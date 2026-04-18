@@ -1,0 +1,36 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine          # versão leve (alpine)
+    container_name: nutricao-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123     # mude depois para algo mais forte
+      POSTGRES_DB: nutricao_equina
+    ports:
+      - "5432:5432"                      # permite acessar de fora (pgAdmin)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: nutricao-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@nutricao.com
+      PGADMIN_DEFAULT_PASSWORD: admin123     # mude depois
+    ports:
+      - "8080:80"                        # pgAdmin acessível em http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

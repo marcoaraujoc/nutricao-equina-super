@@ -1,0 +1,148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ====================== USUÁRIOS + RBAC ======================
+model User {
+  id           Int      @id @default(autoincrement())
+  fullName     String
+  email        String   @unique
+  passwordHash String
+  phone        String?
+  role         String   @default("USER")     // ADMIN | USER
+  userType     String   @default("PROPRIETARIO") // PROPRIETARIO | VETERINARIO
+  createdAt    DateTime @default(now())
+  ativo        Boolean  @default(true)
+
+  auditLogs    AuditLog[]
+  
+  @@map("users")
+}
+
+// ====================== MODELOS EXISTENTES ======================
+model Animal {
+  id                Int      @id @default(autoincrement())
+  nome              String
+  raca              String?
+  peso              Float
+  dataNascimento    DateTime?
+  sexo              String
+  tipoExercicio     String
+  dataCadastro      DateTime @default(now())
+  ativo             Boolean  @default(true)
+
+  dietas            Dieta[]
+  exames            ExameNutricional[]
+  ocorrencias       OcorrenciaSaude[]
+
+  @@map("tb_animais")
+}
+
+model Dieta {
+  id               Int      @id @default(autoincrement())
+  animalId         Int
+  produtoId        Int
+  qtdGramasDia     Float
+  dataInicio       DateTime @default(now())
+  dataFim          DateTime?
+  horario          String?
+  observacao       String?
+
+  animal           Animal   @relation(fields: [animalId], references: [id])
+  produto          Produto  @relation(fields: [produtoId], references: [id])
+
+  @@map("tb_dieta")
+}
+
+model Produto {
+  id            Int      @id @default(autoincrement())
+  nome          String
+  categoria     String
+  fabricante    String?
+  forma         String?
+  ativo         Boolean  @default(true)
+
+  composicoes   ComposicaoProduto[]
+  dietas        Dieta[]
+
+  @@map("tb_produtos")
+}
+
+model Nutriente {
+  id             Int      @id @default(autoincrement())
+  nome           String
+  categoria      String
+  unidadePadrao  String
+  codigo         String?  @unique
+  essencial      Boolean  @default(false)
+
+  composicoes    ComposicaoProduto[]
+  exames         ExameNutricional[]
+
+  @@map("tb_nutrientes")
+}
+
+model ComposicaoProduto {
+  id            Int      @id @default(autoincrement())
+  produtoId     Int
+  nutrienteId   Int
+  valorPorKg    Float
+  base          String   @default("Seca")
+
+  produto       Produto   @relation(fields: [produtoId], references: [id])
+  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@unique([produtoId, nutrienteId])
+  @@map("tb_composicao_produto")
+}
+
+model ExameNutricional {
+  id                  Int      @id @default(autoincrement())
+  animalId            Int
+  nutrienteId         Int
+  dataExame           DateTime
+  valorEncontrado     Float
+  unidade             String
+  valorMinRef         Float?
+  valorMaxRef         Float?
+  observacao          String?
+  statusClinico       String?
+
+  animal              Animal    @relation(fields: [animalId], references: [id])
+  nutriente           Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@map("tb_exames_nutricionais")
+}
+
+model OcorrenciaSaude {
+  id            Int      @id @default(autoincrement())
+  animalId      Int
+  dataInicio    DateTime
+  dataFim       DateTime?
+  problema      String
+  tratamento    String?
+  responsavel   String?
+
+  animal        Animal   @relation(fields: [animalId], references: [id])
+
+  @@map("tb_ocorrencias_saude")
+}
+
+// ====================== AUDITORIA ======================
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  userName    String
+  email       String
+  action      String   // "LOGIN" ou "LOGOUT"
+  timestamp   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("tb_audit_logs")
+}

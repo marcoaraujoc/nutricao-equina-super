@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  // url removida - agora vai para prisma.config.ts
+}
+
+// =============================================
+// TABELAS DA APLICAÇÃO DE NUTRIÇÃO EQUINA
+// =============================================
+
+model Animal {
+  id                Int      @id @default(autoincrement())
+  nome              String   @db.VarChar(100)
+  raca              String?  @db.VarChar(100)
+  peso              Decimal  @db.Decimal(6, 2)
+  dataNascimento    DateTime?
+  sexo              String   @db.Char(1)
+  tipoExercicio     String   @db.VarChar(50)
+  dataCadastro      DateTime @default(now())
+  ativo             Boolean  @default(true)
+
+  dietas            Dieta[]
+  exames            ExameNutricional[]
+  ocorrencias       OcorrenciaSaude[]
+
+  @@map("tb_animais")
+}
+
+model Dieta {
+  id               Int      @id @default(autoincrement())
+  animalId         Int
+  produtoId        Int
+  qtdGramasDia     Decimal  @db.Decimal(10, 2)
+  dataInicio       DateTime @default(now())
+  dataFim          DateTime?
+  horario          String?  @db.VarChar(20)
+  observacao       String?  @db.Text
+
+  animal           Animal   @relation(fields: [animalId], references: [id])
+  produto          Produto  @relation(fields: [produtoId], references: [id])
+
+  @@map("tb_dieta")
+}
+
+model ExameNutricional {
+  id                  Int      @id @default(autoincrement())
+  animalId            Int
+  nutrienteId         Int
+  dataExame           DateTime
+  valorEncontrado     Decimal  @db.Decimal(12, 4)
+  unidade             String   @db.VarChar(20)
+  valorMinRef         Decimal? @db.Decimal(12, 4)
+  valorMaxRef         Decimal? @db.Decimal(12, 4)
+  observacao          String?  @db.Text
+  statusClinico       String?  @db.VarChar(50)
+
+  animal              Animal    @relation(fields: [animalId], references: [id])
+  nutriente           Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@map("tb_exames_nutricionais")
+}
+
+model Produto {
+  id            Int      @id @default(autoincrement())
+  nome          String   @db.VarChar(100)
+  categoria     String   @db.VarChar(50)
+  fabricante    String?  @db.VarChar(100)
+  forma         String?  @db.VarChar(50)
+  ativo         Boolean  @default(true)
+
+  composicoes   ComposicaoProduto[]
+  dietas        Dieta[]
+
+  @@map("tb_produtos")
+}
+
+model Nutriente {
+  id             Int      @id @default(autoincrement())
+  nome           String   @db.VarChar(100)
+  categoria      String   @db.VarChar(50)
+  unidadePadrao  String   @db.VarChar(10)
+  codigo         String?  @unique
+  essencial      Boolean  @default(false)
+
+  composicoes    ComposicaoProduto[]
+  exames         ExameNutricional[]
+
+  @@map("tb_nutrientes")
+}
+
+model ComposicaoProduto {
+  id            Int      @id @default(autoincrement())
+  produtoId     Int
+  nutrienteId   Int
+  valorPorKg    Decimal  @db.Decimal(14, 6)
+  base          String   @default("Seca")
+
+  produto       Produto   @relation(fields: [produtoId], references: [id])
+  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@unique([produtoId, nutrienteId])
+  @@map("tb_composicao_produto")
+}
+
+model OcorrenciaSaude {
+  id            Int      @id @default(autoincrement())
+  animalId      Int
+  dataInicio    DateTime
+  dataFim       DateTime?
+  problema      String   @db.Text
+  tratamento    String?  @db.Text
+  responsavel   String?  @db.VarChar(100)
+
+  animal        Animal   @relation(fields: [animalId], references: [id])
+
+  @@map("tb_ocorrencias_saude")
+}
+
+
+// ====================== AUDITORIA ======================
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  userName    String
+  email       String
+  action      String   // "LOGIN" ou "LOGOUT"
+  timestamp   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("tb_audit_logs")
+}
