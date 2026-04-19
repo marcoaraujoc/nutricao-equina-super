@@ -18,6 +18,8 @@ app.use('/dietas', require('./routes/dietas'));
 app.use('/exames', require('./routes/exames'));
 app.use('/analise', require('./routes/analise'));
 app.use('/audit', require('./routes/audit'));
+app.use('/api/especies', require('./routes/especies'));
+app.use('/api/racas', require('./routes/racas'));
 
 app.get('/', (req, res) => res.json({ message: '🚀 API Equine Nutrition - Super está rodando!' }));
 

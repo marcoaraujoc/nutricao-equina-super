@@ -1,32 +1,56 @@
-import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-
+const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-export class AnimalController {
-  // Listar todos os cavalos
-  async listar(req: Request, res: Response) {
+const listar = async (req, res) => {
+  try {
     const animais = await prisma.animal.findMany({
-      orderBy: { dataCadastro: 'desc' }
+      orderBy: { dataCadastro: 'desc' },
+      include: {
+        especie: true,
+        raca: true,
+        exercises: true
+      }
     });
     res.json(animais);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao listar animais' });
   }
+};
 
-  // Criar novo cavalo
-  async criar(req: Request, res: Response) {
-    const { nome, raca, peso, idade, sexo, tipoExercicio } = req.body;
+const criar = async (req, res) => {
+  try {
+    const { nome, especieId, racaId, peso, dataNascimento, sexo, exercises = [] } = req.body;
 
     const animal = await prisma.animal.create({
       data: {
         nome,
-        raca,
+        especieId: parseInt(especieId),
+        racaId: racaId ? parseInt(racaId) : null,
         peso: parseFloat(peso),
-        dataNascimento: idade ? new Date(Date.now() - idade * 365 * 24 * 60 * 60 * 1000) : null,
+        dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
         sexo,
-        tipoExercicio
       }
     });
 
+    // Cria os exercícios relacionados (se enviados)
+    if (exercises && exercises.length > 0) {
+      for (const ex of exercises) {
+        await prisma.animalExercise.create({
+          data: {
+            animalId: animal.id,
+            tipo: ex.tipo,
+            periodicidade: ex.periodicidade
+          }
+        });
+      }
+    }
+
     res.status(201).json(animal);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao criar animal' });
   }
-}
+};
+
+module.exports = { listar, criar };

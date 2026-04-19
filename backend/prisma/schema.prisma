@@ -28,19 +28,58 @@ model User {
 model Animal {
   id                Int      @id @default(autoincrement())
   nome              String
-  raca              String?
   peso              Float
   dataNascimento    DateTime?
   sexo              String
-  tipoExercicio     String
+  photoUrl          String?
   dataCadastro      DateTime @default(now())
   ativo             Boolean  @default(true)
+
+  especieId         Int
+  racaId            Int?
+
+  especie           Especie  @relation(fields: [especieId], references: [id])
+  raca              Raca?    @relation(fields: [racaId], references: [id])
 
   dietas            Dieta[]
   exames            ExameNutricional[]
   ocorrencias       OcorrenciaSaude[]
+  exercises         AnimalExercise[]
 
   @@map("tb_animais")
+}
+
+model Especie {
+  id     Int    @id @default(autoincrement())
+  nome   String @unique
+
+  animais Animal[]
+  racas   Raca[]
+
+  @@map("tb_especies")
+}
+
+model Raca {
+  id         Int      @id @default(autoincrement())
+  nome       String
+  especieId  Int
+
+  especie    Especie  @relation(fields: [especieId], references: [id])
+  animais    Animal[]
+
+  @@unique([nome, especieId])   // ← ESSA LINHA É OBRIGATÓRIA
+  @@map("tb_racas")
+}
+
+model AnimalExercise {
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  tipo           String   // ex: "Adestramento", "Salto", "Barril", "Cross"
+  periodicidade  String   // ex: "2x na semana", "1x por dia"
+
+  animal         Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+
+  @@map("tb_animal_exercise")
 }
 
 model Dieta {

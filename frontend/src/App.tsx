@@ -22,22 +22,25 @@ function App() {
           <Route path="/register" element={<Register />} />
 
           {/* Rotas protegidas */}
-          <Route path="/*" element={
-            <ProtectedRoute>
-              <div className="flex min-h-screen bg-gray-950">
-                <Sidebar />
-                <div className="flex-1 ml-72 p-10 text-white">
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/cavalos" element={<Cavalos />} />
-                    <Route path="/dieta" element={<Dieta />} />
-                    <Route path="/exames" element={<Exames />} />
-                    <Route path="/analise" element={<Analise />} />
-                  </Routes>
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <div className="flex min-h-screen bg-white">   {/* ← Fundo branco aqui */}
+                  <Sidebar />
+                  <div className="flex-1 ml-72 p-8 bg-white overflow-auto">   {/* ← Fundo branco + scroll controlado */}
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/cavalos" element={<Cavalos />} />
+                      <Route path="/dieta" element={<Dieta />} />
+                      <Route path="/exames" element={<Exames />} />
+                      <Route path="/analise" element={<Analise />} />
+                    </Routes>
+                  </div>
                 </div>
-              </div>
-            </ProtectedRoute>
-          } />
+              </ProtectedRoute>
+            }
+          />
         </Routes>
       </Router>
     </AuthProvider>
