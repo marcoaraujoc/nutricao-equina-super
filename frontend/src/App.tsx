@@ -11,6 +11,7 @@ import Cavalos from './pages/Cavalos';
 import Dieta from './pages/Dieta';
 import Exames from './pages/Exames';
 import Analise from './pages/Analise';
+import CadastroPessoal from './pages/CadastroPessoal';   // ← sua página já existente
 
 function App() {
   return (
@@ -26,11 +27,12 @@ function App() {
             path="/*"
             element={
               <ProtectedRoute>
-                <div className="flex min-h-screen bg-white">   {/* ← Fundo branco aqui */}
+                <div className="flex min-h-screen bg-white">
                   <Sidebar />
-                  <div className="flex-1 ml-72 p-8 bg-white overflow-auto">   {/* ← Fundo branco + scroll controlado */}
+                  <div className="flex-1 ml-72 p-8 bg-white overflow-auto">
                     <Routes>
                       <Route path="/" element={<Dashboard />} />
+                      <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
                       <Route path="/cavalos" element={<Cavalos />} />
                       <Route path="/dieta" element={<Dieta />} />
                       <Route path="/exames" element={<Exames />} />

@@ -43,14 +43,13 @@ export default function Register() {
 
         // Se veio do Google, faz login automático
         if (googleData.fromGoogle) {
-          // Chama o login automático (backend não retorna token no register)
           const loginRes = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: form.email, password: form.password }),
           });
-
           const loginData = await loginRes.json();
+
           if (loginRes.ok) {
             login(loginData.token);
             navigate('/');
@@ -95,8 +94,9 @@ export default function Register() {
             <input
               type="email"
               value={form.email}
-              disabled={!!googleData.email}
-              className="w-full px-4 py-3 rounded-3xl border border-gray-300 bg-gray-100 cursor-not-allowed"
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500 text-gray-900"
+              required
             />
           </div>
 
