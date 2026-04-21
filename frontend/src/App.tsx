@@ -11,7 +11,8 @@ import Cavalos from './pages/Cavalos';
 import Dieta from './pages/Dieta';
 import Exames from './pages/Exames';
 import Analise from './pages/Analise';
-import CadastroPessoal from './pages/CadastroPessoal';   // ← sua página já existente
+import CadastroPessoal from './pages/CadastroPessoal';
+import ResetPassword from './pages/ResetPassword';     // ← ADICIONADO
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
           {/* Rotas públicas */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/reset-password" element={<ResetPassword />} />   {/* ← ADICIONADO */}
 
           {/* Rotas protegidas */}
           <Route

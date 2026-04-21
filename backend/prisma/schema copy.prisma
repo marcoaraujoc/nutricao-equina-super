@@ -1,189 +1,197 @@
-import { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+generator client {
+  provider = "prisma-client-js"
+}
 
-export default function CadastroPessoal() {
-  const { user } = useAuth(); // ← E-mail vem da tela de login via AuthContext
-  const [loading, setLoading] = useState(true);
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
 
-  const [form, setForm] = useState({
-    nomeCompleto: '',
-    telefone: '',
-    email: '',
-    cep: '',
-    endereco: '',
-    complemento: '',
-    bairro: '',
-    cidade: '',
-    estado: '',
-    tipoUsuario: 'PROPRIETARIO',
-  });
+// ====================== USUÁRIOS + RBAC ======================
+model User {
+  id            Int      @id @default(autoincrement())
+  fullName      String
+  email         String   @unique
+  passwordHash  String
+  phone         String?
+  role          String   @default("USER")     // ADMIN | USER
+  userType      String   @default("PROPRIETARIO") // PROPRIETARIO | VETERINARIO
 
-  // 🔥 QUERY NO BANCO USANDO O E-MAIL DO LOGIN (via AuthContext)
-  // O endpoint /api/users/me identifica o usuário pelo token (email único)
-  useEffect(() => {
-    const loadUserData = async () => {
-      const token = localStorage.getItem('token');
-      if (!token || !user?.email) {
-        setLoading(false);
-        return;
-      }
+  // === Campos de endereço (Cadastro Pessoal) ===
+  cep           String?
+  endereco      String?
+  complemento   String?
+  bairro        String?
+  cidade        String?
+  estado        String?
 
-      console.log('🔍 Usando e-mail do login para carregar dados:', user.email);
+  createdAt     DateTime @default(now())
+  ativo         Boolean  @default(true)
 
-      try {
-        const res = await fetch('/api/users/me', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+  // === Auditoria (mantida) ===
+  auditLogs     AuditLog[]
 
-        if (res.ok) {
-          const data = await res.json();
+  @@map("users")
+}
 
-          setForm({
-            nomeCompleto: data.fullName || '',
-            telefone: data.phone || '',
-            email: data.email || '',
-            cep: data.cep || '',
-            endereco: data.endereco || '',
-            complemento: data.complemento || '',
-            bairro: data.bairro || '',
-            cidade: data.cidade || '',
-            estado: data.estado || '',
-            tipoUsuario: data.userType || 'PROPRIETARIO',
-          });
-        }
-      } catch (err) {
-        console.error('Erro ao carregar dados do usuário:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+// ====================== MODELOS EXISTENTES ======================
+model Animal {
+  id                Int      @id @default(autoincrement())
+  nome              String
+  peso              Float
+  dataNascimento    DateTime?
+  sexo              String
+  photoUrl          String?
+  dataCadastro      DateTime @default(now())
+  ativo             Boolean  @default(true)
 
-    loadUserData();
-  }, [user?.email]); // ← Dependência explícita no e-mail do login
+  especieId         Int
+  racaId            Int?
 
-  const buscarCep = async (cep: string) => {
-    const cepLimpo = cep.replace(/\D/g, '');
-    if (cepLimpo.length !== 8) return;
+  especie           Especie  @relation(fields: [especieId], references: [id])
+  raca              Raca?    @relation(fields: [racaId], references: [id])
 
-    try {
-      const res = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
-      const data = await res.json();
-      if (data.erro) {
-        console.warn('CEP não encontrado');
-        return;
-      }
+  dietas            Dieta[]
+  exames            ExameNutricional[]
+  ocorrencias       OcorrenciaSaude[]
+  exercises         AnimalExercise[]
 
-      setForm(prev => ({
-        ...prev,
-        endereco: data.logradouro || '',
-        bairro: data.bairro || '',
-        cidade: data.localidade || '',
-        estado: data.uf || '',
-      }));
-    } catch (err) {
-      console.error('Erro ao buscar CEP:', err);
-    }
-  };
+  @@map("tb_animais")
+}
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setForm(prev => ({ ...prev, [name]: value }));
-  };
+model Especie {
+  id     Int    @id @default(autoincrement())
+  nome   String @unique
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log('✅ Cadastro Pessoal enviado (e-mail do login já foi usado para carregar):', form);
-    // TODO: quando o PUT /api/users/me estiver pronto, chamar aqui
-    alert('Cadastro salvo com sucesso!');
-    window.location.href = '/cavalos';
-  };
+  animais Animal[]
+  racas   Raca[]
 
-  if (loading) return <div className="p-8 text-center text-gray-500">Carregando dados do usuário...</div>;
+  @@map("tb_especies")
+}
 
-  return (
-    <div className="max-w-2xl mx-auto">
-      <div className="bg-white shadow rounded-3xl p-8">
-        <h1 className="text-3xl font-semibold text-gray-900 mb-1">Cadastro Pessoal</h1>
-        <p className="text-gray-500 mb-8">Complete suas informações para continuar</p>
+model Raca {
+  id         Int      @id @default(autoincrement())
+  nome       String
+  especieId  Int
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
-            <input type="text" name="nomeCompleto" value={form.nomeCompleto} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" required />
-          </div>
+  especie    Especie  @relation(fields: [especieId], references: [id])
+  animais    Animal[]
 
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-              <input type="tel" name="telefone" value={form.telefone} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-              <input
-                type="email"
-                name="email"
-                value={form.email}
-                readOnly
-                className="w-full px-4 py-3 border border-gray-300 bg-gray-100 rounded-2xl text-gray-900 cursor-not-allowed"
-              />
-            </div>
-          </div>
+  @@unique([nome, especieId])   // ← ESSA LINHA É OBRIGATÓRIA
+  @@map("tb_racas")
+}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
-            <input
-              type="text"
-              name="cep"
-              maxLength={8}
-              value={form.cep}
-              onChange={e => {
-                setForm(prev => ({ ...prev, cep: e.target.value }));
-                if (e.target.value.length === 8) buscarCep(e.target.value);
-              }}
-              className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-              required
-            />
-          </div>
+model AnimalExercise {
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  tipo           String   // ex: "Adestramento", "Salto", "Barril", "Cross"
+  periodicidade  String   // ex: "2x na semana", "1x por dia"
 
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Endereço</label>
-              <input type="text" name="endereco" value={form.endereco} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Complemento</label>
-              <input type="text" name="complemento" value={form.complemento} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" />
-            </div>
-          </div>
+  animal         Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
 
-          <div className="grid grid-cols-3 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Bairro</label>
-              <input type="text" name="bairro" value={form.bairro} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
-              <input type="text" name="cidade" value={form.cidade} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-              <input type="text" name="estado" maxLength={2} value={form.estado} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" required />
-            </div>
-          </div>
+  @@map("tb_animal_exercise")
+}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Usuário</label>
-            <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange} className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900">
-              <option value="PROPRIETARIO">Proprietário</option>
-              <option value="VETERINARIO">Médico Veterinário</option>
-            </select>
-          </div>
+model Dieta {
+  id               Int      @id @default(autoincrement())
+  animalId         Int
+  produtoId        Int
+  qtdGramasDia     Float
+  dataInicio       DateTime @default(now())
+  dataFim          DateTime?
+  horario          String?
+  observacao       String?
 
-          <button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-4 rounded-3xl text-lg font-semibold mt-8 transition-colors">
-            Salvar e Continuar
-          </button>
-        </form>
-      </div>
-    </div>
-  );
+  animal           Animal   @relation(fields: [animalId], references: [id])
+  produto          Produto  @relation(fields: [produtoId], references: [id])
+
+  @@map("tb_dieta")
+}
+
+model Produto {
+  id            Int      @id @default(autoincrement())
+  nome          String
+  categoria     String
+  fabricante    String?
+  forma         String?
+  ativo         Boolean  @default(true)
+
+  composicoes   ComposicaoProduto[]
+  dietas        Dieta[]
+
+  @@map("tb_produtos")
+}
+
+model Nutriente {
+  id             Int      @id @default(autoincrement())
+  nome           String
+  categoria      String
+  unidadePadrao  String
+  codigo         String?  @unique
+  essencial      Boolean  @default(false)
+
+  composicoes    ComposicaoProduto[]
+  exames         ExameNutricional[]
+
+  @@map("tb_nutrientes")
+}
+
+model ComposicaoProduto {
+  id            Int      @id @default(autoincrement())
+  produtoId     Int
+  nutrienteId   Int
+  valorPorKg    Float
+  base          String   @default("Seca")
+
+  produto       Produto   @relation(fields: [produtoId], references: [id])
+  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@unique([produtoId, nutrienteId])
+  @@map("tb_composicao_produto")
+}
+
+model ExameNutricional {
+  id                  Int      @id @default(autoincrement())
+  animalId            Int
+  nutrienteId         Int
+  dataExame           DateTime
+  valorEncontrado     Float
+  unidade             String
+  valorMinRef         Float?
+  valorMaxRef         Float?
+  observacao          String?
+  statusClinico       String?
+
+  animal              Animal    @relation(fields: [animalId], references: [id])
+  nutriente           Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@map("tb_exames_nutricionais")
+}
+
+model OcorrenciaSaude {
+  id            Int      @id @default(autoincrement())
+  animalId      Int
+  dataInicio    DateTime
+  dataFim       DateTime?
+  problema      String
+  tratamento    String?
+  responsavel   String?
+
+  animal        Animal   @relation(fields: [animalId], references: [id])
+
+  @@map("tb_ocorrencias_saude")
+}
+
+// ====================== AUDITORIA ======================
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  userName    String
+  email       String
+  action      String   // "LOGIN" ou "LOGOUT"
+  timestamp   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("tb_audit_logs")
 }

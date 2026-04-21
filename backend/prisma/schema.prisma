@@ -9,27 +9,31 @@ datasource db {
 
 // ====================== USUÁRIOS + RBAC ======================
 model User {
-  id            Int      @id @default(autoincrement())
-  fullName      String
-  email         String   @unique
-  passwordHash  String
-  phone         String?
-  role          String   @default("USER")     // ADMIN | USER
-  userType      String   @default("PROPRIETARIO") // PROPRIETARIO | VETERINARIO
+  id Int @id @default(autoincrement())
+  fullName String
+  email String @unique
+  passwordHash String
+  phone String?
+  role String @default("USER")
+  userType String @default("PROPRIETARIO")
 
-  // === Campos de endereço (Cadastro Pessoal) ===
-  cep           String?
-  endereco      String?
-  complemento   String?
-  bairro        String?
-  cidade        String?
-  estado        String?
+  // === Campos de endereço ===
+  cep String?
+  endereco String?
+  complemento String?
+  bairro String?
+  cidade String?
+  estado String?
 
-  createdAt     DateTime @default(now())
-  ativo         Boolean  @default(true)
+  createdAt DateTime @default(now())
+  ativo Boolean @default(true)
 
-  // === Auditoria (mantida) ===
-  auditLogs     AuditLog[]
+  // === Campos de recuperação de senha ===
+  resetPasswordToken   String?   @unique
+  resetPasswordExpires DateTime?
+
+  // === Auditoria ===
+  auditLogs AuditLog[]
 
   @@map("users")
 }
@@ -47,6 +51,8 @@ model Animal {
 
   especieId         Int
   racaId            Int?
+  resetPasswordToken   String?   @unique
+  resetPasswordExpires DateTime?
 
   especie           Especie  @relation(fields: [especieId], references: [id])
   raca              Raca?    @relation(fields: [racaId], references: [id])
