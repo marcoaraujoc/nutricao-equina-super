@@ -16,8 +16,25 @@ export default function ResetPassword() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  // Validação forte de senha (exatamente como você pediu)
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 8) return 'A senha deve ter no mínimo 8 caracteres';
+    if (!/[A-Z]/.test(password)) return 'A senha deve conter pelo menos 1 letra maiúscula';
+    if (!/[0-9]/.test(password)) return 'A senha deve conter pelo menos 1 número';
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'A senha deve conter pelo menos 1 caractere especial (!@#$%^&*)';
+    return null; // senha válida
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validação forte
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+
     if (newPassword !== confirmPassword) {
       setError('As senhas não coincidem');
       return;
@@ -104,7 +121,7 @@ export default function ResetPassword() {
             </div>
           </div>
 
-          {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+          {error && <p className="text-red-500 text-sm text-center font-medium">{error}</p>}
 
           <button
             type="submit"

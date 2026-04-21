@@ -27,15 +27,27 @@ export default function Register() {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
+  // Validação forte de senha (mesma regra usada na tela de ResetPassword)
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 8) return 'A senha deve ter no mínimo 8 caracteres';
+    if (!/[A-Z]/.test(password)) return 'A senha deve conter pelo menos 1 letra maiúscula';
+    if (!/[0-9]/.test(password)) return 'A senha deve conter pelo menos 1 número';
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'A senha deve conter pelo menos 1 caractere especial (!@#$%^&*)';
+    return null; // senha válida
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (form.password !== form.confirmPassword) {
-      setError('As senhas não coincidem');
+    // Validação forte
+    const passwordError = validatePassword(form.password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
-    if (form.password.length < 6) {
-      setError('A senha deve ter no mínimo 6 caracteres');
+
+    if (form.password !== form.confirmPassword) {
+      setError('As senhas não coincidem');
       return;
     }
 
