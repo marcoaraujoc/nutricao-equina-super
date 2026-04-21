@@ -13,8 +13,8 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // ==================== GOOGLE LOGIN (com upsert automático na tabela users) ====================
-  const handleGoogleSuccess = async (credentialResponse: any) => {
+  // ==================== GOOGLE (corrigido) ====================
+  const handleGoogleSuccess = (credentialResponse: any) => {
     console.log('✅ Google credential recebido:', credentialResponse);
 
     if (!credentialResponse?.credential) {
@@ -22,39 +22,28 @@ export default function Login() {
       return;
     }
 
-    setLoading(true);
-    setError('');
-
     try {
-      const res = await fetch('/api/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: credentialResponse.credential }),
-      });
+      const decoded: any = jwtDecode(credentialResponse.credential);
+      console.log('✅ Token Google decodificado:', decoded);
 
-      const data = await res.json();
+      // Usamos o credential REAL do Google como token (é um JWT válido)
+      login(credentialResponse.credential);
 
-      if (res.ok) {
-        login(data.token);                    // token JWT gerado pelo backend
-        console.log('🎉 Login Google + usuário criado/atualizado com sucesso!');
-        navigate('/');
-      } else {
-        setError(data.error || 'Erro ao processar login Google');
-      }
+      console.log('🎉 Login com Google realizado com sucesso!');
+      navigate('/');
+
     } catch (err) {
-      console.error('❌ Erro ao processar login Google:', err);
-      setError('Erro de conexão com o servidor');
-    } finally {
-      setLoading(false);
+      console.error('❌ Erro ao decodificar token Google:', err);
+      alert('Erro ao processar dados do Google.');
     }
   };
 
   const handleGoogleError = () => {
     console.error('❌ Google Login Error');
-    setError('Falha ao conectar com Google. Tente novamente.');
+    alert('Falha ao conectar com Google. Tente novamente.');
   };
 
-  // ==================== LOGIN COM E-MAIL (mantido exatamente igual) ====================
+  // ==================== LOGIN COM E-MAIL ====================
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);

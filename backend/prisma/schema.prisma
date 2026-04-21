@@ -9,18 +9,28 @@ datasource db {
 
 // ====================== USUÁRIOS + RBAC ======================
 model User {
-  id           Int      @id @default(autoincrement())
-  fullName     String
-  email        String   @unique
-  passwordHash String
-  phone        String?
-  role         String   @default("USER")     // ADMIN | USER
-  userType     String   @default("PROPRIETARIO") // PROPRIETARIO | VETERINARIO
-  createdAt    DateTime @default(now())
-  ativo        Boolean  @default(true)
+  id            Int      @id @default(autoincrement())
+  fullName      String
+  email         String   @unique
+  passwordHash  String
+  phone         String?
+  role          String   @default("USER")     // ADMIN | USER
+  userType      String   @default("PROPRIETARIO") // PROPRIETARIO | VETERINARIO
 
-  auditLogs    AuditLog[]
-  
+  // === Campos de endereço (Cadastro Pessoal) ===
+  cep           String?
+  endereco      String?
+  complemento   String?
+  bairro        String?
+  cidade        String?
+  estado        String?
+
+  createdAt     DateTime @default(now())
+  ativo         Boolean  @default(true)
+
+  // === Auditoria (mantida) ===
+  auditLogs     AuditLog[]
+
   @@map("users")
 }
 
