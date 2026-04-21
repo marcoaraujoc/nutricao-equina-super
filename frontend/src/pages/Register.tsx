@@ -15,13 +15,34 @@ export default function Register() {
     phone: '',
     userType: 'PROPRIETARIO' as 'PROPRIETARIO' | 'VETERINARIO',
     password: '',
+    confirmPassword: '',
   });
 
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (form.password !== form.confirmPassword) {
+      setError('As senhas não coincidem');
+      return;
+    }
+    if (form.password.length < 6) {
+      setError('A senha deve ter no mínimo 6 caracteres');
+      return;
+    }
+
     setLoading(true);
+    setError('');
+
+    const emailLower = form.email.trim().toLowerCase();
 
     try {
       const res = await fetch('/api/auth/register', {
@@ -29,7 +50,7 @@ export default function Register() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fullName: form.fullName,
-          email: form.email,
+          email: emailLower,
           password: form.password,
           phone: form.phone,
           userType: form.userType,
@@ -41,12 +62,11 @@ export default function Register() {
       if (res.ok) {
         alert('✅ Cadastro realizado com sucesso!');
 
-        // Se veio do Google, faz login automático
         if (googleData.fromGoogle) {
           const loginRes = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: form.email, password: form.password }),
+            body: JSON.stringify({ email: emailLower, password: form.password }),
           });
           const loginData = await loginRes.json();
 
@@ -60,11 +80,11 @@ export default function Register() {
           navigate('/login');
         }
       } else {
-        alert(data.error || 'Erro ao cadastrar usuário');
+        setError(data.error || 'Erro ao cadastrar usuário');
       }
     } catch (err) {
       console.error(err);
-      alert('Erro de conexão com o servidor');
+      setError('Erro de conexão com o servidor');
     } finally {
       setLoading(false);
     }
@@ -82,8 +102,9 @@ export default function Register() {
             <label className="block text-sm font-medium mb-1">Nome completo</label>
             <input
               type="text"
+              name="fullName"
               value={form.fullName}
-              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+              onChange={handleChange}
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
               required
             />
@@ -93,8 +114,9 @@ export default function Register() {
             <label className="block text-sm font-medium mb-1">E-mail</label>
             <input
               type="email"
+              name="email"
               value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              onChange={handleChange}
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500 text-gray-900"
               required
             />
@@ -104,8 +126,9 @@ export default function Register() {
             <label className="block text-sm font-medium mb-1">Telefone</label>
             <input
               type="tel"
+              name="phone"
               value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              onChange={handleChange}
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
               placeholder="(11) 99999-9999"
               required
@@ -115,8 +138,9 @@ export default function Register() {
           <div>
             <label className="block text-sm font-medium mb-1">Você é...</label>
             <select
+              name="userType"
               value={form.userType}
-              onChange={(e) => setForm({ ...form, userType: e.target.value as any })}
+              onChange={handleChange}
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
             >
               <option value="PROPRIETARIO">Proprietário de cavalo</option>
@@ -124,16 +148,51 @@ export default function Register() {
             </select>
           </div>
 
+          {/* Senha com olho */}
           <div>
             <label className="block text-sm font-medium mb-1">Senha</label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
-              required
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                name="password"
+                value={form.password}
+                onChange={handleChange}
+                className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 text-xl"
+              >
+                {showPassword ? '🙈' : '👁️'}
+              </button>
+            </div>
           </div>
+
+          {/* Repetir Senha com olho */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Repetir Senha</label>
+            <div className="relative">
+              <input
+                type={showConfirmPassword ? 'text' : 'password'}
+                name="confirmPassword"
+                value={form.confirmPassword}
+                onChange={handleChange}
+                className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 text-xl"
+              >
+                {showConfirmPassword ? '🙈' : '👁️'}
+              </button>
+            </div>
+          </div>
+
+          {error && <p className="text-red-500 text-sm text-center font-medium">{error}</p>}
 
           <button
             type="submit"
