@@ -26,7 +26,7 @@ const userRoutes = require('./routes/user');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth', authRoutes);
-app.use('/animais', animaisRoutes);
+app.use('/api/animais', animaisRoutes);
 app.use('/produtos', produtosRoutes);
 app.use('/dietas', dietasRoutes);
 app.use('/exames', examesRoutes);

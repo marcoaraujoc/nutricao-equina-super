@@ -9,8 +9,9 @@ const Cavalos = () => {
 
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [especies, setEspecies] = useState<any[]>([]);
-  const [todasRacas, setTodasRacas] = useState<any[]>([]); // todas as raças do banco
+  const [todasRacas, setTodasRacas] = useState<any[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<any[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
     nome: '',
@@ -22,7 +23,7 @@ const Cavalos = () => {
     exercises: [] as { tipo: string; periodicidade: string }[],
   });
 
-  // Carrega espécies e todas as raças
+  // Carrega espécies e raças
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -32,7 +33,7 @@ const Cavalos = () => {
         ]);
         setEspecies(espRes.data);
         setTodasRacas(racRes.data);
-        // Filtra inicialmente para Equino
+
         const filtradas = racRes.data.filter((r: any) => r.especieId === 1);
         setRacasFiltradas(filtradas);
       } catch (error) {
@@ -42,13 +43,17 @@ const Cavalos = () => {
     loadData();
   }, []);
 
-  // Filtra raças quando a espécie muda
+  // Filtra raças quando muda a espécie + define default = primeira raça
   useEffect(() => {
-    if (formData.especieId) {
+    if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
       setRacasFiltradas(filtradas);
-      // Limpa raça selecionada quando muda a espécie
-      setFormData(prev => ({ ...prev, racaId: null }));
+
+      if (filtradas.length > 0) {
+        setFormData(prev => ({ ...prev, racaId: filtradas[0].id }));
+      } else {
+        setFormData(prev => ({ ...prev, racaId: null }));
+      }
     }
   }, [formData.especieId, todasRacas]);
 
@@ -62,16 +67,16 @@ const Cavalos = () => {
   };
 
   const toggleExercise = (tipo: string) => {
-    const exists = formData.exercises.find((ex) => ex.tipo === tipo);
+    const exists = formData.exercises.find(ex => ex.tipo === tipo);
     if (exists) {
-      setFormData((prev) => ({
+      setFormData(prev => ({
         ...prev,
-        exercises: prev.exercises.filter((ex) => ex.tipo !== tipo),
+        exercises: prev.exercises.filter(ex => ex.tipo !== tipo)
       }));
     } else {
-      setFormData((prev) => ({
+      setFormData(prev => ({
         ...prev,
-        exercises: [...prev.exercises, { tipo, periodicidade: '1x na semana' }],
+        exercises: [...prev.exercises, { tipo, periodicidade: '1x na semana' }]
       }));
     }
   };
@@ -84,28 +89,42 @@ const Cavalos = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitting(true);
+
     try {
       await axios.post('/api/animais', {
         ...formData,
-        peso: parseFloat(formData.peso),
+        peso: parseFloat(formData.peso) || 0,
         dataNascimento: formData.dataNascimento || null,
         userId: user?.id,
       });
+
       alert('✅ Animal cadastrado com sucesso!');
-      setFormData({ nome: '', especieId: 1, racaId: null, peso: '', dataNascimento: '', sexo: 'Macho', exercises: [] });
+      
+      // Limpa formulário
+      setFormData({
+        nome: '',
+        especieId: 1,
+        racaId: null as number | null,
+        peso: '',
+        dataNascimento: '',
+        sexo: 'Macho',
+        exercises: [] as { tipo: string; periodicidade: string }[],
+      });
       setPhotoPreview(null);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('❌ Erro ao cadastrar animal');
+      alert(error.response?.data?.error || '❌ Erro ao cadastrar animal');
+    } finally {
+      setSubmitting(false);
     }
   };
-
-  const isEquino = formData.especieId === 1;
 
   return (
     <div className="h-screen bg-white flex items-center justify-center overflow-hidden">
       <div className="max-w-2xl w-full mx-auto px-4">
         <div className="bg-white shadow-2xl rounded-3xl p-5 border border-gray-100 max-h-[94vh] overflow-y-auto">
+          {/* Foto */}
           <div className="flex justify-center mb-5">
             <label className="cursor-pointer group">
               <div className="w-44 h-44 rounded-full border-4 border-emerald-600 overflow-hidden bg-gray-100 flex items-center justify-center shadow-inner transition-all group-hover:scale-105">
@@ -123,17 +142,25 @@ const Cavalos = () => {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
-            {/* NOME GRANDE */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Animal</label>
-              <input type="text" required value={formData.nome} onChange={(e) => setFormData({ ...formData, nome: e.target.value })} className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900" />
+              <input
+                type="text"
+                required
+                value={formData.nome}
+                onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
+                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+              />
             </div>
 
-            {/* Espécie + Sexo lado a lado */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
-                <select value={formData.especieId} onChange={(e) => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })} className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900">
+                <select
+                  value={formData.especieId}
+                  onChange={(e) => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                >
                   {especies.map((esp: any) => (
                     <option key={esp.id} value={esp.id}>{esp.nome}</option>
                   ))}
@@ -141,7 +168,11 @@ const Cavalos = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
-                <select value={formData.sexo} onChange={(e) => setFormData({ ...formData, sexo: e.target.value })} className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900">
+                <select
+                  value={formData.sexo}
+                  onChange={(e) => setFormData({ ...formData, sexo: e.target.value })}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                >
                   <option value="Macho">Macho</option>
                   <option value="Fêmea">Fêmea</option>
                   <option value="Castrado">Castrado</option>
@@ -149,11 +180,16 @@ const Cavalos = () => {
               </div>
             </div>
 
-            {/* RAÇA - dropdown filtrado */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Raça</label>
-              <select value={formData.racaId || ''} onChange={(e) => setFormData({ ...formData, racaId: e.target.value ? parseInt(e.target.value) : null })} className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900">
-                <option value="">Selecione uma raça...</option>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Raça <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.racaId || ''}
+                onChange={(e) => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
+                required
+                className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+              >
                 {racasFiltradas.map((raca: any) => (
                   <option key={raca.id} value={raca.id}>
                     {raca.nome}
@@ -162,19 +198,30 @@ const Cavalos = () => {
               </select>
             </div>
 
-            {/* PESO + DATA */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Peso (kg)</label>
-                <input type="number" step="0.1" required value={formData.peso} onChange={(e) => setFormData({ ...formData, peso: e.target.value })} className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900" />
+                <input
+                  type="number"
+                  step="0.1"
+                  required
+                  value={formData.peso}
+                  onChange={(e) => setFormData({ ...formData, peso: e.target.value })}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Data de Nascimento</label>
-                <input type="date" value={formData.dataNascimento} onChange={(e) => setFormData({ ...formData, dataNascimento: e.target.value })} className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900" />
+                <input
+                  type="date"
+                  required
+                  value={formData.dataNascimento}
+                  onChange={(e) => setFormData({ ...formData, dataNascimento: e.target.value })}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                />
               </div>
             </div>
 
-            {/* EXERCÍCIOS (só Equino) */}
             {formData.especieId === 1 && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Tipos de Exercício e Quantidade de Vezes</label>
@@ -190,7 +237,11 @@ const Cavalos = () => {
                         {selected && (
                           <div className="mt-2">
                             <label className="text-xs text-gray-500 block mb-1">Quantidade de vezes</label>
-                            <select value={selected.periodicidade} onChange={(e) => updatePeriodicidade(formData.exercises.indexOf(selected), e.target.value)} className="w-full border border-gray-300 rounded-xl px-3 py-2 text-gray-900">
+                            <select
+                              value={selected.periodicidade}
+                              onChange={(e) => updatePeriodicidade(formData.exercises.indexOf(selected), e.target.value)}
+                              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
+                            >
                               <option value="1x na semana">1x na semana</option>
                               <option value="2x na semana">2x na semana</option>
                               <option value="3x na semana">3x na semana</option>
@@ -206,8 +257,12 @@ const Cavalos = () => {
               </div>
             )}
 
-            <button type="submit" className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors">
-              Cadastrar Animal
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors"
+            >
+              {submitting ? 'Cadastrando Animal...' : 'Cadastrar Animal'}
             </button>
           </form>
         </div>
