@@ -9,58 +9,61 @@ datasource db {
 
 // ====================== USUÁRIOS + RBAC ======================
 model User {
-  id Int @id @default(autoincrement())
-  fullName String
-  email String @unique
+  id           Int      @id @default(autoincrement())
+  fullName     String
+  email        String   @unique
   passwordHash String
-  phone String?
-  role String @default("USER")
-  userType String @default("PROPRIETARIO")
+  phone        String?
+  role         String   @default("USER")
+  userType     String   @default("PROPRIETARIO")
 
   // === Campos de endereço ===
-  cep String?
-  endereco String?
-  complemento String?
-  bairro String?
-  cidade String?
-  estado String?
+  cep         String?
+  endereco     String?
+  complemento  String?
+  bairro       String?
+  cidade       String?
+  estado       String?
 
   createdAt DateTime @default(now())
-  ativo Boolean @default(true)
+  ativo     Boolean  @default(true)
 
   // === Campos de recuperação de senha ===
-  resetPasswordToken   String?   @unique
+  resetPasswordToken  String? @unique
   resetPasswordExpires DateTime?
 
   // === Auditoria ===
   auditLogs AuditLog[]
+
+  // === RELAÇÃO COM ANIMAIS ===
+  animais Animal[]
 
   @@map("users")
 }
 
 // ====================== MODELOS EXISTENTES ======================
 model Animal {
-  id                Int      @id @default(autoincrement())
-  nome              String
-  peso              Float
-  dataNascimento    DateTime?
-  sexo              String
-  photoUrl          String?
-  dataCadastro      DateTime @default(now())
-  ativo             Boolean  @default(true)
+  id              Int      @id @default(autoincrement())
+  nome            String
+  peso            Float
+  dataNascimento  DateTime?
+  sexo            String
+  photoUrl        String?
+  dataCadastro    DateTime @default(now())
+  ativo           Boolean  @default(true)
+  especieId       Int
+  racaId          Int?
 
-  especieId         Int
-  racaId            Int?
-  resetPasswordToken   String?   @unique
-  resetPasswordExpires DateTime?
+  // === FK AGORA OBRIGATÓRIA ===
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  especie           Especie  @relation(fields: [especieId], references: [id])
-  raca              Raca?    @relation(fields: [racaId], references: [id])
-
-  dietas            Dieta[]
-  exames            ExameNutricional[]
-  ocorrencias       OcorrenciaSaude[]
-  exercises         AnimalExercise[]
+  especie         Especie  @relation(fields: [especieId], references: [id])
+  raca            Raca?    @relation(fields: [racaId], references: [id])
+  dietas          Dieta[]
+  exames          ExameNutricional[]
+  ocorrencias     OcorrenciaSaude[]
+  exercises       AnimalExercise[]
 
   @@map("tb_animais")
 }

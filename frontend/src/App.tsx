@@ -8,11 +8,12 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Cavalos from './pages/Cavalos';
+import MeusCavalos from './pages/MeusCavalos';     // ← IMPORTADO AQUI
 import Dieta from './pages/Dieta';
 import Exames from './pages/Exames';
 import Analise from './pages/Analise';
 import CadastroPessoal from './pages/CadastroPessoal';
-import ResetPassword from './pages/ResetPassword';     // ← ADICIONADO
+import ResetPassword from './pages/ResetPassword';
 
 function App() {
   return (
@@ -22,7 +23,7 @@ function App() {
           {/* Rotas públicas */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route path="/reset-password" element={<ResetPassword />} />   {/* ← ADICIONADO */}
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Rotas protegidas */}
           <Route
@@ -35,7 +36,12 @@ function App() {
                     <Routes>
                       <Route path="/" element={<Dashboard />} />
                       <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
+                      
+                      {/* Rotas de Cavalos */}
+                      <Route path="/meus-cavalos" element={<MeusCavalos />} />
                       <Route path="/cavalos" element={<Cavalos />} />
+                      <Route path="/cavalos/:id" element={<Cavalos />} />
+
                       <Route path="/dieta" element={<Dieta />} />
                       <Route path="/exames" element={<Exames />} />
                       <Route path="/analise" element={<Analise />} />

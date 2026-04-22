@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 
 const Cavalos = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const isEditMode = !!id;
 
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+
   const [especies, setEspecies] = useState<any[]>([]);
   const [todasRacas, setTodasRacas] = useState<any[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<any[]>([]);
@@ -23,7 +27,7 @@ const Cavalos = () => {
     exercises: [] as { tipo: string; periodicidade: string }[],
   });
 
-  // Carrega espécies e raças
+  // Carrega espécies, raças e dados do animal (edição)
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -36,30 +40,44 @@ const Cavalos = () => {
 
         const filtradas = racRes.data.filter((r: any) => r.especieId === 1);
         setRacasFiltradas(filtradas);
+
+        if (isEditMode && id) {
+          const animalRes = await axios.get(`/api/animais/${id}`);
+          const animal = animalRes.data;
+          setFormData({
+            nome: animal.nome,
+            especieId: animal.especieId,
+            racaId: animal.racaId,
+            peso: animal.peso.toString(),
+            dataNascimento: animal.dataNascimento ? animal.dataNascimento.split('T')[0] : '',
+            sexo: animal.sexo,
+            exercises: animal.exercises || [],
+          });
+          if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
+        }
       } catch (error) {
         console.error('Erro ao carregar dados', error);
       }
     };
     loadData();
-  }, []);
+  }, [id, isEditMode]);
 
-  // Filtra raças quando muda a espécie + define default = primeira raça
+  // Filtra raças + define default apenas no cadastro
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
       setRacasFiltradas(filtradas);
 
-      if (filtradas.length > 0) {
+      if (!isEditMode && filtradas.length > 0 && !formData.racaId) {
         setFormData(prev => ({ ...prev, racaId: filtradas[0].id }));
-      } else {
-        setFormData(prev => ({ ...prev, racaId: null }));
       }
     }
-  }, [formData.especieId, todasRacas]);
+  }, [formData.especieId, todasRacas, isEditMode]);
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setPhotoFile(file);
       const reader = new FileReader();
       reader.onloadend = () => setPhotoPreview(reader.result as string);
       reader.readAsDataURL(file);
@@ -91,30 +109,66 @@ const Cavalos = () => {
     e.preventDefault();
     setSubmitting(true);
 
+    // Debug: mostra o que está sendo enviado
+    console.log('=== DADOS ANTES DE ENVIAR ===');
+    console.log('formData.racaId:', formData.racaId);
+    console.log('formData completo:', formData);
+
+    if (!formData.racaId) {
+      alert('❌ Raça é obrigatória');
+      setSubmitting(false);
+      return;
+    }
+
     try {
-      await axios.post('/api/animais', {
-        ...formData,
+      const payload = {
+        nome: formData.nome,
+        especieId: formData.especieId,
+        racaId: formData.racaId,
         peso: parseFloat(formData.peso) || 0,
         dataNascimento: formData.dataNascimento || null,
+        sexo: formData.sexo,
+        exercises: formData.exercises,
         userId: user?.id,
-      });
+      };
 
-      alert('✅ Animal cadastrado com sucesso!');
-      
-      // Limpa formulário
-      setFormData({
-        nome: '',
-        especieId: 1,
-        racaId: null as number | null,
-        peso: '',
-        dataNascimento: '',
-        sexo: 'Macho',
-        exercises: [] as { tipo: string; periodicidade: string }[],
-      });
-      setPhotoPreview(null);
+      if (photoFile) {
+        const formDataUpload = new FormData();
+        formDataUpload.append('nome', payload.nome);
+        formDataUpload.append('especieId', String(payload.especieId));
+        formDataUpload.append('racaId', String(payload.racaId));        // ← corrigido
+        formDataUpload.append('peso', String(payload.peso));
+        formDataUpload.append('dataNascimento', payload.dataNascimento || '');
+        formDataUpload.append('sexo', payload.sexo);
+        formDataUpload.append('userId', String(payload.userId || ''));
+        formDataUpload.append('exercises', JSON.stringify(payload.exercises));
+        formDataUpload.append('foto', photoFile);
+
+        console.log('Enviando FormData com foto...');
+        const config = { headers: { 'Content-Type': 'multipart/form-data' } };
+
+        if (isEditMode) {
+          await axios.put(`/api/animais/${id}`, formDataUpload, config);
+          alert('✅ Animal atualizado com sucesso!');
+        } else {
+          await axios.post('/api/animais', formDataUpload, config);
+          alert('✅ Animal cadastrado com sucesso!');
+        }
+      } else {
+        console.log('Enviando JSON sem foto...');
+        if (isEditMode) {
+          await axios.put(`/api/animais/${id}`, payload);
+          alert('✅ Animal atualizado com sucesso!');
+        } else {
+          await axios.post('/api/animais', payload);
+          alert('✅ Animal cadastrado com sucesso!');
+        }
+      }
+
+      navigate('/meus-cavalos');
     } catch (error: any) {
-      console.error(error);
-      alert(error.response?.data?.error || '❌ Erro ao cadastrar animal');
+      console.error('Erro completo:', error.response?.data || error);
+      alert(error.response?.data?.error || '❌ Erro ao salvar animal');
     } finally {
       setSubmitting(false);
     }
@@ -262,7 +316,9 @@ const Cavalos = () => {
               disabled={submitting}
               className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors"
             >
-              {submitting ? 'Cadastrando Animal...' : 'Cadastrar Animal'}
+              {submitting 
+                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...') 
+                : (isEditMode ? 'Atualizar Animal' : 'Cadastrar Animal')}
             </button>
           </form>
         </div>

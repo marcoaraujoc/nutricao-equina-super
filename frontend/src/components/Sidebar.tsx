@@ -40,7 +40,7 @@ export default function Sidebar() {
       needsCompletion: !cadastroPessoalCompleted 
     },
     { 
-      path: '/cavalos', 
+      path: '/meus-cavalos', 
       label: 'Cavalos', 
       icon: '🐎',
       needsCompletion: !cadastroPessoalCompleted 

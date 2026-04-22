@@ -6,6 +6,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const path = require('path');
 
 // ===================== MIDDLEWARES =====================
 app.use(cors());
@@ -35,6 +36,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/especies', especiesRoutes);
 app.use('/api/racas', racasRoutes);
 app.use('/api/users', userRoutes);   // ← ESSA LINHA É OBRIGATÓRIA
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ===================== HEALTH CHECK =====================
 app.get('/', (req, res) => {
