@@ -91,14 +91,14 @@ const MeusCavalos = () => {
         {loading ? (
           <p className="text-center text-gray-500 py-12">Carregando cavalos...</p>
         ) : (
-          <div className="space-y-4"> {/* ← Lista vertical mais compacta */}
+          <div className="space-y-4">
             {filteredAnimais.map((animal) => (
               <div
                 key={animal.id}
                 className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden"
               >
-                {/* Foto - ainda menor */}
-                <div className="w-28 h-28 flex-shrink-0 bg-gray-200">
+                {/* FOTO */}
+                <div className="w-32 h-32 flex-shrink-0 bg-gray-200">
                   {animal.photoUrl ? (
                     <img
                       src={animal.photoUrl}
@@ -106,47 +106,51 @@ const MeusCavalos = () => {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-5xl">🐴</div>
+                    <div className="w-full h-full flex items-center justify-center text-6xl">🐴</div>
                   )}
                 </div>
 
-                {/* Informações */}
-                <div className="flex-1 p-5">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="text-xl font-semibold text-gray-900">{animal.nome}</h3>
-                      <p className="text-emerald-700 font-medium text-sm">
-                        {animal.raca?.nome || 'Raça não informada'}
-                      </p>
-                    </div>
+                {/* CONTEÚDO PRINCIPAL - TUDO AO LADO */}
+                <div className="flex-1 p-6 flex items-start">
+                  {/* Nome + Raça */}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-2xl font-bold text-gray-900">{animal.nome}</h3>
+                    <p className="text-emerald-700 font-medium text-lg">
+                      {animal.raca?.nome || 'Raça não informada'}
+                    </p>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-4 text-sm text-gray-600">
+                  {/* IDADE E SEXO - AGORA NA MESMA LINHA (AO LADO) */}
+                  <div className="flex items-start gap-12 ml-10">
                     <div>
-                      <span className="block text-xs uppercase tracking-widest">Idade</span>
-                      <span className="font-medium">{calcularIdade(animal.dataNascimento)}</span>
+                      <span className="block text-xs uppercase text-gray-500 tracking-widest">IDADE</span>
+                      <span className="font-semibold text-gray-800 text-lg">
+                        {calcularIdade(animal.dataNascimento)}
+                      </span>
                     </div>
                     <div>
-                      <span className="block text-xs uppercase tracking-widest">Sexo</span>
-                      <span className="font-medium capitalize">{animal.sexo}</span>
+                      <span className="block text-xs uppercase text-gray-500 tracking-widest">SEXO</span>
+                      <span className="font-semibold text-gray-800 text-lg capitalize">
+                        {animal.sexo}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Botões à direita - empilhados */}
-                <div className="flex flex-col border-l border-gray-100 p-2 gap-2 w-20">
+                {/* BOTÕES NO CANTO SUPERIOR DIREITO */}
+                <div className="flex items-start p-6 gap-3 border-l border-gray-100">
                   <button
                     onClick={() => handleEdit(animal)}
-                    className="flex-1 flex flex-col items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-medium transition-colors"
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
                   >
-                    <Pencil size={16} />
+                    <Pencil size={18} />
                     Editar
                   </button>
                   <button
                     onClick={() => handleDeleteClick(animal)}
-                    className="flex-1 flex flex-col items-center justify-center gap-1 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-medium transition-colors"
+                    className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={18} />
                     Excluir
                   </button>
                 </div>
@@ -155,7 +159,7 @@ const MeusCavalos = () => {
           </div>
         )}
 
-        {/* Modal de exclusão (mantido igual) */}
+        {/* Modal de exclusão (mantido inalterado) */}
         {animalToDelete && (
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
@@ -166,7 +170,6 @@ const MeusCavalos = () => {
                 <h2 className="text-2xl font-bold">Excluir animal?</h2>
                 <p className="text-emerald-100 mt-2">
                   Tem certeza que deseja excluir <strong>{animalToDelete.nome}</strong> permanentemente?
-                  <br />Essa ação não pode ser desfeita.
                 </p>
               </div>
 
