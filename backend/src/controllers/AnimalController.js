@@ -1,26 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads');
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ storage });
 
 class AnimalController {
-  static uploadMiddleware = upload.single('foto');
-
   async listar(req, res) {
     const { userId } = req.query;
     try {
@@ -51,17 +32,13 @@ class AnimalController {
   }
 
   async criar(req, res) {
-    const nome = req.body.nome;
-    const especieId = req.body.especieId;
-    const racaId = req.body.racaId;
-    const peso = req.body.peso;
-    const dataNascimento = req.body.dataNascimento;
-    const sexo = req.body.sexo;
-    const userId = req.body.userId;
+    const { nome, especieId, racaId, peso, dataNascimento, sexo, userId, exercises = '[]' } = req.body;
 
-    let exercises = [];
-    if (req.body.exercises) {
-      try { exercises = JSON.parse(req.body.exercises); } catch (e) { exercises = []; }
+    let parsedExercises = [];
+    try {
+      parsedExercises = JSON.parse(exercises);
+    } catch (e) {
+      parsedExercises = [];
     }
 
     if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ error: 'Raça é obrigatória' });
@@ -70,7 +47,9 @@ class AnimalController {
 
     try {
       let photoUrl = null;
-      if (req.file) photoUrl = `/uploads/${req.file.filename}`;
+      if (req.file) {
+        photoUrl = `/uploads/${req.file.filename}`;
+      }
 
       const animal = await prisma.animal.create({
         data: {
@@ -85,9 +64,9 @@ class AnimalController {
         }
       });
 
-      if (exercises.length > 0) {
+      if (parsedExercises.length > 0) {
         await prisma.animalExercise.createMany({
-          data: exercises.map(ex => ({
+          data: parsedExercises.map(ex => ({
             animalId: animal.id,
             tipo: ex.tipo,
             periodicidade: ex.periodicidade
@@ -104,21 +83,13 @@ class AnimalController {
 
   async atualizar(req, res) {
     const { id } = req.params;
-    const nome = req.body.nome;
-    const especieId = req.body.especieId;
-    const racaId = req.body.racaId;
-    const peso = req.body.peso;
-    const dataNascimento = req.body.dataNascimento;
-    const sexo = req.body.sexo;
+    const { nome, especieId, racaId, peso, dataNascimento, sexo, exercises = '[]' } = req.body;
 
-    // Parse seguro dos exercícios (FormData envia como string)
-    let exercises = [];
-    if (req.body.exercises) {
-      try {
-        exercises = JSON.parse(req.body.exercises);
-      } catch (e) {
-        exercises = [];
-      }
+    let parsedExercises = [];
+    try {
+      parsedExercises = JSON.parse(exercises);
+    } catch (e) {
+      parsedExercises = [];
     }
 
     try {
@@ -140,12 +111,10 @@ class AnimalController {
         }
       });
 
-      // Atualiza exercícios (remove antigos e cria os novos)
-      await prisma.animalExercise.deleteMany({ where: { animalId: Number(id) } });
-
-      if (exercises.length > 0) {
+      if (parsedExercises.length > 0) {
+        await prisma.animalExercise.deleteMany({ where: { animalId: Number(id) } });
         await prisma.animalExercise.createMany({
-          data: exercises.map(ex => ({
+          data: parsedExercises.map(ex => ({
             animalId: Number(id),
             tipo: ex.tipo,
             periodicidade: ex.periodicidade
