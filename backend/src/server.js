@@ -16,7 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 // ===================== IMPORTAÇÃO DAS ROTAS =====================
 const authRoutes = require('./routes/auth');
 const animaisRoutes = require('./routes/animais');
-const produtosRoutes = require('./routes/produtos');
+const alimentosRoutes = require('./routes/alimentos');     // ← NOVA ROTA
 const dietasRoutes = require('./routes/dietas');
 const examesRoutes = require('./routes/exames');
 const analiseRoutes = require('./routes/analise');
@@ -28,14 +28,17 @@ const userRoutes = require('./routes/user');
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth', authRoutes);
 app.use('/api/animais', animaisRoutes);
-app.use('/produtos', produtosRoutes);
+app.use('/api/alimentos', alimentosRoutes);               // ← ADICIONADO AQUI
+
 app.use('/dietas', dietasRoutes);
 app.use('/exames', examesRoutes);
 app.use('/analise', analiseRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/especies', especiesRoutes);
 app.use('/api/racas', racasRoutes);
-app.use('/api/users', userRoutes);   // ← ESSA LINHA É OBRIGATÓRIA
+app.use('/api/users', userRoutes);
+
+// Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ===================== HEALTH CHECK =====================
@@ -59,7 +62,6 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
   console.log(`📡 API disponível em: http://localhost:${PORT}`);
-  console.log(`🔗 Rota de usuários: http://localhost:${PORT}/api/users/me`);
 });
 
 module.exports = app;

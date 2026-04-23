@@ -104,7 +104,7 @@ model AnimalExercise {
 model Dieta {
   id               Int      @id @default(autoincrement())
   animalId         Int
-  produtoId        Int
+  alimentoId       Int                    // ← alterado de produtoId
   qtdGramasDia     Float
   dataInicio       DateTime @default(now())
   dataFim          DateTime?
@@ -112,23 +112,23 @@ model Dieta {
   observacao       String?
 
   animal           Animal   @relation(fields: [animalId], references: [id])
-  produto          Produto  @relation(fields: [produtoId], references: [id])
+  alimento         Alimento @relation(fields: [alimentoId], references: [id])  // ← alterado
 
   @@map("tb_dieta")
 }
 
-model Produto {
+model Alimento {
   id            Int      @id @default(autoincrement())
   nome          String
   categoria     String
   fabricante    String?
-  forma         String?
+  forma         String?           // mantida (explicada acima)
   ativo         Boolean  @default(true)
 
-  composicoes   ComposicaoProduto[]
+  composicoes   ComposicaoAlimento[]
   dietas        Dieta[]
 
-  @@map("tb_produtos")
+  @@map("tb_alimentos")
 }
 
 model Nutriente {
@@ -139,24 +139,24 @@ model Nutriente {
   codigo         String?  @unique
   essencial      Boolean  @default(false)
 
-  composicoes    ComposicaoProduto[]
+  composicoes    ComposicaoAlimento[]
   exames         ExameNutricional[]
 
   @@map("tb_nutrientes")
 }
 
-model ComposicaoProduto {
+model ComposicaoAlimento{
   id            Int      @id @default(autoincrement())
-  produtoId     Int
+  alimentoId    Int                    // ← alterado de produtoId
   nutrienteId   Int
   valorPorKg    Float
   base          String   @default("Seca")
 
-  produto       Produto   @relation(fields: [produtoId], references: [id])
+  alimento      Alimento @relation(fields: [alimentoId], references: [id])   // ← alterado
   nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
 
-  @@unique([produtoId, nutrienteId])
-  @@map("tb_composicao_produto")
+  @@unique([alimentoId, nutrienteId])
+  @@map("tb_composicao_alimento")
 }
 
 model ExameNutricional {
