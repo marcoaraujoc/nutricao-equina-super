@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
+import { ArrowLeft } from 'lucide-react';
 
 const Cavalos = () => {
   const { user } = useAuth();
@@ -9,6 +10,7 @@ const Cavalos = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
 
+  const [loading, setLoading] = useState(true);           // ← Novo estado de loading
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
 
@@ -27,7 +29,7 @@ const Cavalos = () => {
     exercises: [] as { tipo: string; periodicidade: string }[],
   });
 
-  // Carrega espécies, raças e dados do animal (edição)
+  // Carrega espécies, raças e dados do animal
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -57,12 +59,14 @@ const Cavalos = () => {
         }
       } catch (error) {
         console.error('Erro ao carregar dados', error);
+      } finally {
+        setLoading(false);        // ← Finaliza o loading
       }
     };
     loadData();
   }, [id, isEditMode]);
 
-  // Filtra raças + define default apenas no cadastro
+  // Filtra raças
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
@@ -109,11 +113,6 @@ const Cavalos = () => {
     e.preventDefault();
     setSubmitting(true);
 
-    // Debug: mostra o que está sendo enviado
-    console.log('=== DADOS ANTES DE ENVIAR ===');
-    console.log('formData.racaId:', formData.racaId);
-    console.log('formData completo:', formData);
-
     if (!formData.racaId) {
       alert('❌ Raça é obrigatória');
       setSubmitting(false);
@@ -136,7 +135,7 @@ const Cavalos = () => {
         const formDataUpload = new FormData();
         formDataUpload.append('nome', payload.nome);
         formDataUpload.append('especieId', String(payload.especieId));
-        formDataUpload.append('racaId', String(payload.racaId));        // ← corrigido
+        formDataUpload.append('racaId', String(payload.racaId));
         formDataUpload.append('peso', String(payload.peso));
         formDataUpload.append('dataNascimento', payload.dataNascimento || '');
         formDataUpload.append('sexo', payload.sexo);
@@ -144,7 +143,6 @@ const Cavalos = () => {
         formDataUpload.append('exercises', JSON.stringify(payload.exercises));
         formDataUpload.append('foto', photoFile);
 
-        console.log('Enviando FormData com foto...');
         const config = { headers: { 'Content-Type': 'multipart/form-data' } };
 
         if (isEditMode) {
@@ -155,7 +153,6 @@ const Cavalos = () => {
           alert('✅ Animal cadastrado com sucesso!');
         }
       } else {
-        console.log('Enviando JSON sem foto...');
         if (isEditMode) {
           await axios.put(`/api/animais/${id}`, payload);
           alert('✅ Animal atualizado com sucesso!');
@@ -167,53 +164,84 @@ const Cavalos = () => {
 
       navigate('/meus-cavalos');
     } catch (error: any) {
-      console.error('Erro completo:', error.response?.data || error);
+      console.error(error);
       alert(error.response?.data?.error || '❌ Erro ao salvar animal');
     } finally {
       setSubmitting(false);
     }
   };
 
+  // Tela de loading (evita tela em branco)
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-500">Carregando animal...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-screen bg-white flex items-center justify-center overflow-hidden">
-      <div className="max-w-2xl w-full mx-auto px-4">
-        <div className="bg-white shadow-2xl rounded-3xl p-5 border border-gray-100 max-h-[94vh] overflow-y-auto">
-          {/* Foto */}
-          <div className="flex justify-center mb-5">
-            <label className="cursor-pointer group">
-              <div className="w-44 h-44 rounded-full border-4 border-emerald-600 overflow-hidden bg-gray-100 flex items-center justify-center shadow-inner transition-all group-hover:scale-105">
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+      <div className="max-w-2xl mx-auto">
+        <div className="bg-white shadow-2xl rounded-3xl p-6 md:p-8 border border-gray-100">
+          {/* Header com botão Voltar */}
+          <div className="flex items-center gap-3 mb-8">
+            <button
+              onClick={() => navigate('/meus-cavalos')}
+              className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
+            >
+              <ArrowLeft size={24} />
+              <span className="text-lg">Voltar</span>
+            </button>
+          </div>
+
+          {/* Foto quadrada + Nome em destaque */}
+          <div className="flex gap-6 mb-10">
+            {/* Foto quadrada */}
+            <label className="cursor-pointer group flex-shrink-0">
+              <div className="w-40 h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
                 {photoPreview ? (
-                  <img src={photoPreview} alt="Foto do animal" className="w-full h-full object-cover" />
+                  <img
+                    src={photoPreview}
+                    alt="Foto do animal"
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
-                  <div className="text-center text-emerald-600">
-                    <span className="block text-sm font-medium">Adicionar foto</span>
-                    <span className="text-xs">Clique aqui</span>
+                  <div className="w-full h-full flex items-center justify-center text-emerald-600 text-center p-4">
+                    <div>
+                      <span className="block text-sm font-medium">Adicionar foto</span>
+                      <span className="text-xs">Clique aqui</span>
+                    </div>
                   </div>
                 )}
               </div>
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
             </label>
-          </div>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Animal</label>
+            {/* Nome em destaque */}
+            <div className="flex-1 pt-4">
               <input
                 type="text"
                 required
                 value={formData.nome}
                 onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                className="w-full text-4xl font-bold text-gray-900 focus:outline-none border-b border-transparent focus:border-emerald-600"
+                placeholder="Nome do Animal"
               />
             </div>
+          </div>
 
+          <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
                 <select
                   value={formData.especieId}
                   onChange={(e) => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
                 >
                   {especies.map((esp: any) => (
                     <option key={esp.id} value={esp.id}>{esp.nome}</option>
@@ -225,7 +253,7 @@ const Cavalos = () => {
                 <select
                   value={formData.sexo}
                   onChange={(e) => setFormData({ ...formData, sexo: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
                 >
                   <option value="Macho">Macho</option>
                   <option value="Fêmea">Fêmea</option>
@@ -242,7 +270,7 @@ const Cavalos = () => {
                 value={formData.racaId || ''}
                 onChange={(e) => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
                 required
-                className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
               >
                 {racasFiltradas.map((raca: any) => (
                   <option key={raca.id} value={raca.id}>
@@ -261,7 +289,7 @@ const Cavalos = () => {
                   required
                   value={formData.peso}
                   onChange={(e) => setFormData({ ...formData, peso: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
                 />
               </div>
               <div>
@@ -271,7 +299,7 @@ const Cavalos = () => {
                   required
                   value={formData.dataNascimento}
                   onChange={(e) => setFormData({ ...formData, dataNascimento: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
                 />
               </div>
             </div>
