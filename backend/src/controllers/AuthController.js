@@ -1,13 +1,14 @@
 const { PrismaClient } = require('@prisma/client');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 
 const prisma = new PrismaClient();
 const SECRET = process.env.JWT_SECRET || 'equine-nutrition-super-2026';
 
-// Configuração do Nodemailer (configure no .env)
+// Configuração do Nodemailer
 const transporter = nodemailer.createTransport({
-  service: 'gmail', // ou use SendGrid, Outlook, etc.
+  service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -15,8 +16,53 @@ const transporter = nodemailer.createTransport({
 });
 
 const AuthController = {
-  // ==================== SEUS MÉTODOS EXISTENTES (login, register, google, etc.) ====================
-  // (mantenha aqui todos os métodos que já existiam no seu arquivo)
+
+  // ==================== REGISTRO (corrigido - e-mail único) ====================
+  register: async (req, res) => {
+    const { fullName, email, phone, password, userType = 'PROPRIETARIO' } = req.body;
+
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios' });
+    }
+
+    try {
+      const emailLower = email.trim().toLowerCase();
+
+      // Cria o usuário
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const user = await prisma.user.create({
+        data: {
+          fullName: fullName.trim(),
+          email: emailLower,
+          phone: phone || null,
+          passwordHash: hashedPassword,
+          role: 'USER',
+          userType: userType,
+        }
+      });
+
+      console.log(`✅ Novo usuário cadastrado: ${user.email}`);
+
+      res.status(201).json({
+        success: true,
+        message: 'Cadastro realizado com sucesso!',
+        user: { id: user.id, fullName: user.fullName, email: user.email }
+      });
+
+    } catch (error) {
+      console.error('Erro no register:', error);
+
+      // Tratamento específico de e-mail duplicado
+      if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
+        return res.status(409).json({ 
+          error: 'Este e-mail já está cadastrado. Tente fazer login ou use outro e-mail.' 
+        });
+      }
+
+      res.status(500).json({ error: 'Erro interno ao cadastrar usuário' });
+    }
+  },
 
   // ==================== ESQUECI MINHA SENHA ====================
   forgotPassword: async (req, res) => {
@@ -66,7 +112,6 @@ const AuthController = {
   },
 
   // ==================== REDEFINIR SENHA ====================
-    // ==================== REDEFINIR SENHA (com hash bcrypt) ====================
   resetPassword: async (req, res) => {
     try {
       const { token, newPassword } = req.body;
@@ -78,14 +123,12 @@ const AuthController = {
         return res.status(400).json({ error: 'Token inválido ou expirado' });
       }
 
-      // Hash da senha (igual ao cadastro normal)
-      const bcrypt = require('bcryptjs');
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          passwordHash: hashedPassword,           // ← agora com hash
+          passwordHash: hashedPassword,
           resetPasswordToken: null,
           resetPasswordExpires: null,
         },

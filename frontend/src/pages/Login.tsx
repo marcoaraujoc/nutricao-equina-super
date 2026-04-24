@@ -20,7 +20,7 @@ export default function Login() {
   const [forgotSuccess, setForgotSuccess] = useState(false);
   const [forgotError, setForgotError] = useState('');
 
-  // ==================== GOOGLE (mantido igual) ====================
+  // ==================== GOOGLE ====================
   const handleGoogleSuccess = (credentialResponse: any) => {
     console.log('✅ Google credential recebido:', credentialResponse);
     if (!credentialResponse?.credential) {
@@ -68,7 +68,7 @@ export default function Login() {
     }
   };
 
-  // ==================== ESQUECI MINHA SENHA (MODAL) ====================
+  // ==================== ESQUECI MINHA SENHA ====================
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setForgotLoading(true);
@@ -76,20 +76,18 @@ export default function Login() {
     setForgotSuccess(false);
 
     try {
-      const res = await fetch('/api/auth/forgot-password', {
+      // Sempre envia a requisição (não revela se o e-mail existe ou não)
+      await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail.trim().toLowerCase() }),
       });
 
-      if (res.ok) {
-        setForgotSuccess(true);
-      } else {
-        const data = await res.json();
-        setForgotError(data.error || 'E-mail não encontrado');
-      }
+      // Sempre mostra sucesso (segurança contra enumeração de e-mails)
+      setForgotSuccess(true);
     } catch (err) {
-      setForgotError('Erro de conexão com o servidor');
+      // Mesmo em caso de erro de rede, mostra a mensagem de sucesso
+      setForgotSuccess(true);
     } finally {
       setForgotLoading(false);
     }
@@ -104,22 +102,42 @@ export default function Login() {
         <form onSubmit={handleEmailLogin} className="space-y-6">
           <div>
             <label className="block text-sm font-medium mb-1">E-mail</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500" placeholder="seuemail@email.com" required />
+            <input 
+              type="email" 
+              value={email} 
+              onChange={(e) => setEmail(e.target.value)} 
+              className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500" 
+              placeholder="seuemail@email.com" 
+              required 
+            />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Senha</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500" required />
+            <input 
+              type="password" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500" 
+              required 
+            />
           </div>
 
           {error && <p className="text-red-500 text-sm text-center font-medium">{error}</p>}
 
-          <button type="submit" disabled={loading} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white py-4 rounded-3xl text-lg font-semibold transition-colors">
+          <button 
+            type="submit" 
+            disabled={loading} 
+            className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white py-4 rounded-3xl text-lg font-semibold transition-colors"
+          >
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
         </form>
 
         <div className="text-center mt-4">
-          <button onClick={() => setShowForgotModal(true)} className="text-emerald-600 hover:underline text-sm">
+          <button 
+            onClick={() => setShowForgotModal(true)} 
+            className="text-emerald-600 hover:underline text-sm"
+          >
             Esqueci minha senha
           </button>
         </div>
@@ -130,7 +148,16 @@ export default function Login() {
           <div className="flex-1 h-px bg-gray-300"></div>
         </div>
 
-        <GoogleLogin onSuccess={handleGoogleSuccess} onError={handleGoogleError} useOneTap={false} theme="outline" size="large" text="continue_with" shape="rectangular" width="100%" />
+        <GoogleLogin 
+          onSuccess={handleGoogleSuccess} 
+          onError={handleGoogleError} 
+          useOneTap={false} 
+          theme="outline" 
+          size="large" 
+          text="continue_with" 
+          shape="rectangular" 
+          width="100%" 
+        />
 
         <p className="text-center text-gray-500 mt-8">
           Não tem uma conta?{' '}
@@ -138,7 +165,7 @@ export default function Login() {
         </p>
       </div>
 
-      {/* MODAL - Texto escuro visível */}
+      {/* MODAL - Esqueci minha senha */}
       {showForgotModal && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-white rounded-3xl p-8 w-full max-w-md mx-4 text-gray-900">
@@ -156,14 +183,25 @@ export default function Login() {
               />
 
               {forgotError && <p className="text-red-500 text-sm text-center mt-3">{forgotError}</p>}
-              {forgotSuccess && <p className="text-emerald-600 text-sm text-center mt-3">Link enviado! Verifique sua caixa de entrada.</p>}
+              {forgotSuccess && (
+                <p className="text-emerald-600 text-sm text-center mt-3">
+                  Se o e-mail existir será encaminhado o link.
+                </p>
+              )}
 
-              <button type="submit" disabled={forgotLoading} className="w-full mt-6 bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-3xl text-lg font-semibold">
-                {forgotLoading ? 'Enviando...' : 'Enviar link'}
+              <button 
+                type="submit" 
+                disabled={forgotLoading} 
+                className="w-full mt-6 bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-3xl text-lg font-semibold"
+              >
+                {forgotLoading ? 'Enviando...' : 'Enviar e-mail'}
               </button>
             </form>
 
-            <button onClick={() => setShowForgotModal(false)} className="mt-6 w-full text-gray-500 hover:text-gray-700 text-sm">
+            <button 
+              onClick={() => setShowForgotModal(false)} 
+              className="mt-6 w-full text-gray-500 hover:text-gray-700 text-sm"
+            >
               Fechar
             </button>
           </div>

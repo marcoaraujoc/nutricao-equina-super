@@ -6,7 +6,6 @@ export default function Register() {
   const location = useLocation();
   const navigate = useNavigate();
   const { login } = useAuth();
-
   const googleData = location.state || {};
 
   const [form, setForm] = useState({
@@ -23,23 +22,38 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+  // Máscara de telefone com (21)
+  const formatPhone = (value: string) => {
+    let phone = value.replace(/\D/g, '');
+    if (phone.length > 11) phone = phone.substring(0, 11);
+
+    if (phone.length <= 2) return `(${phone}`;
+    if (phone.length <= 6) return `(${phone.substring(0,2)}) ${phone.substring(2)}`;
+    return `(${phone.substring(0,2)}) ${phone.substring(2,7)}-${phone.substring(7)}`;
   };
 
-  // Validação forte de senha (mesma regra usada na tela de ResetPassword)
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    if (name === 'phone') {
+      setForm({ ...form, phone: formatPhone(value) });
+    } else {
+      setForm({ ...form, [name]: value });
+    }
+  };
+
+  // Validação forte de senha
   const validatePassword = (password: string): string | null => {
     if (password.length < 8) return 'A senha deve ter no mínimo 8 caracteres';
     if (!/[A-Z]/.test(password)) return 'A senha deve conter pelo menos 1 letra maiúscula';
     if (!/[0-9]/.test(password)) return 'A senha deve conter pelo menos 1 número';
     if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'A senha deve conter pelo menos 1 caractere especial (!@#$%^&*)';
-    return null; // senha válida
+    return null;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
 
-    // Validação forte
     const passwordError = validatePassword(form.password);
     if (passwordError) {
       setError(passwordError);
@@ -51,8 +65,12 @@ export default function Register() {
       return;
     }
 
+    if (form.phone.replace(/\D/g, '').length < 10) {
+      setError('Telefone inválido');
+      return;
+    }
+
     setLoading(true);
-    setError('');
 
     const emailLower = form.email.trim().toLowerCase();
 
@@ -73,7 +91,6 @@ export default function Register() {
 
       if (res.ok) {
         alert('✅ Cadastro realizado com sucesso!');
-
         if (googleData.fromGoogle) {
           const loginRes = await fetch('/api/auth/login', {
             method: 'POST',
@@ -81,7 +98,6 @@ export default function Register() {
             body: JSON.stringify({ email: emailLower, password: form.password }),
           });
           const loginData = await loginRes.json();
-
           if (loginRes.ok) {
             login(loginData.token);
             navigate('/');
@@ -92,7 +108,12 @@ export default function Register() {
           navigate('/login');
         }
       } else {
-        setError(data.error || 'Erro ao cadastrar usuário');
+        // Tratamento de e-mail duplicado
+        if (data.error?.toLowerCase().includes('email') || data.error?.toLowerCase().includes('e-mail')) {
+          setError('Este e-mail já está cadastrado. Tente fazer login ou use outro e-mail.');
+        } else {
+          setError(data.error || 'Erro ao cadastrar usuário');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -111,7 +132,9 @@ export default function Register() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium mb-1">Nome completo</label>
+            <label className="block text-sm font-medium mb-1">
+              Nome completo <span className="text-red-500">*</span>
+            </label>
             <input
               type="text"
               name="fullName"
@@ -123,7 +146,9 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">E-mail</label>
+            <label className="block text-sm font-medium mb-1">
+              E-mail <span className="text-red-500">*</span>
+            </label>
             <input
               type="email"
               name="email"
@@ -135,34 +160,40 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Telefone</label>
+            <label className="block text-sm font-medium mb-1">
+              Telefone <span className="text-red-500">*</span>
+            </label>
             <input
               type="tel"
               name="phone"
               value={form.phone}
               onChange={handleChange}
+              placeholder="(21) 99999-9999"
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
-              placeholder="(11) 99999-9999"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Você é...</label>
+            <label className="block text-sm font-medium mb-1">
+              Você é... <span className="text-red-500">*</span>
+            </label>
             <select
               name="userType"
               value={form.userType}
               onChange={handleChange}
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
+              required
             >
               <option value="PROPRIETARIO">Proprietário de cavalo</option>
               <option value="VETERINARIO">Veterinário</option>
             </select>
           </div>
 
-          {/* Senha com olho */}
           <div>
-            <label className="block text-sm font-medium mb-1">Senha</label>
+            <label className="block text-sm font-medium mb-1">
+              Senha <span className="text-red-500">*</span>
+            </label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -182,9 +213,10 @@ export default function Register() {
             </div>
           </div>
 
-          {/* Repetir Senha com olho */}
           <div>
-            <label className="block text-sm font-medium mb-1">Repetir Senha</label>
+            <label className="block text-sm font-medium mb-1">
+              Repetir Senha <span className="text-red-500">*</span>
+            </label>
             <div className="relative">
               <input
                 type={showConfirmPassword ? 'text' : 'password'}
