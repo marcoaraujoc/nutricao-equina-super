@@ -136,8 +136,6 @@ model Nutriente {
   nome           String
   categoria      String
   unidadePadrao  String
-  codigo         String?  @unique
-  essencial      Boolean  @default(false)
 
   composicoes    ComposicaoAlimento[]
   exames         ExameNutricional[]

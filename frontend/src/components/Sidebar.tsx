@@ -44,7 +44,21 @@ export default function Sidebar() {
       label: 'Alimentos',
       icon: '🌾'                             // ícone adequado para alimentos
     },
-    { path: '/dieta', label: 'Dieta Diária', icon: '🍎' },
+    {
+      path: '/nutrientes',
+      label: 'Nutrientes',
+      icon: '🧪'   // ou use o ícone que preferir (padrão do projeto aceita emoji)
+    },
+    {
+      path: '/composicao-alimentar',
+      label: 'Composição Alimentar',
+      icon: '📊'
+    },
+    {
+      path: '/dieta',
+      label: 'Dieta',
+      icon: '🥕'
+    },
     { path: '/exames', label: 'Exames', icon: '📋' },
     { path: '/analise', label: 'Análise + LLM', icon: '📊' },
   ];

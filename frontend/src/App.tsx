@@ -16,6 +16,11 @@ import Exames from './pages/Exames';
 import Analise from './pages/Analise';
 import CadastroPessoal from './pages/CadastroPessoal';
 import ResetPassword from './pages/ResetPassword';
+import Nutrientes from './pages/Nutrientes';
+import CriaNutrientes from './pages/CriaNutrientes';
+import ComposicaoAlimentar from './pages/ComposicaoAlimentar';
+import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
+import CriaDieta from './pages/CriaDieta';
 
 function App() {
   return (
@@ -49,7 +54,21 @@ function App() {
                       <Route path="/alimentos/novo" element={<CriaAlimentos />} />
                       <Route path="/alimentos/:id" element={<CriaAlimentos />} />
 
+                      {/* Rotas de Nutrientes */}
+                      <Route path="/nutrientes" element={<Nutrientes />} />
+                      <Route path="/nutrientes/novo" element={<CriaNutrientes />} />
+                      <Route path="/nutrientes/:id" element={<CriaNutrientes />} />
+                      
+                      {/* Rotas de Composição Alimentar */}
+                      <Route path="/composicao-alimentar" element={<ComposicaoAlimentar />} />
+                      <Route path="/composicao-alimentar/novo" element={<CriaComposicaoAlimentar />} />
+                      <Route path="/composicao-alimentar/:id" element={<CriaComposicaoAlimentar />} />
+        
+                      {/* Rotas de Dieta */}
                       <Route path="/dieta" element={<Dieta />} />
+                      <Route path="/dieta/novo" element={<CriaDieta />} />
+                      <Route path="/dieta/:id" element={<CriaDieta />} />
+    
                       <Route path="/exames" element={<Exames />} />
                       <Route path="/analise" element={<Analise />} />
                     </Routes>
