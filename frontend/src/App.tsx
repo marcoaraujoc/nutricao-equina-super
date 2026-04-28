@@ -21,6 +21,7 @@ import CriaNutrientes from './pages/CriaNutrientes';
 import ComposicaoAlimentar from './pages/ComposicaoAlimentar';
 import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
 import CriaDieta from './pages/CriaDieta';
+import AnimalDetail from './pages/AnimalDetail';
 
 function App() {
   return (
@@ -39,7 +40,7 @@ function App() {
               <ProtectedRoute>
                 <div className="flex min-h-screen bg-white">
                   <Sidebar />
-                  <div className="flex-1 ml-72 p-8 bg-white overflow-auto">
+                  <div className="flex-1 p-8 bg-white overflow-auto">
                     <Routes>
                       <Route path="/" element={<Dashboard />} />
                       <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
@@ -69,6 +70,9 @@ function App() {
                       <Route path="/dieta/novo" element={<CriaDieta />} />
                       <Route path="/dieta/:id" element={<CriaDieta />} />
     
+                      {/* Rotas de Animais */}
+                      <Route path="/animal/:id" element={<AnimalDetail />} />
+
                       <Route path="/exames" element={<Exames />} />
                       <Route path="/analise" element={<Analise />} />
                     </Routes>
