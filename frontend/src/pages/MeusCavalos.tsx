@@ -70,7 +70,7 @@ const MeusCavalos = () => {
     <div className="space-y-6 md:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-3xl font-bold text-gray-900">Meus Cavalos</h1>
+        <h1 className="text-3xl font-bold text-gray-900">Meus Animais</h1>
         <button
           onClick={() => navigate('/cavalos')}
           className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"

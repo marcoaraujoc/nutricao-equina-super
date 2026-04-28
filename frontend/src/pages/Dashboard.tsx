@@ -25,7 +25,13 @@ const Dashboard = () => {
   const loadAnimais = async () => {
     try {
       const res = await axios.get('/api/animais');
+      console.log('✅ Animais carregados:', res.data);
       setAnimais(res.data);
+
+      // Regra: se tiver EXATAMENTE 1 animal, abre direto a tela completa
+      if (res.data.length === 1) {
+        navigate(`/animal/${res.data[0].id}`);
+      }
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
     } finally {
@@ -49,12 +55,8 @@ const Dashboard = () => {
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
         <PawPrint size={80} className="mx-auto text-gray-300 mb-6" />
-        <h2 className="text-3xl font-bold text-gray-900 mb-3">
-          Você ainda não tem animais cadastrados
-        </h2>
-        <p className="text-gray-600 mb-8">
-          Para começar a usar o sistema, cadastre seu primeiro animal.
-        </p>
+        <h2 className="text-3xl font-bold text-gray-900 mb-3">Você ainda não tem animais cadastrados</h2>
+        <p className="text-gray-600 mb-8">Para começar a usar o sistema, cadastre seu primeiro animal.</p>
         <button
           onClick={() => navigate('/cavalos')}
           className="inline-flex items-center gap-3 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-4 rounded-3xl font-semibold text-lg transition-colors"
@@ -66,16 +68,17 @@ const Dashboard = () => {
     );
   }
 
+  // Se chegou aqui = tem mais de 1 animal → mostra a lista
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-gray-900">Seus Animais</h1>
+      <h1 className="text-3xl font-bold text-gray-900">Meus Animais</h1>
 
       <div className="space-y-4">
         {animais.map((animal) => (
           <button
             key={animal.id}
             onClick={() => navigate(`/animal/${animal.id}`)}
-            className="w-full flex items-center bg-white rounded-3xl shadow-sm border border-gray-100 hover:shadow-md transition-all p-6 text-left text-gray-900"
+            className="w-full flex items-center bg-white rounded-3xl shadow-sm border border-gray-100 hover:shadow-md transition-all p-6 text-left"
           >
             {/* Foto */}
             <div className="w-20 h-20 bg-gray-200 rounded-3xl overflow-hidden flex-shrink-0 mr-6">
@@ -88,55 +91,40 @@ const Dashboard = () => {
 
             {/* Nome + Raça/Espécie */}
             <div className="flex-1">
-              <h3 className="text-3xl font-semibold text-gray-900">
-                {animal.nome}
-              </h3>
+              <h3 className="text-3xl font-semibold text-gray-900">{animal.nome}</h3>
               <p className="text-xl font-medium text-emerald-600 mt-1">
                 {animal.raca?.nome || animal.especie?.nome || 'Sem raça definida'}
               </p>
             </div>
 
-            {/* Campos à direita */}
-            <div className="grid grid-cols-4 gap-x-12 text-center text-gray-900">
-              
+            {/* Campos à direita - Labels pretos + Valores verdes */}
+            <div className="grid grid-cols-4 gap-x-12 text-center">
               <div>
-                <span className="block text-xs uppercase text-emerald-600 tracking-widest">
-                  ESPÉCIE
-                </span>
-                <span className="block text-lg font-medium !text-gray-900 mt-1">
+                <span className="block text-xs uppercase text-gray-900 tracking-widest">ESPÉCIE</span>
+                <span className="text-lg font-medium text-emerald-600 mt-1">
                   {animal.especie?.nome || '-'}
                 </span>
               </div>
-
               <div>
-                <span className="block text-xs uppercase text-emerald-600 tracking-widest">
-                  SEXO
-                </span>
-                <span className="block text-lg font-medium !text-gray-900 mt-1">
+                <span className="block text-xs uppercase text-gray-900 tracking-widest">SEXO</span>
+                <span className="text-lg font-medium text-emerald-600 mt-1">
                   {animal.sexo || '-'}
                 </span>
               </div>
-
               <div>
-                <span className="block text-xs uppercase text-emerald-600 tracking-widest">
-                  NASCIMENTO
-                </span>
-                <span className="block text-lg font-medium !text-gray-900 mt-1">
-                  {animal.dataNascimento
+                <span className="block text-xs uppercase text-gray-900 tracking-widest">NASCIMENTO</span>
+                <span className="text-lg font-medium text-emerald-600 mt-1">
+                  {animal.dataNascimento 
                     ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR')
                     : '-'}
                 </span>
               </div>
-
               <div>
-                <span className="block text-xs uppercase text-emerald-600 tracking-widest">
-                  IDADE
-                </span>
-                <span className="block text-lg font-medium !text-gray-900 mt-1">
+                <span className="block text-xs uppercase text-gray-900 tracking-widest">IDADE</span>
+                <span className="text-lg font-medium text-emerald-600 mt-1">
                   {calculateAge(animal.dataNascimento)} anos
                 </span>
               </div>
-
             </div>
           </button>
         ))}
