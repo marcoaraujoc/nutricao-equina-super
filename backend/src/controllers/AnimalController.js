@@ -2,26 +2,56 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 class AnimalController {
+  // ✅ LISTAR ANIMAIS (agora suporta busca por e-mail - como você pediu)
   async listar(req, res) {
-    const { userId } = req.query;
+    const { userId, email } = req.query;
     try {
+      let where = {};
+
+      if (email) {
+        // Busca o usuário interno pelo e-mail (único) e depois os animais dele
+        const usuario = await prisma.user.findUnique({
+          where: { email: String(email) }
+        });
+        if (usuario) {
+          where = { userId: usuario.id };
+        }
+      } else if (userId) {
+        where = { userId: Number(userId) };
+      }
+
       const animais = await prisma.animal.findMany({
-        where: userId ? { userId: Number(userId) } : {},
-        include: { especie: true, raca: true, exercises: true }
+        where,
+        include: { 
+          especie: true, 
+          raca: true, 
+          exercises: true,
+          user: { select: { fullName: true, email: true } } // nome + e-mail do proprietário
+        }
       });
+
       res.json(animais);
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao listar animais' });
+      console.error('Erro no listar animais:', error);
+      res.status(500).json({ 
+        error: 'Erro ao listar animais', 
+        details: error.message 
+      });
     }
   }
 
   async obterPorId(req, res) {
     const { id } = req.params;
     try {
+      console.log('✅ AnimalController.obterPorId executado com ID:', id);
       const animal = await prisma.animal.findUnique({
         where: { id: Number(id) },
-        include: { especie: true, raca: true, exercises: true }
+        include: { 
+          especie: true, 
+          raca: true, 
+          exercises: true,
+          user: { select: { fullName: true, email: true } }
+        }
       });
       if (!animal) return res.status(404).json({ error: 'Animal não encontrado' });
       res.json(animal);

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import axios from 'axios';
 import { Plus, PawPrint } from 'lucide-react';
 
@@ -18,6 +19,7 @@ const calculateAge = (dataNascimento: string) => {
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const { setSelectedAnimal } = useSelectedAnimal();   // ← NOVO
   const navigate = useNavigate();
   const [animais, setAnimais] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,8 +30,9 @@ const Dashboard = () => {
       console.log('✅ Animais carregados:', res.data);
       setAnimais(res.data);
 
-      // Regra: se tiver EXATAMENTE 1 animal, abre direto a tela completa
+      // Regra: se tiver EXATAMENTE 1 animal, auto-seleciona e abre
       if (res.data.length === 1) {
+        setSelectedAnimal(res.data[0]);
         navigate(`/animal/${res.data[0].id}`);
       }
     } catch (error) {
@@ -68,7 +71,6 @@ const Dashboard = () => {
     );
   }
 
-  // Se chegou aqui = tem mais de 1 animal → mostra a lista
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold text-gray-900">Meus Animais</h1>
@@ -77,7 +79,10 @@ const Dashboard = () => {
         {animais.map((animal) => (
           <button
             key={animal.id}
-            onClick={() => navigate(`/animal/${animal.id}`)}
+            onClick={() => {
+              setSelectedAnimal(animal);        // ← ARMAZENA NA MEMÓRIA GLOBAL
+              navigate(`/animal/${animal.id}`);
+            }}
             className="w-full flex items-center bg-white rounded-3xl shadow-sm border border-gray-100 hover:shadow-md transition-all p-6 text-left"
           >
             {/* Foto */}
@@ -97,7 +102,7 @@ const Dashboard = () => {
               </p>
             </div>
 
-            {/* Campos à direita - Labels pretos + Valores verdes */}
+            {/* Campos à direita */}
             <div className="grid grid-cols-4 gap-x-12 text-center">
               <div>
                 <span className="block text-xs uppercase text-gray-900 tracking-widest">ESPÉCIE</span>

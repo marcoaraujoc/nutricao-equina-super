@@ -38,6 +38,10 @@ model User {
   // === RELAÇÃO COM ANIMAIS ===
   animais Animal[]
 
+  // === RELAÇÕES DE AUDITORIA DIETA (obrigatório para Prisma) ===
+  dietasCriadas     Dieta[]  @relation("CriadorDieta")
+  dietasModificadas Dieta[]  @relation("ModificadorDieta")
+
   @@map("users")
 }
 
@@ -102,20 +106,36 @@ model AnimalExercise {
 }
 
 model Dieta {
-  id               Int      @id @default(autoincrement())
-  animalId         Int
-  alimentoId       Int                    // ← alterado de produtoId
-  qtdGramasDia     Float
-  dataInicio       DateTime @default(now())
-  dataFim          DateTime?
-  horario          String?
-  observacao       String?
+  id           Int   @id @default(autoincrement())
+  animalId     Int
+  alimentoId   Int
+  qtdGramasDia Float // mantido (será 0 por enquanto)
 
-  animal           Animal   @relation(fields: [animalId], references: [id])
-  alimento         Alimento @relation(fields: [alimentoId], references: [id])  // ← alterado
+  // === CAMPOS NOVOS DO LAYOUT ===
+  periodicidade    String // "3x ao dia", "2x ao dia", etc.
+  quantidadePorVez String // "2 pães", "2 Kg", "500 ml", etc.
+
+  dataInicio DateTime  @default(now())
+  dataFim    DateTime?
+  horario    String?
+  observacao String?
+
+  // === AUDITORIA ===
+  dataCriacao   DateTime @default(now())
+  dataAlteracao DateTime @updatedAt
+  criadopor     Int
+  modificadopor Int
+
+  animal   Animal   @relation(fields: [animalId], references: [id])
+  alimento Alimento @relation(fields: [alimentoId], references: [id])
+
+  // === RELAÇÕES DE AUDITORIA COM USER ===
+  userCriador     User @relation("CriadorDieta", fields: [criadopor], references: [id])
+  userModificador User @relation("ModificadorDieta", fields: [modificadopor], references: [id])
 
   @@map("tb_dieta")
 }
+
 
 model Alimento {
   id            Int      @id @default(autoincrement())
@@ -202,3 +222,7 @@ model AuditLog {
 
   @@map("tb_audit_logs")
 }
+
+
+
+

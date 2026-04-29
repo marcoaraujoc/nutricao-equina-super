@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useState } from 'react';
 import { 
   LayoutDashboard, 
@@ -24,6 +25,7 @@ import {
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
+  const { selectedAnimal } = useSelectedAnimal();
   const location = useLocation();
 
   const role = user?.role?.toUpperCase();
@@ -43,11 +45,16 @@ export default function Sidebar() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const toggle = (setter: any) => setter((prev: boolean) => !prev);
-  const isActive = (path: string) => location.pathname === path;
+  
+  // ✅ Suporte a rota dinâmica /dieta/:animalId
+  const isActive = (path: string) => {
+    if (path === '/dieta') return location.pathname.startsWith('/dieta');
+    return location.pathname === path;
+  };
 
   return (
     <>
-      {/* ==================== HAMBURGER BUTTON (Mobile/Tablet) ==================== */}
+      {/* HAMBURGER BUTTON (Mobile/Tablet) */}
       <button
         onClick={() => setIsMobileMenuOpen(true)}
         className="md:hidden fixed top-6 left-6 z-50 p-3 bg-white rounded-3xl shadow-lg border border-gray-200"
@@ -55,9 +62,9 @@ export default function Sidebar() {
         <Menu size={28} />
       </button>
 
-      {/* ==================== SIDEBAR DESKTOP + DRAWER MOBILE ==================== */}
+      {/* SIDEBAR */}
       <div className={`
-        fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 shadow-sm
+        fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-gray-200 shadow-sm
         transition-transform duration-300 ease-in-out
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
         md:translate-x-0 md:static md:block
@@ -71,7 +78,6 @@ export default function Sidebar() {
             <p className="text-emerald-500 text-sm -mt-1">Super</p>
           </div>
 
-          {/* Botão fechar no mobile */}
           <button
             onClick={() => setIsMobileMenuOpen(false)}
             className="md:hidden ml-auto p-2 text-gray-500 hover:text-gray-700"
@@ -133,7 +139,12 @@ export default function Sidebar() {
                   </button>
                   {openNutricional && (
                     <div className="mt-2 pl-6 space-y-1">
-                      <Link to="/dieta" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/dieta') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>Dieta</Link>
+                      <Link 
+                        to={selectedAnimal ? `/dieta/${selectedAnimal.id}` : '/dieta'} 
+                        className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/dieta') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}
+                      >
+                        Dieta
+                      </Link>
                       <Link to="/analise" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/analise') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>Relatório</Link>
                       {isAdminOrVet && (
                         <>

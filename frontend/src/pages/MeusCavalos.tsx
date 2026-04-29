@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import axios from 'axios';
 import { Pencil, Trash2, Plus } from 'lucide-react';
 
 const MeusCavalos = () => {
   const { user } = useAuth();
+  const { setSelectedAnimal } = useSelectedAnimal();   // ← Necessário para salvar na memória
   const navigate = useNavigate();
   const [animais, setAnimais] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -42,7 +44,8 @@ const MeusCavalos = () => {
   };
 
   const handleEdit = (animal: any) => {
-    navigate(`/cavalos/${animal.id}`);
+    setSelectedAnimal(animal);           // ← Salva na memória global
+    navigate(`/cavalos/${animal.id}`);   // ← Abre tela de edição
   };
 
   const handleDeleteClick = (animal: any) => {
@@ -60,10 +63,6 @@ const MeusCavalos = () => {
       console.error(error);
       alert('❌ Erro ao excluir animal');
     }
-  };
-
-  const handleViewDetail = (animal: any) => {
-    navigate(`/cavalos/${animal.id}/view`);
   };
 
   return (
@@ -98,59 +97,52 @@ const MeusCavalos = () => {
           {filteredAnimais.map((animal) => (
             <div
               key={animal.id}
-              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full"
+              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full cursor-pointer"
+              onClick={() => handleEdit(animal)}   // ← CLIQUE NO CARD = EDIÇÃO + MEMÓRIA
             >
-              {/* ÁREA CLICÁVEL */}
-              <div
-                onClick={() => handleViewDetail(animal)}
-                className="flex flex-1 cursor-pointer"
-              >
-                {/* FOTO */}
-                <div className="w-28 h-28 flex-shrink-0 bg-gray-200">
-                  {animal.photoUrl ? (
-                    <img
-                      src={animal.photoUrl}
-                      alt={animal.nome}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-6xl">🐴</div>
-                  )}
-                </div>
+              {/* FOTO */}
+              <div className="w-28 h-28 flex-shrink-0 bg-gray-200">
+                {animal.photoUrl ? (
+                  <img
+                    src={animal.photoUrl}
+                    alt={animal.nome}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-6xl">🐴</div>
+                )}
+              </div>
 
-                {/* INFORMAÇÕES - ALINHAMENTO FIXO */}
-                <div className="flex-1 p-6 flex items-center">
-                  <div className="w-full flex items-center">
-                    {/* Nome + Raça (largura flexível + truncate) */}
-                    <div className="flex-1 min-w-0 pr-8">
-                      <h3 className="text-2xl font-bold text-gray-900 truncate">
-                        {animal.nome}
-                      </h3>
-                      <p className="text-emerald-700 font-medium text-lg truncate">
-                        {animal.raca?.nome || 'Raça não informada'}
-                      </p>
+              {/* INFORMAÇÕES */}
+              <div className="flex-1 p-6 flex items-center">
+                <div className="w-full flex items-center">
+                  <div className="flex-1 min-w-0 pr-8">
+                    <h3 className="text-2xl font-bold text-gray-900 truncate">
+                      {animal.nome}
+                    </h3>
+                    <p className="text-emerald-700 font-medium text-lg truncate">
+                      {animal.raca?.nome || 'Raça não informada'}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-10 flex-shrink-0">
+                    <div className="text-right min-w-[70px]">
+                      <span className="block text-xs uppercase text-gray-500 tracking-widest">IDADE</span>
+                      <span className="font-semibold text-gray-800 text-lg">
+                        {calcularIdade(animal.dataNascimento)}
+                      </span>
                     </div>
-
-                    {/* IDADE + SEXO - Sempre alinhados na mesma coluna */}
-                    <div className="flex items-center gap-10 flex-shrink-0">
-                      <div className="text-right min-w-[70px]">
-                        <span className="block text-xs uppercase text-gray-500 tracking-widest">IDADE</span>
-                        <span className="font-semibold text-gray-800 text-lg">
-                          {calcularIdade(animal.dataNascimento)}
-                        </span>
-                      </div>
-                      <div className="text-right min-w-[70px]">
-                        <span className="block text-xs uppercase text-gray-500 tracking-widest">SEXO</span>
-                        <span className="font-semibold text-gray-800 text-lg capitalize">
-                          {animal.sexo}
-                        </span>
-                      </div>
+                    <div className="text-right min-w-[70px]">
+                      <span className="block text-xs uppercase text-gray-500 tracking-widest">SEXO</span>
+                      <span className="font-semibold text-gray-800 text-lg capitalize">
+                        {animal.sexo}
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* BOTÕES */}
+              {/* BOTÕES DE AÇÃO */}
               <div className="flex items-center p-6 gap-3 border-l border-gray-100">
                 <button
                   onClick={(e) => {

@@ -1,21 +1,31 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import axios from 'axios';
-import { Pencil, Trash2, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Trash2 } from 'lucide-react';
 
 const Dieta = () => {
   const { user } = useAuth();
+  const { selectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
+  const { animalId } = useParams<{ animalId: string }>();
+
+  const [animal, setAnimal] = useState<any>(null);
   const [dietas, setDietas] = useState<any[]>([]);
-  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [itemToDelete, setItemToDelete] = useState<any | null>(null);
 
-  const loadDietas = async () => {
+  const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
+
+  const loadDieta = async () => {
+    if (!effectiveAnimalId) return;
+    setLoading(true);
     try {
-      const res = await axios.get('/api/dietas');
+      const res = await axios.get(`/api/dietas/animal/${effectiveAnimalId}`);
       setDietas(res.data);
+      if (res.data.length > 0) setAnimal(res.data[0].animal);
+      else if (selectedAnimal) setAnimal(selectedAnimal);
     } catch (error) {
       console.error(error);
     } finally {
@@ -24,144 +34,142 @@ const Dieta = () => {
   };
 
   useEffect(() => {
-    loadDietas();
-  }, []);
+    if (effectiveAnimalId) loadDieta();
+  }, [effectiveAnimalId]);
 
-  const filteredDietas = dietas.filter((d) =>
-    `${d.animal?.nome || ''} ${d.alimento?.nome || ''}`
-      .toLowerCase()
-      .includes(search.toLowerCase())
-  );
+  const handleAddAlimento = () => {
+    navigate(`/dieta/${effectiveAnimalId}/novo`);
+  };
 
   const handleEdit = (item: any) => {
-    navigate(`/dieta/${item.id}`);
+    navigate(`/dieta/${effectiveAnimalId}/editar/${item.id}`);
   };
 
-  const handleDeleteClick = (item: any) => {
-    setItemToDelete(item);
-  };
-
-  const confirmDelete = async () => {
+  const handleDelete = async () => {
     if (!itemToDelete) return;
     try {
       await axios.delete(`/api/dietas/${itemToDelete.id}`);
-      alert('Dieta excluída com sucesso!');
+      loadDieta();
       setItemToDelete(null);
-      loadDietas();
     } catch (error) {
-      console.error(error);
-      alert('Erro ao excluir dieta');
+      alert('Erro ao excluir');
     }
   };
 
+  const handleSalvarDieta = async () => {
+    alert('✅ Dieta salva com sucesso!');
+    navigate('/dashboard');
+  };
+
+  if (loading) return <div className="p-8 text-center text-gray-900">Carregando dieta...</div>;
+  if (!effectiveAnimalId) return <div className="p-8 text-center text-gray-900">Selecione um animal para continuar.</div>;
+
   return (
-    <div className="space-y-6 md:space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-3xl font-bold text-gray-900">Dieta</h1>
-        <button
-          onClick={() => navigate('/dieta/novo')}
-          className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"
-        >
-          <Plus size={20} />
-          Nova Dieta
-        </button>
+    <div className="min-h-screen bg-gray-50 pb-20">
+      {/* HEADER COM SETA */}
+      <div className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
+          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-emerald-700">
+            <ArrowLeft size={28} />
+            <span className="font-semibold !text-gray-900">Voltar</span>
+          </button>
+          <h1 className="flex-1 text-xl font-bold text-center !text-gray-900">Dieta – {animal?.nome || 'Animal'}</h1>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="mb-6">
-        <input
-          type="text"
-          placeholder="Buscar por animal ou alimento..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md border border-gray-300 rounded-3xl px-6 py-4 text-gray-900 focus:outline-none focus:border-emerald-600"
-        />
-      </div>
+      {/* BLOCO ANIMAL (READ-ONLY) */}
+      <div className="max-w-4xl mx-auto px-4 pt-6">
+        <div className="bg-white rounded-3xl shadow p-6 flex flex-col md:flex-row gap-6">
+          {/* Foto */}
+          <div className="w-40 h-40 bg-gray-200 rounded-3xl overflow-hidden flex-shrink-0">
+            <img src={animal?.photoUrl || '/placeholder-horse.jpg'} alt={animal?.nome} className="w-full h-full object-cover" />
+          </div>
 
-      {loading ? (
-        <p className="text-center text-gray-500 py-12">Carregando dietas...</p>
-      ) : (
-        <div className="space-y-4">
-          {filteredDietas.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full"
-            >
-              <div className="flex-1 p-6 flex items-center">
-                <div className="w-full flex items-center justify-between">
-                  <div>
-                    <h3 className="text-2xl font-bold text-gray-900">{item.animal?.nome || 'Animal'}</h3>
-                    <p className="text-emerald-700 font-medium">{item.alimento?.nome || 'Alimento'}</p>
-                  </div>
-                  <div className="flex items-center gap-8 text-right">
-                    <div>
-                      <span className="block text-xs uppercase text-gray-500 tracking-widest">QTD/DIA</span>
-                      <span className="font-semibold text-gray-800">{item.qtdGramasDia} g</span>
-                    </div>
-                    <div>
-                      <span className="block text-xs uppercase text-gray-500 tracking-widest">INÍCIO</span>
-                      <span className="font-semibold text-gray-800">
-                        {new Date(item.dataInicio).toLocaleDateString('pt-BR')}
-                      </span>
-                    </div>
-                    {item.dataFim && (
-                      <div>
-                        <span className="block text-xs uppercase text-gray-500 tracking-widest">FIM</span>
-                        <span className="font-semibold text-gray-800">
-                          {new Date(item.dataFim).toLocaleDateString('pt-BR')}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+          {/* Dados do Animal */}
+          <div className="flex-1 space-y-3">
+            <div>
+              <span className="text-sm font-medium !text-gray-900">Nome:</span>
+              <p className="font-bold text-2xl !text-gray-900">{animal?.nome}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-x-8">
+              <div>
+                <span className="text-sm font-medium !text-gray-900">Nascimento:</span>
+                <p className="font-medium !text-gray-900">
+                  {animal?.dataNascimento ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR') : '-'}
+                </p>
               </div>
+              <div>
+                <span className="text-sm font-medium !text-gray-900">Raça:</span>
+                <p className="font-medium !text-gray-900">{animal?.raca?.nome || 'Não informada'}</p>
+              </div>
+            </div>
+            <div className="pt-4 border-t">
+              <span className="text-sm font-medium !text-gray-900 block">Proprietário:</span>
+              <p className="font-semibold !text-gray-900">{animal?.user?.fullName}</p>
+              <p className="text-sm !text-gray-900">{animal?.user?.email}</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
-              {/* BOTÕES */}
-              <div className="flex items-center p-6 gap-3 border-l border-gray-100">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleEdit(item); }}
-                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Pencil size={18} />
-                  Editar
+      {/* ALIMENTOS DA DIETA */}
+      <div className="max-w-4xl mx-auto px-4 pt-8">
+        <h2 className="text-xl font-bold mb-4 px-2 !text-gray-900">Alimentos da Dieta</h2>
+
+        <div className="bg-white rounded-3xl shadow p-6">
+          <div className="hidden md:grid grid-cols-12 gap-4 text-sm font-semibold !text-gray-900 border-b pb-3">
+            <div className="col-span-4">Alimento</div>
+            <div className="col-span-3">Periodicidade</div>
+            <div className="col-span-3">Quantidade</div>
+            <div className="col-span-2 text-right">Ações</div>
+          </div>
+
+          {dietas.map((item) => (
+            <div key={item.id} className="grid grid-cols-12 gap-4 py-4 border-b last:border-none items-center">
+              <div className="col-span-4 font-medium !text-gray-900">{item.alimento.nome}</div>
+              <div className="col-span-3 !text-gray-900">{item.periodicidade}</div>
+              <div className="col-span-3 !text-gray-900">{item.quantidadePorVez}</div>
+              <div className="col-span-2 flex justify-end gap-2">
+                <button onClick={() => handleEdit(item)} className="text-emerald-600 hover:text-emerald-700">
+                  <Pencil size={20} />
                 </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteClick(item); }}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Trash2 size={18} />
-                  Excluir
+                <button onClick={() => setItemToDelete(item)} className="text-red-600 hover:text-red-700">
+                  <Trash2 size={20} />
                 </button>
               </div>
             </div>
           ))}
-        </div>
-      )}
 
-      {/* Modal de exclusão */}
+          {dietas.length === 0 && <p className="text-center py-8 !text-gray-400">Nenhum alimento cadastrado ainda.</p>}
+        </div>
+
+        {/* BOTÕES */}
+        <div className="mt-8 flex flex-col gap-4">
+          <button
+            onClick={handleAddAlimento}
+            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-5 rounded-3xl font-semibold flex items-center justify-center gap-3 text-lg"
+          >
+            <Plus size={24} /> + Adicionar Novo Alimento
+          </button>
+
+          <button
+            onClick={handleSalvarDieta}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-5 rounded-3xl font-bold text-xl"
+          >
+            Salvar Dieta
+          </button>
+        </div>
+      </div>
+
+      {/* MODAL EXCLUIR */}
       {itemToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="bg-emerald-700 text-white p-6 text-center">
-              <h2 className="text-2xl font-bold">Excluir dieta?</h2>
-              <p className="text-emerald-100 mt-2">
-                Tem certeza que deseja excluir a dieta de <strong>{itemToDelete.animal?.nome}</strong>?
-              </p>
-            </div>
-            <div className="p-6 flex gap-4">
-              <button
-                onClick={() => setItemToDelete(null)}
-                className="flex-1 py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="flex-1 py-4 bg-red-600 text-white font-semibold rounded-3xl hover:bg-red-700"
-              >
-                Excluir
-              </button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6">
+            <h3 className="font-bold text-xl !text-gray-900">Excluir alimento?</h3>
+            <p className="mt-2 !text-gray-900">{itemToDelete.alimento.nome}</p>
+            <div className="flex gap-4 mt-8">
+              <button onClick={() => setItemToDelete(null)} className="flex-1 py-4 border rounded-3xl !text-gray-900">Cancelar</button>
+              <button onClick={handleDelete} className="flex-1 py-4 bg-red-600 text-white rounded-3xl">Excluir</button>
             </div>
           </div>
         </div>

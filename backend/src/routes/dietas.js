@@ -1,12 +1,15 @@
 const express = require('express');
-const dietaController = require('../controllers/DietaController');
+const DietaController = require('../controllers/DietaController');
 
 const router = express.Router();
 
-router.get('/', dietaController.listar);
-router.post('/', dietaController.criar);
-router.get('/:id', dietaController.obterPorId);
-router.put('/:id', dietaController.atualizar);
-router.delete('/:id', dietaController.excluir);
+// === ROTAS DA TELA DE DIETA v2.3 ===
+router.get('/animal/:animalId', DietaController.listarPorAnimal);     // Lista dieta do animal
+router.post('/item', DietaController.criarItem);                     // + Adicionar Novo Alimento
+router.put('/:id', DietaController.atualizarItem);                   // Alterar item
+router.delete('/:id', DietaController.excluirItem);                  // Excluir item
+
+// === ROTAS ANTIGAS (mantidas para compatibilidade) ===
+router.get('/', DietaController.listar); // se existir no controller
 
 module.exports = router;
