@@ -3,11 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import axios from 'axios';
-import { ArrowLeft, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, Plus } from 'lucide-react';
 
 const Dieta = () => {
   const { user } = useAuth();
-  const { selectedAnimal } = useSelectedAnimal();
+  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
 
@@ -15,6 +15,7 @@ const Dieta = () => {
   const [dietas, setDietas] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [itemToDelete, setItemToDelete] = useState<any | null>(null);
+  const [animaisDoProprietario, setAnimaisDoProprietario] = useState<any[]>([]);
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
@@ -33,19 +34,33 @@ const Dieta = () => {
     }
   };
 
+  const loadAnimais = async () => {
+    try {
+      const res = await axios.get('/api/animais', { params: { email: user?.email } });
+      setAnimaisDoProprietario(res.data);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   useEffect(() => {
     if (effectiveAnimalId) loadDieta();
+    loadAnimais();
   }, [effectiveAnimalId]);
 
-  const handleAddAlimento = () => {
-    navigate(`/dieta/${effectiveAnimalId}/novo`);
+  const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const selected = animaisDoProprietario.find(a => a.id === Number(e.target.value));
+    if (selected) {
+      setSelectedAnimal(selected);
+      navigate(`/dieta/${selected.id}`);
+    }
   };
 
-  const handleEdit = (item: any) => {
-    navigate(`/dieta/${effectiveAnimalId}/editar/${item.id}`);
-  };
+  const handleAddAlimento = () => navigate(`/dieta/${effectiveAnimalId}/novo`);
+  const handleEdit = (item: any) => navigate(`/dieta/${effectiveAnimalId}/editar/${item.id}`);
+  const handleDeleteClick = (item: any) => setItemToDelete(item);
 
-  const handleDelete = async () => {
+  const confirmDelete = async () => {
     if (!itemToDelete) return;
     try {
       await axios.delete(`/api/dietas/${itemToDelete.id}`);
@@ -56,120 +71,157 @@ const Dieta = () => {
     }
   };
 
-  const handleSalvarDieta = async () => {
+  const handleSalvarDieta = () => {
     alert('✅ Dieta salva com sucesso!');
     navigate('/dashboard');
   };
 
-  if (loading) return <div className="p-8 text-center text-gray-900">Carregando dieta...</div>;
-  if (!effectiveAnimalId) return <div className="p-8 text-center text-gray-900">Selecione um animal para continuar.</div>;
+  const hasMultipleAnimals = animaisDoProprietario.length > 1;
+
+  if (loading) return <div className="p-6 text-center text-gray-900">Carregando...</div>;
+  if (!effectiveAnimalId || !animal) return <div className="p-6 text-center text-gray-900">Selecione um animal.</div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-      {/* HEADER COM SETA */}
-      <div className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
-          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-emerald-700">
-            <ArrowLeft size={28} />
-            <span className="font-semibold !text-gray-900">Voltar</span>
-          </button>
-          <h1 className="flex-1 text-xl font-bold text-center !text-gray-900">Dieta – {animal?.nome || 'Animal'}</h1>
-        </div>
-      </div>
+    <div className="min-h-screen bg-gray-50 pb-10">
+      <div className="max-w-3xl mx-auto px-4">
 
-      {/* BLOCO ANIMAL (READ-ONLY) */}
-      <div className="max-w-4xl mx-auto px-4 pt-6">
-        <div className="bg-white rounded-3xl shadow p-6 flex flex-col md:flex-row gap-6">
-          {/* Foto */}
-          <div className="w-40 h-40 bg-gray-200 rounded-3xl overflow-hidden flex-shrink-0">
-            <img src={animal?.photoUrl || '/placeholder-horse.jpg'} alt={animal?.nome} className="w-full h-full object-cover" />
+        {/* Seletor de Animal */}
+        {hasMultipleAnimals && (
+          <div className="mb-6 pt-2">
+            <label className="block text-sm font-medium text-gray-500 mb-1">Escolha o Animal</label>
+            <select
+              value={effectiveAnimalId}
+              onChange={handleAnimalChange}
+              className="w-full rounded-3xl border border-gray-300 p-3 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+            >
+              {animaisDoProprietario.map((a: any) => (
+                <option key={a.id} value={a.id}>
+                  {a.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Card do Animal (layout preservado) */}
+        <div className="bg-white rounded-2xl shadow p-2.5 flex gap-3 mb-4">
+          <div className="w-24 self-stretch bg-gray-200 rounded-xl overflow-hidden flex-shrink-0">
+            <img
+              src={animal.photoUrl || 'https://picsum.photos/id/1015/400/400'}
+              alt={animal.nome}
+              className="w-full h-full object-cover"
+            />
           </div>
 
-          {/* Dados do Animal */}
-          <div className="flex-1 space-y-3">
-            <div>
-              <span className="text-sm font-medium !text-gray-900">Nome:</span>
-              <p className="font-bold text-2xl !text-gray-900">{animal?.nome}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-x-8">
+          <div className="flex-1 flex flex-col justify-between">
+            <div className="grid grid-cols-3 gap-2 items-start">
               <div>
-                <span className="text-sm font-medium !text-gray-900">Nascimento:</span>
-                <p className="font-medium !text-gray-900">
-                  {animal?.dataNascimento ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR') : '-'}
+                <span className="text-[11px] text-gray-500">Nome</span>
+                <p className="text-lg font-semibold text-gray-900 leading-tight">
+                  {animal.nome}
                 </p>
               </div>
               <div>
-                <span className="text-sm font-medium !text-gray-900">Raça:</span>
-                <p className="font-medium !text-gray-900">{animal?.raca?.nome || 'Não informada'}</p>
+                <span className="text-[11px] text-gray-500">Nascimento</span>
+                <p className="text-xs text-gray-900">
+                  {animal.dataNascimento
+                    ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR')
+                    : '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-[11px] text-gray-500">Raça</span>
+                <p className="text-xs text-gray-900">
+                  {animal.raca?.nome || 'Não informada'}
+                </p>
               </div>
             </div>
-            <div className="pt-4 border-t">
-              <span className="text-sm font-medium !text-gray-900 block">Proprietário:</span>
-              <p className="font-semibold !text-gray-900">{animal?.user?.fullName}</p>
-              <p className="text-sm !text-gray-900">{animal?.user?.email}</p>
+
+            <div className="mt-2 pt-2 border-t">
+              <span className="text-[11px] text-gray-500 block">Proprietário</span>
+              <p className="text-xs font-medium text-gray-900 leading-tight">
+                {animal.user?.fullName || 'Marco Cunha'}
+              </p>
+              <p className="text-[11px] text-gray-500 truncate">
+                {animal.user?.email || 'marcoaraujoc@gmail.com'}
+              </p>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* ALIMENTOS DA DIETA */}
-      <div className="max-w-4xl mx-auto px-4 pt-8">
-        <h2 className="text-xl font-bold mb-4 px-2 !text-gray-900">Alimentos da Dieta</h2>
-
-        <div className="bg-white rounded-3xl shadow p-6">
-          <div className="hidden md:grid grid-cols-12 gap-4 text-sm font-semibold !text-gray-900 border-b pb-3">
-            <div className="col-span-4">Alimento</div>
-            <div className="col-span-3">Periodicidade</div>
-            <div className="col-span-3">Quantidade</div>
-            <div className="col-span-2 text-right">Ações</div>
-          </div>
-
-          {dietas.map((item) => (
-            <div key={item.id} className="grid grid-cols-12 gap-4 py-4 border-b last:border-none items-center">
-              <div className="col-span-4 font-medium !text-gray-900">{item.alimento.nome}</div>
-              <div className="col-span-3 !text-gray-900">{item.periodicidade}</div>
-              <div className="col-span-3 !text-gray-900">{item.quantidadePorVez}</div>
-              <div className="col-span-2 flex justify-end gap-2">
-                <button onClick={() => handleEdit(item)} className="text-emerald-600 hover:text-emerald-700">
-                  <Pencil size={20} />
-                </button>
-                <button onClick={() => setItemToDelete(item)} className="text-red-600 hover:text-red-700">
-                  <Trash2 size={20} />
-                </button>
-              </div>
-            </div>
-          ))}
-
-          {dietas.length === 0 && <p className="text-center py-8 !text-gray-400">Nenhum alimento cadastrado ainda.</p>}
-        </div>
-
-        {/* BOTÕES */}
-        <div className="mt-8 flex flex-col gap-4">
+        {/* Botões */}
+        <div className="space-y-2 mb-6">
           <button
             onClick={handleAddAlimento}
-            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-5 rounded-3xl font-semibold flex items-center justify-center gap-3 text-lg"
+            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
           >
-            <Plus size={24} /> + Adicionar Novo Alimento
+            <Plus size={16} />
+            Adicionar alimento
           </button>
 
           <button
             onClick={handleSalvarDieta}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-5 rounded-3xl font-bold text-xl"
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-medium text-sm transition-colors"
           >
-            Salvar Dieta
+            Salvar dieta
           </button>
+        </div>
+
+        {/* Tabela */}
+        <div className="bg-white rounded-2xl shadow overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gray-50">
+            <h2 className="text-base font-semibold text-gray-900">Alimentos da Dieta</h2>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Alimento</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Periodicidade</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Qtd</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Unidade</th>
+                  <th className="text-right px-4 py-2 font-medium text-gray-500 w-20">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dietas.map((item) => (
+                  <tr key={item.id} className="border-b last:border-none hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-900">{item.alimento?.nome}</td>
+                    <td className="px-4 py-3 text-gray-700">{item.periodicidade}</td>
+                    <td className="px-4 py-3 text-gray-700">{item.qtdGramasDia}</td>
+                    <td className="px-4 py-3 text-gray-700">{item.unidade}</td>
+                    <td className="px-4 py-3 text-right flex justify-end gap-3">
+                      <button onClick={() => handleEdit(item)} className="text-emerald-600 hover:text-emerald-700">
+                        <Pencil size={16} />
+                      </button>
+                      <button onClick={() => handleDeleteClick(item)} className="text-red-600 hover:text-red-700">
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {dietas.length === 0 && (
+            <p className="text-center py-8 text-gray-400 text-sm">
+              Nenhum alimento cadastrado ainda.
+            </p>
+          )}
         </div>
       </div>
 
-      {/* MODAL EXCLUIR */}
+      {/* Modal */}
       {itemToDelete && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6">
-            <h3 className="font-bold text-xl !text-gray-900">Excluir alimento?</h3>
-            <p className="mt-2 !text-gray-900">{itemToDelete.alimento.nome}</p>
-            <div className="flex gap-4 mt-8">
-              <button onClick={() => setItemToDelete(null)} className="flex-1 py-4 border rounded-3xl !text-gray-900">Cancelar</button>
-              <button onClick={handleDelete} className="flex-1 py-4 bg-red-600 text-white rounded-3xl">Excluir</button>
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5">
+            <h3 className="font-semibold text-lg text-gray-900">Excluir alimento?</h3>
+            <p className="mt-2 text-sm text-gray-600">{itemToDelete.alimento?.nome}</p>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setItemToDelete(null)} className="flex-1 py-2 border rounded-xl text-sm text-gray-700">Cancelar</button>
+              <button onClick={confirmDelete} className="flex-1 py-2 bg-red-600 text-white rounded-xl text-sm">Excluir</button>
             </div>
           </div>
         </div>

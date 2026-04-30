@@ -1,141 +1,209 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import axios from 'axios';
 import { ArrowLeft } from 'lucide-react';
 
 const CriaDieta = () => {
-  const { animalId } = useParams<{ animalId: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
-  const { selectedAnimal } = useSelectedAnimal();
+  const navigate = useNavigate();
+  const { animalId, id } = useParams<{ animalId: string; id?: string }>();
+  const isEditMode = !!id;
 
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [alimentos, setAlimentos] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({
+
+  const [formData, setFormData] = useState({
     alimentoId: '',
-    periodicidade: '2x ao dia',
-    quantidadePorVez: '',
+    qtdGramasDia: '',
+    unidade: '',
+    periodicidade: '',
+    horario: '',
+    observacao: '',
   });
 
-  // Carrega alimentos da tabela tb_alimentos
   useEffect(() => {
-    axios.get('/api/alimentos')
-      .then((res) => {
-        const ativos = res.data.filter((a: any) => a.ativo !== false);
-        ativos.sort((a: any, b: any) => a.nome.localeCompare(b.nome));
-        setAlimentos(ativos);
-      })
-      .catch((err) => console.error('Erro ao carregar alimentos', err));
-  }, []);
+    const loadData = async () => {
+      try {
+        // Carregar lista de alimentos para o select
+        const alRes = await axios.get('/api/alimentos');
+        setAlimentos(alRes.data);
+
+        // Se estiver editando, carregar os dados existentes da dieta
+        if (isEditMode && id) {
+          const res = await axios.get(`/api/dietas/${id}`);
+          const item = res.data;
+
+          setFormData({
+            alimentoId: item.alimentoId?.toString() || '',
+            qtdGramasDia: item.qtdGramasDia?.toString() || '',
+            unidade: item.unidade || '',
+            periodicidade: item.periodicidade || '',
+            horario: item.horario || '',
+            observacao: item.observacao || '',
+          });
+        }
+      } catch (error) {
+        console.error('Erro ao carregar dados de edição:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, [id, isEditMode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!form.alimentoId || !form.quantidadePorVez) {
-      alert('Preencha o alimento e a quantidade');
-      return;
-    }
-
-    const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
-    if (!effectiveAnimalId) {
-      alert('Animal não identificado');
-      return;
-    }
-
-    setLoading(true);
-
-    const payload = {
-      animalId: Number(effectiveAnimalId),
-      alimentoId: Number(form.alimentoId),
-      periodicidade: form.periodicidade,
-      quantidadePorVez: form.quantidadePorVez,
-      userId: user?.id
-    };
+    setSubmitting(true);
 
     try {
-      await axios.post('/api/dietas/item', payload);
-      alert('✅ Alimento adicionado com sucesso!');
-      navigate(`/dieta/${effectiveAnimalId}`);
-    } catch (err: any) {
-      console.error(err);
-      alert('Erro ao adicionar alimento: ' + (err.response?.data?.error || err.message));
+      const payload = {
+        animalId: parseInt(animalId!),
+        alimentoId: parseInt(formData.alimentoId),
+        qtdGramasDia: parseFloat(formData.qtdGramasDia) || 0,
+        unidade: formData.unidade,
+        periodicidade: formData.periodicidade,
+        horario: formData.horario || null,
+        observacao: formData.observacao || null,
+        criadopor: user?.id || 1,
+        modificadopor: user?.id || 1,
+      };
+
+      if (isEditMode) {
+        await axios.put(`/api/dietas/${id}`, payload);
+        alert('✅ Alimento atualizado na dieta com sucesso!');
+      } else {
+        await axios.post('/api/dietas', payload);
+        alert('✅ Alimento adicionado à dieta com sucesso!');
+      }
+
+      navigate(`/dieta/${animalId}`);
+    } catch (error: any) {
+      console.error(error);
+      alert(error.response?.data?.error || 'Erro ao salvar alimento na dieta');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  if (loading) {
+    return <div className="p-8 text-center text-gray-900">Carregando dados...</div>;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 p-4 pb-20">
-      <div className="max-w-2xl mx-auto">
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-2 mb-6 text-emerald-700 hover:text-emerald-800"
-        >
-          <ArrowLeft size={24} />
-          <span className="font-semibold !text-gray-900">Voltar</span>
-        </button>
-
-        <h1 className="text-3xl font-bold mb-8 text-center !text-gray-900">Adicionar Novo Alimento</h1>
-
-        <form onSubmit={handleSubmit} className="bg-white p-8 rounded-3xl shadow space-y-8">
-          {/* ALIMENTO */}
-          <div>
-            <label className="block text-sm font-medium !text-gray-900 mb-2">Alimento</label>
-            <select
-              value={form.alimentoId}
-              onChange={(e) => setForm({ ...form, alimentoId: e.target.value })}
-              className="w-full rounded-3xl border border-gray-300 p-4 focus:outline-none focus:border-emerald-600 !text-gray-900 text-base bg-white"
-              required
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-3xl mx-auto">
+        <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
+          <div className="flex items-center gap-3 mb-6">
+            <button
+              onClick={() => navigate(`/dieta/${animalId}`)}
+              className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
             >
-              <option value="" className="!text-gray-900 bg-white">Selecione um alimento...</option>
-              {alimentos.map((alimento: any) => (
-                <option key={alimento.id} value={alimento.id} className="!text-gray-900 bg-white">
-                  {alimento.nome}
-                </option>
-              ))}
-            </select>
+              <ArrowLeft size={22} />
+              <span className="text-base">Voltar</span>
+            </button>
           </div>
 
-          {/* PERIODICIDADE */}
-          <div>
-            <label className="block text-sm font-medium !text-gray-900 mb-2">Periodicidade</label>
-            <select
-              value={form.periodicidade}
-              onChange={(e) => setForm({ ...form, periodicidade: e.target.value })}
-              className="w-full rounded-3xl border border-gray-300 p-4 focus:outline-none focus:border-emerald-600 !text-gray-900 text-base bg-white"
+          <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+            {isEditMode ? 'Editar Alimento na Dieta' : 'Adicionar Alimento na Dieta'}
+          </h1>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Alimento</label>
+              <select
+                required
+                value={formData.alimentoId}
+                onChange={(e) => setFormData({ ...formData, alimentoId: e.target.value })}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+              >
+                <option value="">Selecione o alimento...</option>
+                {alimentos.map((a) => (
+                  <option key={a.id} value={a.id}>{a.nome}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Quantidade (qtdGramasDia)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                value={formData.qtdGramasDia}
+                onChange={(e) => setFormData({ ...formData, qtdGramasDia: e.target.value })}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 text-gray-900"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Unidade</label>
+              <select
+                required
+                value={formData.unidade}
+                onChange={(e) => setFormData({ ...formData, unidade: e.target.value })}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+              >
+                <option value="">Selecione a unidade...</option>
+                <option value="Pães">Pães</option>
+                <option value="Kg">Kg</option>
+                <option value="Gramas">Gramas</option>
+                <option value="Mililitros">Mililitros</option>
+                <option value="Litro">Litro</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Periodicidade</label>
+              <select
+                required
+                value={formData.periodicidade}
+                onChange={(e) => setFormData({ ...formData, periodicidade: e.target.value })}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+              >
+                <option value="">Selecione a periodicidade...</option>
+                <option value="3x ao dia">3x ao dia</option>
+                <option value="2x ao dia">2x ao dia</option>
+                <option value="1x ao dia">1x ao dia</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Horário (24h)</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={5}
+                placeholder="00:00"
+                value={formData.horario}
+                onChange={(e) => setFormData({ ...formData, horario: e.target.value })}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 text-gray-900"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Observação</label>
+              <textarea
+                value={formData.observacao}
+                onChange={(e) => setFormData({ ...formData, observacao: e.target.value })}
+                rows={3}
+                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 text-gray-900"
+                placeholder="Observações adicionais..."
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-4 rounded-3xl font-semibold text-lg transition-colors disabled:opacity-50"
             >
-              <option value="1x ao dia" className="!text-gray-900 bg-white">1x ao dia</option>
-              <option value="2x ao dia" className="!text-gray-900 bg-white">2x ao dia</option>
-              <option value="3x ao dia" className="!text-gray-900 bg-white">3x ao dia</option>
-              <option value="4x ao dia" className="!text-gray-900 bg-white">4x ao dia</option>
-            </select>
-          </div>
-
-          {/* QUANTIDADE */}
-          <div>
-            <label className="block text-sm font-medium !text-gray-900 mb-2">
-              Quantidade (ex: 2 pães, 2 Kg, 500 g, 300 ml)
-            </label>
-            <input
-              type="text"
-              value={form.quantidadePorVez}
-              onChange={(e) => setForm({ ...form, quantidadePorVez: e.target.value })}
-              className="w-full rounded-3xl border border-gray-300 p-4 focus:outline-none focus:border-emerald-600 !text-gray-900 text-base bg-white"
-              placeholder="2 pães"
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-5 rounded-3xl font-bold text-xl transition-colors"
-          >
-            {loading ? 'Adicionando...' : 'Adicionar à Dieta'}
-          </button>
-        </form>
+              {submitting ? 'Salvando...' : isEditMode ? 'Atualizar Alimento' : 'Adicionar Alimento'}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

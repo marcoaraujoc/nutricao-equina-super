@@ -2,20 +2,16 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 class AnimalController {
-  // ✅ LISTAR ANIMAIS (agora suporta busca por e-mail - como você pediu)
   async listar(req, res) {
     const { userId, email } = req.query;
     try {
       let where = {};
 
       if (email) {
-        // Busca o usuário interno pelo e-mail (único) e depois os animais dele
         const usuario = await prisma.user.findUnique({
           where: { email: String(email) }
         });
-        if (usuario) {
-          where = { userId: usuario.id };
-        }
+        if (usuario) where = { userId: usuario.id };
       } else if (userId) {
         where = { userId: Number(userId) };
       }
@@ -26,24 +22,20 @@ class AnimalController {
           especie: true, 
           raca: true, 
           exercises: true,
-          user: { select: { fullName: true, email: true } } // nome + e-mail do proprietário
+          user: { select: { fullName: true, email: true } }
         }
       });
 
       res.json(animais);
     } catch (error) {
       console.error('Erro no listar animais:', error);
-      res.status(500).json({ 
-        error: 'Erro ao listar animais', 
-        details: error.message 
-      });
+      res.status(500).json({ error: 'Erro ao listar animais', details: error.message });
     }
   }
 
   async obterPorId(req, res) {
     const { id } = req.params;
     try {
-      console.log('✅ AnimalController.obterPorId executado com ID:', id);
       const animal = await prisma.animal.findUnique({
         where: { id: Number(id) },
         include: { 
@@ -162,12 +154,21 @@ class AnimalController {
   async excluir(req, res) {
     const { id } = req.params;
     try {
+      // Apaga todos os registros relacionados antes de excluir o animal
       await prisma.animalExercise.deleteMany({ where: { animalId: Number(id) } });
+      await prisma.dieta.deleteMany({ where: { animalId: Number(id) } });           // ← ADICIONADO
+      // Se existirem outras tabelas relacionadas (exames, etc.), adicione aqui
+
       await prisma.animal.delete({ where: { id: Number(id) } });
+
+      console.log(`✅ Animal ID ${id} excluído com sucesso`);
       res.json({ message: 'Animal excluído com sucesso' });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao excluir animal' });
+      console.error('Erro ao excluir animal:', error);
+      res.status(500).json({ 
+        error: 'Erro ao excluir animal', 
+        details: error.message 
+      });
     }
   }
 }

@@ -26,15 +26,14 @@ const racasRoutes = require('./routes/racas');
 const userRoutes = require('./routes/user');
 const nutrientesRoutes = require('./routes/nutrientes');
 const composicaoAlimentarRoutes = require('./routes/composicaoAlimentar');
-const dietaRoutes = require('./routes/dietas');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth', authRoutes);
 app.use('/api/animais', animaisRoutes);
 app.use('/api/alimentos', alimentosRoutes);               // ← ADICIONADO AQUI
 
-app.use('/dietas', dietasRoutes);
-app.use('/exames', examesRoutes);
+app.use('/api/dietas', dietasRoutes);
+app.use('/api/exames', examesRoutes);
 app.use('/analise', analiseRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/especies', especiesRoutes);
@@ -42,7 +41,6 @@ app.use('/api/racas', racasRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/nutrientes', nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
-app.use('/api/dietas', dietaRoutes);
 
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

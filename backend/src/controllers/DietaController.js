@@ -2,8 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 class DietaController {
-  // LISTAR DIETAS DE UM ANIMAL ESPECÍFICO (nova tela)
-    async listarPorAnimal(req, res) {
+  async listarPorAnimal(req, res) {
     const { animalId } = req.params;
     try {
       const dietas = await prisma.dieta.findMany({
@@ -12,7 +11,9 @@ class DietaController {
           alimento: true,
           animal: {
             include: {
-              user: { select: { fullName: true, email: true } } // nome + e-mail do proprietário
+              user: { select: { fullName: true, email: true } },
+              raca: true,           // ← ADICIONADO (raça agora aparece sempre)
+              especie: true         // opcional, mas útil
             }
           }
         },
@@ -25,51 +26,78 @@ class DietaController {
     }
   }
 
-  // ADICIONAR / EDITAR ITEM (novo fluxo)
+  async obterPorId(req, res) {
+    const { id } = req.params;
+    try {
+      const dieta = await prisma.dieta.findUnique({
+        where: { id: Number(id) },
+        include: { alimento: true }
+      });
+      if (!dieta) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+      res.json(dieta);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Erro ao buscar item da dieta' });
+    }
+  }
+
   async criarItem(req, res) {
-    const { animalId, alimentoId, periodicidade, quantidadePorVez, dataInicio, dataFim, horario, observacao } = req.body;
-    const userId = req.user?.id || req.body.userId; // middleware de auth ou body
+    const { 
+      animalId, 
+      alimentoId, 
+      qtdGramasDia, 
+      unidade, 
+      periodicidade, 
+      horario, 
+      observacao,
+      criadopor,
+      modificadopor
+    } = req.body;
+
+    const userId = Number(criadopor || modificadopor || req.user?.id || 1);
+
+    console.log('📥 [CRIAR DIETA] Payload recebido:', req.body);
+    console.log('👤 userId usado:', userId);
 
     try {
       const dieta = await prisma.dieta.create({
         data: {
           animalId: Number(animalId),
           alimentoId: Number(alimentoId),
-          periodicidade,
-          quantidadePorVez,
-          qtdGramasDia: 0, // conversão futura
-          dataInicio: dataInicio ? new Date(dataInicio) : undefined,
-          dataFim: dataFim ? new Date(dataFim) : undefined,
-          horario,
-          observacao,
-          criadopor: Number(userId),
-          modificadopor: Number(userId)
+          qtdGramasDia: parseFloat(qtdGramasDia) || 0,
+          unidade: unidade || null,
+          periodicidade: periodicidade || null,
+          horario: horario || null,
+          observacao: observacao || null,
+          criadopor: userId,
+          modificadopor: userId
         },
         include: { alimento: true }
       });
+
+      console.log('✅ Item da dieta criado com sucesso ID:', dieta.id);
       res.status(201).json(dieta);
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao criar item da dieta' });
+      console.error('❌ Erro ao criar item da dieta:', error);
+      res.status(500).json({ error: 'Erro ao salvar alimento na dieta' });
     }
   }
 
   async atualizarItem(req, res) {
     const { id } = req.params;
-    const { periodicidade, quantidadePorVez, dataFim, horario, observacao } = req.body;
-    const userId = req.user?.id || req.body.userId;
+    const { qtdGramasDia, unidade, periodicidade, horario, observacao } = req.body;
+    const userId = Number(req.user?.id || req.body.modificadopor || 1);
 
     try {
       const dieta = await prisma.dieta.update({
         where: { id: Number(id) },
         data: {
-          periodicidade,
-          quantidadePorVez,
-          qtdGramasDia: 0,
-          dataFim: dataFim ? new Date(dataFim) : undefined,
-          horario,
-          observacao,
-          modificadopor: Number(userId)
+          qtdGramasDia: parseFloat(qtdGramasDia) || 0,
+          unidade: unidade || null,
+          periodicidade: periodicidade || null,
+          horario: horario || null,
+          observacao: observacao || null,
+          modificadopor: userId
         }
       });
       res.json(dieta);
@@ -89,10 +117,6 @@ class DietaController {
       res.status(500).json({ error: 'Erro ao excluir item' });
     }
   }
-
-  // Manter compatibilidade com rotas antigas (opcional)
-  async listar(req, res) { /* ... mesmo código antigo ... */ }
-  // ... (outros métodos antigos se necessário)
 }
 
 module.exports = new DietaController();

@@ -67,10 +67,11 @@ function App() {
                         <Route path="/composicao-alimentar/novo" element={<CriaComposicaoAlimentar />} />
                         <Route path="/composicao-alimentar/:id" element={<CriaComposicaoAlimentar />} />
 
-                        {/* ==================== ROTAS DE DIETA (CORRIGIDO) ==================== */}
+                        {/* Rotas de Dieta */}
                         <Route path="/dieta" element={<Dieta />} />
                         <Route path="/dieta/:animalId" element={<Dieta />} />
                         <Route path="/dieta/:animalId/novo" element={<CriaDieta />} />
+                        <Route path="/dieta/:animalId/editar/:id" element={<CriaDieta />} />
 
                         {/* Rotas de Animais */}
                         <Route path="/animal/:id" element={<AnimalDetail />} />
