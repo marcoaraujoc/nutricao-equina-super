@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
 // ====================== USUÁRIOS + RBAC ======================
@@ -179,7 +179,7 @@ model ExameNutricional {
   valorMinRef         Float?
   valorMaxRef         Float?
   observacao          String?
-  statusClinico       String?
+  arquivoUrl          String?
 
   animal              Animal    @relation(fields: [animalId], references: [id])
   nutriente           Nutriente @relation(fields: [nutrienteId], references: [id])

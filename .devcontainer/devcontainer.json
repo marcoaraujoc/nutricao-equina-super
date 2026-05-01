@@ -1,22 +1,33 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-	"name": "Ubuntu",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/base:noble"
+  "name": "Nutrição Equina - Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/base:noble",
 
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+  // Aumentamos a memória para 6GB (necessário para phi3:mini)
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "6GB",
+    "storage": "10GB"
+  },
 
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
 
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "uname -a",
+  "forwardPorts": [3000, 5173, 11434],
 
-	// Configure tool-specific properties.
-	// "customizations": {},
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
 
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "prisma.prisma"
+      ]
+    }
+  }
 }

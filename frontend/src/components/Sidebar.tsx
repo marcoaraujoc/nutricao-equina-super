@@ -46,9 +46,9 @@ export default function Sidebar() {
 
   const toggle = (setter: any) => setter((prev: boolean) => !prev);
   
-  // ✅ Suporte a rota dinâmica /dieta/:animalId
+  // ✅ Suporte a rota dinâmica /dieta/:animalId e /exames/:animalId
   const isActive = (path: string) => {
-    if (path === '/dieta') return location.pathname.startsWith('/dieta');
+    if (path === '/dieta' || path === '/exames') return location.pathname.startsWith(path);
     return location.pathname === path;
   };
 

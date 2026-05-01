@@ -12,7 +12,6 @@ import MeusCavalos from './pages/MeusCavalos';
 import Alimentos from './pages/Alimentos';
 import CriaAlimentos from './pages/criaAlimentos';
 import Dieta from './pages/Dieta';
-import Exames from './pages/Exames';
 import Analise from './pages/Analise';
 import CadastroPessoal from './pages/CadastroPessoal';
 import ResetPassword from './pages/ResetPassword';
@@ -23,6 +22,8 @@ import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
 import CriaDieta from './pages/CriaDieta';
 import AnimalDetail from './pages/AnimalDetail';
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
+import Exames from './pages/Exames';                    
+import CriaExameNutricional from './pages/CriaExameNutricional'; 
 
 function App() {
   return (
@@ -76,7 +77,12 @@ function App() {
                         {/* Rotas de Animais */}
                         <Route path="/animal/:id" element={<AnimalDetail />} />
 
+                        {/* Rotas de Exames */}
                         <Route path="/exames" element={<Exames />} />
+                        <Route path="/exames/:animalId" element={<Exames />} />
+                        <Route path="/exames/:animalId/novo" element={<CriaExameNutricional />} />
+                        <Route path="/exames/:animalId/editar/:id" element={<CriaExameNutricional />} />
+
                         <Route path="/analise" element={<Analise />} />
                       </Routes>
                     </div>
