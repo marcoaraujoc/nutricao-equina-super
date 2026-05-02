@@ -20,6 +20,8 @@ const upload = multer({ storage: storage });
 router.get('/animal/:animalId', exameController.getExamesByAnimal);
 router.post('/', upload.single('arquivo'), exameController.create);
 router.post('/analisar-llm', upload.single('arquivo'), exameController.analisarLLM);
+router.delete('/:id', exameController.delete);
+router.put('/:id', exameController.update);   // ← adicione esta linha
 
 // Removemos a rota PUT por enquanto (não estamos usando edição ainda)
 module.exports = router;

@@ -1,11 +1,135 @@
-id	nome	categoria	fabricante
-1	Ração Royal Horse S-280	Concentrado	Royal Horse
-2	Amino E	Suplemento	NULL
-3	Sal Mineral	Suplemento	NULL
-4	Óleo de Linhaça	Suplemento	NULL
-5	Feno	Volumoso	NULL
-6	Alfafa	Volumoso	NULL
-7	Capim	Volumoso	NULL
-8	Pasto	Volumoso	NULL
-9	Ração Royal Horse S-150	Concentrado	Royal Horse
-1002	Eletrolitico	Suplemento	NULL
+id,alimento_id,nutriente_id,valor_por_grama
+79,Alfafa,Ácido Aspártico,0.00900000
+81,Alfafa,Ácido Glutâmico,0.01200000
+83,Alfafa,Alanina,0.00500000
+1,Amino E,Arginina,0.02600000
+84,Alfafa,Arginina,0.01200000
+117,Feno,Arginina,0.00200000
+86,Alfafa,Cisteína,0.00060000
+155,Ração Royal Horse S-150,Cisteína,0.01400000
+2,Amino E,Fenilalanina,0.00000638
+92,Alfafa,Fenilalanina,0.00000900
+119,Feno,Fenilalanina,0.00000160
+95,Alfafa,Glicina,0.00400000
+3,Amino E,Histidina,0.00000900
+96,Alfafa,Histidina,0.00000500
+121,Feno,Histidina,0.00000100
+4,Amino E,Isoleucina,0.01762500
+98,Alfafa,Isoleucina,0.00800000
+122,Feno,Isoleucina,0.00140000
+5,Amino E,Leucina,0.02225000
+99,Alfafa,Leucina,0.01200000
+123,Feno,Leucina,0.00240000
+6,Amino E,Lisina,0.09800000
+40,Ração Royal Horse S-280,Lisina,0.00530000
+100,Alfafa,Lisina,0.01000000
+124,Feno,Lisina,0.00160000
+161,Ração Royal Horse S-150,Lisina,0.00400000
+8,Amino E,Metionina,0.05200000
+42,Ração Royal Horse S-280,Metionina,0.00240000
+103,Alfafa,Metionina,0.00300000
+126,Feno,Metionina,0.00060000
+104,Alfafa,Prolina,0.00300000
+9,Amino E,Treonina,0.01425000
+45,Ração Royal Horse S-280,Treonina,0.00480000
+107,Alfafa,Treonina,0.00800000
+128,Feno,Treonina,0.00140000
+10,Amino E,Triptofano,0.00000475
+108,Alfafa,Triptofano,0.00000200
+129,Feno,Triptofano,0.00000040
+11,Amino E,Valina,0.01762500
+109,Alfafa,Valina,0.00900000
+130,Feno,Valina,0.00160000
+39,Ração Royal Horse S-280,Carnitina,0.00010000
+14,Sal Mineral,Cálcio,0.16000000
+32,Ração Royal Horse S-280,Cálcio,0.01300000
+85,Alfafa,Cálcio,0.01000000
+118,Feno,Cálcio,0.00300000
+20,Sal Mineral,Fósforo,0.08000000
+37,Ração Royal Horse S-280,Fósforo,0.00600000
+94,Alfafa,Fósforo,0.00150000
+120,Feno,Fósforo,0.00120000
+159,Ração Royal Horse S-150,Fósforo,0.00600000
+7,Amino E,Magnésio,0.04500000
+22,Sal Mineral,Magnésio,0.00800000
+101,Alfafa,Magnésio,0.00200000
+125,Feno,Magnésio,0.00060000
+25,Sal Mineral,Sódio,0.12000000
+44,Ração Royal Horse S-280,Sódio,0.00350000
+106,Alfafa,Sódio,0.00010000
+164,Ração Royal Horse S-150,Sódio,0.00250000
+30,Sal Mineral,Potássio,0.01500000
+115,Alfafa,Potássio,0.03000000
+116,Alfafa,Cloro,0.00200000
+18,Sal Mineral,Enxofre,0.01200000
+91,Alfafa,Enxofre,0.00200000
+19,Sal Mineral,Ferro,0.00080000
+36,Ração Royal Horse S-280,Ferro,0.00009000
+93,Alfafa,Ferro,0.00010000
+158,Ração Royal Horse S-150,Ferro,0.00008100
+16,Sal Mineral,Cobre,0.00032000
+34,Ração Royal Horse S-280,Cobre,0.00002800
+88,Alfafa,Cobre,0.00001000
+157,Ração Royal Horse S-150,Cobre,0.00002250
+29,Sal Mineral,Zinco,0.00096000
+56,Ração Royal Horse S-280,Zinco,0.00009900
+113,Alfafa,Zinco,0.00002000
+133,Feno,Zinco,0.00001200
+172,Ração Royal Horse S-150,Zinco,0.00009900
+23,Sal Mineral,Manganês,0.00080000
+41,Ração Royal Horse S-280,Manganês,0.00008400
+102,Alfafa,Manganês,0.00002000
+162,Ração Royal Horse S-150,Manganês,0.00004500
+24,Sal Mineral,Selênio,0.00000080
+43,Ração Royal Horse S-280,Selênio,0.00000050
+105,Alfafa,Selênio,0.00000005
+127,Feno,Selênio,0.00000004
+163,Ração Royal Horse S-150,Selênio,0.00000027
+21,Sal Mineral,Iodo,0.00002000
+38,Ração Royal Horse S-280,Iodo,0.00000060
+97,Alfafa,Iodo,0.00000005
+160,Ração Royal Horse S-150,Iodo,0.00000020
+15,Sal Mineral,Cobalto,0.00002000
+33,Ração Royal Horse S-280,Cobalto,0.00000060
+87,Alfafa,Cobalto,0.00000020
+156,Ração Royal Horse S-150,Cobalto,0.00000020
+17,Sal Mineral,Cromo,0.00006000
+35,Ração Royal Horse S-280,Cromo,0.00000030
+90,Alfafa,Cromo,0.00000005
+26,Sal Mineral,Vitamina A,110.00000000
+46,Ração Royal Horse S-280,Vitamina A,10.00000000
+110,Alfafa,Vitamina A,9.00000000
+131,Feno,Vitamina A,2.00000000
+165,Ração Royal Horse S-150,Vitamina A,9.00000000
+47,Ração Royal Horse S-280,Vitamina B1,0.00000620
+166,Ração Royal Horse S-150,Vitamina B1,0.00000250
+50,Ração Royal Horse S-280,Vitamina B2,0.00000780
+168,Ração Royal Horse S-150,Vitamina B2,0.00000400
+48,Ração Royal Horse S-280,Vitamina B3,0.00001688
+51,Ração Royal Horse S-280,Vitamina B5,0.00001120
+52,Ração Royal Horse S-280,Vitamina B6,0.00000280
+169,Ração Royal Horse S-150,Vitamina B6,0.00000100
+49,Ração Royal Horse S-280,Vitamina B12,0.00000002
+167,Ração Royal Horse S-150,Vitamina B12,0.00000001
+53,Ração Royal Horse S-280,Vitamina C,0.00000007
+27,Sal Mineral,Vitamina D3,30.00000000
+54,Ração Royal Horse S-280,Vitamina D3,1.50000000
+111,Alfafa,Vitamina D3,0.25000000
+170,Ração Royal Horse S-150,Vitamina D3,0.60000000
+12,Amino E,Vitamina E,4.50000000
+28,Sal Mineral,Vitamina E,0.50000000
+55,Ração Royal Horse S-280,Vitamina E,0.21500000
+112,Alfafa,Vitamina E,0.07500000
+132,Feno,Vitamina E,0.02000000
+171,Ração Royal Horse S-150,Vitamina E,0.18000000
+80,Alfafa,Ácido Fólico,0.00000060
+82,Alfafa,Ácido Nicotínico,0.00002000
+31,Ração Royal Horse S-280,Biotina,0.00000070
+154,Ração Royal Horse S-150,Biotina,0.00000070
+89,Alfafa,Colina,0.00020000
+13,Amino E,Proteína Bruta,0.38000000
+57,Ração Royal Horse S-280,Proteína Bruta,0.14000000
+114,Alfafa,Proteína Bruta,0.18000000
+134,Feno,Proteína Bruta,0.10000000
+173,Ração Royal Horse S-150,Proteína Bruta,0.12000000
+58,Ração Royal Horse S-280,Extrato Etéreo,0.07000000

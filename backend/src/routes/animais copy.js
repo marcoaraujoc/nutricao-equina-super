@@ -2,16 +2,11 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { authenticate } = require('../middlewares/auth.js');   // ← importante
-
 const animalController = require('../controllers/AnimalController');
 
 const router = express.Router();
 
-// 🔥 Protege todas as rotas
-router.use(authenticate);
-
-// Configuração do multer
+// Configuração do multer (direto nas rotas - mais estável)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, '../../uploads');
@@ -26,11 +21,12 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Rotas
+// Rotas simples (sem upload)
 router.get('/', animalController.listar);
 router.get('/:id', animalController.obterPorId);
 router.delete('/:id', animalController.excluir);
 
+// Rotas com upload de foto
 router.post('/', upload.single('foto'), animalController.criar);
 router.put('/:id', upload.single('foto'), animalController.atualizar);
 

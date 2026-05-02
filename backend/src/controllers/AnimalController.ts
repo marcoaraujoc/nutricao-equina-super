@@ -1,9 +1,21 @@
-const { PrismaClient } = require('@prisma/client');
+import { Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
+
 const prisma = new PrismaClient();
 
-const listar = async (req, res) => {
+const listar = async (req: any, res: Response) => {
+  console.log('🔍 [ANIMAL LISTAR] Usuário autenticado:', req.user);
+  console.log('🔍 [ANIMAL LISTAR] Headers:', req.headers.authorization ? 'Token presente' : 'SEM TOKEN');
+
   try {
+    const whereClause = req.user?.id 
+      ? { userId: req.user.id } 
+      : {};
+
+    console.log('🔍 [ANIMAL LISTAR] Where clause aplicado:', whereClause);
+
     const animais = await prisma.animal.findMany({
+      where: whereClause,
       orderBy: { dataCadastro: 'desc' },
       include: {
         especie: true,
@@ -11,14 +23,20 @@ const listar = async (req, res) => {
         exercises: true
       }
     });
+
+    console.log(`🔍 [ANIMAL LISTAR] Retornando ${animais.length} animais`);
+
     res.json(animais);
-  } catch (error) {
-    console.error(error);
+  } catch (error: any) {
+    console.error('❌ Erro no listar:', error);
     res.status(500).json({ error: 'Erro ao listar animais' });
   }
 };
 
-const criar = async (req, res) => {
+const criar = async (req: any, res: Response) => {
+  console.log('🔍 [ANIMAL CRIAR] Usuário:', req.user?.id);
+  console.log('🔍 [ANIMAL CRIAR] Body:', req.body);
+
   try {
     const { nome, especieId, racaId, peso, dataNascimento, sexo, exercises = [] } = req.body;
 
@@ -30,10 +48,12 @@ const criar = async (req, res) => {
         peso: parseFloat(peso),
         dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
         sexo,
+        userId: req.user?.id
       }
     });
 
-    // Cria os exercícios relacionados (se enviados)
+    console.log('✅ Animal criado com ID:', animal.id, 'UserID:', req.user?.id);
+
     if (exercises && exercises.length > 0) {
       for (const ex of exercises) {
         await prisma.animalExercise.create({
@@ -47,10 +67,10 @@ const criar = async (req, res) => {
     }
 
     res.status(201).json(animal);
-  } catch (error) {
-    console.error(error);
+  } catch (error: any) {
+    console.error('❌ Erro no criar:', error);
     res.status(500).json({ error: 'Erro ao criar animal' });
   }
 };
 
-module.exports = { listar, criar };
+export { listar, criar };

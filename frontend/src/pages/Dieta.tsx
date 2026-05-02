@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
-import axios from 'axios';
+import api from '../services/api';
 import { Pencil, Trash2, Plus } from 'lucide-react';
 
 const Dieta = () => {
@@ -23,7 +23,7 @@ const Dieta = () => {
     if (!effectiveAnimalId) return;
     setLoading(true);
     try {
-      const res = await axios.get(`/api/dietas/animal/${effectiveAnimalId}`);
+      const res = await api.get(`/dietas/animal/${effectiveAnimalId}`);
       setDietas(res.data);
       if (res.data.length > 0) setAnimal(res.data[0].animal);
       else if (selectedAnimal) setAnimal(selectedAnimal);
@@ -36,7 +36,7 @@ const Dieta = () => {
 
   const loadAnimais = async () => {
     try {
-      const res = await axios.get('/api/animais', { params: { email: user?.email } });
+      const res = await api.get('/animais');
       setAnimaisDoProprietario(res.data);
     } catch (error) {
       console.error(error);
@@ -63,7 +63,7 @@ const Dieta = () => {
   const confirmDelete = async () => {
     if (!itemToDelete) return;
     try {
-      await axios.delete(`/api/dietas/${itemToDelete.id}`);
+      await api.delete(`/dietas/${itemToDelete.id}`);
       loadDieta();
       setItemToDelete(null);
     } catch (error) {
@@ -103,7 +103,7 @@ const Dieta = () => {
           </div>
         )}
 
-        {/* Card do Animal (layout preservado) */}
+        {/* Card do Animal */}
         <div className="bg-white rounded-2xl shadow p-2.5 flex gap-3 mb-4">
           <div className="w-24 self-stretch bg-gray-200 rounded-xl overflow-hidden flex-shrink-0">
             <img
@@ -140,10 +140,10 @@ const Dieta = () => {
             <div className="mt-2 pt-2 border-t">
               <span className="text-[11px] text-gray-500 block">Proprietário</span>
               <p className="text-xs font-medium text-gray-900 leading-tight">
-                {animal.user?.fullName || 'Marco Cunha'}
+                {animal.user?.fullName || user?.fullName}
               </p>
               <p className="text-[11px] text-gray-500 truncate">
-                {animal.user?.email || 'marcoaraujoc@gmail.com'}
+                {animal.user?.email || user?.email}
               </p>
             </div>
           </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import axios from 'axios';
+import api from '../services/api';
 import { ArrowLeft } from 'lucide-react';
 
 const Cavalos = () => {
@@ -10,7 +10,7 @@ const Cavalos = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
 
-  const [loading, setLoading] = useState(true);           // ← Novo estado de loading
+  const [loading, setLoading] = useState(true);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
 
@@ -34,8 +34,8 @@ const Cavalos = () => {
     const loadData = async () => {
       try {
         const [espRes, racRes] = await Promise.all([
-          axios.get('/api/especies'),
-          axios.get('/api/racas')
+          api.get('/especies'),
+          api.get('/racas')
         ]);
         setEspecies(espRes.data);
         setTodasRacas(racRes.data);
@@ -44,7 +44,7 @@ const Cavalos = () => {
         setRacasFiltradas(filtradas);
 
         if (isEditMode && id) {
-          const animalRes = await axios.get(`/api/animais/${id}`);
+          const animalRes = await api.get(`/animais/${id}`);
           const animal = animalRes.data;
           setFormData({
             nome: animal.nome,
@@ -60,7 +60,7 @@ const Cavalos = () => {
       } catch (error) {
         console.error('Erro ao carregar dados', error);
       } finally {
-        setLoading(false);        // ← Finaliza o loading
+        setLoading(false);
       }
     };
     loadData();
@@ -128,7 +128,6 @@ const Cavalos = () => {
         dataNascimento: formData.dataNascimento || null,
         sexo: formData.sexo,
         exercises: formData.exercises,
-        userId: user?.id,
       };
 
       if (photoFile) {
@@ -139,25 +138,24 @@ const Cavalos = () => {
         formDataUpload.append('peso', String(payload.peso));
         formDataUpload.append('dataNascimento', payload.dataNascimento || '');
         formDataUpload.append('sexo', payload.sexo);
-        formDataUpload.append('userId', String(payload.userId || ''));
         formDataUpload.append('exercises', JSON.stringify(payload.exercises));
         formDataUpload.append('foto', photoFile);
 
         const config = { headers: { 'Content-Type': 'multipart/form-data' } };
 
         if (isEditMode) {
-          await axios.put(`/api/animais/${id}`, formDataUpload, config);
+          await api.put(`/animais/${id}`, formDataUpload, config);
           alert('✅ Animal atualizado com sucesso!');
         } else {
-          await axios.post('/api/animais', formDataUpload, config);
+          await api.post('/animais', formDataUpload, config);
           alert('✅ Animal cadastrado com sucesso!');
         }
       } else {
         if (isEditMode) {
-          await axios.put(`/api/animais/${id}`, payload);
+          await api.put(`/animais/${id}`, payload);
           alert('✅ Animal atualizado com sucesso!');
         } else {
-          await axios.post('/api/animais', payload);
+          await api.post('/animais', payload);
           alert('✅ Animal cadastrado com sucesso!');
         }
       }
@@ -171,7 +169,6 @@ const Cavalos = () => {
     }
   };
 
-  // Tela de loading (evita tela em branco)
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -200,7 +197,6 @@ const Cavalos = () => {
 
           {/* Foto quadrada + Nome em destaque */}
           <div className="flex gap-6 mb-10">
-            {/* Foto quadrada */}
             <label className="cursor-pointer group flex-shrink-0">
               <div className="w-40 h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
                 {photoPreview ? (
@@ -221,7 +217,6 @@ const Cavalos = () => {
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
             </label>
 
-            {/* Nome em destaque */}
             <div className="flex-1 pt-4">
               <input
                 type="text"
@@ -235,6 +230,7 @@ const Cavalos = () => {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* ... resto do formulário permanece igual ... */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import axios from 'axios';
+import api from '../services/api';
 import { ArrowLeft } from 'lucide-react';
 
 const CriaDieta = () => {
@@ -27,12 +27,12 @@ const CriaDieta = () => {
     const loadData = async () => {
       try {
         // Carregar lista de alimentos para o select
-        const alRes = await axios.get('/api/alimentos');
+        const alRes = await api.get('/alimentos');
         setAlimentos(alRes.data);
 
         // Se estiver editando, carregar os dados existentes da dieta
         if (isEditMode && id) {
-          const res = await axios.get(`/api/dietas/${id}`);
+          const res = await api.get(`/dietas/${id}`);
           const item = res.data;
 
           setFormData({
@@ -72,10 +72,10 @@ const CriaDieta = () => {
       };
 
       if (isEditMode) {
-        await axios.put(`/api/dietas/${id}`, payload);
+        await api.put(`/dietas/${id}`, payload);
         alert('✅ Alimento atualizado na dieta com sucesso!');
       } else {
-        await axios.post('/api/dietas', payload);
+        await api.post('/dietas', payload);
         alert('✅ Alimento adicionado à dieta com sucesso!');
       }
 

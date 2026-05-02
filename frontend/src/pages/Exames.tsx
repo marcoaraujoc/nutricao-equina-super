@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
-import axios from 'axios';
+import api from '../services/api';
 import { Plus, Eye, Download, Calendar, Edit, Trash2, ArrowLeft } from 'lucide-react';
 
 const Exames = () => {
@@ -15,13 +15,29 @@ const Exames = () => {
   const [currentAnimal, setCurrentAnimal] = useState<any>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editValues, setEditValues] = useState<any>({});
+  const [nutrientes, setNutrientes] = useState<any[]>([]);
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
+  // Carrega lista de nutrientes
+  useEffect(() => {
+    const loadNutrientes = async () => {
+      try {
+        const res = await api.get('/nutrientes');
+        setNutrientes(res.data);
+      } catch (err) {
+        console.error('Erro ao carregar nutrientes:', err);
+      }
+    };
+    loadNutrientes();
+  }, []);
+
   const loadAnimais = async () => {
-    if (!user?.email) return;
+    if (!user?.id) return;
     try {
-      const res = await axios.get('/api/animais', { params: { email: user.email } });
+      const res = await api.get('/animais');
       const lista = res.data || [];
       setAnimaisDoProprietario(lista);
 
@@ -37,10 +53,10 @@ const Exames = () => {
   const loadExamesAndAnimal = async () => {
     if (!effectiveAnimalId) return;
     try {
-      const resExames = await axios.get(`/api/exames/animal/${effectiveAnimalId}`);
+      const resExames = await api.get(`/exames/animal/${effectiveAnimalId}`);
       setExames(resExames.data || []);
 
-      const resAnimal = await axios.get(`/api/animais/${effectiveAnimalId}`);
+      const resAnimal = await api.get(`/animais/${effectiveAnimalId}`);
       setCurrentAnimal(resAnimal.data);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -50,7 +66,7 @@ const Exames = () => {
   useEffect(() => {
     setLoading(true);
     Promise.all([loadAnimais(), loadExamesAndAnimal()]).finally(() => setLoading(false));
-  }, [effectiveAnimalId, user?.email]);
+  }, [effectiveAnimalId, user?.id]);
 
   const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = animaisDoProprietario.find((a: any) => a.id === Number(e.target.value));
@@ -64,17 +80,35 @@ const Exames = () => {
     if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo`);
   };
 
-  const handleEdit = (id: number) => {
-    if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/editar/${id}`);
+  const startEdit = (ex: any) => {
+    setEditingId(ex.id);
+    setEditValues({ ...ex });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValues({});
+  };
+
+  const saveEdit = async (id: number) => {
+    try {
+      await api.put(`/exames/${id}`, editValues);
+      setExames(exames.map(ex => ex.id === id ? { ...ex, ...editValues } : ex));
+      setEditingId(null);
+      setEditValues({});
+    } catch (error) {
+      alert('Erro ao salvar edição');
+    }
   };
 
   const handleDelete = async (id: number) => {
     if (!confirm('Deseja realmente excluir este exame?')) return;
     try {
-      await axios.delete(`/api/exames/${id}`);
+      await api.delete(`/exames/${id}`);
       setExames(exames.filter(ex => ex.id !== id));
     } catch (error) {
       alert('Erro ao excluir o exame');
+      console.error(error);
     }
   };
 
@@ -104,7 +138,6 @@ const Exames = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-4xl mx-auto px-4">
 
-        {/* Botão Voltar para o Dashboard */}
         <button 
           onClick={() => navigate('/')} 
           className="flex items-center gap-2 text-emerald-700 mb-4 hover:text-emerald-800"
@@ -127,7 +160,6 @@ const Exames = () => {
           </div>
         )}
 
-        {/* Card do Animal */}
         {currentAnimal && (
           <div className="bg-white rounded-2xl shadow p-2.5 flex gap-3 mb-6">
             <div className="w-24 self-stretch bg-gray-200 rounded-xl overflow-hidden flex-shrink-0">
@@ -188,15 +220,63 @@ const Exames = () => {
                 </tr>
               ) : (
                 exames.map((ex: any) => {
+                  const isEditing = editingId === ex.id;
                   const status = getStatus(ex);
+
                   return (
                     <tr key={ex.id} className="border-t hover:bg-gray-50">
                       <td className="px-6 py-4 flex items-center gap-2 text-gray-900">
-                        <Calendar size={16} />{formatDate(ex.dataExame)}
+                        <Calendar size={16} />
+                        {isEditing ? (
+                          <input 
+                            type="date" 
+                            value={editValues.dataExame ? editValues.dataExame.split('T')[0] : formatDate(ex.dataExame)} 
+                            onChange={(e) => setEditValues({ ...editValues, dataExame: e.target.value })}
+                            className="border rounded p-1 text-sm"
+                          />
+                        ) : (
+                          formatDate(ex.dataExame)
+                        )}
                       </td>
-                      <td className="px-6 py-4 font-medium text-gray-900">{ex.nutriente?.nome || '—'}</td>
+                      <td className="px-6 py-4 font-medium text-gray-900">
+                        {isEditing ? (
+                          <>
+                            <input 
+                              list="nutrientes-list"
+                              value={editValues.nutriente?.nome || ex.nutriente?.nome || ''} 
+                              onChange={(e) => {
+                                const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
+                                setEditValues({ 
+                                  ...editValues, 
+                                  nutriente: { nome: e.target.value },
+                                  nutrienteId: selected ? selected.id : null
+                                });
+                              }}
+                              className="border rounded p-1 text-sm w-full"
+                              placeholder="Digite o nutriente..."
+                            />
+                            <datalist id="nutrientes-list">
+                              {nutrientes.map(n => (
+                                <option key={n.id} value={n.nome} />
+                              ))}
+                            </datalist>
+                          </>
+                        ) : (
+                          ex.nutriente?.nome || '—'
+                        )}
+                      </td>
                       <td className="px-6 py-4 font-semibold text-emerald-700">
-                        {ex.valorEncontrado} {ex.unidade}
+                        {isEditing ? (
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={editValues.valorEncontrado || ex.valorEncontrado} 
+                            onChange={(e) => setEditValues({ ...editValues, valorEncontrado: e.target.value })}
+                            className="border rounded p-1 text-sm w-20"
+                          />
+                        ) : (
+                          `${ex.valorEncontrado} ${ex.unidade}`
+                        )}
                       </td>
                       <td className="px-6 py-4 text-center">
                         {status === 'naoCalculado' ? (
@@ -213,18 +293,27 @@ const Exames = () => {
                         )}
                       </td>
                       <td className="px-6 py-4 text-right flex justify-end gap-3">
-                        {ex.arquivoUrl && (
+                        {isEditing ? (
                           <>
-                            <button onClick={() => window.open(ex.arquivoUrl, '_blank')}><Eye size={18} /></button>
-                            <button><Download size={18} /></button>
+                            <button onClick={() => saveEdit(ex.id)} className="text-emerald-600 hover:text-emerald-700 font-medium">Salvar</button>
+                            <button onClick={cancelEdit} className="text-gray-500 hover:text-gray-700">Cancelar</button>
+                          </>
+                        ) : (
+                          <>
+                            {ex.arquivoUrl && (
+                              <>
+                                <button onClick={() => window.open(ex.arquivoUrl, '_blank')}><Eye size={18} /></button>
+                                <button><Download size={18} /></button>
+                              </>
+                            )}
+                            <button onClick={() => startEdit(ex)} className="text-emerald-600 hover:text-emerald-700">
+                              <Edit size={18} />
+                            </button>
+                            <button onClick={() => handleDelete(ex.id)} className="text-red-500 hover:text-red-600">
+                              <Trash2 size={18} />
+                            </button>
                           </>
                         )}
-                        <button onClick={() => handleEdit(ex.id)} className="text-emerald-600 hover:text-emerald-700">
-                          <Edit size={18} />
-                        </button>
-                        <button onClick={() => handleDelete(ex.id)} className="text-red-500 hover:text-red-600">
-                          <Trash2 size={18} />
-                        </button>
                       </td>
                     </tr>
                   );
@@ -238,7 +327,6 @@ const Exames = () => {
   );
 };
 
-// Função auxiliar para exibir a data corretamente (sem deslocamento de fuso)
 const formatDate = (isoString: string) => {
   const date = new Date(isoString);
   return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });

@@ -1,27 +1,33 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import axios from 'axios';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import api from '../services/api';
 import { ArrowLeft, PawPrint } from 'lucide-react';
 
 const AnimalDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { selectedAnimal } = useSelectedAnimal();
+
   const [animal, setAnimal] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!id) return;
+
     const loadAnimal = async () => {
       try {
-        const res = await axios.get(`/api/animais/${id}`);
+        const res = await api.get(`/animais/${id}`);
         setAnimal(res.data);
       } catch (error) {
-        console.error(error);
+        console.error('Erro ao carregar animal:', error);
       } finally {
         setLoading(false);
       }
     };
+
     loadAnimal();
   }, [id]);
 
@@ -34,7 +40,11 @@ const AnimalDetail = () => {
   }
 
   if (!animal) {
-    return <div className="text-center py-20 text-red-500">Animal não encontrado</div>;
+    return (
+      <div className="text-center py-20 text-red-500">
+        Animal não encontrado
+      </div>
+    );
   }
 
   return (
@@ -73,7 +83,11 @@ const AnimalDetail = () => {
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Idade</span>
-                  <span className="text-3xl font-semibold">{animal.idade || '-'} anos</span>
+                  <span className="text-3xl font-semibold">
+                    {animal.dataNascimento 
+                      ? new Date().getFullYear() - new Date(animal.dataNascimento).getFullYear() 
+                      : '-'} anos
+                  </span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Peso Atual</span>
@@ -90,7 +104,6 @@ const AnimalDetail = () => {
 
         {/* PROPRIETÁRIO + VETERINÁRIO */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Proprietário */}
           <div className="bg-white rounded-3xl shadow-md p-6 border border-gray-100">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 text-3xl">👤</div>
@@ -111,7 +124,6 @@ const AnimalDetail = () => {
             </div>
           </div>
 
-          {/* Veterinário */}
           <div className="bg-emerald-700 text-white rounded-3xl shadow-md p-6">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-3xl">🩺</div>
@@ -133,7 +145,7 @@ const AnimalDetail = () => {
           </div>
         </div>
 
-        {/* DIETA */}
+        {/* DIETA e demais seções mantidas iguais */}
         <div className="lg:col-span-12 bg-white rounded-3xl shadow-md p-8 border border-gray-100">
           <h3 className="font-semibold flex items-center gap-2 mb-6 text-xl">🥕 Dieta Atual</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -154,10 +166,8 @@ const AnimalDetail = () => {
 
         {/* Últimas Consultas + Próximos Eventos */}
         <div className="lg:col-span-12 grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Últimas Consultas */}
           <div className="bg-white rounded-3xl shadow-md p-8 border border-gray-100">
             <h3 className="font-semibold mb-6">Últimas Consultas</h3>
-            {/* Você pode popular dinamicamente depois */}
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <div>
@@ -169,7 +179,6 @@ const AnimalDetail = () => {
             </div>
           </div>
 
-          {/* Próximos Eventos */}
           <div className="bg-white rounded-3xl shadow-md p-8 border border-gray-100">
             <h3 className="font-semibold mb-6">Próximos Eventos</h3>
             <div className="grid grid-cols-2 gap-4">

@@ -3,21 +3,26 @@ const prisma = new PrismaClient();
 
 class AnimalController {
   async listar(req, res) {
-    const { userId, email } = req.query;
-    try {
-      let where = {};
+    console.log('🔍 [LISTAR] === INÍCIO DA REQUISIÇÃO ===');
+    console.log('🔍 [LISTAR] req.user completo:', req.user);
+    console.log('🔍 [LISTAR] req.user.id:', req.user?.id, 'tipo:', typeof req.user?.id);
 
-      if (email) {
-        const usuario = await prisma.user.findUnique({
-          where: { email: String(email) }
-        });
-        if (usuario) where = { userId: usuario.id };
-      } else if (userId) {
-        where = { userId: Number(userId) };
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        console.log('⚠️ [LISTAR] Nenhum userId encontrado no token!');
+        return res.status(401).json({ error: 'Usuário não autenticado' });
       }
 
+      // Debug direto no banco
+      const count = await prisma.animal.count({
+        where: { userId: Number(userId) }
+      });
+      console.log(`🔍 [LISTAR] Total de animais no banco para userId ${userId}: ${count}`);
+
       const animais = await prisma.animal.findMany({
-        where,
+        where: { userId: Number(userId) },
         include: { 
           especie: true, 
           raca: true, 
@@ -26,9 +31,10 @@ class AnimalController {
         }
       });
 
+      console.log(`✅ [LISTAR] Retornando ${animais.length} animais para o frontend`);
       res.json(animais);
     } catch (error) {
-      console.error('Erro no listar animais:', error);
+      console.error('❌ Erro no listar animais:', error);
       res.status(500).json({ error: 'Erro ao listar animais', details: error.message });
     }
   }
@@ -54,7 +60,7 @@ class AnimalController {
   }
 
   async criar(req, res) {
-    const { nome, especieId, racaId, peso, dataNascimento, sexo, userId, exercises = '[]' } = req.body;
+    const { nome, especieId, racaId, peso, dataNascimento, sexo, exercises = '[]' } = req.body;
 
     let parsedExercises = [];
     try {
@@ -64,7 +70,6 @@ class AnimalController {
     }
 
     if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ error: 'Raça é obrigatória' });
-    if (!userId) return res.status(400).json({ error: 'Usuário não identificado' });
     if (!especieId) return res.status(400).json({ error: 'Espécie é obrigatória' });
 
     try {
@@ -82,7 +87,7 @@ class AnimalController {
           photoUrl,
           especieId: Number(especieId),
           racaId: Number(racaId),
-          userId: Number(userId)
+          userId: req.user?.id
         }
       });
 
@@ -96,6 +101,7 @@ class AnimalController {
         });
       }
 
+      console.log('✅ Animal criado com sucesso ID:', animal.id, 'UserID:', req.user?.id);
       res.status(201).json(animal);
     } catch (error) {
       console.error(error);
@@ -154,10 +160,8 @@ class AnimalController {
   async excluir(req, res) {
     const { id } = req.params;
     try {
-      // Apaga todos os registros relacionados antes de excluir o animal
       await prisma.animalExercise.deleteMany({ where: { animalId: Number(id) } });
-      await prisma.dieta.deleteMany({ where: { animalId: Number(id) } });           // ← ADICIONADO
-      // Se existirem outras tabelas relacionadas (exames, etc.), adicione aqui
+      await prisma.dieta.deleteMany({ where: { animalId: Number(id) } });
 
       await prisma.animal.delete({ where: { id: Number(id) } });
 

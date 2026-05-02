@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
-import axios from 'axios';
+import api from '../services/api';
 import { Pencil, Trash2, Plus } from 'lucide-react';
 
 const MeusCavalos = () => {
   const { user } = useAuth();
-  const { setSelectedAnimal } = useSelectedAnimal();   // ← Necessário para salvar na memória
+  const { setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
+
   const [animais, setAnimais] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -16,10 +17,11 @@ const MeusCavalos = () => {
 
   const loadAnimais = async () => {
     try {
-      const res = await axios.get('/api/animais', { params: { userId: user?.id } });
+      const res = await api.get('/animais'); // ← Sem ?userId (o token já filtra)
+      console.log('✅ MeusCavalos carregou:', res.data.length, 'animais');
       setAnimais(res.data);
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao carregar animais:', error);
     } finally {
       setLoading(false);
     }
@@ -27,7 +29,7 @@ const MeusCavalos = () => {
 
   useEffect(() => {
     if (user?.id) loadAnimais();
-  }, [user]);
+  }, [user?.id]);
 
   const filteredAnimais = animais.filter((a) =>
     a.nome.toLowerCase().includes(search.toLowerCase())
@@ -44,8 +46,8 @@ const MeusCavalos = () => {
   };
 
   const handleEdit = (animal: any) => {
-    setSelectedAnimal(animal);           // ← Salva na memória global
-    navigate(`/cavalos/${animal.id}`);   // ← Abre tela de edição
+    setSelectedAnimal(animal);
+    navigate(`/cavalos/${animal.id}`);
   };
 
   const handleDeleteClick = (animal: any) => {
@@ -55,7 +57,7 @@ const MeusCavalos = () => {
   const confirmDelete = async () => {
     if (!animalToDelete) return;
     try {
-      await axios.delete(`/api/animais/${animalToDelete.id}`);
+      await api.delete(`/animais/${animalToDelete.id}`);
       alert('✅ Animal excluído com sucesso!');
       setAnimalToDelete(null);
       loadAnimais();
@@ -98,7 +100,7 @@ const MeusCavalos = () => {
             <div
               key={animal.id}
               className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full cursor-pointer"
-              onClick={() => handleEdit(animal)}   // ← CLIQUE NO CARD = EDIÇÃO + MEMÓRIA
+              onClick={() => handleEdit(animal)}
             >
               {/* FOTO */}
               <div className="w-28 h-28 flex-shrink-0 bg-gray-200">

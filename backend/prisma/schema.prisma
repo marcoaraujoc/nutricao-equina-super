@@ -9,72 +9,70 @@ datasource db {
 
 // ====================== USUÁRIOS + RBAC ======================
 model User {
-  id           Int      @id @default(autoincrement())
+  id           Int     @id @default(autoincrement())
   fullName     String
-  email        String   @unique
+  email        String  @unique
   passwordHash String
   phone        String?
-  role         String   @default("USER")
-  userType     String   @default("PROPRIETARIO")
+  role         String  @default("USER")
+  userType     String  @default("PROPRIETARIO")
 
-  // === Campos de endereço ===
   cep         String?
-  endereco     String?
-  complemento  String?
-  bairro       String?
-  cidade       String?
-  estado       String?
+  endereco    String?
+  complemento String?
+  bairro      String?
+  cidade      String?
+  estado      String?
 
   createdAt DateTime @default(now())
   ativo     Boolean  @default(true)
 
-  // === Campos de recuperação de senha ===
-  resetPasswordToken  String? @unique
+  resetPasswordToken   String?   @unique
   resetPasswordExpires DateTime?
 
-  // === Auditoria ===
   auditLogs AuditLog[]
 
-  // === RELAÇÃO COM ANIMAIS ===
   animais Animal[]
 
-  // === RELAÇÕES DE AUDITORIA DIETA (obrigatório para Prisma) ===
-  dietasCriadas     Dieta[]  @relation("CriadorDieta")
-  dietasModificadas Dieta[]  @relation("ModificadorDieta")
+  // Relações de Dieta (nomeadas para evitar ambiguidade)
+  dietasCriadas     Dieta[] @relation("CriadorDieta")
+  dietasModificadas Dieta[] @relation("ModificadorDieta")
 
   @@map("users")
 }
 
-// ====================== MODELOS EXISTENTES ======================
+// ====================== ANIMAL ======================
 model Animal {
-  id              Int      @id @default(autoincrement())
-  nome            String
-  peso            Float
-  dataNascimento  DateTime?
-  sexo            String
-  photoUrl        String?
-  dataCadastro    DateTime @default(now())
-  ativo           Boolean  @default(true)
-  especieId       Int
-  racaId          Int?
+  id             Int       @id @default(autoincrement())
+  nome           String
+  peso           Float
+  dataNascimento DateTime?
+  sexo           String
+  photoUrl       String?
+  dataCadastro   DateTime  @default(now())
+  ativo          Boolean   @default(true)
+  especieId      Int
+  racaId         Int?
 
-  // === FK AGORA OBRIGATÓRIA ===
-  userId          Int
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  especie         Especie  @relation(fields: [especieId], references: [id])
-  raca            Raca?    @relation(fields: [racaId], references: [id])
-  dietas          Dieta[]
-  exames          ExameNutricional[]
-  ocorrencias     OcorrenciaSaude[]
-  exercises       AnimalExercise[]
+  especie Especie @relation(fields: [especieId], references: [id])
+  raca    Raca?   @relation(fields: [racaId], references: [id])
+
+  // Relações com Cascade (apenas do lado "muitos")
+  dietas      Dieta[]
+  exames      ExameNutricional[]
+  ocorrencias OcorrenciaSaude[]
+  exercises   AnimalExercise[]
 
   @@map("tb_animais")
 }
 
+// ====================== OUTRAS MODELS ======================
 model Especie {
-  id     Int    @id @default(autoincrement())
-  nome   String @unique
+  id   Int    @id @default(autoincrement())
+  nome String @unique
 
   animais Animal[]
   racas   Raca[]
@@ -83,138 +81,134 @@ model Especie {
 }
 
 model Raca {
-  id         Int      @id @default(autoincrement())
-  nome       String
-  especieId  Int
+  id        Int    @id @default(autoincrement())
+  nome      String
+  especieId Int
 
-  especie    Especie  @relation(fields: [especieId], references: [id])
-  animais    Animal[]
+  especie Especie  @relation(fields: [especieId], references: [id])
+  animais Animal[]
 
-  @@unique([nome, especieId])   // ← ESSA LINHA É OBRIGATÓRIA
+  @@unique([nome, especieId])
   @@map("tb_racas")
 }
 
 model AnimalExercise {
-  id             Int      @id @default(autoincrement())
-  animalId       Int
-  tipo           String   // ex: "Adestramento", "Salto", "Barril", "Cross"
-  periodicidade  String   // ex: "2x na semana", "1x por dia"
+  id            Int    @id @default(autoincrement())
+  animalId      Int
+  tipo          String
+  periodicidade String
 
-  animal         Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  animal Animal @relation(fields: [animalId], references: [id], onDelete: Cascade)
 
   @@map("tb_animal_exercise")
 }
 
 model Dieta {
-  id                Int      @id @default(autoincrement())
-  animalId          Int
-  alimentoId        Int
-  qtdGramasDia      Float    // mantido
-  periodicidade     String?
-  unidade           String?
-  dataInicio        DateTime @default(now())
-  dataFim           DateTime?
-  horario           String?
-  observacao        String?
-  dataCriacao       DateTime @default(now())
-  dataAlteracao     DateTime @updatedAt
-  criadopor         Int
-  modificadopor     Int
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  alimentoId    Int
+  qtdGramasDia  Float
+  periodicidade String?
+  unidade       String?
+  dataInicio    DateTime  @default(now())
+  dataFim       DateTime?
+  horario       String?
+  observacao    String?
+  dataCriacao   DateTime  @default(now())
+  dataAlteracao DateTime  @updatedAt
+  criadopor     Int
+  modificadopor Int
 
-  animal            Animal   @relation(fields: [animalId], references: [id])
-  alimento          Alimento @relation(fields: [alimentoId], references: [id])
-  userCriador       User     @relation("CriadorDieta", fields: [criadopor], references: [id])
-  userModificador   User     @relation("ModificadorDieta", fields: [modificadopor], references: [id])
+  animal          Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  alimento        Alimento @relation(fields: [alimentoId], references: [id])
+  userCriador     User     @relation("CriadorDieta", fields: [criadopor], references: [id])
+  userModificador User     @relation("ModificadorDieta", fields: [modificadopor], references: [id])
 
   @@map("tb_dieta")
 }
 
 model Alimento {
-  id            Int      @id @default(autoincrement())
-  nome          String
-  categoria     String
-  fabricante    String?
-  forma         String?           // mantida (explicada acima)
-  ativo         Boolean  @default(true)
+  id         Int     @id @default(autoincrement())
+  nome       String
+  categoria  String
+  fabricante String?
+  forma      String?
+  ativo      Boolean @default(true)
 
-  composicoes   ComposicaoAlimento[]
-  dietas        Dieta[]
+  composicoes ComposicaoAlimento[]
+  dietas      Dieta[]
 
   @@map("tb_alimentos")
 }
 
 model Nutriente {
-  id             Int      @id @default(autoincrement())
-  nome           String
-  categoria      String
-  unidadePadrao  String
+  id            Int    @id @default(autoincrement())
+  nome          String
+  categoria     String
+  unidadePadrao String
 
-  composicoes    ComposicaoAlimento[]
-  exames         ExameNutricional[]
+  composicoes ComposicaoAlimento[]
+  exames      ExameNutricional[]
 
   @@map("tb_nutrientes")
 }
 
-model ComposicaoAlimento{
-  id            Int      @id @default(autoincrement())
-  alimentoId    Int                    // ← alterado de produtoId
-  nutrienteId   Int
-  valorPorKg    Float
-  base          String   @default("Seca")
+model ComposicaoAlimento {
+  id          Int    @id @default(autoincrement())
+  alimentoId  Int
+  nutrienteId Int
+  valorPorKg  Float
+  base        String @default("Seca")
 
-  alimento      Alimento @relation(fields: [alimentoId], references: [id])   // ← alterado
-  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+  alimento  Alimento  @relation(fields: [alimentoId], references: [id])
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
 
   @@unique([alimentoId, nutrienteId])
   @@map("tb_composicao_alimento")
 }
 
 model ExameNutricional {
-  id                  Int      @id @default(autoincrement())
-  animalId            Int
-  nutrienteId         Int
-  dataExame           DateTime
-  valorEncontrado     Float
-  unidade             String
-  valorMinRef         Float?
-  valorMaxRef         Float?
-  observacao          String?
-  arquivoUrl          String?
+  id              Int      @id @default(autoincrement())
+  animalId        Int
+  nutrienteId     Int
+  dataExame       DateTime
+  valorEncontrado Float
+  unidade         String
+  valorMinRef     Float?
+  valorMaxRef     Float?
+  observacao      String?
+  arquivoUrl      String?
 
-  animal              Animal    @relation(fields: [animalId], references: [id])
-  nutriente           Nutriente @relation(fields: [nutrienteId], references: [id])
+  animal    Animal    @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
 
   @@map("tb_exames_nutricionais")
 }
 
 model OcorrenciaSaude {
-  id            Int      @id @default(autoincrement())
-  animalId      Int
-  dataInicio    DateTime
-  dataFim       DateTime?
-  problema      String
-  tratamento    String?
-  responsavel   String?
+  id          Int       @id @default(autoincrement())
+  animalId    Int
+  dataInicio  DateTime
+  dataFim     DateTime?
+  problema    String
+  tratamento  String?
+  responsavel String?
 
-  animal        Animal   @relation(fields: [animalId], references: [id])
+  animal Animal @relation(fields: [animalId], references: [id], onDelete: Cascade)
 
   @@map("tb_ocorrencias_saude")
 }
 
 // ====================== AUDITORIA ======================
 model AuditLog {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  userName    String
-  email       String
-  action      String   // "LOGIN" ou "LOGOUT"
-  timestamp   DateTime @default(now())
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  userName  String
+  email     String
+  action    String
+  timestamp DateTime @default(now())
 
-  user        User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 
   @@map("tb_audit_logs")
 }
-
-
-
-

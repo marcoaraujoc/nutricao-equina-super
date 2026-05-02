@@ -1,10 +1,12 @@
 import { Router } from 'express';
-import { AnimalController } from '../controllers/AnimalController';
+import { authenticate } from '../middlewares/auth.js';
+import * as animalCtrl from '../controllers/AnimalController.js';
 
 const router = Router();
-const controller = new AnimalController();
 
-router.get('/', controller.listar);
-router.post('/', controller.criar);
+router.use(authenticate);   // ← Proteção
+
+router.get('/', animalCtrl.listar);
+router.post('/', animalCtrl.criar);
 
 export default router;

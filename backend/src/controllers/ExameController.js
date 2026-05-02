@@ -143,6 +143,40 @@ exports.bulkCreateNutrientes = async (req, res) => {
   }
 };
 
+exports.delete = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const exame = await prisma.exameNutricional.delete({
+      where: { id: Number(id) }
+    });
+    res.json({ message: 'Exame excluído com sucesso', exame });
+  } catch (error) {
+    console.error(error);
+    res.status(404).json({ error: 'Exame não encontrado' });
+  }
+};
+
+
 exports.update = async (req, res) => {
-  // seu código de update (se tiver)
+  const { id } = req.params;
+  const { nutrienteId, dataExame, valorEncontrado, unidade, valorMinRef, valorMaxRef, observacao } = req.body;
+
+  try {
+    const exame = await prisma.exameNutricional.update({
+      where: { id: Number(id) },
+      data: {
+        nutrienteId: nutrienteId ? Number(nutrienteId) : undefined,
+        dataExame: dataExame ? new Date(dataExame) : undefined,
+        valorEncontrado: valorEncontrado ? Number(valorEncontrado) : undefined,
+        unidade,
+        valorMinRef: valorMinRef ? Number(valorMinRef) : undefined,
+        valorMaxRef: valorMaxRef ? Number(valorMaxRef) : undefined,
+        observacao
+      }
+    });
+    res.json(exame);
+  } catch (error) {
+    console.error(error);
+    res.status(404).json({ error: 'Exame não encontrado' });
+  }
 };

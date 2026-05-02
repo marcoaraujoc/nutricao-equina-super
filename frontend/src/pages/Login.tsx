@@ -1,7 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function Login() {
@@ -21,20 +20,35 @@ export default function Login() {
   const [forgotError, setForgotError] = useState('');
 
   // ==================== GOOGLE ====================
-  const handleGoogleSuccess = (credentialResponse: any) => {
+  const handleGoogleSuccess = async (credentialResponse: any) => {
     console.log('✅ Google credential recebido:', credentialResponse);
+
     if (!credentialResponse?.credential) {
       alert('Google não retornou o token.');
       return;
     }
+
     try {
-      const decoded: any = jwtDecode(credentialResponse.credential);
-      login(credentialResponse.credential);
-      console.log('🎉 Login com Google realizado com sucesso!');
-      navigate('/');
+      // Envia o credential para o backend gerar o token JWT
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: credentialResponse.credential }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.token) {
+        login(data.token);                    // ← Token gerado pelo backend
+        console.log('🎉 Login Google realizado com sucesso!');
+        navigate('/');
+      } else {
+        console.error('Erro do backend:', data);
+        alert(data.error || 'Erro no login Google');
+      }
     } catch (err) {
-      console.error('❌ Erro ao decodificar token Google:', err);
-      alert('Erro ao processar dados do Google.');
+      console.error('❌ Erro ao processar login Google:', err);
+      alert('Erro de conexão com o servidor.');
     }
   };
 
@@ -76,18 +90,15 @@ export default function Login() {
     setForgotSuccess(false);
 
     try {
-      // Sempre envia a requisição (não revela se o e-mail existe ou não)
       await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail.trim().toLowerCase() }),
       });
 
-      // Sempre mostra sucesso (segurança contra enumeração de e-mails)
       setForgotSuccess(true);
     } catch (err) {
-      // Mesmo em caso de erro de rede, mostra a mensagem de sucesso
-      setForgotSuccess(true);
+      setForgotSuccess(true); // Mostra sucesso mesmo em erro (segurança)
     } finally {
       setForgotLoading(false);
     }
@@ -185,7 +196,7 @@ export default function Login() {
               {forgotError && <p className="text-red-500 text-sm text-center mt-3">{forgotError}</p>}
               {forgotSuccess && (
                 <p className="text-emerald-600 text-sm text-center mt-3">
-                  Se o e-mail existir será encaminhado o link.
+                  Se o e-mail existir, será enviado um link de recuperação.
                 </p>
               )}
 

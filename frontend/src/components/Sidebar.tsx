@@ -25,7 +25,7 @@ import {
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
-  const { selectedAnimal } = useSelectedAnimal();
+  const { isNewUser, selectedAnimal } = useSelectedAnimal();
   const location = useLocation();
 
   const role = user?.role?.toUpperCase();
@@ -44,17 +44,18 @@ export default function Sidebar() {
   // Menu mobile
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const toggle = (setter: any) => setter((prev: boolean) => !prev);
+  const toggle = (setter: React.Dispatch<React.SetStateAction<boolean>>) => 
+    setter(prev => !prev);
   
-  // ✅ Suporte a rota dinâmica /dieta/:animalId e /exames/:animalId
   const isActive = (path: string) => {
-    if (path === '/dieta' || path === '/exames') return location.pathname.startsWith(path);
+    if (path === '/dieta' || path === '/exames') 
+      return location.pathname.startsWith(path);
     return location.pathname === path;
   };
 
   return (
     <>
-      {/* HAMBURGER BUTTON (Mobile/Tablet) */}
+      {/* HAMBURGER BUTTON (Mobile) */}
       <button
         onClick={() => setIsMobileMenuOpen(true)}
         className="md:hidden fixed top-6 left-6 z-50 p-3 bg-white rounded-3xl shadow-lg border border-gray-200"
@@ -88,9 +89,12 @@ export default function Sidebar() {
 
         <nav className="flex-1 px-3 py-6 space-y-8 overflow-y-auto">
 
-          {/* GERAL */}
+          {/* ===================== GERAL ===================== */}
           <div>
-            <button onClick={() => toggle(setOpenGeral)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
+            <button 
+              onClick={() => toggle(setOpenGeral)} 
+              className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 uppercase tracking-widest hover:bg-gray-50 rounded-3xl"
+            >
               GERAL
               <ChevronDown className={`w-4 h-4 transition-transform ${openGeral ? 'rotate-180' : ''}`} />
             </button>
@@ -112,75 +116,86 @@ export default function Sidebar() {
             )}
           </div>
 
-          {/* MÓDULOS */}
-          <div>
-            <button onClick={() => toggle(setOpenModulos)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
-              MÓDULOS
-              <ChevronDown className={`w-4 h-4 transition-transform ${openModulos ? 'rotate-180' : ''}`} />
-            </button>
+          {/* ===================== MÓDULOS ===================== */}
+          {!isNewUser ? (
+            <div>
+              <button 
+                onClick={() => toggle(setOpenModulos)} 
+                className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 uppercase tracking-widest hover:bg-gray-50 rounded-3xl"
+              >
+                MÓDULOS
+                <ChevronDown className={`w-4 h-4 transition-transform ${openModulos ? 'rotate-180' : ''}`} />
+              </button>
 
-            {openModulos && (
-              <div className="mt-2 pl-4 space-y-6">
+              {openModulos && (
+                <div className="mt-2 pl-4 space-y-6">
 
-                {/* Clínica */}
-                <div>
-                  <button onClick={() => toggle(setOpenClinica)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
-                    <span className="flex items-center gap-3"><Stethoscope size={20} /> Clínica</span>
-                    <ChevronDown className={`w-4 h-4 transition-transform ${openClinica ? 'rotate-180' : ''}`} />
-                  </button>
-                  {openClinica && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
-                </div>
+                  {/* Clínica */}
+                  <div>
+                    <button onClick={() => toggle(setOpenClinica)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
+                      <span className="flex items-center gap-3"><Stethoscope size={20} /> Clínica</span>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${openClinica ? 'rotate-180' : ''}`} />
+                    </button>
+                    {openClinica && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
+                  </div>
 
-                {/* Nutricional */}
-                <div>
-                  <button onClick={() => toggle(setOpenNutricional)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
-                    <span className="flex items-center gap-3"><Carrot size={20} /> Nutricional</span>
-                    <ChevronDown className={`w-4 h-4 transition-transform ${openNutricional ? 'rotate-180' : ''}`} />
-                  </button>
-                  {openNutricional && (
-                    <div className="mt-2 pl-6 space-y-1">
-                      <Link 
-                        to={selectedAnimal ? `/dieta/${selectedAnimal.id}` : '/dieta'} 
-                        className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/dieta') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}
-                      >
-                        Dieta
-                      </Link>
-                      <Link to="/analise" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/analise') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>Relatório</Link>
-                      {isAdminOrVet && (
-                        <>
-                          <Link to="/alimentos" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/alimentos') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><Wheat size={20} /> Alimentos</Link>
-                          <Link to="/nutrientes" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/nutrientes') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><TestTube size={20} /> Nutrientes</Link>
-                          <Link to="/composicao-alimentar" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/composicao-alimentar') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><ChartBar size={20} /> Composição Alimentar</Link>
-                        </>
-                      )}
+                  {/* Nutricional */}
+                  <div>
+                    <button onClick={() => toggle(setOpenNutricional)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
+                      <span className="flex items-center gap-3"><Carrot size={20} /> Nutricional</span>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${openNutricional ? 'rotate-180' : ''}`} />
+                    </button>
+                    {openNutricional && (
+                      <div className="mt-2 pl-6 space-y-1">
+                        <Link 
+                          to={selectedAnimal ? `/dieta/${selectedAnimal.id}` : '/dieta'} 
+                          className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/dieta') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}
+                        >
+                          Dieta
+                        </Link>
+                        <Link to="/analise" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/analise') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>Relatório</Link>
+                        {isAdminOrVet && (
+                          <>
+                            <Link to="/alimentos" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/alimentos') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><Wheat size={20} /> Alimentos</Link>
+                            <Link to="/nutrientes" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/nutrientes') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><TestTube size={20} /> Nutrientes</Link>
+                            <Link to="/composicao-alimentar" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/composicao-alimentar') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><ChartBar size={20} /> Composição Alimentar</Link>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Estoque */}
+                  {isAdminOrVet && (
+                    <div>
+                      <button onClick={() => toggle(setOpenEstoque)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
+                        <span className="flex items-center gap-3"><Package size={20} /> Estoque</span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openEstoque ? 'rotate-180' : ''}`} />
+                      </button>
+                      {openEstoque && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
                     </div>
                   )}
-                </div>
 
-                {/* Estoque */}
-                {isAdminOrVet && (
+                  {/* Financeiro */}
                   <div>
-                    <button onClick={() => toggle(setOpenEstoque)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
-                      <span className="flex items-center gap-3"><Package size={20} /> Estoque</span>
-                      <ChevronDown className={`w-4 h-4 transition-transform ${openEstoque ? 'rotate-180' : ''}`} />
+                    <button onClick={() => toggle(setOpenFinanceiro)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
+                      <span className="flex items-center gap-3"><DollarSign size={20} /> Financeiro</span>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${openFinanceiro ? 'rotate-180' : ''}`} />
                     </button>
-                    {openEstoque && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
+                    {openFinanceiro && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
                   </div>
-                )}
-
-                {/* Financeiro */}
-                <div>
-                  <button onClick={() => toggle(setOpenFinanceiro)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl">
-                    <span className="flex items-center gap-3"><DollarSign size={20} /> Financeiro</span>
-                    <ChevronDown className={`w-4 h-4 transition-transform ${openFinanceiro ? 'rotate-180' : ''}`} />
-                  </button>
-                  {openFinanceiro && <div className="mt-1 pl-6 text-gray-600 text-sm">Em breve</div>}
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          ) : (
+            /* Mensagem para usuário novo */
+            <div className="mx-3 px-5 py-6 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm">
+              <strong>Funcionalidades bloqueadas</strong><br />
+              Cadastre seu primeiro animal e complete o seu cadastro para liberar Dieta, Relatórios e demais módulos.
+            </div>
+          )}
 
-          {/* GESTÃO (apenas ADMIN) */}
+          {/* ===================== GESTÃO (ADMIN) ===================== */}
           {role === 'ADMIN' && (
             <div>
               <button onClick={() => toggle(setOpenGestao)} className="flex items-center justify-between w-full px-5 py-3 text-sm font-semibold text-gray-500 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
@@ -217,7 +232,10 @@ export default function Sidebar() {
               </div>
             </div>
 
-            <button onClick={logout} className="mt-4 flex items-center justify-center gap-3 w-full py-3 text-red-600 hover:bg-red-50 rounded-3xl text-sm font-medium transition-colors">
+            <button 
+              onClick={logout} 
+              className="mt-4 flex items-center justify-center gap-3 w-full py-3 text-red-600 hover:bg-red-50 rounded-3xl text-sm font-medium transition-colors"
+            >
               <LogOut size={18} />
               Sair
             </button>
