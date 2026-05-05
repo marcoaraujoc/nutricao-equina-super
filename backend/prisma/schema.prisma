@@ -3,77 +3,71 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
-// ====================== USUÁRIOS + RBAC ======================
 model User {
-  id           Int     @id @default(autoincrement())
-  fullName     String
-  email        String  @unique
-  passwordHash String
-  phone        String?
-  role         String  @default("USER")
-  userType     String  @default("PROPRIETARIO")
-
-  cep         String?
-  endereco    String?
-  complemento String?
-  bairro      String?
-  cidade      String?
-  estado      String?
-
-  createdAt DateTime @default(now())
-  ativo     Boolean  @default(true)
-
-  resetPasswordToken   String?   @unique
-  resetPasswordExpires DateTime?
-
-  auditLogs AuditLog[]
-
-  animais Animal[]
-
-  // Relações de Dieta (nomeadas para evitar ambiguidade)
-  dietasCriadas     Dieta[] @relation("CriadorDieta")
-  dietasModificadas Dieta[] @relation("ModificadorDieta")
+  id                   Int        @id @default(autoincrement())
+  fullName             String     @db.VarChar(255)
+  email                String     @unique @db.VarChar(255)
+  passwordHash         String     @db.VarChar(255)
+  phone                String?    @db.VarChar(30)
+  role                 String     @default("USER") @db.VarChar(50)
+  userType             String     @default("PROPRIETARIO") @db.VarChar(50)
+  cep                  String?    @db.VarChar(10)
+  endereco             String?    @db.VarChar(255)
+  complemento          String?    @db.VarChar(100)
+  bairro               String?    @db.VarChar(100)
+  cidade               String?    @db.VarChar(100)
+  estado               String?    @db.VarChar(2)
+  createdAt            DateTime   @default(now()) @db.DateTime(0)
+  ativo                Boolean    @default(true)
+  resetPasswordToken   String?    @unique @db.VarChar(255)
+  resetPasswordExpires DateTime?  @db.DateTime(0)
+  animais              Animal[]
+  auditLogs            AuditLog[]
+  dietasCriadas        Dieta[]    @relation("CriadorDieta")
+  dietasModificadas    Dieta[]    @relation("ModificadorDieta")
 
   @@map("users")
 }
 
-// ====================== ANIMAL ======================
 model Animal {
-  id             Int       @id @default(autoincrement())
-  nome           String
-  peso           Float
-  dataNascimento DateTime?
-  sexo           String
-  photoUrl       String?
-  dataCadastro   DateTime  @default(now())
-  ativo          Boolean   @default(true)
-  especieId      Int
-  racaId         Int?
+  id                 Int                  @id @default(autoincrement())
+  nome               String               @db.Text
+  peso               Float
+  dataNascimento     DateTime?            @db.DateTime(0)
+  sexo               String               @db.Text
+  photoUrl           String?              @db.Text
+  dataCadastro       DateTime             @default(now()) @db.DateTime(0)
+  ativo              Boolean              @default(true)
+  especieId          Int
+  racaId             Int?
+  userId             Int
+  exercise           String?              @db.Text      // ← Adicionado aqui
+  periodicidade      String?              @db.Text      // Opcional: se quiser separar
 
-  userId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  especie            Especie              @relation(fields: [especieId], references: [id])
+  raca               Raca?                @relation(fields: [racaId], references: [id])
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  especie Especie @relation(fields: [especieId], references: [id])
-  raca    Raca?   @relation(fields: [racaId], references: [id])
+  // Remova ou comente este bloco se não for mais usar a tabela separada
+  // tb_animal_exercise tb_animal_exercise[]
 
-  // Relações com Cascade (apenas do lado "muitos")
-  dietas      Dieta[]
-  exames      ExameNutricional[]
-  ocorrencias OcorrenciaSaude[]
-  exercises   AnimalExercise[]
+  dietas             Dieta[]
+  exames             ExameNutricional[]
+  ocorrencias        OcorrenciaSaude[]
 
+  @@index([especieId], map: "tb_animais_especieId_fkey")
+  @@index([racaId], map: "tb_animais_racaId_fkey")
+  @@index([userId], map: "tb_animais_userId_fkey")
   @@map("tb_animais")
 }
 
-// ====================== OUTRAS MODELS ======================
 model Especie {
-  id   Int    @id @default(autoincrement())
-  nome String @unique
-
+  id      Int      @id @default(autoincrement())
+  nome    String   @db.Text
   animais Animal[]
   racas   Raca[]
 
@@ -81,60 +75,50 @@ model Especie {
 }
 
 model Raca {
-  id        Int    @id @default(autoincrement())
-  nome      String
+  id        Int      @id @default(autoincrement())
+  nome      String   @db.Text
   especieId Int
+  animais   Animal[]
+  especie   Especie  @relation(fields: [especieId], references: [id])
 
-  especie Especie  @relation(fields: [especieId], references: [id])
-  animais Animal[]
-
-  @@unique([nome, especieId])
+  @@index([especieId], map: "tb_racas_especieId_fkey")
   @@map("tb_racas")
 }
 
-model AnimalExercise {
-  id            Int    @id @default(autoincrement())
-  animalId      Int
-  tipo          String
-  periodicidade String
-
-  animal Animal @relation(fields: [animalId], references: [id], onDelete: Cascade)
-
-  @@map("tb_animal_exercise")
-}
-
 model Dieta {
-  id            Int       @id @default(autoincrement())
-  animalId      Int
-  alimentoId    Int
-  qtdGramasDia  Float
-  periodicidade String?
-  unidade       String?
-  dataInicio    DateTime  @default(now())
-  dataFim       DateTime?
-  horario       String?
-  observacao    String?
-  dataCriacao   DateTime  @default(now())
-  dataAlteracao DateTime  @updatedAt
-  criadopor     Int
-  modificadopor Int
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  alimentoId      Int
+  qtdGramasDia    Float
+  periodicidade   String?   @db.Text
+  unidade         String?   @db.Text
+  dataInicio      DateTime  @default(now()) @db.DateTime(0)
+  dataFim         DateTime? @db.DateTime(0)
+  horario         String?   @db.Text
+  observacao      String?   @db.Text
+  dataCriacao     DateTime  @default(now()) @db.DateTime(0)
+  dataAlteracao   DateTime  @updatedAt @db.DateTime(0)
+  criadopor       Int
+  modificadopor   Int
+  alimento        Alimento  @relation(fields: [alimentoId], references: [id])
+  animal          Animal    @relation(fields: [animalId], references: [id])
+  userCriador     User      @relation("CriadorDieta", fields: [criadopor], references: [id])
+  userModificador User      @relation("ModificadorDieta", fields: [modificadopor], references: [id])
 
-  animal          Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
-  alimento        Alimento @relation(fields: [alimentoId], references: [id])
-  userCriador     User     @relation("CriadorDieta", fields: [criadopor], references: [id])
-  userModificador User     @relation("ModificadorDieta", fields: [modificadopor], references: [id])
-
+  @@index([alimentoId], map: "tb_dieta_alimentoId_fkey")
+  @@index([animalId], map: "tb_dieta_animalId_fkey")
+  @@index([criadopor], map: "tb_dieta_criadopor_fkey")
+  @@index([modificadopor], map: "tb_dieta_modificadopor_fkey")
   @@map("tb_dieta")
 }
 
 model Alimento {
-  id         Int     @id @default(autoincrement())
-  nome       String
-  categoria  String
-  fabricante String?
-  forma      String?
-  ativo      Boolean @default(true)
-
+  id          Int                  @id @default(autoincrement())
+  nome        String               @db.Text
+  categoria   String               @db.Text
+  fabricante  String?              @db.Text
+  forma       String?              @db.Text
+  ativo       Boolean              @default(true)
   composicoes ComposicaoAlimento[]
   dietas      Dieta[]
 
@@ -142,73 +126,87 @@ model Alimento {
 }
 
 model Nutriente {
-  id            Int    @id @default(autoincrement())
-  nome          String
-  categoria     String
-  unidadePadrao String
-
-  composicoes ComposicaoAlimento[]
-  exames      ExameNutricional[]
+  id            Int                  @id @default(autoincrement())
+  nome          String               @db.Text
+  categoria     String               @db.Text
+  unidadePadrao String               @db.Text
+  composicoes   ComposicaoAlimento[]
+  exames        ExameNutricional[]
+  exigenciasNRC ExigenciasNRC[]
 
   @@map("tb_nutrientes")
 }
 
 model ComposicaoAlimento {
-  id          Int    @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   alimentoId  Int
   nutrienteId Int
   valorPorKg  Float
-  base        String @default("Seca")
-
-  alimento  Alimento  @relation(fields: [alimentoId], references: [id])
-  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+  base        String    @default("Seca") @db.VarChar(50)
+  alimento    Alimento  @relation(fields: [alimentoId], references: [id])
+  nutriente   Nutriente @relation(fields: [nutrienteId], references: [id])
 
   @@unique([alimentoId, nutrienteId])
+  @@index([nutrienteId], map: "tb_composicao_alimento_nutrienteId_fkey")
   @@map("tb_composicao_alimento")
 }
 
 model ExameNutricional {
-  id              Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   animalId        Int
   nutrienteId     Int
-  dataExame       DateTime
+  dataExame       DateTime  @db.DateTime(0)
   valorEncontrado Float
-  unidade         String
+  unidade         String    @db.Text
   valorMinRef     Float?
   valorMaxRef     Float?
-  observacao      String?
-  arquivoUrl      String?
+  observacao      String?   @db.Text
+  arquivoUrl      String?   @db.Text
+  animal          Animal    @relation(fields: [animalId], references: [id])
+  nutriente       Nutriente @relation(fields: [nutrienteId], references: [id])
 
-  animal    Animal    @relation(fields: [animalId], references: [id], onDelete: Cascade)
-  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
-
+  @@index([animalId], map: "tb_exames_nutricionais_animalId_fkey")
+  @@index([nutrienteId], map: "tb_exames_nutricionais_nutrienteId_fkey")
   @@map("tb_exames_nutricionais")
 }
 
 model OcorrenciaSaude {
   id          Int       @id @default(autoincrement())
   animalId    Int
-  dataInicio  DateTime
-  dataFim     DateTime?
-  problema    String
-  tratamento  String?
-  responsavel String?
+  dataInicio  DateTime  @db.DateTime(0)
+  dataFim     DateTime? @db.DateTime(0)
+  problema    String    @db.Text
+  tratamento  String?   @db.Text
+  responsavel String?   @db.Text
+  animal      Animal    @relation(fields: [animalId], references: [id])
 
-  animal Animal @relation(fields: [animalId], references: [id], onDelete: Cascade)
-
+  @@index([animalId], map: "tb_ocorrencias_saude_animalId_fkey")
   @@map("tb_ocorrencias_saude")
 }
 
-// ====================== AUDITORIA ======================
 model AuditLog {
   id        Int      @id @default(autoincrement())
   userId    Int
-  userName  String
-  email     String
-  action    String
-  timestamp DateTime @default(now())
+  userName  String   @db.Text
+  email     String   @db.Text
+  action    String   @db.Text
+  timestamp DateTime @default(now()) @db.DateTime(0)
+  user      User     @relation(fields: [userId], references: [id])
 
-  user User @relation(fields: [userId], references: [id])
-
+  @@index([userId], map: "tb_audit_logs_userId_fkey")
   @@map("tb_audit_logs")
+}
+
+model ExigenciasNRC {
+  id            Int       @id @default(autoincrement())
+  nutrienteId   Int
+  peso          Float     @db.Float
+  tipoExercicio String    @db.VarChar(100)
+  valorExigido  Float     @db.Float
+  createdAt     DateTime  @default(now()) @db.DateTime(0)
+  updatedAt     DateTime  @default(now()) @updatedAt @db.DateTime(0)
+  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@unique([nutrienteId, peso, tipoExercicio], map: "tb_exigencias_nrc_unique")
+  @@map("tb_exigencias_nrc")
 }

@@ -104,3 +104,6 @@ export const useSelectedAnimal = () => {
   }
   return context;
 };
+
+// Exportação única e limpa
+export { SelectedAnimalContext };

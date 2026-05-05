@@ -48,7 +48,7 @@ export default function Sidebar() {
     setter(prev => !prev);
   
   const isActive = (path: string) => {
-    if (path === '/dieta' || path === '/exames') 
+    if (path === '/dieta' || path === '/exames' || path === '/relatorio') 
       return location.pathname.startsWith(path);
     return location.pathname === path;
   };
@@ -153,7 +153,12 @@ export default function Sidebar() {
                         >
                           Dieta
                         </Link>
-                        <Link to="/analise" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/analise') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>Relatório</Link>
+                        
+                        <Link to="/relatorio" 
+                          className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/relatorio') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}
+                        >
+                          Relatório
+                        </Link>
                         {isAdminOrVet && (
                           <>
                             <Link to="/alimentos" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/alimentos') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}><Wheat size={20} /> Alimentos</Link>

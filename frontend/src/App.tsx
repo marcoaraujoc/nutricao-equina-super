@@ -25,6 +25,10 @@ import AnimalDetail from './pages/AnimalDetail';
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import Exames from './pages/Exames';                    
 import CriaExameNutricional from './pages/CriaExameNutricional'; 
+import RelatorioNutricional from './pages/RelatorioNutricional';
+
+//Import Temporário
+import QueryAdHoc from './pages/query-adhoc';
 
 function App() {
   return (
@@ -85,6 +89,12 @@ function App() {
                           <Route path="/exames/:animalId/novo" element={<CriaExameNutricional />} />
                           <Route path="/exames/:animalId/editar/:id" element={<CriaExameNutricional />} />
 
+                          {/* Rotas de Relatório */}
+                          <Route path="/relatorio" element={<RelatorioNutricional />} />
+                          <Route path="/relatorio/:animalId" element={<RelatorioNutricional />} />
+
+                          {/* Rotas Temporária */}
+                          <Route path="/query-adhoc" element={<QueryAdHoc />} />
                           <Route path="/analise" element={<Analise />} />
                         </Routes>
                       </div>

@@ -6,7 +6,6 @@ const nodemailer = require('nodemailer');
 const prisma = new PrismaClient();
 const SECRET = process.env.JWT_SECRET || 'equine-nutrition-super-2026';
 
-// Configuração do Nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -17,7 +16,7 @@ const transporter = nodemailer.createTransport({
 
 const AuthController = {
 
-  // ==================== REGISTRO (corrigido - e-mail único) ====================
+  // ==================== REGISTRO NORMAL (seu código original) ====================
   register: async (req, res) => {
     const { fullName, email, phone, password, userType = 'PROPRIETARIO' } = req.body;
 
@@ -28,7 +27,6 @@ const AuthController = {
     try {
       const emailLower = email.trim().toLowerCase();
 
-      // Cria o usuário
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const user = await prisma.user.create({
@@ -52,19 +50,70 @@ const AuthController = {
 
     } catch (error) {
       console.error('Erro no register:', error);
-
-      // Tratamento específico de e-mail duplicado
       if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
-        return res.status(409).json({ 
-          error: 'Este e-mail já está cadastrado. Tente fazer login ou use outro e-mail.' 
-        });
+        return res.status(409).json({ error: 'Este e-mail já está cadastrado.' });
       }
-
       res.status(500).json({ error: 'Erro interno ao cadastrar usuário' });
     }
   },
 
-  // ==================== ESQUECI MINHA SENHA ====================
+  // ==================== LOGIN COM GOOGLE (NOVO) ====================
+  googleLogin: async (req, res) => {
+    const { email, fullName, picture } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'E-mail é obrigatório' });
+    }
+
+    try {
+      const emailLower = email.trim().toLowerCase();
+
+      let user = await prisma.user.findUnique({
+        where: { email: emailLower }
+      });
+
+      if (!user) {
+        user = await prisma.user.create({
+          data: {
+            fullName: fullName || 'Usuário Google',
+            email: emailLower,
+            passwordHash: '',           // usuário Google não tem senha local
+            role: 'USER',
+            userType: 'PROPRIETARIO',
+            ativo: true,
+            // photoUrl: picture,
+          }
+        });
+        console.log(`🆕 Novo usuário Google criado → ${user.email} (ID: ${user.id})`);
+      } else {
+        console.log(`✅ Usuário Google encontrado → ${user.email} (ID: ${user.id})`);
+      }
+
+      const token = jwt.sign(
+        { id: user.id, email: user.email, role: user.role },
+        SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          fullName: user.fullName,
+          email: user.email,
+          role: user.role,
+          userType: user.userType
+        },
+        token
+      });
+
+    } catch (error) {
+      console.error('Erro googleLogin:', error);
+      res.status(500).json({ error: 'Erro ao fazer login com Google' });
+    }
+  },
+
+  // ==================== ESQUECI MINHA SENHA (seu código original) ====================
   forgotPassword: async (req, res) => {
     try {
       const { email } = req.body;
@@ -74,9 +123,7 @@ const AuthController = {
         where: { email: email.toLowerCase() }
       });
 
-      if (!user) {
-        return res.status(404).json({ error: 'E-mail não encontrado' });
-      }
+      if (!user) return res.status(404).json({ error: 'E-mail não encontrado' });
 
       const resetToken = jwt.sign({ id: user.id }, SECRET, { expiresIn: '1h' });
 
@@ -102,8 +149,6 @@ const AuthController = {
         `,
       });
 
-      console.log(`📧 E-mail de recuperação enviado para: ${email}`);
-
       res.json({ success: true, message: 'Link de recuperação enviado para o e-mail' });
     } catch (error) {
       console.error('Erro forgotPassword:', error);
@@ -111,7 +156,7 @@ const AuthController = {
     }
   },
 
-  // ==================== REDEFINIR SENHA ====================
+  // ==================== REDEFINIR SENHA (seu código original) ====================
   resetPassword: async (req, res) => {
     try {
       const { token, newPassword } = req.body;
@@ -133,8 +178,6 @@ const AuthController = {
           resetPasswordExpires: null,
         },
       });
-
-      console.log(`✅ Senha redefinida com hash para usuário ID: ${user.id}`);
 
       res.json({ success: true, message: 'Senha alterada com sucesso' });
     } catch (err) {

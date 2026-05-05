@@ -19,18 +19,15 @@ const CriaDieta = () => {
     qtdGramasDia: '',
     unidade: '',
     periodicidade: '',
-    horario: '',
     observacao: '',
   });
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Carregar lista de alimentos para o select
         const alRes = await api.get('/alimentos');
         setAlimentos(alRes.data);
 
-        // Se estiver editando, carregar os dados existentes da dieta
         if (isEditMode && id) {
           const res = await api.get(`/dietas/${id}`);
           const item = res.data;
@@ -40,12 +37,11 @@ const CriaDieta = () => {
             qtdGramasDia: item.qtdGramasDia?.toString() || '',
             unidade: item.unidade || '',
             periodicidade: item.periodicidade || '',
-            horario: item.horario || '',
             observacao: item.observacao || '',
           });
         }
       } catch (error) {
-        console.error('Erro ao carregar dados de edição:', error);
+        console.error('Erro ao carregar dados:', error);
       } finally {
         setLoading(false);
       }
@@ -65,7 +61,6 @@ const CriaDieta = () => {
         qtdGramasDia: parseFloat(formData.qtdGramasDia) || 0,
         unidade: formData.unidade,
         periodicidade: formData.periodicidade,
-        horario: formData.horario || null,
         observacao: formData.observacao || null,
         criadopor: user?.id || 1,
         modificadopor: user?.id || 1,
@@ -127,7 +122,7 @@ const CriaDieta = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Quantidade (qtdGramasDia)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Quantidade (g/dia)</label>
               <input
                 type="number"
                 min="0"
@@ -169,19 +164,6 @@ const CriaDieta = () => {
                 <option value="2x ao dia">2x ao dia</option>
                 <option value="1x ao dia">1x ao dia</option>
               </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Horário (24h)</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={5}
-                placeholder="00:00"
-                value={formData.horario}
-                onChange={(e) => setFormData({ ...formData, horario: e.target.value })}
-                className="w-full border border-gray-300 rounded-3xl px-5 py-3.5 focus:outline-none focus:border-emerald-600 text-gray-900"
-              />
             </div>
 
             <div>

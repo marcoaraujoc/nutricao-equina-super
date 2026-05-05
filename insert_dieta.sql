@@ -1,0 +1,1 @@
+INSERT INTO tb_dieta (id, animalId, alimentoId, qtdGramasDia, periodicidade, unidade, dataInicio, observacao, criadopor, modificadopor, dataAlteracao) VALUES (11, 30, 1, 69.0, '3x ao dia', 'Pães', '2026-04-30 00:52:03', 'Teste', 12, 12, NOW());

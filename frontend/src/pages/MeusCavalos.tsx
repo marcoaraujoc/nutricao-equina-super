@@ -17,7 +17,7 @@ const MeusCavalos = () => {
 
   const loadAnimais = async () => {
     try {
-      const res = await api.get('/animais'); // ← Sem ?userId (o token já filtra)
+      const res = await api.get('/animais');
       console.log('✅ MeusCavalos carregou:', res.data.length, 'animais');
       setAnimais(res.data);
     } catch (error) {
@@ -69,7 +69,6 @@ const MeusCavalos = () => {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-3xl font-bold text-gray-900">Meus Animais</h1>
         <button
@@ -81,7 +80,6 @@ const MeusCavalos = () => {
         </button>
       </div>
 
-      {/* Search */}
       <div className="mb-6">
         <input
           type="text"
@@ -102,28 +100,23 @@ const MeusCavalos = () => {
               className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full cursor-pointer"
               onClick={() => handleEdit(animal)}
             >
-              {/* FOTO */}
               <div className="w-28 h-28 flex-shrink-0 bg-gray-200">
                 {animal.photoUrl ? (
-                  <img
-                    src={animal.photoUrl}
-                    alt={animal.nome}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-6xl">🐴</div>
                 )}
               </div>
 
-              {/* INFORMAÇÕES */}
               <div className="flex-1 p-6 flex items-center">
                 <div className="w-full flex items-center">
                   <div className="flex-1 min-w-0 pr-8">
-                    <h3 className="text-2xl font-bold text-gray-900 truncate">
-                      {animal.nome}
-                    </h3>
+                    <h3 className="text-2xl font-bold text-gray-900 truncate">{animal.nome}</h3>
                     <p className="text-emerald-700 font-medium text-lg truncate">
                       {animal.raca?.nome || 'Raça não informada'}
+                    </p>
+                    <p className="text-gray-600 text-sm mt-1">
+                      {animal.exercise || 'Nível de exercício não informado'}
                     </p>
                   </div>
 
@@ -144,23 +137,16 @@ const MeusCavalos = () => {
                 </div>
               </div>
 
-              {/* BOTÕES DE AÇÃO */}
               <div className="flex items-center p-6 gap-3 border-l border-gray-100">
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleEdit(animal);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); handleEdit(animal); }}
                   className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
                 >
                   <Pencil size={18} />
                   Editar
                 </button>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteClick(animal);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); handleDeleteClick(animal); }}
                   className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
                 >
                   <Trash2 size={18} />
@@ -177,9 +163,7 @@ const MeusCavalos = () => {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
             <div className="bg-emerald-700 text-white p-6 text-center">
-              <div className="mx-auto w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4">
-                ⚠️
-              </div>
+              <div className="mx-auto w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4">⚠️</div>
               <h2 className="text-2xl font-bold">Excluir animal?</h2>
               <p className="text-emerald-100 mt-2">
                 Tem certeza que deseja excluir <strong>{animalToDelete.nome}</strong> permanentemente?
@@ -198,21 +182,16 @@ const MeusCavalos = () => {
                 <div>
                   <h3 className="font-semibold text-xl">{animalToDelete.nome}</h3>
                   <p className="text-gray-600">{animalToDelete.raca?.nome || ''}</p>
+                  <p className="text-sm text-emerald-700">{animalToDelete.exercise}</p>
                 </div>
               </div>
             </div>
 
             <div className="border-t flex">
-              <button
-                onClick={() => setAnimalToDelete(null)}
-                className="flex-1 py-6 text-lg font-semibold text-gray-700 hover:bg-gray-100"
-              >
+              <button onClick={() => setAnimalToDelete(null)} className="flex-1 py-6 text-lg font-semibold text-gray-700 hover:bg-gray-100">
                 Cancelar
               </button>
-              <button
-                onClick={confirmDelete}
-                className="flex-1 py-6 text-lg font-semibold text-red-600 hover:bg-red-50 border-l"
-              >
+              <button onClick={confirmDelete} className="flex-1 py-6 text-lg font-semibold text-red-600 hover:bg-red-50 border-l">
                 Sim, Excluir
               </button>
             </div>

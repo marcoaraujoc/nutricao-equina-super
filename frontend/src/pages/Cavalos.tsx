@@ -26,7 +26,7 @@ const Cavalos = () => {
     peso: '',
     dataNascimento: '',
     sexo: 'Macho',
-    exercises: [] as { tipo: string; periodicidade: string }[],
+    exercise: '', // ← Novo campo
   });
 
   // Carrega espécies, raças e dados do animal
@@ -46,6 +46,7 @@ const Cavalos = () => {
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const animal = animalRes.data;
+
           setFormData({
             nome: animal.nome,
             especieId: animal.especieId,
@@ -53,8 +54,9 @@ const Cavalos = () => {
             peso: animal.peso.toString(),
             dataNascimento: animal.dataNascimento ? animal.dataNascimento.split('T')[0] : '',
             sexo: animal.sexo,
-            exercises: animal.exercises || [],
+            exercise: animal.exercise || '',
           });
+
           if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
         }
       } catch (error) {
@@ -66,7 +68,7 @@ const Cavalos = () => {
     loadData();
   }, [id, isEditMode]);
 
-  // Filtra raças
+  // Filtra raças quando muda a espécie
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
@@ -88,33 +90,18 @@ const Cavalos = () => {
     }
   };
 
-  const toggleExercise = (tipo: string) => {
-    const exists = formData.exercises.find(ex => ex.tipo === tipo);
-    if (exists) {
-      setFormData(prev => ({
-        ...prev,
-        exercises: prev.exercises.filter(ex => ex.tipo !== tipo)
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        exercises: [...prev.exercises, { tipo, periodicidade: '1x na semana' }]
-      }));
-    }
-  };
-
-  const updatePeriodicidade = (index: number, value: string) => {
-    const newExercises = [...formData.exercises];
-    newExercises[index].periodicidade = value;
-    setFormData({ ...formData, exercises: newExercises });
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
 
     if (!formData.racaId) {
       alert('❌ Raça é obrigatória');
+      setSubmitting(false);
+      return;
+    }
+
+    if (!formData.exercise) {
+      alert('❌ Nível de exercício é obrigatório');
       setSubmitting(false);
       return;
     }
@@ -127,7 +114,7 @@ const Cavalos = () => {
         peso: parseFloat(formData.peso) || 0,
         dataNascimento: formData.dataNascimento || null,
         sexo: formData.sexo,
-        exercises: formData.exercises,
+        exercise: formData.exercise,
       };
 
       if (photoFile) {
@@ -138,7 +125,7 @@ const Cavalos = () => {
         formDataUpload.append('peso', String(payload.peso));
         formDataUpload.append('dataNascimento', payload.dataNascimento || '');
         formDataUpload.append('sexo', payload.sexo);
-        formDataUpload.append('exercises', JSON.stringify(payload.exercises));
+        formDataUpload.append('exercise', payload.exercise);
         formDataUpload.append('foto', photoFile);
 
         const config = { headers: { 'Content-Type': 'multipart/form-data' } };
@@ -184,7 +171,7 @@ const Cavalos = () => {
     <div className="min-h-screen bg-gray-50 p-4 md:p-8">
       <div className="max-w-2xl mx-auto">
         <div className="bg-white shadow-2xl rounded-3xl p-6 md:p-8 border border-gray-100">
-          {/* Header com botão Voltar */}
+          {/* Header */}
           <div className="flex items-center gap-3 mb-8">
             <button
               onClick={() => navigate('/meus-cavalos')}
@@ -195,16 +182,12 @@ const Cavalos = () => {
             </button>
           </div>
 
-          {/* Foto quadrada + Nome em destaque */}
+          {/* Foto + Nome */}
           <div className="flex gap-6 mb-10">
             <label className="cursor-pointer group flex-shrink-0">
               <div className="w-40 h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
                 {photoPreview ? (
-                  <img
-                    src={photoPreview}
-                    alt="Foto do animal"
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={photoPreview} alt="Foto" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-emerald-600 text-center p-4">
                     <div>
@@ -230,7 +213,6 @@ const Cavalos = () => {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* ... resto do formulário permanece igual ... */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
@@ -244,6 +226,7 @@ const Cavalos = () => {
                   ))}
                 </select>
               </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
                 <select
@@ -269,9 +252,7 @@ const Cavalos = () => {
                 className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
               >
                 {racasFiltradas.map((raca: any) => (
-                  <option key={raca.id} value={raca.id}>
-                    {raca.nome}
-                  </option>
+                  <option key={raca.id} value={raca.id}>{raca.nome}</option>
                 ))}
               </select>
             </div>
@@ -300,48 +281,32 @@ const Cavalos = () => {
               </div>
             </div>
 
-            {formData.especieId === 1 && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Tipos de Exercício e Quantidade de Vezes</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {['Adestramento', 'Salto', 'Barril', 'Cross'].map((tipo) => {
-                    const selected = formData.exercises.find((ex) => ex.tipo === tipo);
-                    return (
-                      <div key={tipo} className="border border-gray-200 rounded-2xl p-3">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" checked={!!selected} onChange={() => toggleExercise(tipo)} />
-                          <span className="text-gray-700">{tipo}</span>
-                        </label>
-                        {selected && (
-                          <div className="mt-2">
-                            <label className="text-xs text-gray-500 block mb-1">Quantidade de vezes</label>
-                            <select
-                              value={selected.periodicidade}
-                              onChange={(e) => updatePeriodicidade(formData.exercises.indexOf(selected), e.target.value)}
-                              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
-                            >
-                              <option value="1x na semana">1x na semana</option>
-                              <option value="2x na semana">2x na semana</option>
-                              <option value="3x na semana">3x na semana</option>
-                              <option value="4x na semana">4x na semana</option>
-                              <option value="5x na semana">5x na semana</option>
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {/* Novo Campo - Nível de Exercício */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Nível de Exercício <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.exercise}
+                onChange={(e) => setFormData({ ...formData, exercise: e.target.value })}
+                required
+                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+              >
+                <option value="">Selecione o nível de exercício</option>
+                <option value="Exercicio leve">Exercício Leve</option>
+                <option value="Exercicio Moderado">Exercício Moderado</option>
+                <option value="Exercicio Pesado">Exercício Pesado</option>
+                <option value="Exercicio Muito Pesado">Exercício Muito Pesado</option>
+              </select>
+            </div>
 
             <button
               type="submit"
               disabled={submitting}
               className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors"
             >
-              {submitting 
-                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...') 
+              {submitting
+                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...')
                 : (isEditMode ? 'Atualizar Animal' : 'Cadastrar Animal')}
             </button>
           </form>

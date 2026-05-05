@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: Inicial_001
+      MYSQL_DATABASE: nutricao_equina
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  app:
+    image: mcr.microsoft.com/devcontainers/base:noble
+    volumes:
+      - .:/workspace
+    command: sleep infinity
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: "mysql://root:Inicial_001@db:3306/nutricao_equina"
+
+volumes:
+  mysql-data:

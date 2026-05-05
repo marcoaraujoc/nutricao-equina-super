@@ -1,0 +1,1 @@
+INSERT INTO tb_animais (id, nome, peso, dataNascimento, sexo, photoUrl, dataCadastro, ativo, especieId, racaId, userId) VALUES (30, 'MAIS UM TESTE', 70.0, '2000-01-01 00:00:00', 'Macho', '/uploads/1777510014669-729574701.png', '2026-04-30 00:46:55', 1, 1, 2, 12);

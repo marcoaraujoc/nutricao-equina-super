@@ -12,8 +12,8 @@ class DietaController {
           animal: {
             include: {
               user: { select: { fullName: true, email: true } },
-              raca: true,           // ← ADICIONADO (raça agora aparece sempre)
-              especie: true         // opcional, mas útil
+              raca: true,
+              especie: true
             }
           }
         },
@@ -48,16 +48,12 @@ class DietaController {
       qtdGramasDia, 
       unidade, 
       periodicidade, 
-      horario, 
       observacao,
       criadopor,
       modificadopor
     } = req.body;
 
     const userId = Number(criadopor || modificadopor || req.user?.id || 1);
-
-    console.log('📥 [CRIAR DIETA] Payload recebido:', req.body);
-    console.log('👤 userId usado:', userId);
 
     try {
       const dieta = await prisma.dieta.create({
@@ -67,7 +63,6 @@ class DietaController {
           qtdGramasDia: parseFloat(qtdGramasDia) || 0,
           unidade: unidade || null,
           periodicidade: periodicidade || null,
-          horario: horario || null,
           observacao: observacao || null,
           criadopor: userId,
           modificadopor: userId
@@ -75,7 +70,6 @@ class DietaController {
         include: { alimento: true }
       });
 
-      console.log('✅ Item da dieta criado com sucesso ID:', dieta.id);
       res.status(201).json(dieta);
     } catch (error) {
       console.error('❌ Erro ao criar item da dieta:', error);
@@ -85,7 +79,7 @@ class DietaController {
 
   async atualizarItem(req, res) {
     const { id } = req.params;
-    const { qtdGramasDia, unidade, periodicidade, horario, observacao } = req.body;
+    const { qtdGramasDia, unidade, periodicidade, observacao } = req.body;
     const userId = Number(req.user?.id || req.body.modificadopor || 1);
 
     try {
@@ -95,7 +89,6 @@ class DietaController {
           qtdGramasDia: parseFloat(qtdGramasDia) || 0,
           unidade: unidade || null,
           periodicidade: periodicidade || null,
-          horario: horario || null,
           observacao: observacao || null,
           modificadopor: userId
         }

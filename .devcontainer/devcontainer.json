@@ -2,23 +2,26 @@
   "name": "Nutrição Equina - Dev Container",
   "image": "mcr.microsoft.com/devcontainers/base:noble",
 
-  // Aumentamos a memória para 6GB (necessário para phi3:mini)
   "hostRequirements": {
     "cpus": 2,
-    "memory": "6GB",
-    "storage": "10GB"
+    "memory": "6gb",
+    "storage": "10gb"
   },
 
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
 
-  "forwardPorts": [3000, 5173, 11434],
+  "forwardPorts": [3000, 5173, 11434, 3306],
 
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "20"
     }
   },
+
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y mysql-server && sudo service mysql start && sudo mysql -e \"ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'Inicial_001';\" && sudo chown -R mysql:mysql /var/run/mysqld && sudo chmod 755 /var/run/mysqld || true",
+
+  "postStartCommand": "sudo service mysql start || true",
 
   "customizations": {
     "vscode": {

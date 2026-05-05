@@ -1,67 +1,80 @@
+require('dotenv').config({ path: '../.env' });
+
 const fs = require('fs');
+const path = require('path');
 const csv = require('csv-parser');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
+const csvPath = path.join(__dirname, 'ComposicaoAlimentar.csv');
+const logPath = path.join(__dirname, 'rejeitados_composicao.log');
 
 async function importarComposicao() {
-  const results = [];
+  if (!fs.existsSync(csvPath)) {
+    console.error(`❌ Arquivo não encontrado: ${csvPath}`);
+    process.exit(1);
+  }
 
-  fs.createReadStream('ComposicaoAlimentar.csv')
+  console.log('📂 Lendo ComposicaoAlimentar.csv...');
+
+  const results = [];
+  const rejeitados = [];
+
+  fs.createReadStream(csvPath)
     .pipe(csv({ separator: ',' }))
     .on('data', (data) => results.push(data))
     .on('end', async () => {
-      console.log(`✅ ${results.length} linhas lidas do CSV.`);
+      console.log(`✅ ${results.length} registros lidos.`);
 
-      try {
-        let imported = 0;
-        let skipped = 0;
+      let imported = 0;
 
-        for (const row of results) {
-          const alimento = await prisma.Alimento.findFirst({
-            where: { nome: row.alimento_id }
-          });
+      for (const [index, row] of results.entries()) {
+        const linha = index + 2; // +2 por causa do cabeçalho
+        const alimentoId = parseInt(row.alimento_id);
+        const nutrienteId = parseInt(row.nutriente_id);
+        const valorPorKg = parseFloat(row.valor_por_grama);
 
-          const nutriente = await prisma.Nutriente.findFirst({
-            where: { nome: row.nutriente_id }
-          });
+        if (isNaN(alimentoId) || isNaN(nutrienteId) || isNaN(valorPorKg)) {
+          rejeitados.push(`Linha ${linha}: Dados inválidos - alimento_id=${row.alimento_id}, nutriente_id=${row.nutriente_id}`);
+          continue;
+        }
 
-          if (!alimento || !nutriente) {
-            skipped++;
-            console.log(`⏭️ Pulando: Alimento="${row.alimento_id}" | Nutriente="${row.nutriente_id}"`);
-            continue;
-          }
-
-          await prisma.ComposicaoAlimento.upsert({
+        try {
+          await prisma.composicaoAlimento.upsert({
             where: {
               alimentoId_nutrienteId: {
-                alimentoId: alimento.id,
-                nutrienteId: nutriente.id
+                alimentoId: alimentoId,
+                nutrienteId: nutrienteId
               }
             },
             update: {
-              valorPorKg: parseFloat(row.valor_por_grama) * 1000   // converte por grama → por kg
+              valorPorKg: valorPorKg,
+              base: "Seca"
             },
             create: {
-              alimentoId: alimento.id,
-              nutrienteId: nutriente.id,
-              valorPorKg: parseFloat(row.valor_por_grama) * 1000,
+              alimentoId: alimentoId,
+              nutrienteId: nutrienteId,
+              valorPorKg: valorPorKg,
               base: "Seca"
             }
           });
-
           imported++;
+        } catch (error) {
+          rejeitados.push(`Linha ${linha}: FK violation - alimento_id=${alimentoId}, nutriente_id=${nutrienteId} | ${error.message}`);
         }
-
-        console.log(`✅ Importação finalizada!`);
-        console.log(`   ✅ Inseridos/Atualizados: ${imported}`);
-        console.log(`   ⏭️  Pulados: ${skipped}`);
-
-      } catch (error) {
-        console.error('❌ Erro durante a importação:', error.message);
-      } finally {
-        await prisma.$disconnect();
       }
+
+      console.log(`✅ Importados: ${imported}`);
+      console.log(`❌ Rejeitados: ${rejeitados.length}`);
+
+      if (rejeitados.length > 0) {
+        fs.writeFileSync(logPath, rejeitados.join('\n'));
+        console.log(`📄 Log salvo em: ${logPath}`);
+      } else {
+        console.log('✅ Todos os registros foram importados com sucesso!');
+      }
+
+      await prisma.$disconnect();
     });
 }
 

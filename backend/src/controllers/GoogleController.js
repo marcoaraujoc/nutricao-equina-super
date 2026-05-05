@@ -20,7 +20,7 @@ const GoogleController = {
         return res.status(400).json({ error: 'E-mail não encontrado no token Google' });
       }
 
-      // UPSERT: cria ou atualiza o usuário na tabela users
+      // UPSERT: cria ou atualiza o usuário
       const user = await prisma.user.upsert({
         where: { email },
         update: {
@@ -29,21 +29,21 @@ const GoogleController = {
         create: {
           fullName: fullName || 'Usuário Google',
           email,
-          passwordHash: '', // Google não usa senha
+          passwordHash: '', 
           userType: 'PROPRIETARIO',
           role: 'USER',
           ativo: true,
         },
       });
 
-      // Gera o token JWT do nosso sistema
+      console.log(`✅ Usuário Google processado: ${user.email} (ID: ${user.id})`);
+
+      // Gera token JWT
       const token = jwt.sign(
         { id: user.id, email: user.email, userType: user.userType },
         SECRET,
         { expiresIn: '7d' }
       );
-
-      console.log('✅ Usuário Google criado/atualizado:', user.email);
 
       return res.json({
         success: true,
@@ -55,6 +55,7 @@ const GoogleController = {
           userType: user.userType,
         },
       });
+
     } catch (error) {
       console.error('Erro no login Google:', error);
       return res.status(500).json({ error: 'Erro interno ao processar login Google' });

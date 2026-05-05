@@ -1,0 +1,56 @@
+nome,categoria,unidade
+Ácido Aspártico,Aminoácido,g
+Ácido Glutâmico,Aminoácido,g
+Alanina,Aminoácido,g
+Arginina,Aminoácido,g
+Cisteína,Aminoácido,g
+Fenilalanina,Aminoácido,mg
+Glicina,Aminoácido,g
+Histidina,Aminoácido,mg
+Isoleucina,Aminoácido,g
+Leucina,Aminoácido,g
+Lisina,Aminoácido,g
+Metionina,Aminoácido,g
+Prolina,Aminoácido,g
+Serina,Aminoácido,mg
+Tirosina,Aminoácido,mg
+Treonina,Aminoácido,g
+Triptofano,Aminoácido,mg
+Valina,Aminoácido,g
+Taurina,Aminoácido,g
+Carnitina,Aminoácido,mg
+Cálcio,Mineral,g
+Fósforo,Mineral,g
+Magnésio,Mineral,g
+Sódio,Mineral,g
+Potássio,Mineral,g
+Cloro,Mineral,g
+Enxofre,Mineral,g
+Ferro,Mineral,mg
+Cobre,Mineral,mg
+Zinco,Mineral,mg
+Manganês,Mineral,mg
+Selênio,Mineral,mg
+Iodo,Mineral,mg
+Cobalto,Mineral,mg
+Cromo,Mineral,mg
+Vitamina A,Vitamina,UI
+Vitamina B1,Vitamina,mg
+Vitamina B2,Vitamina,mg
+Vitamina B3,Vitamina,mg
+Vitamina B5,Vitamina,mg
+Vitamina B6,Vitamina,mg
+Vitamina B12,Vitamina,mcg
+Vitamina C,Vitamina,mg
+Vitamina D3,Vitamina,UI
+Vitamina E,Vitamina,UI
+Ácido Fólico,Vitamina,mg
+Ácido Nicotínico,Vitamina,mg
+Biotina,Vitamina,mg
+Colina,Vitamina,mg
+Pantotenato de Cálcio,Vitamina,mg
+Ácido Linolênico (Ômega 3),Ácido Graxo,mg
+Ácido Linoleico (Ômega 6),Ácido Graxo,mg
+Proteína Bruta,Macronutriente,g
+Extrato Etéreo,Macronutriente,g
+Energia Digestível,Energia,Mcal

@@ -26,6 +26,11 @@ const racasRoutes = require('./routes/racas');
 const userRoutes = require('./routes/user');
 const nutrientesRoutes = require('./routes/nutrientes');
 const composicaoAlimentarRoutes = require('./routes/composicaoAlimentar');
+const relatorioRoutes = require('./routes/relatorio');
+
+//Rota Temporária
+const testeRoutes = require('./routes/teste');
+const queryRoutes = require('./routes/query');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth', authRoutes);
@@ -44,6 +49,13 @@ app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Rota de Relatórios
+app.use('/api/nutricao', relatorioRoutes);
+
+// Rota Temporaria
+app.use('/teste', testeRoutes);
+app.use('/api', queryRoutes);
 
 // ===================== HEALTH CHECK =====================
 app.get('/', (req, res) => {
