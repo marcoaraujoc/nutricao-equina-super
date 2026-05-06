@@ -89,9 +89,15 @@ function App() {
                           <Route path="/exames/:animalId/novo" element={<CriaExameNutricional />} />
                           <Route path="/exames/:animalId/editar/:id" element={<CriaExameNutricional />} />
 
-                          {/* Rotas de Relatório */}
+                          {/* 
+                          Rotas de Relatório 
                           <Route path="/relatorio" element={<RelatorioNutricional />} />
                           <Route path="/relatorio/:animalId" element={<RelatorioNutricional />} />
+                          */}
+
+                          {/* Rotas de Relatório Nutricional */}
+                          <Route path="/relatorio-nutricional" element={<RelatorioNutricional />} />
+                          <Route path="/relatorio-nutricional/:animalId" element={<RelatorioNutricional />} />
 
                           {/* Rotas Temporária */}
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />

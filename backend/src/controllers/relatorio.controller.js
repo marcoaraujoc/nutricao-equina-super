@@ -3,21 +3,16 @@ const { RelatorioNutricionalService } = require('../services/relatorioNutriciona
 const service = new RelatorioNutricionalService();
 
 class RelatorioController {
-
   async gerarRelatorio(req, res) {
     try {
       const { animalId } = req.params;
       const { peso = 500, tipoExercicio = 'Exercício Moderado' } = req.query;
 
       if (!animalId) {
-        return res.status(400).json({ sucesso: false, mensagem: "animalId é obrigatório" });
+        return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
       }
 
-      const dados = await service.gerarRelatorioParaLLM(
-        Number(animalId),
-        Number(peso),
-        tipoExercicio
-      );
+      const dados = await service.gerarRelatorioParaLLM(Number(animalId), Number(peso), tipoExercicio);
 
       res.json({
         sucesso: true,
@@ -25,11 +20,8 @@ class RelatorioController {
         dados: dados
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ 
-        sucesso: false, 
-        mensagem: "Erro ao gerar relatório" 
-      });
+      console.error('Erro relatório:', error);
+      res.status(500).json({ sucesso: false, mensagem: error.message });
     }
   }
 }
