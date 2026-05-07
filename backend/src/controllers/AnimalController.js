@@ -51,93 +51,134 @@ class AnimalController {
     }
   }
 
-  async criar(req, res) {
-    const { 
-      nome, 
-      especieId, 
-      racaId, 
-      peso, 
-      dataNascimento, 
-      sexo, 
-      exercise 
-    } = req.body;
+async criar(req, res) {
+  const { 
+    nome, 
+    especieId, 
+    racaId, 
+    peso, 
+    dataNascimento, 
+    sexo, 
+    exercise 
+  } = req.body;
 
-    if (!racaId || isNaN(Number(racaId))) {
-      return res.status(400).json({ error: 'Raça é obrigatória' });
-    }
-    if (!especieId) {
-      return res.status(400).json({ error: 'Espécie é obrigatória' });
-    }
-    if (!exercise) {
-      return res.status(400).json({ error: 'Nível de exercício é obrigatório' });
-    }
-
-    try {
-      let photoUrl = null;
-      if (req.file) {
-        photoUrl = `/uploads/${req.file.filename}`;
-      }
-
-      const animal = await prisma.animal.create({
-        data: {
-          nome,
-          peso: parseFloat(peso) || 0,
-          dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
-          sexo,
-          exercise,                    // ← Novo campo
-          photoUrl,
-          especieId: Number(especieId),
-          racaId: Number(racaId),
-          userId: req.user?.id
-        }
-      });
-
-      console.log('✅ Animal criado com sucesso ID:', animal.id);
-      res.status(201).json(animal);
-    } catch (error) {
-      console.error('❌ Erro ao criar animal:', error);
-      res.status(500).json({ error: 'Erro ao criar animal', details: error.message });
-    }
+  if (!racaId || isNaN(Number(racaId))) {
+    return res.status(400).json({ error: 'Raça é obrigatória' });
+  }
+  if (!especieId) {
+    return res.status(400).json({ error: 'Espécie é obrigatória' });
   }
 
-  async atualizar(req, res) {
-    const { id } = req.params;
-    const { 
-      nome, 
-      especieId, 
-      racaId, 
-      peso, 
-      dataNascimento, 
-      sexo, 
-      exercise 
-    } = req.body;
-
-    try {
-      let photoUrl = undefined;
-      if (req.file) {
-        photoUrl = `/uploads/${req.file.filename}`;
-      }
-
-      const animal = await prisma.animal.update({
-        where: { id: Number(id) },
-        data: {
-          nome,
-          peso: parseFloat(peso) || 0,
-          dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
-          sexo,
-          exercise,                    // ← Novo campo
-          especieId: Number(especieId),
-          racaId: racaId ? Number(racaId) : null,
-          ...(photoUrl && { photoUrl })
-        }
-      });
-
-      res.json(animal);
-    } catch (error) {
-      console.error('❌ Erro ao atualizar animal:', error);
-      res.status(500).json({ error: 'Erro ao atualizar animal', details: error.message });
-    }
+  // ✅ NOVA VALIDAÇÃO CONDICIONAL
+  if (!especieId) {
+    return res.status(400).json({ error: 'Espécie é obrigatória' });
   }
+
+  // Verifica se é equino
+  const especie = await prisma.especie.findUnique({
+    where: { id: Number(especieId) }
+  });
+
+  const isEquino = especie && 
+    (especie.nome.toLowerCase().includes('equino') || 
+     especie.nome.toLowerCase().includes('cavalo'));
+
+  // Só exige exercise se for equino
+  if (isEquino && (!exercise || exercise.trim() === '')) {
+    return res.status(400).json({ error: 'Nível de exercício é obrigatório para equinos' });
+  }
+
+  try {
+    let photoUrl = null;
+    if (req.file) {
+      photoUrl = `/uploads/${req.file.filename}`;
+    }
+
+    const animal = await prisma.animal.create({
+      data: {
+        nome,
+        peso: parseFloat(peso) || 0,
+        dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
+        sexo,
+        exercise: isEquino ? exercise : null,   // ← Salva null para outras espécies
+        photoUrl,
+        especieId: Number(especieId),
+        racaId: Number(racaId),
+        userId: req.user?.id
+      }
+    });
+
+    console.log('✅ Animal criado com sucesso ID:', animal.id);
+    res.status(201).json(animal);
+  } catch (error) {
+    console.error('❌ Erro ao criar animal:', error);
+    res.status(500).json({ error: 'Erro ao criar animal', details: error.message });
+  }
+}
+
+async atualizar(req, res) {
+  const { id } = req.params;
+  const { 
+    nome, 
+    especieId, 
+    racaId, 
+    peso, 
+    dataNascimento, 
+    sexo, 
+    exercise 
+  } = req.body;
+
+  // ✅ Validações
+  if (!nome?.trim()) {
+    return res.status(400).json({ error: 'Nome do animal é obrigatório' });
+  }
+  if (!racaId || isNaN(Number(racaId))) {
+    return res.status(400).json({ error: 'Raça é obrigatória' });
+  }
+  if (!especieId) {
+    return res.status(400).json({ error: 'Espécie é obrigatória' });
+  }
+
+  // Validação condicional de exercise (equino)
+  const especie = await prisma.especie.findUnique({
+    where: { id: Number(especieId) }
+  });
+
+  const isEquino = especie && 
+    (especie.nome.toLowerCase().includes('equino') || 
+     especie.nome.toLowerCase().includes('cavalo'));
+
+  if (isEquino && (!exercise || exercise.trim() === '')) {
+    return res.status(400).json({ error: 'Nível de exercício é obrigatório para equinos' });
+  }
+
+  try {
+    let photoUrl = undefined;
+    if (req.file) {
+      photoUrl = `/uploads/${req.file.filename}`;
+    }
+
+    const animal = await prisma.animal.update({
+      where: { id: Number(id) },
+      data: {
+        nome: nome.trim(),
+        peso: parseFloat(peso) || 0,
+        dataNascimento: dataNascimento ? new Date(dataNascimento) : null,
+        sexo,
+        exercise: isEquino ? exercise : null,
+        especieId: Number(especieId),
+        racaId: Number(racaId),
+        ...(photoUrl && { photoUrl })
+      }
+    });
+
+    console.log('✅ Animal atualizado com sucesso ID:', animal.id);
+    res.json(animal);
+  } catch (error) {
+    console.error('❌ Erro ao atualizar animal:', error);
+    res.status(500).json({ error: 'Erro ao atualizar animal', details: error.message });
+  }
+}
 
   async excluir(req, res) {
     const { id } = req.params;

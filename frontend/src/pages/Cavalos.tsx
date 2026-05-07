@@ -26,8 +26,20 @@ const Cavalos = () => {
     peso: '',
     dataNascimento: '',
     sexo: 'Macho',
-    exercise: '', // ← Novo campo
+    exercise: '',
   });
+
+  const especieAtual = especies.find(esp => esp.id === formData.especieId);
+  const isEquino = !!especieAtual && 
+    (especieAtual.nome.toLowerCase().includes('equino') || 
+     especieAtual.nome.toLowerCase().includes('cavalo'));
+
+  // Reseta exercise quando a espécie não é equina
+  useEffect(() => {
+    if (!isEquino && formData.exercise !== '') {
+      setFormData(prev => ({ ...prev, exercise: '' }));
+    }
+  }, [isEquino]);
 
   // Carrega espécies, raças e dados do animal
   useEffect(() => {
@@ -40,9 +52,7 @@ const Cavalos = () => {
         setEspecies(espRes.data);
         setTodasRacas(racRes.data);
 
-        const filtradas = racRes.data.filter((r: any) => r.especieId === 1);
-        setRacasFiltradas(filtradas);
-
+        // Removido filtro fixo aqui (estava causando problema)
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const animal = animalRes.data;
@@ -68,17 +78,23 @@ const Cavalos = () => {
     loadData();
   }, [id, isEditMode]);
 
-  // Filtra raças quando muda a espécie
+  // ✅ ALTERAÇÃO PRINCIPAL: Melhoria na seleção automática de raça
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
       setRacasFiltradas(filtradas);
 
-      if (!isEditMode && filtradas.length > 0 && !formData.racaId) {
-        setFormData(prev => ({ ...prev, racaId: filtradas[0].id }));
+      if (filtradas.length > 0) {
+        setFormData(prev => {
+          // Se não tem raça ou a raça atual não pertence à nova espécie → seleciona a primeira
+          if (!prev.racaId || !filtradas.some(r => r.id === prev.racaId)) {
+            return { ...prev, racaId: filtradas[0].id };
+          }
+          return prev;
+        });
       }
     }
-  }, [formData.especieId, todasRacas, isEditMode]);
+  }, [formData.especieId, todasRacas]);
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -94,27 +110,35 @@ const Cavalos = () => {
     e.preventDefault();
     setSubmitting(true);
 
+    console.log('📤 Enviando -> racaId:', formData.racaId); // Debug
+
+    if (!formData.nome?.trim()) {
+      alert('❌ Nome do animal é obrigatório');
+      setSubmitting(false);
+      return;
+    }
+
     if (!formData.racaId) {
       alert('❌ Raça é obrigatória');
       setSubmitting(false);
       return;
     }
 
-    if (!formData.exercise) {
-      alert('❌ Nível de exercício é obrigatório');
+    if (isEquino && !formData.exercise?.trim()) {
+      alert('❌ Nível de exercício é obrigatório para equinos');
       setSubmitting(false);
       return;
     }
 
     try {
       const payload = {
-        nome: formData.nome,
+        nome: formData.nome.trim(),
         especieId: formData.especieId,
         racaId: formData.racaId,
         peso: parseFloat(formData.peso) || 0,
         dataNascimento: formData.dataNascimento || null,
         sexo: formData.sexo,
-        exercise: formData.exercise,
+        exercise: isEquino ? formData.exercise : null,
       };
 
       if (photoFile) {
@@ -125,28 +149,25 @@ const Cavalos = () => {
         formDataUpload.append('peso', String(payload.peso));
         formDataUpload.append('dataNascimento', payload.dataNascimento || '');
         formDataUpload.append('sexo', payload.sexo);
-        formDataUpload.append('exercise', payload.exercise);
+        formDataUpload.append('exercise', payload.exercise || '');
         formDataUpload.append('foto', photoFile);
 
         const config = { headers: { 'Content-Type': 'multipart/form-data' } };
 
         if (isEditMode) {
           await api.put(`/animais/${id}`, formDataUpload, config);
-          alert('✅ Animal atualizado com sucesso!');
         } else {
           await api.post('/animais', formDataUpload, config);
-          alert('✅ Animal cadastrado com sucesso!');
         }
       } else {
         if (isEditMode) {
           await api.put(`/animais/${id}`, payload);
-          alert('✅ Animal atualizado com sucesso!');
         } else {
           await api.post('/animais', payload);
-          alert('✅ Animal cadastrado com sucesso!');
         }
       }
 
+      alert(isEditMode ? '✅ Animal atualizado com sucesso!' : '✅ Animal cadastrado com sucesso!');
       navigate('/meus-cavalos');
     } catch (error: any) {
       console.error(error);
@@ -161,7 +182,7 @@ const Cavalos = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p className="text-gray-500">Carregando animal...</p>
+          <p className="text-gray-500">Carregando...</p>
         </div>
       </div>
     );
@@ -281,32 +302,33 @@ const Cavalos = () => {
               </div>
             </div>
 
-            {/* Novo Campo - Nível de Exercício */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Nível de Exercício <span className="text-red-500">*</span>
-              </label>
-              <select
-                value={formData.exercise}
-                onChange={(e) => setFormData({ ...formData, exercise: e.target.value })}
-                required
-                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
-              >
-                <option value="">Selecione o nível de exercício</option>
-                <option value="Exercicio leve">Exercício Leve</option>
-                <option value="Exercicio Moderado">Exercício Moderado</option>
-                <option value="Exercicio Pesado">Exercício Pesado</option>
-                <option value="Exercicio Muito Pesado">Exercício Muito Pesado</option>
-              </select>
-            </div>
+            {isEquino && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nível de Exercício <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.exercise}
+                  onChange={(e) => setFormData({ ...formData, exercise: e.target.value })}
+                  required
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                >
+                  <option value="">Selecione o nível de exercício</option>
+                  <option value="Exercicio leve">Exercício Leve</option>
+                  <option value="Exercicio Moderado">Exercício Moderado</option>
+                  <option value="Exercicio Pesado">Exercício Pesado</option>
+                  <option value="Exercicio Muito Pesado">Exercício Muito Pesado</option>
+                </select>
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={submitting}
               className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors"
             >
-              {submitting
-                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...')
+              {submitting 
+                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...') 
                 : (isEditMode ? 'Atualizar Animal' : 'Cadastrar Animal')}
             </button>
           </form>

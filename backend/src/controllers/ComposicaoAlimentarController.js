@@ -1,45 +1,33 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-// ==================== NOVA FUNÇÃO DE CONVERSÃO (g/g) ====================
+// ==================== FUNÇÃO DE CONVERSÃO (g/g) ====================
 const converterParaGramasPorGrama = (valorOriginal, unidadeOriginal) => {
   const valor = Number(valorOriginal);
   const unidade = String(unidadeOriginal || '').trim().toLowerCase();
 
-  console.log(`[CONVERSÃO g/g] Unidade do banco: "${unidadeOriginal}" → "${unidade}"`);
-  console.log(`[CONVERSÃO g/g] Valor informado: ${valorOriginal}`);
+  if (isNaN(valor)) return valorOriginal;
 
-  if (isNaN(valor)) {
-    console.log(`[CONVERSÃO g/g] ERRO: Valor não numérico`);
-    return valorOriginal;
-  }
+  if (unidade === 'ufc/g') return valor;
 
-  // Exceção explícita
-  if (unidade === 'ufc/g') {
-    console.log(`[CONVERSÃO g/g] UFC/g → Mantém valor original`);
-    return valor;
-  }
-
-  // Conversão para gramas por grama de alimento (g/g)
   let valorFinal = valor;
+  if (unidade === 'g')   valorFinal = valor / 1000;
+  if (unidade === 'mg')  valorFinal = valor / 1_000_000;
+  if (unidade === 'mcg') valorFinal = valor / 1_000_000_000;
 
-  if (unidade === 'g')   valorFinal = valor / 1000;           // g/kg → g/g
-  if (unidade === 'mg')  valorFinal = valor / 1_000_000;      // mg/kg → g/g
-  if (unidade === 'mcg') valorFinal = valor / 1_000_000_000;  // mcg/kg → g/g
-
-  console.log(`[CONVERSÃO g/g] RESULTADO FINAL: ${valor} ${unidade} → ${valorFinal} g/g`);
   return valorFinal;
 };
 // =====================================================================
 
 class ComposicaoAlimentarController {
+
   async criar(req, res) {
     const { alimentoId, nutrienteId, valorPorKg, base } = req.body;
 
     try {
       const nutriente = await prisma.nutriente.findUnique({
         where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true, nome: true }
+        select: { unidadePadrao: true }
       });
 
       if (!nutriente) return res.status(404).json({ error: 'Nutriente não encontrado' });
@@ -50,7 +38,7 @@ class ComposicaoAlimentarController {
         data: {
           alimentoId: Number(alimentoId),
           nutrienteId: Number(nutrienteId),
-          valorPorKg: valorConvertido,        // ← AGORA EM g/g
+          valorPorKg: valorConvertido,
           base: base || 'Seca'
         }
       });
@@ -72,7 +60,7 @@ class ComposicaoAlimentarController {
     try {
       const nutriente = await prisma.nutriente.findUnique({
         where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true, nome: true }
+        select: { unidadePadrao: true }
       });
 
       if (!nutriente) return res.status(404).json({ error: 'Nutriente não encontrado' });
@@ -85,7 +73,7 @@ class ComposicaoAlimentarController {
           alimentoId: Number(alimentoId),
           nutrienteId: Number(nutrienteId),
           valorPorKg: valorConvertido,
-          base
+          base: base || 'Seca'
         }
       });
 
@@ -102,7 +90,10 @@ class ComposicaoAlimentarController {
   async listar(req, res) {
     try {
       const composicoes = await prisma.composicaoAlimento.findMany({
-        include: { alimento: true, nutriente: true },
+        include: { 
+          alimento: true, 
+          nutriente: true 
+        },
         orderBy: { id: 'asc' }
       });
       res.json(composicoes);
@@ -135,6 +126,32 @@ class ComposicaoAlimentarController {
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Erro ao excluir composição' });
+    }
+  }
+
+  // =============================================
+  // ANÁLISE COM LLM - Totalmente Genérico
+  // =============================================
+  async analisarLLM(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+      }
+
+      const parser = require('../services/composicaoParserService');
+      const resultado = await parser.processarArquivo(req.file.path, req.file.mimetype);
+
+      res.json({
+        composicoes: resultado.composicoes,
+        mensagem: 'Análise realizada com sucesso'
+      });
+
+    } catch (error) {
+      console.error('Erro na análise LLM de composição:', error);
+      res.status(500).json({ 
+        error: 'Erro ao processar arquivo com IA',
+        detalhes: error.message 
+      });
     }
   }
 }
