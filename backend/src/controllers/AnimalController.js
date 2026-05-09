@@ -81,7 +81,7 @@ async criar(req, res) {
 
   const isEquino = especie && 
     (especie.nome.toLowerCase().includes('equino') || 
-     especie.nome.toLowerCase().includes('cavalo'));
+     especie.nome.toLowerCase().includes('animal'));
 
   // Só exige exercise se for equino
   if (isEquino && (!exercise || exercise.trim() === '')) {
@@ -146,7 +146,7 @@ async atualizar(req, res) {
 
   const isEquino = especie && 
     (especie.nome.toLowerCase().includes('equino') || 
-     especie.nome.toLowerCase().includes('cavalo'));
+     especie.nome.toLowerCase().includes('animal'));
 
   if (isEquino && (!exercise || exercise.trim() === '')) {
     return res.status(400).json({ error: 'Nível de exercício é obrigatório para equinos' });

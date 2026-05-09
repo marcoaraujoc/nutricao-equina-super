@@ -74,11 +74,11 @@ const AnimalDetail = () => {
               <div className="grid grid-cols-2 gap-8 mt-10">
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Sexo</span>
-                  <span className="text-3xl font-semibold">{animal.sexo || '-'}</span>
+                  <span className="text-3xl font-semibold text-gray-900">{animal.sexo || '-'}</span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Idade</span>
-                  <span className="text-3xl font-semibold">
+                  <span className="text-3xl font-semibold text-gray-900">
                     {animal.dataNascimento 
                       ? new Date().getFullYear() - new Date(animal.dataNascimento).getFullYear() 
                       : '-'} anos
@@ -86,7 +86,7 @@ const AnimalDetail = () => {
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Peso Atual</span>
-                  <span className="text-3xl font-semibold">{animal.peso || '-'} kg</span>
+                  <span className="text-3xl font-semibold text-gray-900">{animal.peso || '-'} kg</span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500">Nível de Exercício</span>
@@ -105,18 +105,18 @@ const AnimalDetail = () => {
             <div className="flex items-center gap-4 mb-6">
               <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 text-3xl">👤</div>
               <div>
-                <h3 className="font-semibold text-lg">Proprietário</h3>
+                <h3 className="font-semibold text-lg text-gray-900">Proprietário</h3>
                 <p className="text-gray-600">{user?.fullName}</p>
               </div>
             </div>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">E-mail</span>
-                <span>{user?.email}</span>
+                <span className="text-gray-900">{user?.email}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Telefone</span>
-                <span>(11) 98765-4321</span>
+                <span className="text-gray-900">(11) 98765-4321</span>
               </div>
             </div>
           </div>
@@ -144,7 +144,7 @@ const AnimalDetail = () => {
 
         {/* Outras seções mantidas */}
         <div className="lg:col-span-12 bg-white rounded-3xl shadow-md p-8 border border-gray-100">
-          <h3 className="font-semibold flex items-center gap-2 mb-6 text-xl">🥕 Dieta Atual</h3>
+          <h3 className="font-semibold flex items-center gap-2 mb-6 text-xl text-gray-900">🥕 Dieta Atual</h3>
           {/* ... (mantido igual) */}
         </div>
       </div>

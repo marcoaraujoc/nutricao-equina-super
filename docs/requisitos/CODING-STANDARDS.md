@@ -18,7 +18,7 @@
 
 - Componentes funcionais
 - Hooks customizados quando necessário
-- Nome de arquivos: PascalCase (`App.tsx`, `Cavalos.tsx`)
+- Nome de arquivos: PascalCase (`App.tsx`, `Animais.tsx`)
 - Estilos exclusivamente com Tailwind (sem CSS inline desnecessário)
 - Todo componente deve ter tipagem clara
 

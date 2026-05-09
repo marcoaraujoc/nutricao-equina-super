@@ -25,6 +25,21 @@ const Dashboard = () => {
   const [animais, setAnimais] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // ==================== FUNÇÃO FORMATAR DATA (mesma dos outros arquivos) ====================
+  const formatarDataBR = (data: string | Date | null | undefined): string => {
+    if (!data) return '-';
+
+    const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
+
+    if (isNaN(dataObj.getTime())) return '-';
+
+    const dia = String(dataObj.getUTCDate()).padStart(2, '0');
+    const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
+    const ano = dataObj.getUTCFullYear();
+
+    return `${dia}/${mes}/${ano}`;
+  };
+
   // Carrega os animais
   useEffect(() => {
     if (!user?.id) return;
@@ -32,7 +47,7 @@ const Dashboard = () => {
     const loadAnimais = async () => {
       try {
         const res = await api.get('/animais');
-        console.log('✅ Animais carregados:', res.data); // ← para debug
+        console.log('✅ Animais carregados:', res.data);
         setAnimais(res.data);
       } catch (error) {
         console.error('❌ Erro ao carregar animais:', error);
@@ -59,7 +74,7 @@ const Dashboard = () => {
         <h2 className="text-3xl font-bold text-gray-900 mb-3">Você ainda não tem animais cadastrados</h2>
         <p className="text-gray-600 mb-8">Para começar a usar o sistema, cadastre seu primeiro animal e Complete o seu Cadastro Pessoal.</p>
         <button
-          onClick={() => navigate('/cavalos')}
+          onClick={() => navigate('/animais')}
           className="inline-flex items-center gap-3 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-4 rounded-3xl font-semibold text-lg transition-colors"
         >
           <Plus size={24} />
@@ -120,9 +135,7 @@ const Dashboard = () => {
               <div>
                 <span className="block text-xs uppercase text-gray-900 tracking-widest">NASCIMENTO</span>
                 <span className="text-lg font-medium text-emerald-600 mt-1">
-                  {animal.dataNascimento 
-                    ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR')
-                    : '-'}
+                  {formatarDataBR(animal.dataNascimento)}
                 </span>
               </div>
               <div>

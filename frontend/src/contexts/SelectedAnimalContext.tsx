@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import api from '../services/api';
 import { useAuth } from './AuthContext';
@@ -17,6 +17,7 @@ interface Animal {
 interface SelectedAnimalContextType {
   selectedAnimal: Animal | null;
   setSelectedAnimal: (animal: Animal | null) => void;
+  refreshSelectedAnimal: () => Promise<void>;   // ← Nova função
   clearSelectedAnimal: () => void;
   hasAnimals: boolean;
   hasSingleAnimal: boolean;
@@ -31,43 +32,46 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
   const [hasAnimals, setHasAnimals] = useState(false);
   const [hasSingleAnimal, setHasSingleAnimal] = useState(false);
 
-  // Carrega os animais do usuário logado
-  useEffect(() => {
+  const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
 
-    const loadAnimais = async () => {
-      try {
-        const res = await api.get('/animais');
-        const animais = res.data as Animal[];
+    try {
+      const res = await api.get('/animais');
+      const animais = res.data as Animal[];
 
-        setHasAnimals(animais.length > 0);
-        setHasSingleAnimal(animais.length === 1);
+      setHasAnimals(animais.length > 0);
+      setHasSingleAnimal(animais.length === 1);
 
-        if (animais.length === 0) {
-          setSelectedAnimalState(null);
-          return;
-        }
-
-        // Regra: seleciona o animal com menor ID (quando tiver mais de um)
-        let toSelect = animais.reduce((prev, curr) => 
-          prev.id < curr.id ? prev : curr
-        );
-
-        // Respeita a última seleção salva no localStorage
-        const lastSelectedId = localStorage.getItem('lastSelectedAnimalId');
-        if (lastSelectedId) {
-          const found = animais.find(a => a.id.toString() === lastSelectedId);
-          if (found) toSelect = found;
-        }
-
-        setSelectedAnimalState(toSelect);
-      } catch (error) {
-        console.error('Erro ao carregar animais no context:', error);
+      if (animais.length === 0) {
+        setSelectedAnimalState(null);
+        return;
       }
-    };
 
-    loadAnimais();
+      let toSelect = animais.reduce((prev, curr) => 
+        prev.id < curr.id ? prev : curr
+      );
+
+      const lastSelectedId = localStorage.getItem('lastSelectedAnimalId');
+      if (lastSelectedId) {
+        const found = animais.find(a => a.id.toString() === lastSelectedId);
+        if (found) toSelect = found;
+      }
+
+      setSelectedAnimalState(toSelect);
+    } catch (error) {
+      console.error('Erro ao carregar animais no context:', error);
+    }
   }, [user?.id]);
+
+  // Carrega os animais quando o usuário muda
+  useEffect(() => {
+    loadAnimais();
+  }, [loadAnimais]);
+
+  // ✅ Nova função para forçar atualização
+  const refreshSelectedAnimal = async () => {
+    await loadAnimais();
+  };
 
   const setSelectedAnimal = (animal: Animal | null) => {
     setSelectedAnimalState(animal);
@@ -86,6 +90,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       value={{
         selectedAnimal,
         setSelectedAnimal,
+        refreshSelectedAnimal,     // ← Exportada
         clearSelectedAnimal,
         hasAnimals,
         hasSingleAnimal,
@@ -105,5 +110,4 @@ export const useSelectedAnimal = () => {
   return context;
 };
 
-// Exportação única e limpa
 export { SelectedAnimalContext };

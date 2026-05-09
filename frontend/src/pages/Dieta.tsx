@@ -7,7 +7,7 @@ import { Pencil, Trash2, Plus } from 'lucide-react';
 
 const Dieta = () => {
   const { user } = useAuth();
-  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
+  const { selectedAnimal, setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
 
@@ -19,14 +19,30 @@ const Dieta = () => {
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
+  // ==================== FUNÇÃO ATUALIZADA (a que você enviou) ====================
+  const formatarDataBR = (data: string | Date | null | undefined): string => {
+    if (!data) return '-';
+
+    const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
+
+    if (isNaN(dataObj.getTime())) return '-';
+
+    const dia = String(dataObj.getUTCDate()).padStart(2, '0');
+    const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
+    const ano = dataObj.getUTCFullYear();
+
+    return `${dia}/${mes}/${ano}`;
+  };
+
   const loadDieta = async () => {
     if (!effectiveAnimalId) return;
     setLoading(true);
     try {
       const res = await api.get(`/dietas/animal/${effectiveAnimalId}`);
       setDietas(res.data);
-      if (res.data.length > 0) setAnimal(res.data[0].animal);
-      else if (selectedAnimal) setAnimal(selectedAnimal);
+      if (res.data.length > 0) {
+        setAnimal(res.data[0].animal);
+      }
     } catch (error) {
       console.error(error);
     } finally {
@@ -47,6 +63,28 @@ const Dieta = () => {
     if (effectiveAnimalId) loadDieta();
     loadAnimais();
   }, [effectiveAnimalId]);
+
+  // Força atualização do animal
+  useEffect(() => {
+    const refreshAnimalData = async () => {
+      if (!effectiveAnimalId) return;
+
+      try {
+        const res = await api.get(`/animais/${effectiveAnimalId}`);
+        const animalAtual = res.data;
+
+        console.log('📅 Data bruta recebida:', animalAtual.dataNascimento);
+
+        setAnimal(animalAtual);
+        setSelectedAnimal(animalAtual);
+        await refreshSelectedAnimal?.();
+      } catch (error) {
+        console.error("Erro ao buscar animal atualizado:", error);
+      }
+    };
+
+    refreshAnimalData();
+  }, [effectiveAnimalId, setSelectedAnimal, refreshSelectedAnimal]);
 
   const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = animaisDoProprietario.find(a => a.id === Number(e.target.value));
@@ -124,9 +162,7 @@ const Dieta = () => {
               <div>
                 <span className="text-[11px] text-gray-500">Nascimento</span>
                 <p className="text-xs text-gray-900">
-                  {animal.dataNascimento
-                    ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR')
-                    : '-'}
+                  {formatarDataBR(animal.dataNascimento)}
                 </p>
               </div>
               <div>

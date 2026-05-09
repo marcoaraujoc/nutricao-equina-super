@@ -185,7 +185,7 @@ export default function Register() {
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
               required
             >
-              <option value="PROPRIETARIO">Proprietário de cavalo</option>
+              <option value="PROPRIETARIO">Proprietário</option>
               <option value="VETERINARIO">Veterinário</option>
             </select>
           </div>

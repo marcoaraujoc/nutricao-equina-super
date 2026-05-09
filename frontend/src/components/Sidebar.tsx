@@ -46,7 +46,10 @@ export default function Sidebar() {
   const toggle = (setter: React.Dispatch<React.SetStateAction<boolean>>) => 
     setter(prev => !prev);
   
-  const isActive = (path: string) => {
+    const isActive = (path: string) => {
+    if (path === '/') {
+      return location.pathname === '/'; // exato apenas para o Dashboard
+    }
     return location.pathname.startsWith(path);
   };
 
@@ -103,7 +106,7 @@ export default function Sidebar() {
                 <Link to="/cadastro-pessoal" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/cadastro-pessoal') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>
                   <User size={20} /> Cadastro Pessoal
                 </Link>
-                <Link to="/meus-cavalos" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/meus-cavalos') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>
+                <Link to="/meus-animais" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/meus-animais') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>
                   <Zap size={20} /> Animais
                 </Link>
                 <Link to="/exames" className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base ${isActive('/exames') ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-gray-100 text-gray-700'}`}>

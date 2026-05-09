@@ -122,7 +122,7 @@ export default function CadastroPessoal() {
 
       if (res.ok) {
         alert('✅ Cadastro pessoal salvo com sucesso no banco!');
-        window.location.href = '/cavalos';
+        window.location.href = '/animais';
       } else {
         const errorData = await res.json();
         alert(`Erro ao salvar: ${errorData.error || 'Tente novamente'}`);

@@ -21,6 +21,21 @@ const Exames = () => {
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
+  // ==================== FUNÇÃO FORMATAR DATA (mesma lógica do Dieta) ====================
+  const formatarDataBR = (data: string | Date | null | undefined): string => {
+    if (!data) return '-';
+
+    const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
+
+    if (isNaN(dataObj.getTime())) return '-';
+
+    const dia = String(dataObj.getUTCDate()).padStart(2, '0');
+    const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
+    const ano = dataObj.getUTCFullYear();
+
+    return `${dia}/${mes}/${ano}`;
+  };
+
   // Carrega lista de nutrientes
   useEffect(() => {
     const loadNutrientes = async () => {
@@ -124,6 +139,7 @@ const Exames = () => {
     return 'normal';
   };
 
+  // Função para formatar datas dos exames (mantida)
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
     return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
@@ -179,7 +195,7 @@ const Exames = () => {
                 <div>
                   <span className="text-[11px] text-gray-500">Nascimento</span>
                   <p className="text-xs text-gray-900">
-                    {currentAnimal.dataNascimento ? new Date(currentAnimal.dataNascimento).toLocaleDateString('pt-BR') : '-'}
+                    {formatarDataBR(currentAnimal.dataNascimento)}
                   </p>
                 </div>
                 <div>
@@ -325,11 +341,6 @@ const Exames = () => {
       </div>
     </div>
   );
-};
-
-const formatDate = (isoString: string) => {
-  const date = new Date(isoString);
-  return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
 };
 
 export default Exames;

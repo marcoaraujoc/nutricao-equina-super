@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import { ArrowLeft } from 'lucide-react';
 
-const Cavalos = () => {
+const Animal = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -29,10 +29,30 @@ const Cavalos = () => {
     exercise: '',
   });
 
+  // ==================== FUNÇÃO FORMATAR DATA ====================
+  const formatarDataBR = (data: string | Date | null | undefined): string => {
+  if (!data) return '-';
+
+  // Se for string no formato yyyy-mm-dd, parseia diretamente
+  if (typeof data === 'string' && /^\d{4}-\d{2}-\d{2}/.test(data)) {
+    const [ano, mes, dia] = data.split('T')[0].split('-');
+    return `${dia}/${mes}/${ano}`;
+  }
+
+  const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
+  if (isNaN(dataObj.getTime())) return '-';
+
+  const dia = String(dataObj.getUTCDate()).padStart(2, '0');
+  const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
+  const ano = dataObj.getUTCFullYear();
+
+  return `${dia}/${mes}/${ano}`;
+};
+
   const especieAtual = especies.find(esp => esp.id === formData.especieId);
   const isEquino = !!especieAtual && 
     (especieAtual.nome.toLowerCase().includes('equino') || 
-     especieAtual.nome.toLowerCase().includes('cavalo'));
+     especieAtual.nome.toLowerCase().includes('animal'));
 
   // Reseta exercise quando a espécie não é equina
   useEffect(() => {
@@ -52,7 +72,6 @@ const Cavalos = () => {
         setEspecies(espRes.data);
         setTodasRacas(racRes.data);
 
-        // Removido filtro fixo aqui (estava causando problema)
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const animal = animalRes.data;
@@ -78,7 +97,7 @@ const Cavalos = () => {
     loadData();
   }, [id, isEditMode]);
 
-  // ✅ ALTERAÇÃO PRINCIPAL: Melhoria na seleção automática de raça
+  // Melhoria na seleção automática de raça
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
@@ -86,7 +105,6 @@ const Cavalos = () => {
 
       if (filtradas.length > 0) {
         setFormData(prev => {
-          // Se não tem raça ou a raça atual não pertence à nova espécie → seleciona a primeira
           if (!prev.racaId || !filtradas.some(r => r.id === prev.racaId)) {
             return { ...prev, racaId: filtradas[0].id };
           }
@@ -110,7 +128,7 @@ const Cavalos = () => {
     e.preventDefault();
     setSubmitting(true);
 
-    console.log('📤 Enviando -> racaId:', formData.racaId); // Debug
+    console.log('📤 Enviando -> racaId:', formData.racaId);
 
     if (!formData.nome?.trim()) {
       alert('❌ Nome do animal é obrigatório');
@@ -168,7 +186,7 @@ const Cavalos = () => {
       }
 
       alert(isEditMode ? '✅ Animal atualizado com sucesso!' : '✅ Animal cadastrado com sucesso!');
-      navigate('/meus-cavalos');
+      navigate('/meus-animais');
     } catch (error: any) {
       console.error(error);
       alert(error.response?.data?.error || '❌ Erro ao salvar animal');
@@ -195,7 +213,7 @@ const Cavalos = () => {
           {/* Header */}
           <div className="flex items-center gap-3 mb-8">
             <button
-              onClick={() => navigate('/meus-cavalos')}
+              onClick={() => navigate('/meus-animais')}
               className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
             >
               <ArrowLeft size={24} />
@@ -257,7 +275,6 @@ const Cavalos = () => {
                 >
                   <option value="Macho">Macho</option>
                   <option value="Fêmea">Fêmea</option>
-                  <option value="Castrado">Castrado</option>
                 </select>
               </div>
             </div>
@@ -291,15 +308,49 @@ const Cavalos = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Data de Nascimento</label>
-                <input
-                  type="date"
-                  required
-                  value={formData.dataNascimento}
-                  onChange={(e) => setFormData({ ...formData, dataNascimento: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
-                />
-              </div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Data de Nascimento</label>
+                  <input
+                    type="text"
+                    placeholder="dd/mm/aaaa"
+                    required
+                    autoComplete="off"
+                    value={formData.dataNascimento
+                      ? formData.dataNascimento.split('-').reverse().join('/')
+                      : ''}
+                    onChange={(e) => {
+                    let val = e.target.value.replace(/\D/g, '');
+                    if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
+                    if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5);
+                    val = val.slice(0, 10);
+
+                    const parts = val.split('/');
+                    if (parts.length === 3 && parts[2].length === 4) {
+                      const dia = parseInt(parts[0]);
+                      const mes = parseInt(parts[1]);
+                      const ano = parseInt(parts[2]);
+
+                      // Valida se a data realmente existe
+                      const dataObj = new Date(ano, mes - 1, dia);
+                      const dataValida =
+                        dataObj.getFullYear() === ano &&
+                        dataObj.getMonth() === mes - 1 &&
+                        dataObj.getDate() === dia;
+
+                      if (!dataValida) {
+                        alert('❌ Data inválida. Verifique o dia, mês e ano informados.');
+                        setFormData({ ...formData, dataNascimento: '' });
+                        return;
+                      }
+
+                      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                      setFormData({ ...formData, dataNascimento: iso });
+                    } else {
+                      setFormData({ ...formData, dataNascimento: val });
+                    }
+                  }}
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                  />
+                </div>
             </div>
 
             {isEquino && (
@@ -338,4 +389,4 @@ const Cavalos = () => {
   );
 };
 
-export default Cavalos;
+export default Animal;

@@ -5,7 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import { Pencil, Trash2, Plus } from 'lucide-react';
 
-const MeusCavalos = () => {
+const MeusAnimais = () => {
   const { user } = useAuth();
   const { setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
@@ -18,7 +18,7 @@ const MeusCavalos = () => {
   const loadAnimais = async () => {
     try {
       const res = await api.get('/animais');
-      console.log('✅ MeusCavalos carregou:', res.data.length, 'animais');
+      console.log('✅ MeusAnimais carregou:', res.data.length, 'animais');
       setAnimais(res.data);
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
@@ -47,7 +47,7 @@ const MeusCavalos = () => {
 
   const handleEdit = (animal: any) => {
     setSelectedAnimal(animal);
-    navigate(`/cavalos/${animal.id}`);
+    navigate(`/animais/${animal.id}`);
   };
 
   const handleDeleteClick = (animal: any) => {
@@ -72,11 +72,11 @@ const MeusCavalos = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-3xl font-bold text-gray-900">Meus Animais</h1>
         <button
-          onClick={() => navigate('/cavalos')}
+          onClick={() => navigate('/animais')}
           className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"
         >
           <Plus size={20} />
-          Novo Cavalo
+          Novo Animal
         </button>
       </div>
 
@@ -91,7 +91,7 @@ const MeusCavalos = () => {
       </div>
 
       {loading ? (
-        <p className="text-center text-gray-500 py-12">Carregando cavalos...</p>
+        <p className="text-center text-gray-500 py-12">Carregando Animais...</p>
       ) : (
         <div className="space-y-4">
           {filteredAnimais.map((animal) => (
@@ -202,4 +202,4 @@ const MeusCavalos = () => {
   );
 };
 
-export default MeusCavalos;
+export default MeusAnimais;

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { ArrowLeft } from 'lucide-react';
 
-const CavalosView = () => {
+const AnimalView = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
@@ -62,7 +62,7 @@ const CavalosView = () => {
   }, [id]);
 
   const handleBack = () => {
-    navigate('/meus-cavalos');
+    navigate('/meus-animais');
   };
 
   if (loading) {
@@ -123,7 +123,6 @@ const CavalosView = () => {
                 <select value={formData.sexo} disabled className="w-full border border-gray-300 rounded-2xl px-4 py-3 bg-gray-50 cursor-not-allowed">
                   <option value="Macho">Macho</option>
                   <option value="Fêmea">Fêmea</option>
-                  <option value="Castrado">Castrado</option>
                 </select>
               </div>
             </div>
@@ -162,4 +161,4 @@ const CavalosView = () => {
   );
 };
 
-export default CavalosView;
+export default AnimalView;

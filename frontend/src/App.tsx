@@ -8,8 +8,8 @@ import ErrorBoundary from './components/ErrorBoundary';   // ← Adicione esta l
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import Cavalos from './pages/Cavalos';
-import MeusCavalos from './pages/MeusCavalos';
+import Animal from './pages/Animal';
+import MeusAnimais from './pages/MeusAnimais';
 import Alimentos from './pages/Alimentos';
 import CriaAlimentos from './pages/criaAlimentos';
 import Dieta from './pages/Dieta';
@@ -54,10 +54,10 @@ function App() {
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
 
-                          {/* Rotas de Cavalos */}
-                          <Route path="/meus-cavalos" element={<MeusCavalos />} />
-                          <Route path="/cavalos" element={<Cavalos />} />
-                          <Route path="/cavalos/:id" element={<Cavalos />} />
+                          {/* Rotas de Aniamos */}
+                          <Route path="/meus-animais" element={<MeusAnimais />} />
+                          <Route path="/animais" element={<Animal />} />
+                          <Route path="/animais/:id" element={<Animal />} />
 
                           {/* Rotas de Alimentos */}
                           <Route path="/alimentos" element={<Alimentos />} />
