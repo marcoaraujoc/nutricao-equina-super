@@ -94,9 +94,11 @@ const formatarDataBR = (data: string | Date | null | undefined): string => {
   return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
 };
 
-// ─── Classe base para inputs de edição (fix: texto sempre gray-900) ───────────
-const inputClass = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
+// ─── Constantes de UI ─────────────────────────────────────────────────────────
+
+const inputClass  = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
 const selectClass = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
+const OPCOES_HORARIO = ['Manhã', 'Meio-dia', 'Tarde', 'Janta', 'Noite'];
 
 // ─── Componente de feedback ───────────────────────────────────────────────────
 
@@ -165,20 +167,20 @@ const Dieta = () => {
   const itensRef = useRef<HTMLDivElement>(null);
 
   // ── Estado compartilhado ───────────────────────────────────────────────────
-  const [animal, setAnimal]                         = useState<AnimalExtended | null>(null);
+  const [animal, setAnimal]                               = useState<AnimalExtended | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<AnimalExtended[]>([]);
-  const [feedback, setFeedback]                     = useState<FeedbackState>(null);
-  const [loading, setLoading]                       = useState(true);
-  const [loadingItens, setLoadingItens]             = useState(false);
+  const [feedback, setFeedback]                           = useState<FeedbackState>(null);
+  const [loading, setLoading]                             = useState(true);
+  const [loadingItens, setLoadingItens]                   = useState(false);
 
   // ── Planos ────────────────────────────────────────────────────────────────
-  const [planos, setPlanos]           = useState<PlanoDieta[]>([]);
-  const [search, setSearch]           = useState('');
-  const [filtroAtivo, setFiltroAtivo] = useState<FiltroAtivo>('todos');
+  const [planos, setPlanos]                 = useState<PlanoDieta[]>([]);
+  const [search, setSearch]                 = useState('');
+  const [filtroAtivo, setFiltroAtivo]       = useState<FiltroAtivo>('todos');
   const [criandoPlano, setCriandoPlano]     = useState(false);
   const [novoPlanoNome, setNovoPlanoNome]   = useState('');
   const [editandoPlanoId, setEditandoPlanoId] = useState<number | null>(null);
-  const [editandoNome, setEditandoNome]         = useState('');
+  const [editandoNome, setEditandoNome]     = useState('');
 
   // ── Plano selecionado + itens ──────────────────────────────────────────────
   const [planoSelecionado, setPlanoSelecionado] = useState<PlanoDieta | null>(null);
@@ -187,11 +189,12 @@ const Dieta = () => {
   const [itemParaExcluir, setItemParaExcluir]   = useState<DietaItem | null>(null);
 
   // ── Edição inline de itens ─────────────────────────────────────────────────
-  const [editingItemId, setEditingItemId]     = useState<number | null>(null);
-  const [editItemValues, setEditItemValues]   = useState<EditItemValues>({
+  const [editingItemId, setEditingItemId]   = useState<number | null>(null);
+  const [editItemValues, setEditItemValues] = useState<EditItemValues>({
     alimentoId: '', qtdGramasDia: '', unidade: '', horario: '', periodicidade: '',
   });
-  // Alimentos com frequências conflitantes no plano atual
+
+  // ── Conflitos de frequência ────────────────────────────────────────────────
   const [conflitosFrequencia, setConflitosFrequencia] = useState<string[]>([]);
 
   // ── Feedback ───────────────────────────────────────────────────────────────
@@ -262,8 +265,8 @@ const Dieta = () => {
         api.get(`/dietas/planos/${planId}`),
         api.get(`/dietas/plano/${planId}/itens`),
       ]);
-      const plano      = planoRes.data.dados as PlanoDieta;
-      const itensList  = itensRes.data.dados as DietaItem[];
+      const plano     = planoRes.data.dados as PlanoDieta;
+      const itensList = itensRes.data.dados as DietaItem[];
       setPlanoSelecionado(plano);
       setItens(itensList);
 
@@ -277,9 +280,15 @@ const Dieta = () => {
         freqPorAlimento.get(item.alimentoId)!.add(item.periodicidade);
         nomesPorAlimento.set(item.alimentoId, item.alimento?.nome ?? String(item.alimentoId));
       });
+      const GRUPOS_FREQ: Record<string, string> = {
+        '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
+        '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
+        '1x por mês': 'mensal', '2x por mês': 'mensal',
+      };
       const conflitos: string[] = [];
       freqPorAlimento.forEach((freqs, alimentoId) => {
-        if (freqs.size > 1) {
+        const grupos = new Set([...freqs].map(f => GRUPOS_FREQ[f] ?? f));
+        if (grupos.size > 1) {
           conflitos.push(`${nomesPorAlimento.get(alimentoId)} (${[...freqs].join(' + ')})`);
         }
       });
@@ -304,7 +313,7 @@ const Dieta = () => {
 
   useEffect(() => { carregarPlanos(); }, [effectiveAnimalId, search, filtroAtivo]);
 
-  // ── Impressão — delega ao utilitário dietaPrint.ts ────────────────────────
+  // ── Impressão ──────────────────────────────────────────────────────────────
   const dispararImpressao = () => {
     if (!planoSelecionado) return;
     const pw = window.open('', '_blank', 'width=900,height=700');
@@ -316,11 +325,11 @@ const Dieta = () => {
     pw.document.close();
   };
 
-  // ── Toggle ativo/inativo do plano selecionado ──────────────────────────────
+  // ── Toggle do plano selecionado (header) ───────────────────────────────────
   const handleTogglePlanoSelecionado = async () => {
     if (!planoSelecionado) return;
     try {
-      const res      = await api.patch(`/dietas/planos/${planoSelecionado.id}/toggle`);
+      const res       = await api.patch(`/dietas/planos/${planoSelecionado.id}/toggle`);
       const atualizado = res.data.dados as PlanoDieta;
       setPlanoSelecionado(atualizado);
       setPlanos(prev => prev.map(p => p.id === atualizado.id ? { ...p, ativo: atualizado.ativo } : p));
@@ -339,7 +348,7 @@ const Dieta = () => {
     setTimeout(() => itensRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
   };
 
-  // ── Handlers: planos ──────────────────────────────────────────────────────
+  // ── Handlers: planos ───────────────────────────────────────────────────────
   const handleCriarPlano = async () => {
     if (!novoPlanoNome.trim()) { exibirFeedback('erro', 'Informe um nome para o plano'); return; }
     try {
@@ -362,37 +371,71 @@ const Dieta = () => {
     } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao atualizar nome'); }
   };
 
-  const handleTogglePlano = async (plano: PlanoDieta) => {
-    try {
-      await api.patch(`/dietas/planos/${plano.id}/toggle`);
-      carregarPlanos();
-      if (planoSelecionado?.id === plano.id) {
-        setPlanoSelecionado(prev => prev ? { ...prev, ativo: !prev.ativo } : prev);
+  // ── Validação de edição: grupo de frequência + horário duplicado ───────────
+
+  const GRUPOS_FREQUENCIA: Record<string, string> = {
+    '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
+    '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
+    '1x por mês': 'mensal', '2x por mês': 'mensal',
+    'Diário': 'diario', 'Semanal': 'semanal', 'Quinzenal': 'quinzenal', 'Mensal': 'mensal',
+  };
+
+  const getGrupo = (p: string): string => GRUPOS_FREQUENCIA[p] ?? p;
+
+  const getPeriodicidadeByCount = (grupo: string, count: number): string => {
+    if (grupo === 'diario')  {
+      if (count === 1) return '1x ao dia';
+      if (count === 2) return '2x ao dia';
+      if (count === 3) return '3x ao dia';
+    }
+    if (grupo === 'semanal') {
+      if (count === 1) return '1x por semana';
+      if (count === 2) return '2x por semana';
+      if (count === 3) return '3x por semana';
+    }
+    if (grupo === 'mensal')  {
+      if (count === 1) return '1x por mês';
+      if (count === 2) return '2x por mês';
+    }
+    return `${count}x`;
+  };
+
+  const validarEdicaoItem = (
+    alimentoIdNum: number,
+    novaPeriodicidade: string,
+    novoHorario: string,
+    excludeItemId: number,
+  ): string | null => {
+    const novoGrupo    = getGrupo(novaPeriodicidade);
+    const nomeAlimento = alimentos.find(a => a.id === alimentoIdNum)?.nome ?? 'Este alimento';
+
+    for (const item of itens) {
+      if (item.id === excludeItemId) continue;
+      if (item.alimentoId !== alimentoIdNum) continue;
+
+      // Regra 1 — mesmo alimento, mesmo horário
+      if (item.horario === novoHorario) {
+        return `"${nomeAlimento}" já está cadastrado no horário "${novoHorario}".`;
       }
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao alterar status do plano'); }
+
+      // Regra 2/3 — mesmo alimento em grupo de frequência diferente
+      if (getGrupo(item.periodicidade) !== novoGrupo) {
+        return `"${nomeAlimento}" já existe com frequência "${item.periodicidade}". Um alimento só pode pertencer a um grupo de frequência por plano.`;
+      }
+    }
+
+    return null;
   };
 
   // ── Handlers: itens ────────────────────────────────────────────────────────
 
-  // Retorna a periodicidade já registrada para este alimento no plano (ignora o item editado).
-  // Regra: o mesmo alimento só pode ter UMA periodicidade dentro de um plano.
-  const periodicidadeConflitante = (
-    alimentoIdNum: number,
-    excludeItemId?: number,
-  ): string | null => {
-    const encontrado = itens.find(
-      i => i.alimentoId === alimentoIdNum &&
-           (excludeItemId === undefined || i.id !== excludeItemId),
-    );
-    return encontrado?.periodicidade ?? null;
-  };
   const handleStartEditItem = (item: DietaItem) => {
     setEditingItemId(item.id);
     setEditItemValues({
-      alimentoId:   String(item.alimentoId),
-      qtdGramasDia: String(item.qtdGramasDia),
-      unidade:      item.unidade,
-      horario:      item.horario ?? '',
+      alimentoId:    String(item.alimentoId),
+      qtdGramasDia:  String(item.qtdGramasDia),
+      unidade:       item.unidade,
+      horario:       item.horario ?? '',
       periodicidade: item.periodicidade,
     });
   };
@@ -403,23 +446,25 @@ const Dieta = () => {
   };
 
   const handleSaveEditItem = async (id: number) => {
-    const alimentoIdNum  = Number(editItemValues.alimentoId);
-    const periExistente  = periodicidadeConflitante(alimentoIdNum, id);
+    const alimentoIdNum = Number(editItemValues.alimentoId);
+    const erroValidacao = validarEdicaoItem(
+      alimentoIdNum,
+      editItemValues.periodicidade,
+      editItemValues.horario,
+      id,
+    );
 
-    if (periExistente && periExistente !== editItemValues.periodicidade) {
-      exibirFeedback(
-        'erro',
-        `"${alimentos.find(a => a.id === alimentoIdNum)?.nome ?? 'Este alimento'}" já está cadastrado com frequência "${periExistente}". Altere a frequência para "${periExistente}" ou remova o outro item antes de mudar.`,
-      );
+    if (erroValidacao) {
+      exibirFeedback('erro', erroValidacao);
       return;
     }
 
     try {
       await api.put(`/dietas/${id}`, {
-        alimentoId:   Number(editItemValues.alimentoId),
-        qtdGramasDia: Number(editItemValues.qtdGramasDia),
-        unidade:      editItemValues.unidade,
-        horario:      editItemValues.horario || null,
+        alimentoId:    Number(editItemValues.alimentoId),
+        qtdGramasDia:  Number(editItemValues.qtdGramasDia),
+        unidade:       editItemValues.unidade,
+        horario:       editItemValues.horario || null,
         periodicidade: editItemValues.periodicidade,
       });
       setEditingItemId(null);
@@ -432,6 +477,27 @@ const Dieta = () => {
     if (!itemParaExcluir || !planoSelecionado) return;
     try {
       await api.delete(`/dietas/${itemParaExcluir.id}`);
+
+      // Recalcula periodicidade dos irmãos (mesmo alimento, mesmo grupo de frequência)
+      const grupo   = getGrupo(itemParaExcluir.periodicidade);
+      const irmaos  = itens.filter(i =>
+        i.id !== itemParaExcluir.id &&
+        i.alimentoId === itemParaExcluir.alimentoId &&
+        getGrupo(i.periodicidade) === grupo
+      );
+      if (irmaos.length > 0) {
+        const novaPeriodicidade = getPeriodicidadeByCount(grupo, irmaos.length);
+        await Promise.all(
+          irmaos.map(irmao => api.put(`/dietas/${irmao.id}`, {
+            alimentoId:    irmao.alimentoId,
+            qtdGramasDia:  irmao.qtdGramasDia,
+            unidade:       irmao.unidade,
+            horario:       irmao.horario,
+            periodicidade: novaPeriodicidade,
+          }))
+        );
+      }
+
       setItemParaExcluir(null);
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
       exibirFeedback('sucesso', 'Alimento removido da dieta');
@@ -590,7 +656,6 @@ const Dieta = () => {
                           if (e.key === 'Enter') handleSalvarNomePlano(plano.id);
                           if (e.key === 'Escape') setEditandoPlanoId(null);
                         }}
-                        /* FIX: text-gray-900 garante texto visível */
                         className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
                       />
                       <button onClick={() => handleSalvarNomePlano(plano.id)} className="p-1.5 text-emerald-700 hover:text-emerald-800"><Check size={16} /></button>
@@ -638,14 +703,6 @@ const Dieta = () => {
                         >
                           <Pencil size={14} />
                         </button>
-                        {/* Toggle restaurado na lista */}
-                        <button
-                          onClick={() => handleTogglePlano(plano)}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600"
-                          aria-label="Ativar/Desativar"
-                        >
-                          {plano.ativo ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                        </button>
                       </div>
                     </div>
                   )}
@@ -666,7 +723,6 @@ const Dieta = () => {
                 <p className="text-base font-semibold text-gray-900">{planoSelecionado.nome}</p>
               </div>
               <div className="flex items-center gap-2">
-                {/* Toggle ativo/inativo (restaurado) */}
                 <button
                   onClick={handleTogglePlanoSelecionado}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
@@ -679,7 +735,6 @@ const Dieta = () => {
                     ? <><ToggleRight size={15} /> Ativo</>
                     : <><ToggleLeft size={15} /> Inativo</>}
                 </button>
-                {/* Imprimir */}
                 <button
                   onClick={dispararImpressao}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -739,7 +794,6 @@ const Dieta = () => {
                         <th className="text-left px-4 py-2 font-medium text-gray-500">Horário</th>
                         <th className="text-left px-4 py-2 font-medium text-gray-500">Qtd</th>
                         <th className="text-left px-4 py-2 font-medium text-gray-500">Unidade</th>
-                        <th className="text-left px-4 py-2 font-medium text-gray-500">Frequência</th>
                         <th className="text-right px-4 py-2 font-medium text-gray-500 w-24">Ações</th>
                       </tr>
                     </thead>
@@ -753,7 +807,6 @@ const Dieta = () => {
                               /* ── Linha em modo edição inline ─────────── */
                               <>
                                 <td className="px-2 py-2">
-                                  {/* FIX: text-gray-900 via selectClass */}
                                   <select
                                     value={editItemValues.alimentoId}
                                     onChange={(e) => setEditItemValues(v => ({ ...v, alimentoId: e.target.value }))}
@@ -766,12 +819,16 @@ const Dieta = () => {
                                   </select>
                                 </td>
                                 <td className="px-2 py-2">
-                                  <input
-                                    type="time"
+                                  <select
                                     value={editItemValues.horario}
                                     onChange={(e) => setEditItemValues(v => ({ ...v, horario: e.target.value }))}
-                                    className={inputClass}
-                                  />
+                                    className={selectClass}
+                                  >
+                                    <option value="">Selecione...</option>
+                                    {OPCOES_HORARIO.map(h => (
+                                      <option key={h} value={h}>{h}</option>
+                                    ))}
+                                  </select>
                                 </td>
                                 <td className="px-2 py-2">
                                   <input
@@ -791,17 +848,6 @@ const Dieta = () => {
                                   >
                                     {['kg', 'g', 'L', 'mL', 'unidade', 'porção'].map(u => (
                                       <option key={u} value={u}>{u}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td className="px-2 py-2">
-                                  <select
-                                    value={editItemValues.periodicidade}
-                                    onChange={(e) => setEditItemValues(v => ({ ...v, periodicidade: e.target.value }))}
-                                    className={selectClass}
-                                  >
-                                    {['Diário', '2x ao dia', '3x ao dia', 'Semanal', 'Quinzenal'].map(f => (
-                                      <option key={f} value={f}>{f}</option>
                                     ))}
                                   </select>
                                 </td>
@@ -826,25 +872,32 @@ const Dieta = () => {
                               /* ── Linha em modo visualização ──────────── */
                               <>
                                 <td className="px-4 py-3 text-gray-900">{item.alimento?.nome}</td>
-                                <td className="px-4 py-3 text-gray-700">{item.horario ?? '-'}</td>
+                                <td className="px-4 py-3 text-gray-700">
+                                  {item.horario
+                                    ? item.horario.split(',').map((h, i) => (
+                                        <span key={i} className="block text-xs leading-5">{h}</span>
+                                      ))
+                                    : '-'}
+                                </td>
                                 <td className="px-4 py-3 text-gray-700">{item.qtdGramasDia}</td>
                                 <td className="px-4 py-3 text-gray-700">{item.unidade}</td>
-                                <td className="px-4 py-3 text-gray-700">{item.periodicidade}</td>
-                                <td className="px-4 py-3 text-right flex justify-end gap-3">
-                                  <button
-                                    onClick={() => handleStartEditItem(item)}
-                                    className="text-emerald-600 hover:text-emerald-700"
-                                    aria-label="Editar"
-                                  >
-                                    <Pencil size={15} />
-                                  </button>
-                                  <button
-                                    onClick={() => setItemParaExcluir(item)}
-                                    className="text-red-500 hover:text-red-700"
-                                    aria-label="Excluir"
-                                  >
-                                    <Trash2 size={15} />
-                                  </button>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="flex justify-end gap-3">
+                                    <button
+                                      onClick={() => handleStartEditItem(item)}
+                                      className="text-emerald-600 hover:text-emerald-700"
+                                      aria-label="Editar"
+                                    >
+                                      <Pencil size={15} />
+                                    </button>
+                                    <button
+                                      onClick={() => setItemParaExcluir(item)}
+                                      className="text-red-500 hover:text-red-700"
+                                      aria-label="Excluir"
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
+                                  </div>
                                 </td>
                               </>
                             )}

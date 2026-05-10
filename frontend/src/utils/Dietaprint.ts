@@ -185,11 +185,11 @@ const PRINT_CSS = `
 
   /* ── Cabeçalho do plano ── */
   .plan-row {
-    display: flex; justify-content: space-between; align-items: center;
+    position: relative; display: flex; justify-content: center; align-items: center;
     margin-top: 12pt; margin-bottom: 12pt;
   }
-  .plan-name { font-size: 15pt; font-weight: 700; color: #111; }
-  .badge     { font-size: 9pt; font-weight: 600; padding: 3pt 10pt; border-radius: 20pt; border: 0.8pt solid; }
+  .plan-name { font-size: 15pt; font-weight: 700; color: #111; text-align: center; }
+  .badge     { position: absolute; right: 0; font-size: 9pt; font-weight: 600; padding: 3pt 10pt; border-radius: 20pt; border: 0.8pt solid; }
   .badge-on  { color: #065f46; border-color: #059669; background: #d1fae5; }
   .badge-off { color: #6b7280; border-color: #d1d5db; background: #f3f4f6; }
 

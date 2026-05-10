@@ -46,6 +46,29 @@ const OPCOES_PERIODICIDADE = [
   '1x por mês', '2x por mês',
 ];
 
+const getSlotsFromPeriodicidade = (p: string): number => {
+  const match = p.match(/^(\d+)x/);
+  return match ? parseInt(match[1], 10) : 1;
+};
+
+const getPeriodicidadeByCount = (grupo: string, count: number): string => {
+  if (grupo === 'diario')  {
+    if (count === 1) return '1x ao dia';
+    if (count === 2) return '2x ao dia';
+    if (count === 3) return '3x ao dia';
+  }
+  if (grupo === 'semanal') {
+    if (count === 1) return '1x por semana';
+    if (count === 2) return '2x por semana';
+    if (count === 3) return '3x por semana';
+  }
+  if (grupo === 'mensal')  {
+    if (count === 1) return '1x por mês';
+    if (count === 2) return '2x por mês';
+  }
+  return `${count}x`;
+};
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 const CriaDieta = () => {
@@ -66,7 +89,9 @@ const CriaDieta = () => {
   const [editingTempId, setEditingTempId] = useState<number | null>(null);
   const [editingData, setEditingData]     = useState<FormData>(FORM_INICIAL);
   const [feedback, setFeedback]     = useState<FeedbackState>(null);
-  const [tempIdCounter, setTempIdCounter] = useState(0);
+  const [tempIdCounter, setTempIdCounter]   = useState(0);
+  const [itensDoBanco, setItensDoBanco]     = useState<{ id: number; alimentoId: number; qtdGramasDia: number; unidade: string; periodicidade: string; horario: string | null }[]>([]);
+  const [formHorarios, setFormHorarios]   = useState<string[]>(['']);
 
   // ── Destino de navegação ──────────────────────────────────────────────────
   const rotaVoltar = `/dieta/${animalId}/plano/${planoDietaId}`;
@@ -83,6 +108,11 @@ const CriaDieta = () => {
       try {
         const alRes = await api.get('/alimentos');
         setAlimentos(alRes.data);
+
+        if (planoDietaId && !isEditMode) {
+          const itensRes = await api.get(`/dietas/plano/${planoDietaId}/itens`);
+          setItensDoBanco(itensRes.data.dados ?? []);
+        }
 
         if (isEditMode && id) {
           const res = await api.get(`/dietas/${id}`);
@@ -107,12 +137,13 @@ const CriaDieta = () => {
   }, [id, isEditMode]);
 
   // ── Validação ─────────────────────────────────────────────────────────────
-  const validar = (dados: FormData): string | null => {
+  const validar = (dados: FormData, horarios?: string[]): string | null => {
     if (!dados.alimentoId)                              return 'Selecione um alimento';
-    if (!dados.horario)                                 return 'Selecione o horário';
+    if (!dados.periodicidade)                           return 'Selecione a periodicidade';
     if (!dados.qtdGramasDia || Number(dados.qtdGramasDia) <= 0) return 'Informe uma quantidade válida';
     if (!dados.unidade)                                 return 'Selecione a unidade';
-    if (!dados.periodicidade)                           return 'Selecione a periodicidade';
+    const slots = horarios ?? [dados.horario];
+    if (slots.some(h => !h)) return 'Selecione todos os horários de fornecimento';
     return null;
   };
 
@@ -125,23 +156,33 @@ const CriaDieta = () => {
     );
 
   const formEstaPreenchido = (): boolean =>
-    !!(formData.alimentoId && formData.qtdGramasDia && formData.unidade && formData.periodicidade && formData.horario);
+    !!(formData.alimentoId && formData.qtdGramasDia && formData.unidade && formData.periodicidade && formHorarios.some(h => h));
 
   // ── Adicionar à lista pendente ────────────────────────────────────────────
-  const handleAdicionarItem = () => {
-    const erro = validar(formData);
+  const handleAdicionarItem = () => 
+  {
+    const erro = validar(formData, formHorarios);
     if (erro) { exibirFeedback('erro', erro); return; }
 
-    if (isDuplicado(formData)) {
-      exibirFeedback('erro', `Este alimento já foi adicionado para o horário "${formData.horario}".`);
-      return;
+    const alimento = alimentos.find((a) => a.id === Number(formData.alimentoId));
+    const novos: PendingItem[] = [];
+    let counter = tempIdCounter;
+
+    for (const horario of formHorarios) {
+      const itemComHorario = { ...formData, horario };
+      if (isDuplicado(itemComHorario)) {
+        exibirFeedback('erro', `Este alimento já foi adicionado para o horário "${horario}".`);
+        return;
+      }
+      novos.push({ ...itemComHorario, _tempId: counter, alimentoNome: alimento?.nome ?? '' });
+      counter++;
     }
 
-    const alimento = alimentos.find((a) => a.id === Number(formData.alimentoId));
-    setPendingItems((prev) => [...prev, { ...formData, _tempId: tempIdCounter, alimentoNome: alimento?.nome ?? '' }]);
-    setTempIdCounter((c) => c + 1);
+    setPendingItems((prev) => [...prev, ...novos]);
+    setTempIdCounter(counter);
     setFormData(FORM_INICIAL);
-    exibirFeedback('info', 'Alimento adicionado. Preencha o próximo ou clique em Salvar.');
+    setFormHorarios(['']);
+    exibirFeedback('info', `${novos.length} horário${novos.length > 1 ? 's' : ''} adicionado${novos.length > 1 ? 's' : ''}. Preencha o próximo ou clique em Salvar.`);
   };
 
   // ── Edição inline ─────────────────────────────────────────────────────────
@@ -168,8 +209,28 @@ const CriaDieta = () => {
     exibirFeedback('sucesso', 'Item atualizado.');
   };
 
-  const handleRemoverPendente = (tempId: number) =>
-    setPendingItems((prev) => prev.filter((i) => i._tempId !== tempId));
+  const handleRemoverPendente = (tempId: number) => {
+    const removido = pendingItems.find(i => i._tempId === tempId);
+
+    setPendingItems(prev => {
+      const semItem = prev.filter(i => i._tempId !== tempId);
+      if (!removido) return semItem;
+
+      const grupo   = getGrupo(removido.periodicidade);
+      const irmaos  = semItem.filter(i =>
+        Number(i.alimentoId) === Number(removido.alimentoId) &&
+        getGrupo(i.periodicidade) === grupo
+      );
+      if (irmaos.length === 0) return semItem;
+
+      const novaPeriodicidade = getPeriodicidadeByCount(grupo, irmaos.length);
+      return semItem.map(i =>
+        Number(i.alimentoId) === Number(removido.alimentoId) && getGrupo(i.periodicidade) === grupo
+          ? { ...i, periodicidade: novaPeriodicidade }
+          : i
+      );
+    });
+  };
 
   // ── Persistir ─────────────────────────────────────────────────────────────
   const salvarItem = async (dados: FormData): Promise<void> => {
@@ -211,15 +272,19 @@ const CriaDieta = () => {
     }
 
     const itensFinal: FormData[] = [...pendingItems];
-    if (formEstaPreenchido()) {
-      const erro = validar(formData);
-      if (erro) { exibirFeedback('erro', erro); return; }
-      if (isDuplicado(formData)) {
-        exibirFeedback('erro', `Este alimento já está na lista para o horário "${formData.horario}".`);
-        return;
+      if (formEstaPreenchido()) 
+      {
+        const erro = validar(formData, formHorarios);
+        if (erro) { exibirFeedback('erro', erro); return; }
+        for (const horario of formHorarios) {
+          const itemComHorario = { ...formData, horario };
+          if (isDuplicado(itemComHorario)) {
+            exibirFeedback('erro', `Este alimento já está na lista para o horário "${horario}".`);
+            return;
+          }
+          itensFinal.push(itemComHorario);
+        }
       }
-      itensFinal.push(formData);
-    }
 
     if (itensFinal.length === 0) {
       exibirFeedback('erro', 'Preencha ao menos um alimento antes de salvar');
@@ -229,10 +294,38 @@ const CriaDieta = () => {
     setSubmitting(true);
     try {
       await Promise.all(itensFinal.map(salvarItem));
+
+      // Recalcula periodicidade dos irmãos já no banco para refletir o novo total
+      const alimentosInseridos = [...new Set(itensFinal.map(i => i.alimentoId))];
+      const recalculos: Promise<unknown>[] = [];
+
+      for (const alimentoId of alimentosInseridos) {
+        const grupo           = getGrupo(itensFinal.find(i => i.alimentoId === alimentoId)!.periodicidade);
+        const irmaosNoBanco   = itensDoBanco.filter(i => Number(i.alimentoId) === Number(alimentoId) && getGrupo(i.periodicidade) === grupo);
+        const novosNesteGrupo = itensFinal.filter(i => i.alimentoId === alimentoId && getGrupo(i.periodicidade) === grupo);
+        const totalFinal      = irmaosNoBanco.length + novosNesteGrupo.length;
+        const novaPeriodicidade = getPeriodicidadeByCount(grupo, totalFinal);
+
+        irmaosNoBanco.forEach(irmao => {
+          recalculos.push(
+            api.put(`/dietas/${irmao.id}`, {
+              alimentoId:    irmao.alimentoId,
+              qtdGramasDia:  irmao.qtdGramasDia,
+              unidade:       irmao.unidade,
+              horario:       irmao.horario,
+              periodicidade: novaPeriodicidade,
+            })
+          );
+        });
+      }
+
+      if (recalculos.length > 0) await Promise.all(recalculos);
+
       const n = itensFinal.length;
       navigate(rotaVoltar, {
         state: { mensagem: `${n} alimento${n > 1 ? 's' : ''} adicionado${n > 1 ? 's' : ''} à dieta com sucesso!` }
       });
+
     } catch (error) {
       console.error(error);
       exibirFeedback('erro', 'Erro ao salvar alimentos. Tente novamente.');
@@ -244,7 +337,38 @@ const CriaDieta = () => {
   // ── Classes reutilizáveis ─────────────────────────────────────────────────
   const selectClass = 'w-full border border-gray-300 rounded-2xl px-4 py-3 focus:outline-none focus:border-emerald-600 bg-white text-gray-900 text-sm';
   const inputClass  = 'w-full border border-gray-300 rounded-2xl px-4 py-3 focus:outline-none focus:border-emerald-600 text-gray-900 text-sm';
-  const totalItens  = pendingItems.length + (formEstaPreenchido() ? 1 : 0);
+  const GRUPOS_FREQUENCIA: Record<string, string> = {
+    '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
+    '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
+    '1x por mês': 'mensal', '2x por mês': 'mensal',
+  };
+  const getGrupo = (p: string) => GRUPOS_FREQUENCIA[p] ?? p;
+
+  const validarContraPlano = (alimentoId: string, periodicidade: string, horario: string): string | null => {
+    const idNum      = Number(alimentoId);
+    const novoGrupo  = getGrupo(periodicidade);
+    const nomeAlim   = alimentos.find(a => a.id === idNum)?.nome ?? 'Este alimento';
+
+    // Verifica também os pendentes ainda não salvos
+    const todosItens = [
+      ...itensDoBanco,
+      ...pendingItems.map(p => ({ alimentoId: Number(p.alimentoId), periodicidade: p.periodicidade, horario: p.horario })),
+    ];
+
+    for (const item of todosItens) {
+      if (item.alimentoId !== idNum) continue;
+
+      if (item.horario === horario) {
+        return `"${nomeAlim}" já está cadastrado no horário "${horario}".`;
+      }
+      if (getGrupo(item.periodicidade) !== novoGrupo) {
+        return `"${nomeAlim}" já existe com frequência "${item.periodicidade}". Um alimento só pode pertencer a um grupo de frequência por plano.`;
+      }
+    }
+    return null;
+  };
+
+  const totalItens = pendingItems.length + (formEstaPreenchido() ? 1 : 0);
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (loading) {
@@ -295,15 +419,17 @@ const CriaDieta = () => {
           {/* Formulário */}
           <div className="space-y-4">
 
-            {/* Alimento + Quantidade */}
+          {/* Linha 1 — Alimento */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">Alimento</label>
+              <select value={formData.alimentoId} onChange={(e) => setFormData({ ...formData, alimentoId: e.target.value })} className={selectClass}>
+                <option value="">Selecione...</option>
+                {alimentos.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </select>
+            </div>
+
+            {/* Linha 2 — Quantidade + Unidade */}
             <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Alimento</label>
-                <select value={formData.alimentoId} onChange={(e) => setFormData({ ...formData, alimentoId: e.target.value })} className={selectClass}>
-                  <option value="">Selecione...</option>
-                  {alimentos.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-                </select>
-              </div>
               <div className="w-36">
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Quantidade</label>
                 <input
@@ -313,10 +439,6 @@ const CriaDieta = () => {
                   className={inputClass} placeholder="0"
                 />
               </div>
-            </div>
-
-            {/* Unidade + Frequência */}
-            <div className="flex gap-3">
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Unidade</label>
                 <select value={formData.unidade} onChange={(e) => setFormData({ ...formData, unidade: e.target.value })} className={selectClass}>
@@ -324,22 +446,58 @@ const CriaDieta = () => {
                   {OPCOES_UNIDADE.map((u) => <option key={u} value={u}>{u}</option>)}
                 </select>
               </div>
+            </div>
+
+            {/* Linha 3 — Frequência + Horário */}
+            <div className="flex gap-3 items-start">
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Frequência</label>
-                <select value={formData.periodicidade} onChange={(e) => setFormData({ ...formData, periodicidade: e.target.value })} className={selectClass}>
+                <select value={formData.periodicidade} onChange={(e) => {
+                  const p = e.target.value;
+                  const slots = getSlotsFromPeriodicidade(p);
+                  setFormHorarios(prev => Array.from({ length: slots }, (_, i) => prev[i] ?? ''));
+                  setFormData({ ...formData, periodicidade: p });
+                }} className={selectClass}>
                   <option value="">Selecione...</option>
                   {OPCOES_PERIODICIDADE.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
-            </div>
-
-            {/* Horário */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Horário de fornecimento</label>
-              <select value={formData.horario} onChange={(e) => setFormData({ ...formData, horario: e.target.value })} className={selectClass}>
-                <option value="">Selecione o horário...</option>
-                {OPCOES_HORARIO.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Horário de fornecimento
+                  {formHorarios.length > 1 && (
+                    <span className="ml-2 text-[10px] font-normal text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+                      {formHorarios.length} horários
+                    </span>
+                  )}
+                </label>
+                <div className="flex flex-col gap-2">
+                  {formHorarios.map((h, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      {formHorarios.length > 1 && (
+                        <span className="text-xs text-gray-400 w-5 shrink-0 text-right">{idx + 1}ª</span>
+                      )}
+                      <select
+                        value={h}
+                        onChange={(e) => {
+                          const horario = e.target.value;
+                          const next = [...formHorarios];
+                          next[idx] = horario;
+                          setFormHorarios(next);
+                          if (horario && formData.alimentoId && formData.periodicidade) {
+                            const erro = validarContraPlano(formData.alimentoId, formData.periodicidade, horario);
+                            if (erro) exibirFeedback('erro', erro);
+                          }
+                        }}
+                        className={selectClass}
+                      >
+                        <option value="">Selecione...</option>
+                        {OPCOES_HORARIO.map((op) => <option key={op} value={op}>{op}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Observação */}
@@ -390,44 +548,33 @@ const CriaDieta = () => {
 
                 if (isEditing) {
                   return (
-                    <div key={item._tempId} className="p-4 bg-emerald-50 space-y-3">
-                      <div className="flex gap-2">
-                        <select value={editingData.alimentoId} onChange={(e) => setEditingData({ ...editingData, alimentoId: e.target.value })}
-                          className="flex-1 border border-emerald-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600">
-                          <option value="">Alimento...</option>
-                          {alimentos.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-                        </select>
-                        <input type="number" min="0" step="0.01" value={editingData.qtdGramasDia}
-                          onChange={(e) => setEditingData({ ...editingData, qtdGramasDia: e.target.value })}
-                          className="w-28 border border-emerald-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-600" placeholder="Qtd" />
-                      </div>
-                      <div className="flex gap-2">
-                        <select value={editingData.unidade} onChange={(e) => setEditingData({ ...editingData, unidade: e.target.value })}
-                          className="flex-1 border border-emerald-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600">
-                          <option value="">Unidade...</option>
-                          {OPCOES_UNIDADE.map((u) => <option key={u} value={u}>{u}</option>)}
-                        </select>
-                        <select value={editingData.periodicidade} onChange={(e) => setEditingData({ ...editingData, periodicidade: e.target.value })}
-                          className="flex-1 border border-emerald-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600">
-                          <option value="">Frequência...</option>
-                          {OPCOES_PERIODICIDADE.map((p) => <option key={p} value={p}>{p}</option>)}
-                        </select>
-                        <select value={editingData.horario} onChange={(e) => setEditingData({ ...editingData, horario: e.target.value })}
-                          className="flex-1 border border-emerald-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600">
-                          <option value="">Horário...</option>
-                          {OPCOES_HORARIO.map((h) => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                      </div>
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => { setEditingTempId(null); setEditingData(FORM_INICIAL); }}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
-                          <X size={13} /> Cancelar
-                        </button>
-                        <button onClick={() => handleConfirmarEdicao(item._tempId)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">
-                          <Check size={13} /> Confirmar
-                        </button>
-                      </div>
+                    <div key={item._tempId} className="px-4 py-3 bg-emerald-50 flex items-center gap-2">
+                      <select value={editingData.alimentoId} onChange={(e) => setEditingData({ ...editingData, alimentoId: e.target.value })}
+                        className="flex-1 min-w-0 border border-emerald-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600">
+                        <option value="">Alimento...</option>
+                        {alimentos.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                      </select>
+                      <input type="number" min="0" step="0.01" value={editingData.qtdGramasDia}
+                        onChange={(e) => setEditingData({ ...editingData, qtdGramasDia: e.target.value })}
+                        className="w-20 border border-emerald-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" placeholder="Qtd" />
+                      <select value={editingData.unidade} onChange={(e) => setEditingData({ ...editingData, unidade: e.target.value })}
+                        className="w-24 border border-emerald-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600">
+                        <option value="">Unid...</option>
+                        {OPCOES_UNIDADE.map((u) => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                      <select value={editingData.horario} onChange={(e) => setEditingData({ ...editingData, horario: e.target.value })}
+                        className="w-28 border border-emerald-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600">
+                        <option value="">Horário...</option>
+                        {OPCOES_HORARIO.map((h) => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                      <button onClick={() => handleConfirmarEdicao(item._tempId)}
+                        className="text-emerald-600 hover:text-emerald-700 font-medium text-xs whitespace-nowrap">
+                        <Check size={15} />
+                      </button>
+                      <button onClick={() => { setEditingTempId(null); setEditingData(FORM_INICIAL); }}
+                        className="text-gray-400 hover:text-gray-600 text-xs">
+                        <X size={15} />
+                      </button>
                     </div>
                   );
                 }
