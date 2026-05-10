@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Calendar } from 'lucide-react';
 
 const Animal = () => {
   const { user } = useAuth();
+  const { refreshSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
@@ -13,7 +15,6 @@ const Animal = () => {
   const [loading, setLoading] = useState(true);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
-
   const [especies, setEspecies] = useState<any[]>([]);
   const [todasRacas, setTodasRacas] = useState<any[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<any[]>([]);
@@ -29,39 +30,17 @@ const Animal = () => {
     exercise: '',
   });
 
-  // ==================== FUNÇÃO FORMATAR DATA ====================
-  const formatarDataBR = (data: string | Date | null | undefined): string => {
-  if (!data) return '-';
-
-  // Se for string no formato yyyy-mm-dd, parseia diretamente
-  if (typeof data === 'string' && /^\d{4}-\d{2}-\d{2}/.test(data)) {
-    const [ano, mes, dia] = data.split('T')[0].split('-');
-    return `${dia}/${mes}/${ano}`;
-  }
-
-  const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
-  if (isNaN(dataObj.getTime())) return '-';
-
-  const dia = String(dataObj.getUTCDate()).padStart(2, '0');
-  const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
-  const ano = dataObj.getUTCFullYear();
-
-  return `${dia}/${mes}/${ano}`;
-};
-
   const especieAtual = especies.find(esp => esp.id === formData.especieId);
-  const isEquino = !!especieAtual && 
-    (especieAtual.nome.toLowerCase().includes('equino') || 
+  const isEquino = !!especieAtual &&
+    (especieAtual.nome.toLowerCase().includes('equino') ||
      especieAtual.nome.toLowerCase().includes('animal'));
 
-  // Reseta exercise quando a espécie não é equina
   useEffect(() => {
     if (!isEquino && formData.exercise !== '') {
       setFormData(prev => ({ ...prev, exercise: '' }));
     }
   }, [isEquino]);
 
-  // Carrega espécies, raças e dados do animal
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -75,7 +54,6 @@ const Animal = () => {
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const animal = animalRes.data;
-
           setFormData({
             nome: animal.nome,
             especieId: animal.especieId,
@@ -85,7 +63,6 @@ const Animal = () => {
             sexo: animal.sexo,
             exercise: animal.exercise || '',
           });
-
           if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
         }
       } catch (error) {
@@ -97,12 +74,10 @@ const Animal = () => {
     loadData();
   }, [id, isEditMode]);
 
-  // Melhoria na seleção automática de raça
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r: any) => r.especieId === formData.especieId);
       setRacasFiltradas(filtradas);
-
       if (filtradas.length > 0) {
         setFormData(prev => {
           if (!prev.racaId || !filtradas.some(r => r.id === prev.racaId)) {
@@ -128,20 +103,16 @@ const Animal = () => {
     e.preventDefault();
     setSubmitting(true);
 
-    console.log('📤 Enviando -> racaId:', formData.racaId);
-
     if (!formData.nome?.trim()) {
       alert('❌ Nome do animal é obrigatório');
       setSubmitting(false);
       return;
     }
-
     if (!formData.racaId) {
       alert('❌ Raça é obrigatória');
       setSubmitting(false);
       return;
     }
-
     if (isEquino && !formData.exercise?.trim()) {
       alert('❌ Nível de exercício é obrigatório para equinos');
       setSubmitting(false);
@@ -169,9 +140,7 @@ const Animal = () => {
         formDataUpload.append('sexo', payload.sexo);
         formDataUpload.append('exercise', payload.exercise || '');
         formDataUpload.append('foto', photoFile);
-
         const config = { headers: { 'Content-Type': 'multipart/form-data' } };
-
         if (isEditMode) {
           await api.put(`/animais/${id}`, formDataUpload, config);
         } else {
@@ -186,6 +155,7 @@ const Animal = () => {
       }
 
       alert(isEditMode ? '✅ Animal atualizado com sucesso!' : '✅ Animal cadastrado com sucesso!');
+      await refreshSelectedAnimal();
       navigate('/meus-animais');
     } catch (error: any) {
       console.error(error);
@@ -207,24 +177,24 @@ const Animal = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+    <div className="min-h-screen bg-gray-50 p-3 md:p-8">
       <div className="max-w-2xl mx-auto">
-        <div className="bg-white shadow-2xl rounded-3xl p-6 md:p-8 border border-gray-100">
-          {/* Header */}
-          <div className="flex items-center gap-3 mb-8">
+        <div className="bg-white shadow-2xl rounded-3xl p-4 md:p-8 border border-gray-100">
+
+          <div className="flex items-center gap-3 mb-6">
             <button
               onClick={() => navigate('/meus-animais')}
               className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
             >
-              <ArrowLeft size={24} />
-              <span className="text-lg">Voltar</span>
+              <ArrowLeft size={20} />
+              <span className="text-base md:text-lg">Voltar</span>
             </button>
           </div>
 
-          {/* Foto + Nome */}
-          <div className="flex gap-6 mb-10">
-            <label className="cursor-pointer group flex-shrink-0">
-              <div className="w-40 h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
+          {/* Foto + Nome — empilha no mobile */}
+          <div className="flex flex-col sm:flex-row gap-4 mb-8">
+            <label className="cursor-pointer group flex-shrink-0 self-center sm:self-start">
+              <div className="w-28 h-28 sm:w-40 sm:h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
                 {photoPreview ? (
                   <img src={photoPreview} alt="Foto" className="w-full h-full object-cover" />
                 ) : (
@@ -239,20 +209,21 @@ const Animal = () => {
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
             </label>
 
-            <div className="flex-1 pt-4">
+            <div className="flex-1 pt-2 sm:pt-4">
               <input
                 type="text"
                 required
                 value={formData.nome}
                 onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-                className="w-full text-4xl font-bold text-gray-900 focus:outline-none border-b border-transparent focus:border-emerald-600"
+                className="w-full text-2xl sm:text-4xl font-bold text-gray-900 focus:outline-none border-b border-transparent focus:border-emerald-600"
                 placeholder="Nome do Animal"
               />
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* Espécie + Sexo — 1 coluna no mobile */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
                 <select
@@ -265,7 +236,6 @@ const Animal = () => {
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
                 <select
@@ -295,7 +265,8 @@ const Animal = () => {
               </select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Peso + Data — 1 coluna no mobile */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Peso (kg)</label>
                 <input
@@ -308,7 +279,8 @@ const Animal = () => {
                 />
               </div>
               <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Data de Nascimento</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Data de Nascimento</label>
+                <div className="relative">
                   <input
                     type="text"
                     placeholder="dd/mm/aaaa"
@@ -318,39 +290,58 @@ const Animal = () => {
                       ? formData.dataNascimento.split('-').reverse().join('/')
                       : ''}
                     onChange={(e) => {
-                    let val = e.target.value.replace(/\D/g, '');
-                    if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
-                    if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5);
-                    val = val.slice(0, 10);
+                      let val = e.target.value.replace(/\D/g, '');
+                      if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
+                      if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5);
+                      val = val.slice(0, 10);
 
-                    const parts = val.split('/');
-                    if (parts.length === 3 && parts[2].length === 4) {
-                      const dia = parseInt(parts[0]);
-                      const mes = parseInt(parts[1]);
-                      const ano = parseInt(parts[2]);
+                      const parts = val.split('/');
+                      if (parts.length === 3 && parts[2].length === 4) {
+                        const dia = parseInt(parts[0]);
+                        const mes = parseInt(parts[1]);
+                        const ano = parseInt(parts[2]);
+                        const dataObj = new Date(ano, mes - 1, dia);
+                        const dataValida =
+                          dataObj.getFullYear() === ano &&
+                          dataObj.getMonth() === mes - 1 &&
+                          dataObj.getDate() === dia;
 
-                      // Valida se a data realmente existe
-                      const dataObj = new Date(ano, mes - 1, dia);
-                      const dataValida =
-                        dataObj.getFullYear() === ano &&
-                        dataObj.getMonth() === mes - 1 &&
-                        dataObj.getDate() === dia;
-
-                      if (!dataValida) {
-                        alert('❌ Data inválida. Verifique o dia, mês e ano informados.');
-                        setFormData({ ...formData, dataNascimento: '' });
-                        return;
+                        if (!dataValida) {
+                          alert('❌ Data inválida. Verifique o dia, mês e ano informados.');
+                          setFormData({ ...formData, dataNascimento: '' });
+                          return;
+                        }
+                        const hoje = new Date();
+                        hoje.setHours(0, 0, 0, 0);
+                        if (dataObj > hoje) {
+                          alert('❌ A data de nascimento não pode ser uma data futura.');
+                          setFormData({ ...formData, dataNascimento: '' });
+                          return;
+                        }
+                        const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                        setFormData({ ...formData, dataNascimento: iso });
+                      } else {
+                        setFormData({ ...formData, dataNascimento: val });
                       }
-
-                      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
-                      setFormData({ ...formData, dataNascimento: iso });
-                    } else {
-                      setFormData({ ...formData, dataNascimento: val });
-                    }
-                  }}
-                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                    }}
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 pr-12 text-gray-900"
                   />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    <Calendar size={20} className="text-emerald-600 pointer-events-none" />
+                    <input
+                      type="date"
+                      max={new Date().toISOString().split('T')[0]}
+                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        setFormData({ ...formData, dataNascimento: val });
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                  </div>
                 </div>
+              </div>
             </div>
 
             {isEquino && (
@@ -376,10 +367,10 @@ const Animal = () => {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-lg transition-colors"
+              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors"
             >
-              {submitting 
-                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...') 
+              {submitting
+                ? (isEditMode ? 'Atualizando Animal...' : 'Cadastrando Animal...')
                 : (isEditMode ? 'Atualizar Animal' : 'Cadastrar Animal')}
             </button>
           </form>

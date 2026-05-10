@@ -6,16 +6,38 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { Plus, PawPrint } from 'lucide-react';
 import api from '../services/api';
 
-const calculateAge = (dataNascimento: string) => {
-  if (!dataNascimento) return '-';
-  const birth = new Date(dataNascimento);
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-    age--;
+const calcularIdade = (dataNascimento: string): string => {
+  // Parseia direto da string para evitar problema de fuso horário
+  const partes = dataNascimento.split('T')[0].split('-');
+  const anoNasc = parseInt(partes[0]);
+  const mesNasc = parseInt(partes[1]) - 1; // mês começa em 0
+  const diaNasc = parseInt(partes[2]);
+
+  const hoje = new Date();
+  const anoHoje = hoje.getFullYear();
+  const mesHoje = hoje.getMonth();
+  const diaHoje = hoje.getDate();
+
+  // Calcula diferença em dias
+  const nascimento = new Date(anoNasc, mesNasc, diaNasc);
+  const diffMs = hoje.getTime() - nascimento.getTime();
+  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  // Calcula meses completos
+  let diffMeses = (anoHoje - anoNasc) * 12 + (mesHoje - mesNasc);
+  if (diaHoje < diaNasc) diffMeses--;
+
+  // Calcula anos completos
+  let diffAnos = anoHoje - anoNasc;
+  if (mesHoje < mesNasc || (mesHoje === mesNasc && diaHoje < diaNasc)) diffAnos--;
+
+  if (diffDias < 30) {
+    return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
+  } else if (diffMeses < 12) {
+    return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
+  } else {
+    return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
   }
-  return age;
 };
 
 const Dashboard = () => {
@@ -71,7 +93,7 @@ const Dashboard = () => {
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
         <PawPrint size={80} className="mx-auto text-gray-300 mb-6" />
-        <h2 className="text-3xl font-bold text-gray-900 mb-3">Você ainda não tem animais cadastrados</h2>
+        <h2 className="text-3xl font-bold text-gray-900 mb-3">Você ainda não completou o seu Cadastro ou não Cadastrou nenhum Animal</h2>
         <p className="text-gray-600 mb-8">Para começar a usar o sistema, cadastre seu primeiro animal e Complete o seu Cadastro Pessoal.</p>
         <button
           onClick={() => navigate('/animais')}
@@ -141,7 +163,7 @@ const Dashboard = () => {
               <div>
                 <span className="block text-xs uppercase text-gray-900 tracking-widest">IDADE</span>
                 <span className="text-lg font-medium text-emerald-600 mt-1">
-                  {calculateAge(animal.dataNascimento)} anos
+                  {animal.dataNascimento ? calcularIdade(animal.dataNascimento) : '-'}
                 </span>
               </div>
             </div>

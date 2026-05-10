@@ -17,7 +17,7 @@ interface Animal {
 interface SelectedAnimalContextType {
   selectedAnimal: Animal | null;
   setSelectedAnimal: (animal: Animal | null) => void;
-  refreshSelectedAnimal: () => Promise<void>;   // ← Nova função
+  refreshSelectedAnimal: () => Promise<void>;
   clearSelectedAnimal: () => void;
   hasAnimals: boolean;
   hasSingleAnimal: boolean;
@@ -31,23 +31,45 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
   const [selectedAnimal, setSelectedAnimalState] = useState<Animal | null>(null);
   const [hasAnimals, setHasAnimals] = useState(false);
   const [hasSingleAnimal, setHasSingleAnimal] = useState(false);
+  const [cadastroCompleto, setCadastroCompleto] = useState(false);
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
 
     try {
-      const res = await api.get('/animais');
-      const animais = res.data as Animal[];
+      const [animaisRes, perfilRes] = await Promise.allSettled([
+        api.get('/animais'),
+        api.get('/users/me')
+      ]);
+
+      // Animais
+      const animais = animaisRes.status === 'fulfilled'
+        ? (animaisRes.value.data as Animal[])
+        : [];
 
       setHasAnimals(animais.length > 0);
       setHasSingleAnimal(animais.length === 1);
+
+      // Perfil
+      if (perfilRes.status === 'fulfilled') {
+        const perfil = perfilRes.value.data;
+        const perfilCompleto = !!(
+          perfil?.phone &&
+          perfil?.endereco &&
+          perfil?.cep
+        );
+        setCadastroCompleto(perfilCompleto);
+      } else {
+        console.warn('Não foi possível carregar cadastro pessoal:', perfilRes.reason);
+        setCadastroCompleto(false);
+      }
 
       if (animais.length === 0) {
         setSelectedAnimalState(null);
         return;
       }
 
-      let toSelect = animais.reduce((prev, curr) => 
+      let toSelect = animais.reduce((prev, curr) =>
         prev.id < curr.id ? prev : curr
       );
 
@@ -59,16 +81,14 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
 
       setSelectedAnimalState(toSelect);
     } catch (error) {
-      console.error('Erro ao carregar animais no context:', error);
+      console.error('Erro ao carregar dados no context:', error);
     }
   }, [user?.id]);
 
-  // Carrega os animais quando o usuário muda
   useEffect(() => {
     loadAnimais();
   }, [loadAnimais]);
 
-  // ✅ Nova função para forçar atualização
   const refreshSelectedAnimal = async () => {
     await loadAnimais();
   };
@@ -90,11 +110,11 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       value={{
         selectedAnimal,
         setSelectedAnimal,
-        refreshSelectedAnimal,     // ← Exportada
+        refreshSelectedAnimal,
         clearSelectedAnimal,
         hasAnimals,
         hasSingleAnimal,
-        isNewUser: !hasAnimals,
+        isNewUser: !hasAnimals || !cadastroCompleto,
       }}
     >
       {children}

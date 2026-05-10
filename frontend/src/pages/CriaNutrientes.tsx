@@ -25,11 +25,7 @@ const CriaNutrientes = () => {
         try {
           const res = await axios.get(`/api/nutrientes/${id}`);
           const n = res.data;
-          setFormData({
-            nome: n.nome,
-            categoria: n.categoria,
-            unidadePadrao: n.unidadePadrao,
-          });
+          setFormData({ nome: n.nome, categoria: n.categoria, unidadePadrao: n.unidadePadrao });
         } catch (error) {
           console.error(error);
         }
@@ -42,15 +38,12 @@ const CriaNutrientes = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-
     try {
-      const payload = { ...formData };
-
       if (isEditMode) {
-        await axios.put(`/api/nutrientes/${id}`, payload);
+        await axios.put(`/api/nutrientes/${id}`, formData);
         alert('Nutriente atualizado com sucesso!');
       } else {
-        await axios.post('/api/nutrientes', payload);
+        await axios.post('/api/nutrientes', formData);
         alert('Nutriente cadastrado com sucesso!');
       }
       navigate('/nutrientes');
@@ -64,7 +57,7 @@ const CriaNutrientes = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center justify-center py-12">
         <div className="text-center">
           <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-4"></div>
           <p className="text-gray-500">Carregando...</p>
@@ -74,43 +67,39 @@ const CriaNutrientes = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white shadow-2xl rounded-3xl p-6 md:p-8 border border-gray-100">
-          <div className="flex items-center gap-3 mb-8">
-            <button
-              onClick={() => navigate('/nutrientes')}
-              className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
-            >
-              <ArrowLeft size={24} />
-              <span className="text-lg">Voltar</span>
-            </button>
-          </div>
+    <div className="min-h-screen bg-gray-50 pb-10">
+      <div className="max-w-2xl mx-auto px-3 sm:px-4">
 
-          {/* TÍTULO CENTRALIZADO */}
-          <h1 className="text-3xl font-bold text-gray-900 mb-8 text-center">
+        <button onClick={() => navigate('/nutrientes')} className="flex items-center gap-2 text-emerald-700 mb-4 hover:text-emerald-800">
+          <ArrowLeft size={20} /> Voltar
+        </button>
+
+        <div className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 text-center mb-5">
             {isEditMode ? 'Editar Nutriente' : 'Novo Nutriente'}
           </h1>
+        </div>
 
-          <form onSubmit={handleSubmit} className="space-y-8">
+        <div className="bg-white rounded-3xl shadow overflow-hidden">
+          <form onSubmit={handleSubmit} className="p-5 sm:p-8 space-y-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Nutriente</label>
+              <label className="block text-xs uppercase text-gray-500 tracking-widest mb-2">Nome do Nutriente</label>
               <input
                 type="text"
                 required
                 value={formData.nome}
                 onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-                className="w-full border border-gray-300 rounded-3xl px-6 py-4 focus:outline-none focus:border-emerald-600 text-gray-900"
+                className="w-full border border-gray-300 rounded-3xl px-5 sm:px-6 py-3 sm:py-4 focus:outline-none focus:border-emerald-600 text-gray-900"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Categoria</label>
+              <label className="block text-xs uppercase text-gray-500 tracking-widest mb-2">Categoria</label>
               <select
                 required
                 value={formData.categoria}
                 onChange={(e) => setFormData({ ...formData, categoria: e.target.value })}
-                className="w-full border border-gray-300 rounded-3xl px-6 py-4 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+                className="w-full border border-gray-300 rounded-3xl px-5 sm:px-6 py-3 sm:py-4 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
               >
                 <option value="">Selecione a categoria...</option>
                 <option value="Vitamina">Vitamina</option>
@@ -123,12 +112,12 @@ const CriaNutrientes = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Unidade Padrão</label>
+              <label className="block text-xs uppercase text-gray-500 tracking-widest mb-2">Unidade Padrão</label>
               <select
                 required
                 value={formData.unidadePadrao}
                 onChange={(e) => setFormData({ ...formData, unidadePadrao: e.target.value })}
-                className="w-full border border-gray-300 rounded-3xl px-6 py-4 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
+                className="w-full border border-gray-300 rounded-3xl px-5 sm:px-6 py-3 sm:py-4 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
               >
                 <option value="">Selecione a unidade...</option>
                 <option value="g">g</option>
@@ -139,13 +128,15 @@ const CriaNutrientes = () => {
               </select>
             </div>
 
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-5 rounded-3xl font-semibold text-xl transition-colors disabled:opacity-50"
-            >
-              {submitting ? 'Salvando...' : isEditMode ? 'Atualizar Nutriente' : 'Cadastrar Nutriente'}
-            </button>
+            <div className="flex justify-end pt-2">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-3 rounded-3xl font-semibold transition-colors disabled:opacity-50"
+              >
+                {submitting ? 'Salvando...' : isEditMode ? 'Atualizar Nutriente' : 'Cadastrar Nutriente'}
+              </button>
+            </div>
           </form>
         </div>
       </div>

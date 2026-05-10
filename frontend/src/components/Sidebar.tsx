@@ -186,7 +186,7 @@ export default function Sidebar() {
           ) : (
             <div className="mx-3 px-5 py-6 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm">
               <strong>Funcionalidades bloqueadas</strong><br />
-              Cadastre seu primeiro animal para liberar Dieta, Relatórios e demais módulos.
+              Complete seu Cadastro e Cadastre seu primeiro animal para liberar demais módulos.
             </div>
           )}
 

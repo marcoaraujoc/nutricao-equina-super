@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Pencil, Trash2, Plus } from 'lucide-react';
+import { Edit, Trash2, Plus, ArrowLeft } from 'lucide-react';
 
 const Nutrientes = () => {
   const { user } = useAuth();
@@ -23,21 +23,11 @@ const Nutrientes = () => {
     }
   };
 
-  useEffect(() => {
-    loadNutrientes();
-  }, []);
+  useEffect(() => { loadNutrientes(); }, []);
 
   const filteredNutrientes = nutrientes.filter((n) =>
     n.nome.toLowerCase().includes(search.toLowerCase())
   );
-
-  const handleEdit = (nutriente: any) => {
-    navigate(`/nutrientes/${nutriente.id}`);
-  };
-
-  const handleDeleteClick = (nutriente: any) => {
-    setNutrienteToDelete(nutriente);
-  };
 
   const confirmDelete = async () => {
     if (!nutrienteToDelete) return;
@@ -53,103 +43,105 @@ const Nutrientes = () => {
   };
 
   return (
-    <div className="space-y-6 md:space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-3xl font-bold text-gray-900">Nutrientes</h1>
-        <button
-          onClick={() => navigate('/nutrientes/novo')}
-          className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"
-        >
-          <Plus size={20} />
-          Novo Nutriente
+    <div className="min-h-screen bg-gray-50 pb-10">
+      <div className="max-w-6xl mx-auto px-3 sm:px-4">
+
+        <button onClick={() => navigate('/')} className="flex items-center gap-2 text-emerald-700 mb-4 hover:text-emerald-800">
+          <ArrowLeft size={20} /> Voltar
         </button>
-      </div>
 
-      {/* Search */}
-      <div className="mb-6">
-        <input
-          type="text"
-          placeholder="Buscar por nome..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md border border-gray-300 rounded-3xl px-6 py-4 text-gray-900 focus:outline-none focus:border-emerald-600"
-        />
-      </div>
-
-      {loading ? (
-        <p className="text-center text-gray-500 py-12">Carregando nutrientes...</p>
-      ) : (
-        <div className="space-y-4">
-          {filteredNutrientes.map((nutriente) => (
-            <div
-              key={nutriente.id}
-              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full"
+        <div className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 text-center mb-5">Nutrientes</h1>
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Buscar por nome..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full border border-gray-300 rounded-3xl px-5 sm:px-6 py-3 sm:py-4 text-gray-900 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+            <button
+              onClick={() => navigate('/nutrientes/novo')}
+              className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 sm:py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
             >
-              <div className="flex-1 p-6 flex items-center">
-                <div className="w-full flex items-center justify-between">
-                  <div>
-                    <h3 className="text-2xl font-bold text-gray-900">{nutriente.nome}</h3>
-                    <p className="text-emerald-700 font-medium">{nutriente.categoria}</p>
-                  </div>
-                  <div className="flex items-center gap-8 text-right">
-                    <div>
-                      <span className="block text-xs uppercase text-gray-500 tracking-widest">UNIDADE</span>
-                      <span className="font-semibold text-gray-800">{nutriente.unidadePadrao}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <Plus size={20} />
+              Novo Nutriente
+            </button>
+          </div>
+        </div>
 
-              {/* BOTÕES */}
-              <div className="flex items-center p-6 gap-3 border-l border-gray-100">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleEdit(nutriente); }}
-                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Pencil size={18} />
-                  Editar
+        {loading ? (
+          <p className="text-center text-gray-500 py-12">Carregando nutrientes...</p>
+        ) : (
+          /* Tabela com scroll horizontal no mobile */
+          <div className="bg-white rounded-3xl shadow overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[400px]">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-4 sm:px-6 py-4 text-sm font-medium text-gray-500">Nome</th>
+                    <th className="text-left px-4 sm:px-6 py-4 text-sm font-medium text-gray-500">Categoria</th>
+                    <th className="text-left px-4 sm:px-6 py-4 text-sm font-medium text-gray-500">Unidade</th>
+                    <th className="text-right px-4 sm:px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredNutrientes.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
+                        Nenhum nutriente encontrado.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredNutrientes.map((nutriente) => (
+                      <tr key={nutriente.id} className="border-t hover:bg-gray-50">
+                        <td className="px-4 sm:px-6 py-4 font-medium text-gray-900">{nutriente.nome}</td>
+                        <td className="px-4 sm:px-6 py-4 font-medium text-gray-900">{nutriente.categoria}</td>
+                        <td className="px-4 sm:px-6 py-4 font-semibold text-emerald-700">{nutriente.unidadePadrao}</td>
+                        <td className="px-4 sm:px-6 py-4 text-right">
+                          <div className="flex justify-end gap-3">
+                            <button onClick={() => navigate(`/nutrientes/${nutriente.id}`)} className="text-emerald-600 hover:text-emerald-700">
+                              <Edit size={18} />
+                            </button>
+                            <button onClick={() => setNutrienteToDelete(nutriente)} className="text-red-600 hover:text-red-700">
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {nutrienteToDelete && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
+              <div className="bg-emerald-700 text-white p-6 text-center">
+                <h2 className="text-xl sm:text-2xl font-bold">Excluir nutriente?</h2>
+                <p className="text-emerald-100 mt-2 text-sm sm:text-base">
+                  Tem certeza que deseja excluir <strong>{nutrienteToDelete.nome}</strong>?
+                </p>
+              </div>
+              <div className="p-4 sm:p-6 flex gap-4">
+                <button onClick={() => setNutrienteToDelete(null)}
+                  className="flex-1 py-3 sm:py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50">
+                  Cancelar
                 </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteClick(nutriente); }}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Trash2 size={18} />
+                <button onClick={confirmDelete}
+                  className="flex-1 py-3 sm:py-4 bg-red-600 text-white font-semibold rounded-3xl hover:bg-red-700">
                   Excluir
                 </button>
               </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* Modal de exclusão */}
-      {nutrienteToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="bg-emerald-700 text-white p-6 text-center">
-              <h2 className="text-2xl font-bold">Excluir nutriente?</h2>
-              <p className="text-emerald-100 mt-2">
-                Tem certeza que deseja excluir <strong>{nutrienteToDelete.nome}</strong>?
-              </p>
-            </div>
-            <div className="p-6 flex gap-4">
-              <button
-                onClick={() => setNutrienteToDelete(null)}
-                className="flex-1 py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="flex-1 py-4 bg-red-600 text-white font-semibold rounded-3xl hover:bg-red-700"
-              >
-                Excluir
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

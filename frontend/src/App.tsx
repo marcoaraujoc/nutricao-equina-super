@@ -1,8 +1,9 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
-import ErrorBoundary from './components/ErrorBoundary';   // ← Adicione esta linha
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Pages
 import Login from './pages/Login';
@@ -23,8 +24,8 @@ import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
 import CriaDieta from './pages/CriaDieta';
 import AnimalDetail from './pages/AnimalDetail';
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
-import Exames from './pages/Exames';                    
-import CriaExameNutricional from './pages/CriaExameNutricional'; 
+import Exames from './pages/Exames';
+import CriaExameNutricional from './pages/CriaExameNutricional';
 import RelatorioNutricional from './pages/RelatorioNutricional';
 
 //Import Temporário
@@ -35,6 +36,31 @@ function App() {
     <AuthProvider>
       <SelectedAnimalProvider>
         <Router>
+          {/* Toaster global — necessário para react-hot-toast funcionar em toda a aplicação */}
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: {
+                borderRadius: '12px',
+                fontSize: '14px',
+              },
+              success: {
+                style: {
+                  background: '#f0fdf4',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                },
+              },
+              error: {
+                style: {
+                  background: '#fef2f2',
+                  color: '#991b1b',
+                  border: '1px solid #fecaca',
+                },
+              },
+            }}
+          />
           <Routes>
             {/* Rotas públicas */}
             <Route path="/login" element={<Login />} />
@@ -46,7 +72,7 @@ function App() {
               path="/*"
               element={
                 <ProtectedRoute>
-                  <ErrorBoundary>   {/* ← Envolve tudo aqui */}
+                  <ErrorBoundary>
                     <div className="flex min-h-screen bg-white">
                       <Sidebar />
                       <div className="flex-1 p-8 bg-white overflow-auto">
@@ -54,7 +80,7 @@ function App() {
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
 
-                          {/* Rotas de Aniamos */}
+                          {/* Rotas de Animais */}
                           <Route path="/meus-animais" element={<MeusAnimais />} />
                           <Route path="/animais" element={<Animal />} />
                           <Route path="/animais/:id" element={<Animal />} />
@@ -75,12 +101,13 @@ function App() {
                           <Route path="/composicao-alimentar/:id" element={<CriaComposicaoAlimentar />} />
 
                           {/* Rotas de Dieta */}
-                          <Route path="/dieta" element={<Dieta />} />
-                          <Route path="/dieta/:animalId" element={<Dieta />} />
-                          <Route path="/dieta/:animalId/novo" element={<CriaDieta />} />
-                          <Route path="/dieta/:animalId/editar/:id" element={<CriaDieta />} />
+                          <Route path="/dieta"                                              element={<Dieta />} />
+                          <Route path="/dieta/:animalId"                                    element={<Dieta />} />
+                          <Route path="/dieta/:animalId/plano/:planoDietaId"                element={<Dieta />} />
+                          <Route path="/dieta/:animalId/plano/:planoDietaId/novo"           element={<CriaDieta />} />
+                          <Route path="/dieta/:animalId/plano/:planoDietaId/editar/:id"     element={<CriaDieta />} />
 
-                          {/* Rotas de Animais */}
+                          {/* Rotas de Animais - Detalhe */}
                           <Route path="/animal/:id" element={<AnimalDetail />} />
 
                           {/* Rotas de Exames */}
@@ -89,17 +116,11 @@ function App() {
                           <Route path="/exames/:animalId/novo" element={<CriaExameNutricional />} />
                           <Route path="/exames/:animalId/editar/:id" element={<CriaExameNutricional />} />
 
-                          {/* 
-                          Rotas de Relatório 
-                          <Route path="/relatorio" element={<RelatorioNutricional />} />
-                          <Route path="/relatorio/:animalId" element={<RelatorioNutricional />} />
-                          */}
-
                           {/* Rotas de Relatório Nutricional */}
                           <Route path="/relatorio-nutricional" element={<RelatorioNutricional />} />
                           <Route path="/relatorio-nutricional/:animalId" element={<RelatorioNutricional />} />
 
-                          {/* Rotas Temporária */}
+                          {/* Rotas Temporárias */}
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />
                           <Route path="/analise" element={<Analise />} />
                         </Routes>
