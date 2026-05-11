@@ -1,167 +1,239 @@
+'use strict';
+
 const fs = require('fs');
-const sharp = require('sharp');
-const { createWorker } = require('tesseract.js');
 const pdfParse = require('pdf-parse');
 
-// ==========================
-// OCR MELHORADO
-// ==========================
-async function extrairTextoDaImagem(filePath) {
-  try {
-    const processedBuffer = await sharp(filePath)
-      .rotate()
-      .grayscale()
-      .normalize()
-      .sharpen()
-      .threshold(160)
-      .resize({ width: 3200 })
-      .toBuffer();
+const GEMINI_API_URL =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-    const tempPath = filePath + '_processed.png';
-    fs.writeFileSync(tempPath, processedBuffer);
+// =====================================================================
+// PROMPTS
+// =====================================================================
 
-    const worker = await createWorker('por+eng', 1, { logger: () => {} });
-    await worker.setParameters({
-      tessedit_pageseg_mode: '6',
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,()/-%°µ ',
-    });
+const PROMPT_VISAO = `
+Você é um especialista em nutrição animal. Analise esta imagem de rótulo de produto e extraia TODOS os dados da seção nutricional.
 
-    const { data: { text } } = await worker.recognize(tempPath);
-    await worker.terminate();
-    fs.unlinkSync(tempPath);
+A seção pode ter vários nomes: "Níveis de Garantia", "Níveis de Garantia por Kg", "Informação Nutricional", "Composição Garantida", "Análise Garantida", "Composición", etc.
 
-    return text || '';
-  } catch (error) {
-    console.error('[Parser] Erro OCR:', error);
-    return '';
-  }
+FORMATOS POSSÍVEIS — saiba identificar cada um:
+1. TABELA COM UMA COLUNA DE VALOR: extraia direto.
+2. TABELA COM MÚLTIPLAS COLUNAS (ex: "por tablete" e "por kg"): use SEMPRE a coluna "por kg" ou "total/por kg". Ignore colunas "por porção", "por tablete", "por dose".
+3. PARÁGRAFO CORRIDO: os nutrientes aparecem em texto contínuo separados por vírgula. Ex: "proteína bruta (mín.) 140 g/kg, extrato etéreo (mín.) 70 g/kg, ...". Extraia cada par nutriente+valor+unidade.
+4. LISTA SIMPLES: nutriente em uma linha, valor e unidade na mesma linha ou na próxima.
+
+BASE DE CÁLCULO:
+- Se o título disser "por kg" ou "g/kg": use os valores como estão.
+- Se o título disser "por 100g" ou "100g": multiplique TODOS os valores por 10 para converter para por kg.
+- Se a unidade for %, mantenha como % (não converta).
+
+Retorne APENAS um objeto JSON válido, sem texto antes ou depois, sem blocos de código markdown:
+
+{
+  "nomeAlimento": "nome do produto conforme aparece no rótulo, ou null se não encontrado",
+  "baseCalculo": "kg" ou "100g",
+  "nutrientes": [
+    {
+      "nome": "nome do nutriente sem indicadores como (mín.) (máx.) (min.) (max.)",
+      "valor": 0.00,
+      "unidade": "g/kg"
+    }
+  ]
 }
 
-// ==========================
-// PROMPT MAIS FORTE
-// ==========================
-function montarPrompt(texto) {
+Regras finais:
+1. Remova os indicadores (mín.), (máx.), (min.), (max.) do nome do nutriente.
+2. Não invente valores — use apenas o que está claramente visível.
+3. Se não conseguir ler um valor com segurança, use null.
+4. Inclua TODOS os nutrientes visíveis, mesmo probióticos (UFC/g) e energia (kcal/kg).
+5. Normalize variações de escrita: "Proteina bruta" e "Proteína Bruta" são o mesmo nutriente.
+`;
+
+function montarPromptTexto(texto) {
   return `
-Você é um especialista em extração de rótulos nutricionais.
+Você é um especialista em nutrição animal. Extraia todos os nutrientes do texto abaixo,
+proveniente de um rótulo de produto animal.
 
-Extraia TODOS os nutrientes da seção "NÍVEIS DE GARANTIA" ou equivalente.
+A seção pode se chamar: "Níveis de Garantia", "Informação Nutricional", "Composição Garantida", etc.
 
-Responda **EXATAMENTE** neste formato, sem introdução, sem explicação, sem texto extra:
+Retorne APENAS um objeto JSON válido, sem texto antes ou depois, sem blocos de código markdown:
 
-NÍVEIS DE GARANTIA:
-- Umidade (máx.) 130 g/kg
-- Proteína bruta (mín.) 140 g/kg
-- Vitamina B12 (mín.) 22 mcg/kg
-- Arginina (mín.) 206 g/kg
-- ...
+{
+  "nomeAlimento": "nome do produto se encontrado, ou null",
+  "nutrientes": [
+    {
+      "nome": "nome do nutriente sem (mín.) ou (máx.)",
+      "valor": 0.00,
+      "unidade": "g/kg"
+    }
+  ]
+}
 
-Texto da imagem:
-${texto.slice(0, 25000)}
+Regras:
+1. Se valores forem por 100g, multiplique por 10 para converter para por kg.
+2. Se a unidade for %, mantenha como % (não converta).
+3. Não invente valores — use apenas o que está no texto.
+4. Inclua todos os nutrientes encontrados.
+
+Texto:
+${texto.slice(0, 20000)}
 `;
 }
 
-// ==========================
-// CHAMADA GEMINI 2.5 FLASH
-// ==========================
-async function chamarGemini(prompt) {
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// =====================================================================
+// CHAMADAS GEMINI
+// =====================================================================
 
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY não configurada');
+async function chamarGeminiVisao(imageBase64, mimeType) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 2000,
-        }
-      })
-    }
-  );
+  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { inlineData: { mimeType, data: imageBase64 } },
+            { text: PROMPT_VISAO },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+    }),
+  });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Gemini Error: ${err}`);
+    throw new Error(`Gemini Vision Error HTTP ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  return data.candidates[0].content.parts[0].text.trim();
+}
+
+async function chamarGeminiTexto(prompt) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
+
+  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini Text Error HTTP ${response.status}: ${err}`);
   }
 
   const data = await response.json();
   return data.candidates[0].content.parts[0].text.trim();
 }
 
-// ==========================
-// PARSER MAIS TOLERANTE
-// ==========================
-async function parseRespostaLLM(textoLLM) {
-  console.log('\n=== RESPOSTA BRUTA DO GEMINI ===');
-  console.log(textoLLM);
-  console.log('================================\n');
+// =====================================================================
+// PARSER DA RESPOSTA
+// =====================================================================
 
-  const composicoes = [];
-  const lines = textoLLM.split('\n');
+// Tenta fechar um JSON truncado contando chaves e colchetes abertos
+function tentarRepararJSON(texto) {
+  // Localiza o último objeto completo (último '}' antes do truncamento)
+  let trabalho = texto.trim();
 
-  for (const line of lines) {
-    // Regex mais flexível
-    const match = line.match(/-\s*([A-ZÀ-Ú][A-ZÀ-Ú0-9\s\.\-\(\)]+?)\s*(\d+[.,]?\d*)\s*(.+)/i);
-    if (match) {
-      let nome = match[1].trim();
-      const valor = parseFloat(match[2].replace(',', '.'));
-      const unidade = match[3].trim();
-
-      nome = nome.replace(/\s*\(?(mín\.?|máx\.?)\)?/i, '').trim();
-
-      if (nome.length > 3 && valor > 0) {
-        composicoes.push({
-          alimentoNome: "Produto detectado",
-          nutrienteNome: nome,
-          valorPorKg: valor,
-          unidadeDetectada: unidade,
-          base: 'Seca'
-        });
-      }
+  // Remove o último objeto incompleto (sem fechar '}')
+  const ultimoObjeto = trabalho.lastIndexOf('},');
+  if (ultimoObjeto !== -1) {
+    trabalho = trabalho.substring(0, ultimoObjeto + 1);
+  } else {
+    const ultimoFechamento = trabalho.lastIndexOf('}');
+    if (ultimoFechamento !== -1) {
+      trabalho = trabalho.substring(0, ultimoFechamento + 1);
     }
   }
 
-  console.log(`[Parser] Extraídos ${composicoes.length} itens do Gemini`);
-
-  if (composicoes.length === 0) {
-    composicoes.push({
-      alimentoNome: "Produto detectado",
-      nutrienteNome: "Composição detectada",
-      valorPorKg: 0,
-      unidadeDetectada: "g/kg",
-      base: 'Seca'
-    });
+  // Fecha colchetes e chaves abertos
+  let abreCol = 0, fechaCol = 0, abreChave = 0, fechaChave = 0;
+  for (const c of trabalho) {
+    if (c === '[') abreCol++;
+    if (c === ']') fechaCol++;
+    if (c === '{') abreChave++;
+    if (c === '}') fechaChave++;
   }
+  while (fechaCol < abreCol)   { trabalho += ']'; fechaCol++; }
+  while (fechaChave < abreChave) { trabalho += '}'; fechaChave++; }
 
-  return { composicoes };
+  try {
+    return JSON.parse(trabalho);
+  } catch {
+    return null;
+  }
 }
 
-// ==========================
-// FUNÇÃO PRINCIPAL
-// ==========================
+function parsearRespostaGemini(textoResposta) {
+  console.log('\n=== RESPOSTA GEMINI ===\n', textoResposta, '\n======================\n');
+
+  let parsed;
+  try {
+    const clean = textoResposta.replace(/```json|```/g, '').trim();
+    parsed = JSON.parse(clean);
+  } catch {
+    // Tenta reparar JSON truncado antes de desistir
+    const clean = textoResposta.replace(/```json|```/g, '').trim();
+    parsed = tentarRepararJSON(clean);
+
+    if (!parsed) {
+      console.error('[composicaoParserService] JSON inválido e irreparável:', textoResposta);
+      throw new Error('O modelo retornou resposta em formato inválido');
+    }
+
+    console.warn('[composicaoParserService] JSON reparado — resposta estava truncada. Aumente maxOutputTokens se isso persistir.');
+  }
+  if (!parsed.nutrientes || !Array.isArray(parsed.nutrientes)) {
+    throw new Error('Resposta não contém lista de nutrientes');
+  }
+
+  const composicoes = parsed.nutrientes
+    .filter((n) => n.nome && n.valor !== null && n.valor !== undefined)
+    .map((n) => ({
+      alimentoNome: parsed.nomeAlimento || 'Produto detectado',
+      nutrienteNome: String(n.nome).trim(),
+      valorPorKg: Number(n.valor),
+      unidadeDetectada: String(n.unidade || 'g/kg').trim(),
+      base: 'Seca',
+    }));
+
+  console.log(`[composicaoParserService] ${composicoes.length} nutrientes extraídos`);
+  return { composicoes, nomeAlimento: parsed.nomeAlimento || null };
+}
+
+// =====================================================================
+// EXPORTAÇÃO PRINCIPAL
+// =====================================================================
+
 module.exports = {
   async processarArquivo(filePath, mimetype = '') {
-    const isPdf = mimetype === 'application/pdf' || filePath.toLowerCase().endsWith('.pdf');
-
-    let texto = '';
+    const isPdf =
+      mimetype === 'application/pdf' || filePath.toLowerCase().endsWith('.pdf');
 
     if (isPdf) {
       const dataBuffer = fs.readFileSync(filePath);
-      const data = await pdfParse(dataBuffer);
-      texto = data.text || '';
-    } else {
-      texto = await extrairTextoDaImagem(filePath);
+      const { text } = await pdfParse(dataBuffer);
+      if (!text?.trim()) {
+        throw new Error('PDF sem texto extraível. Envie uma imagem do rótulo.');
+      }
+      const respostaGemini = await chamarGeminiTexto(montarPromptTexto(text));
+      return parsearRespostaGemini(respostaGemini);
     }
 
-    const prompt = montarPrompt(texto);
-    const respostaLLM = await chamarGemini(prompt);
-
-    console.log('[ComposicaoParser] Gemini 2.5 Flash processou com sucesso');
-
-    return parseRespostaLLM(respostaLLM);
-  }
+    // Imagem → Gemini Vision direto, zero OCR
+    const imageBuffer = fs.readFileSync(filePath);
+    const imageBase64 = imageBuffer.toString('base64');
+    const respostaGemini = await chamarGeminiVisao(
+      imageBase64,
+      mimetype || 'image/jpeg'
+    );
+    return parsearRespostaGemini(respostaGemini);
+  },
 };

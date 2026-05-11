@@ -58,6 +58,7 @@ model Animal {
   dietas             Dieta[]
   exames             ExameNutricional[]
   ocorrencias        OcorrenciaSaude[]
+  planosDieta  PlanoDieta[]
 
   @@index([especieId], map: "tb_animais_especieId_fkey")
   @@index([racaId], map: "tb_animais_racaId_fkey")
@@ -69,6 +70,7 @@ model Especie {
   id      Int      @id @default(autoincrement())
   nome    String   @db.Text
   animais Animal[]
+  composicoes   ComposicaoAlimento[]
   racas   Raca[]
 
   @@map("tb_especies")
@@ -100,6 +102,9 @@ model Dieta {
   dataAlteracao   DateTime  @updatedAt @db.DateTime(0)
   criadopor       Int
   modificadopor   Int
+  planoDietaId    Int?
+
+  plano  PlanoDieta? @relation(fields: [planoDietaId], references: [id])
   alimento        Alimento  @relation(fields: [alimentoId], references: [id])
   animal          Animal    @relation(fields: [animalId], references: [id])
   userCriador     User      @relation("CriadorDieta", fields: [criadopor], references: [id])
@@ -137,17 +142,33 @@ model Nutriente {
   @@map("tb_nutrientes")
 }
 
+model PlanoDieta {
+  id          Int      @id @default(autoincrement())
+  animalId    Int
+  nome        String   @db.VarChar(255)
+  ativo       Boolean  @default(true)
+  dataCriacao DateTime @default(now())
+
+  animal Animal  @relation(fields: [animalId], references: [id])
+  itens  Dieta[]
+
+  @@map("tb_planos_dieta")
+}
+
 model ComposicaoAlimento {
   id          Int       @id @default(autoincrement())
   alimentoId  Int
   nutrienteId Int
+  especieId   Int?
   valorPorKg  Float
   base        String    @default("Seca") @db.VarChar(50)
   alimento    Alimento  @relation(fields: [alimentoId], references: [id])
   nutriente   Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie     Especie?  @relation(fields: [especieId], references: [id])
 
   @@unique([alimentoId, nutrienteId])
   @@index([nutrienteId], map: "tb_composicao_alimento_nutrienteId_fkey")
+  @@index([especieId])
   @@map("tb_composicao_alimento")
 }
 

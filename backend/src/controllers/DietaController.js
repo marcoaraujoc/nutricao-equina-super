@@ -1,8 +1,166 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-class DietaController {
-  async listarPorAnimal(req, res) {
+// =============================================================================
+// PLANOS DE DIETA
+// =============================================================================
+
+const PlanoDietaController = {
+
+  listarPorAnimal: async (req, res) => {
+    const { animalId } = req.params;
+    const { ativo } = req.query; // ?ativo=true|false (opcional)
+
+    try {
+      const where = { animalId: Number(animalId) };
+      if (ativo !== undefined) where.ativo = ativo === 'true';
+
+      const planos = await prisma.planoDieta.findMany({
+        where,
+        include: {
+          _count: { select: { itens: true } }
+        },
+        orderBy: [{ ativo: 'desc' }, { dataCriacao: 'desc' }]
+      });
+
+      res.json({ sucesso: true, dados: planos });
+    } catch (error) {
+      console.error('Erro ao listar planos de dieta:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar planos de dieta' });
+    }
+  },
+
+  obterPorId: async (req, res) => {
+    const { id } = req.params;
+    try {
+      const plano = await prisma.planoDieta.findUnique({
+        where: { id: Number(id) },
+        include: {
+          itens: {
+            include: { alimento: true },
+            orderBy: { horario: 'asc' }
+          }
+        }
+      });
+
+      if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano de dieta não encontrado' });
+
+      res.json({ sucesso: true, dados: plano });
+    } catch (error) {
+      console.error('Erro ao obter plano de dieta:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  criar: async (req, res) => {
+    const { animalId, nome } = req.body;
+
+    if (!animalId) return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
+    if (!nome || !nome.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome do plano é obrigatório' });
+
+    try {
+      const plano = await prisma.planoDieta.create({
+        data: {
+          animalId: Number(animalId),
+          nome: nome.trim(),
+          ativo: true
+        }
+      });
+
+      res.status(201).json({ sucesso: true, dados: plano });
+    } catch (error) {
+      console.error('Erro ao criar plano de dieta:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao criar plano de dieta' });
+    }
+  },
+
+  atualizar: async (req, res) => {
+    const { id } = req.params;
+    const { nome } = req.body;
+
+    if (!nome || !nome.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+
+    try {
+      const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
+      if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+
+      const plano = await prisma.planoDieta.update({
+        where: { id: Number(id) },
+        data: { nome: nome.trim() }
+      });
+
+      res.json({ sucesso: true, dados: plano });
+    } catch (error) {
+      console.error('Erro ao atualizar plano de dieta:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  toggleAtivo: async (req, res) => {
+    const { id } = req.params;
+    try {
+      const plano = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
+      if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+
+      const atualizado = await prisma.planoDieta.update({
+        where: { id: Number(id) },
+        data: { ativo: !plano.ativo }
+      });
+
+      res.json({ sucesso: true, dados: atualizado });
+    } catch (error) {
+      console.error('Erro ao alterar status do plano:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  excluir: async (req, res) => {
+    const { id } = req.params;
+    try {
+      const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
+      if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+
+      // Remove os itens vinculados antes de excluir o plano
+      await prisma.dieta.deleteMany({ where: { planoDietaId: Number(id) } });
+      await prisma.planoDieta.delete({ where: { id: Number(id) } });
+
+      res.json({ sucesso: true, mensagem: 'Plano excluído com sucesso' });
+    } catch (error) {
+      console.error('Erro ao excluir plano:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  buscar: async (req, res) => {
+    const { animalId } = req.params;
+    const { q, ativo } = req.query;
+
+    try {
+      const where = { animalId: Number(animalId) };
+      if (q) where.nome = { contains: q };
+      if (ativo !== undefined) where.ativo = ativo === 'true';
+
+      const planos = await prisma.planoDieta.findMany({
+        where,
+        include: { _count: { select: { itens: true } } },
+        orderBy: [{ ativo: 'desc' }, { dataCriacao: 'desc' }]
+      });
+
+      res.json({ sucesso: true, dados: planos });
+    } catch (error) {
+      console.error('Erro ao buscar planos:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  }
+};
+
+// =============================================================================
+// ITENS DA DIETA
+// =============================================================================
+
+const DietaItemController = {
+
+  listarPorAnimal: async (req, res) => {
     const { animalId } = req.params;
     try {
       const dietas = await prisma.dieta.findMany({
@@ -15,56 +173,79 @@ class DietaController {
               raca: true,
               especie: true
             }
-          }
+          },
+          plano: { select: { id: true, nome: true, ativo: true } }
         },
         orderBy: { dataCriacao: 'desc' }
       });
       res.json(dietas);
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao listar itens da dieta:', error);
       res.status(500).json({ error: 'Erro ao listar dieta do animal' });
     }
-  }
+  },
 
-  async obterPorId(req, res) {
+  listarPorPlano: async (req, res) => {
+    const { planoDietaId } = req.params;
+    try {
+      const itens = await prisma.dieta.findMany({
+        where: { planoDietaId: Number(planoDietaId) },
+        include: { alimento: true },
+        orderBy: { horario: 'asc' }
+      });
+      res.json({ sucesso: true, dados: itens });
+    } catch (error) {
+      console.error('Erro ao listar itens do plano:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  obterPorId: async (req, res) => {
     const { id } = req.params;
     try {
       const dieta = await prisma.dieta.findUnique({
         where: { id: Number(id) },
-        include: { alimento: true }
+        include: { alimento: true, plano: true }
       });
       if (!dieta) return res.status(404).json({ error: 'Item da dieta não encontrado' });
       res.json(dieta);
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao buscar item da dieta:', error);
       res.status(500).json({ error: 'Erro ao buscar item da dieta' });
     }
-  }
+  },
 
-  async criarItem(req, res) {
-    const { 
-      animalId, 
-      alimentoId, 
-      qtdGramasDia, 
-      unidade, 
-      periodicidade, 
+  criarItem: async (req, res) => {
+    const {
+      animalId,
+      alimentoId,
+      planoDietaId,
+      qtdGramasDia,
+      unidade,
+      periodicidade,
+      horario,
       observacao,
       criadopor,
       modificadopor
     } = req.body;
+
+    if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
+    if (!alimentoId) return res.status(400).json({ error: 'alimentoId é obrigatório' });
 
     const userId = Number(criadopor || modificadopor || req.user?.id || 1);
 
     try {
       const dieta = await prisma.dieta.create({
         data: {
-          animalId: Number(animalId),
-          alimentoId: Number(alimentoId),
+          animalId:     Number(animalId),
+          alimentoId:   Number(alimentoId),
+          planoDietaId: planoDietaId ? Number(planoDietaId) : null,
           qtdGramasDia: parseFloat(qtdGramasDia) || 0,
-          unidade: unidade || null,
+          unidade:      unidade      || null,
           periodicidade: periodicidade || null,
-          observacao: observacao || null,
-          criadopor: userId,
+          horario:      horario      || null,
+          observacao:   observacao   || null,
+          criadopor:    userId,
           modificadopor: userId
         },
         include: { alimento: true }
@@ -72,44 +253,63 @@ class DietaController {
 
       res.status(201).json(dieta);
     } catch (error) {
-      console.error('❌ Erro ao criar item da dieta:', error);
+      console.error('Erro ao criar item da dieta:', error);
       res.status(500).json({ error: 'Erro ao salvar alimento na dieta' });
     }
-  }
+  },
 
-  async atualizarItem(req, res) {
+  atualizarItem: async (req, res) => {
     const { id } = req.params;
-    const { qtdGramasDia, unidade, periodicidade, observacao } = req.body;
+    const {
+      alimentoId,
+      planoDietaId,
+      qtdGramasDia,
+      unidade,
+      periodicidade,
+      horario,
+      observacao
+    } = req.body;
+
     const userId = Number(req.user?.id || req.body.modificadopor || 1);
 
     try {
+      const existe = await prisma.dieta.findUnique({ where: { id: Number(id) } });
+      if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+
       const dieta = await prisma.dieta.update({
         where: { id: Number(id) },
         data: {
-          qtdGramasDia: parseFloat(qtdGramasDia) || 0,
-          unidade: unidade || null,
+          ...(alimentoId   !== undefined && { alimentoId: Number(alimentoId) }),
+          ...(planoDietaId !== undefined && { planoDietaId: planoDietaId ? Number(planoDietaId) : null }),
+          qtdGramasDia:  parseFloat(qtdGramasDia) || 0,
+          unidade:       unidade       || null,
           periodicidade: periodicidade || null,
-          observacao: observacao || null,
+          horario:       horario       || null,
+          observacao:    observacao    || null,
           modificadopor: userId
         }
       });
+
       res.json(dieta);
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao atualizar item da dieta:', error);
       res.status(500).json({ error: 'Erro ao atualizar item da dieta' });
     }
-  }
+  },
 
-  async excluirItem(req, res) {
+  excluirItem: async (req, res) => {
     const { id } = req.params;
     try {
+      const existe = await prisma.dieta.findUnique({ where: { id: Number(id) } });
+      if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+
       await prisma.dieta.delete({ where: { id: Number(id) } });
       res.json({ message: 'Item excluído com sucesso' });
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao excluir item da dieta:', error);
       res.status(500).json({ error: 'Erro ao excluir item' });
     }
   }
-}
+};
 
-module.exports = new DietaController();
+module.exports = { PlanoDietaController, DietaItemController };

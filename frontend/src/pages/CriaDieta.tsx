@@ -430,8 +430,8 @@ const CriaDieta = () => {
 
             {/* Linha 2 — Quantidade + Unidade */}
             <div className="flex gap-3">
-              <div className="w-36">
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Quantidade</label>
+              <div className="w-1/3">
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">Quantidade por refeição</label>
                 <input
                   type="number" min="0" step="0.01"
                   value={formData.qtdGramasDia}
@@ -452,8 +452,27 @@ const CriaDieta = () => {
             <div className="flex gap-3 items-start">
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Frequência</label>
+                
                 <select value={formData.periodicidade} onChange={(e) => {
                   const p = e.target.value;
+
+                  if (p && formData.alimentoId) {
+                    const novoGrupo    = getGrupo(p);
+                    const idNum        = Number(formData.alimentoId);
+                    const nomeAlim     = alimentos.find(a => a.id === idNum)?.nome ?? 'Este alimento';
+                    const todosItens   = [
+                      ...itensDoBanco,
+                      ...pendingItems.map(i => ({ alimentoId: Number(i.alimentoId), periodicidade: i.periodicidade, horario: i.horario })),
+                    ];
+                    const itemExistente = todosItens.find(i =>
+                      Number(i.alimentoId) === idNum && getGrupo(i.periodicidade) !== novoGrupo
+                    );
+                    if (itemExistente) {
+                      exibirFeedback('erro', `"${nomeAlim}" já está cadastrado com frequência "${itemExistente.periodicidade}". Um alimento só pode pertencer a um grupo de frequência por plano.`);
+                      return;
+                    }
+                  }
+
                   const slots = getSlotsFromPeriodicidade(p);
                   setFormHorarios(prev => Array.from({ length: slots }, (_, i) => prev[i] ?? ''));
                   setFormData({ ...formData, periodicidade: p });

@@ -1,13 +1,14 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-// ==================== FUNÇÃO DE CONVERSÃO (g/g) ====================
+// =====================================================================
+// CONVERSÃO DE UNIDADES → g/g (base interna do banco)
+// =====================================================================
 const converterParaGramasPorGrama = (valorOriginal, unidadeOriginal) => {
   const valor = Number(valorOriginal);
   const unidade = String(unidadeOriginal || '').trim().toLowerCase();
 
   if (isNaN(valor)) return valorOriginal;
-
   if (unidade === 'ufc/g') return valor;
 
   let valorFinal = valor;
@@ -17,20 +18,83 @@ const converterParaGramasPorGrama = (valorOriginal, unidadeOriginal) => {
 
   return valorFinal;
 };
+
+// =====================================================================
+// CONTROLLER
 // =====================================================================
 
-class ComposicaoAlimentarController {
+const ComposicaoAlimentarController = {
 
-  async criar(req, res) {
-    const { alimentoId, nutrienteId, valorPorKg, base } = req.body;
+  // -------------------------------------------------------------------
+  // LISTAR — com filtro opcional por espécie
+  // -------------------------------------------------------------------
+  listar: async (req, res) => {
+    try {
+      const { especieId } = req.query;
+
+      const composicoes = await prisma.composicaoAlimento.findMany({
+        where: especieId ? { especieId: Number(especieId) } : undefined,
+        include: {
+          alimento: true,
+          nutriente: true,
+          especie: { select: { id: true, nome: true } },
+        },
+        orderBy: [{ alimento: { nome: 'asc' } }, { nutriente: { nome: 'asc' } }],
+      });
+
+      res.json({ sucesso: true, dados: composicoes });
+    } catch (error) {
+      console.error('Erro ao listar composições:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar composições' });
+    }
+  },
+
+  // -------------------------------------------------------------------
+  // OBTER POR ID
+  // -------------------------------------------------------------------
+  obterPorId: async (req, res) => {
+    const { id } = req.params;
+    try {
+      const item = await prisma.composicaoAlimento.findUnique({
+        where: { id: Number(id) },
+        include: {
+          alimento: true,
+          nutriente: true,
+          especie: { select: { id: true, nome: true } },
+        },
+      });
+      if (!item) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
+      }
+      res.json({ sucesso: true, dados: item });
+    } catch (error) {
+      console.error('Erro ao buscar composição:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar composição' });
+    }
+  },
+
+  // -------------------------------------------------------------------
+  // CRIAR — composição avulsa (edição inline na listagem)
+  // -------------------------------------------------------------------
+  criar: async (req, res) => {
+    const { alimentoId, nutrienteId, valorPorKg, base, especieId } = req.body;
+
+    if (!alimentoId || !nutrienteId || valorPorKg === undefined) {
+      return res.status(400).json({
+        sucesso: false,
+        mensagem: 'alimentoId, nutrienteId e valorPorKg são obrigatórios',
+      });
+    }
 
     try {
       const nutriente = await prisma.nutriente.findUnique({
         where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true }
+        select: { unidadePadrao: true },
       });
 
-      if (!nutriente) return res.status(404).json({ error: 'Nutriente não encontrado' });
+      if (!nutriente) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Nutriente não encontrado' });
+      }
 
       const valorConvertido = converterParaGramasPorGrama(valorPorKg, nutriente.unidadePadrao);
 
@@ -39,31 +103,40 @@ class ComposicaoAlimentarController {
           alimentoId: Number(alimentoId),
           nutrienteId: Number(nutrienteId),
           valorPorKg: valorConvertido,
-          base: base || 'Seca'
-        }
+          base: base || 'Seca',
+          ...(especieId ? { especieId: Number(especieId) } : {}),
+        },
       });
 
-      res.status(201).json(item);
+      res.status(201).json({ sucesso: true, dados: item });
     } catch (error) {
       if (error.code === 'P2002') {
-        return res.status(409).json({ error: 'Esta combinação de alimento e nutriente já existe.' });
+        return res.status(409).json({
+          sucesso: false,
+          mensagem: 'Esta combinação de alimento e nutriente já existe.',
+        });
       }
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao criar composição' });
+      console.error('Erro ao criar composição:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao criar composição' });
     }
-  }
+  },
 
-  async atualizar(req, res) {
+  // -------------------------------------------------------------------
+  // ATUALIZAR — edição inline na listagem
+  // -------------------------------------------------------------------
+  atualizar: async (req, res) => {
     const { id } = req.params;
-    const { alimentoId, nutrienteId, valorPorKg, base } = req.body;
+    const { alimentoId, nutrienteId, valorPorKg, base, especieId } = req.body;
 
     try {
       const nutriente = await prisma.nutriente.findUnique({
         where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true }
+        select: { unidadePadrao: true },
       });
 
-      if (!nutriente) return res.status(404).json({ error: 'Nutriente não encontrado' });
+      if (!nutriente) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Nutriente não encontrado' });
+      }
 
       const valorConvertido = converterParaGramasPorGrama(valorPorKg, nutriente.unidadePadrao);
 
@@ -73,87 +146,172 @@ class ComposicaoAlimentarController {
           alimentoId: Number(alimentoId),
           nutrienteId: Number(nutrienteId),
           valorPorKg: valorConvertido,
-          base: base || 'Seca'
-        }
+          base: base || 'Seca',
+          especieId: especieId ? Number(especieId) : null,
+        },
       });
 
-      res.json(item);
+      res.json({ sucesso: true, dados: item });
     } catch (error) {
       if (error.code === 'P2002') {
-        return res.status(409).json({ error: 'Esta combinação de alimento e nutriente já existe em outro registro.' });
+        return res.status(409).json({
+          sucesso: false,
+          mensagem: 'Esta combinação de alimento e nutriente já existe em outro registro.',
+        });
       }
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao atualizar composição' });
+      if (error.code === 'P2025') {
+        return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
+      }
+      console.error('Erro ao atualizar composição:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao atualizar composição' });
     }
-  }
+  },
 
-  async listar(req, res) {
-    try {
-      const composicoes = await prisma.composicaoAlimento.findMany({
-        include: { 
-          alimento: true, 
-          nutriente: true 
-        },
-        orderBy: { id: 'asc' }
-      });
-      res.json(composicoes);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao listar composições' });
-    }
-  }
-
-  async obterPorId(req, res) {
-    const { id } = req.params;
-    try {
-      const item = await prisma.composicaoAlimento.findUnique({
-        where: { id: Number(id) },
-        include: { alimento: true, nutriente: true }
-      });
-      if (!item) return res.status(404).json({ error: 'Composição não encontrada' });
-      res.json(item);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao buscar composição' });
-    }
-  }
-
-  async excluir(req, res) {
+  // -------------------------------------------------------------------
+  // EXCLUIR
+  // -------------------------------------------------------------------
+  excluir: async (req, res) => {
     const { id } = req.params;
     try {
       await prisma.composicaoAlimento.delete({ where: { id: Number(id) } });
-      res.json({ message: 'Composição excluída com sucesso' });
+      res.json({ sucesso: true, mensagem: 'Composição excluída com sucesso' });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao excluir composição' });
-    }
-  }
-
-  // =============================================
-  // ANÁLISE COM LLM - Totalmente Genérico
-  // =============================================
-  async analisarLLM(req, res) {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+      if (error.code === 'P2025') {
+        return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
       }
+      console.error('Erro ao excluir composição:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao excluir composição' });
+    }
+  },
 
+  // -------------------------------------------------------------------
+  // ANALISAR LLM — lê o rótulo e retorna JSON (não salva nada)
+  // -------------------------------------------------------------------
+  analisarLLM: async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Nenhum arquivo enviado' });
+    }
+
+    try {
       const parser = require('../services/composicaoParserService');
       const resultado = await parser.processarArquivo(req.file.path, req.file.mimetype);
-
-      res.json({
-        composicoes: resultado.composicoes,
-        mensagem: 'Análise realizada com sucesso'
-      });
-
+      res.json({ sucesso: true, dados: resultado });
     } catch (error) {
       console.error('Erro na análise LLM de composição:', error);
-      res.status(500).json({ 
-        error: 'Erro ao processar arquivo com IA',
-        detalhes: error.message 
+      res.status(500).json({
+        sucesso: false,
+        mensagem: error.message || 'Erro ao processar arquivo com IA',
       });
     }
-  }
-}
+  },
 
-module.exports = new ComposicaoAlimentarController();
+  // -------------------------------------------------------------------
+  // IMPORTAR COMPLETO — cria alimento + nutrientes + composições
+  //
+  // Payload esperado:
+  // {
+  //   nomeAlimento: string,          ← obrigatório, digitado pelo usuário
+  //   especieId?: number | null,
+  //   composicoes: [
+  //     { nutrienteNome, unidade, valorPorKg, base }
+  //   ]
+  // }
+  // -------------------------------------------------------------------
+  importarCompleto: async (req, res) => {
+    const { nomeAlimento, categoriaAlimento, especieId, composicoes } = req.body;
+
+    if (!nomeAlimento?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Nome do alimento é obrigatório' });
+    }
+    if (!composicoes || composicoes.length === 0) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Nenhuma composição para salvar' });
+    }
+
+    // ── 1. Verifica se o alimento já existe ──────────────────────────
+    const alimentoExistente = await prisma.alimento.findFirst({
+      where: { nome: nomeAlimento.trim() },
+    });
+
+    if (alimentoExistente) {
+      return res.status(409).json({
+        sucesso: false,
+        mensagem: `O alimento "${nomeAlimento}" já está cadastrado. Para adicionar nutrientes, use a tela de edição de composições.`,
+      });
+    }
+
+    try {
+      // ── 2. Cria o alimento ─────────────────────────────────────────
+      const alimento = await prisma.alimento.create({
+        data: {
+          nome: nomeAlimento.trim(),
+          categoria: categoriaAlimento || 'Importado',
+        },
+      });
+
+      // ── 3. Para cada composição: encontra ou cria o nutriente ──────
+      let totalSalvos = 0;
+      let totalIgnorados = 0;
+
+      for (const comp of composicoes) {
+        if (!comp.nutrienteNome?.trim() || comp.valorPorKg === null || comp.valorPorKg === undefined) {
+          totalIgnorados++;
+          continue;
+        }
+
+        // Busca nutriente pelo nome (case-insensitive)
+        let nutriente = await prisma.nutriente.findFirst({
+          where: { nome: comp.nutrienteNome.trim() },
+        });
+
+        // Cria o nutriente se não existir
+        if (!nutriente) {
+          nutriente = await prisma.nutriente.create({
+            data: {
+              nome: comp.nutrienteNome.trim(),
+              categoria: 'Importado',
+              unidadePadrao: comp.unidade || 'g/kg',
+            },
+          });
+        }
+
+        // Converte o valor para a unidade padrão interna
+        const valorConvertido = converterParaGramasPorGrama(
+          comp.valorPorKg,
+          nutriente.unidadePadrao
+        );
+
+        try {
+          await prisma.composicaoAlimento.create({
+            data: {
+              alimentoId: alimento.id,
+              nutrienteId: nutriente.id,
+              valorPorKg: valorConvertido,
+              base: comp.base || 'Seca',
+              ...(especieId ? { especieId: Number(especieId) } : {}),
+            },
+          });
+          totalSalvos++;
+        } catch (err) {
+          // P2002 = unique constraint — mesmo nutriente duplicado no payload, ignora
+          if (err.code === 'P2002') {
+            totalIgnorados++;
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      res.status(201).json({
+        sucesso: true,
+        dados: { alimentoId: alimento.id, nomeAlimento: alimento.nome, totalSalvos, totalIgnorados },
+        mensagem: `Alimento criado com ${totalSalvos} composições.${totalIgnorados > 0 ? ` ${totalIgnorados} nutriente(s) ignorado(s) por dados inválidos ou duplicados.` : ''}`,
+      });
+    } catch (error) {
+      console.error('Erro ao importar composição completa:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao salvar composição' });
+    }
+  },
+
+};
+
+module.exports = ComposicaoAlimentarController;

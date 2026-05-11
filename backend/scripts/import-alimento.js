@@ -12,7 +12,7 @@ const prisma = new PrismaClient({
 
 async function importarAlimentos() {
   const results = [];
-  const csvPath = 'backend/scripts/Alimento.csv';
+  const csvPath = 'Alimento.csv';
 
   console.log(`📂 Lendo arquivo: ${csvPath}`);
 

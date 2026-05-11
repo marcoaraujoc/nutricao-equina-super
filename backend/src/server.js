@@ -74,7 +74,7 @@ app.get('/health', (req, res) => {
 
 // ===================== 404 =====================
 app.use((req, res) => {
-  res.status(404).json({ success: false, error: 'Rota não encontrada' });
+  res.status(404).json({ sucesso: false, mensagem: 'Rota não encontrada' });
 });
 
 app.listen(PORT, () => {

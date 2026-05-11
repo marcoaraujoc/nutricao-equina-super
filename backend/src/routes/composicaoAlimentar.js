@@ -1,19 +1,32 @@
 const express = require('express');
 const multer = require('multer');
 const composicaoController = require('../controllers/ComposicaoAlimentarController');
+const { authenticate } = require('../middlewares/auth');
 
 const router = express.Router();
 
 const upload = multer({ dest: 'uploads/composicoes/' });
 
-// === ROTAS EXISTENTES (mantidas intactas) ===
-router.get('/', composicaoController.listar);
-router.post('/', composicaoController.criar);
-router.get('/:id', composicaoController.obterPorId);
-router.put('/:id', composicaoController.atualizar);
-router.delete('/:id', composicaoController.excluir);
+// ── Rotas estáticas ANTES de /:id para evitar conflito de params ────
+router.get('/',                authenticate, composicaoController.listar);
+router.post('/',               authenticate, composicaoController.criar);
 
-// === NOVA ROTA (única adição) ===
-router.post('/analisar-llm', upload.single('arquivo'), composicaoController.analisarLLM);
+router.post(
+  '/analisar-llm',
+  authenticate,
+  upload.single('arquivo'),
+  composicaoController.analisarLLM
+);
+
+router.post(
+  '/importar-completo',
+  authenticate,
+  composicaoController.importarCompleto
+);
+
+// ── Rotas com parâmetro ─────────────────────────────────────────────
+router.get('/:id',    authenticate, composicaoController.obterPorId);
+router.put('/:id',    authenticate, composicaoController.atualizar);
+router.delete('/:id', authenticate, composicaoController.excluir);
 
 module.exports = router;
