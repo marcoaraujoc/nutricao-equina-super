@@ -20,8 +20,9 @@ interface Animal {
   nome: string;
   photoUrl?: string;
   dataNascimento?: string;
+  idadeAnos?: number | null;
   raca?: { nome: string };
-  user?: { fullName: string };
+  user?: { fullName: string; email: string };
 }
 
 const RelatorioNutricional = () => {
@@ -69,6 +70,31 @@ const RelatorioNutricional = () => {
       .replace('EXCESSO', 'ALTO');
   };
 
+  // Adicionar após a função formatarNome
+  const formatarDataBR = (data: string | null | undefined): string => {
+    if (!data) return '-';
+    const d = new Date(data);
+    if (isNaN(d.getTime())) return '-';
+    return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+  };
+
+  const calcularIdade = (dataNascimento: string): string => {
+    const partes = dataNascimento.split('T')[0].split('-');
+    const anoNasc = parseInt(partes[0]);
+    const mesNasc = parseInt(partes[1]) - 1;
+    const diaNasc = parseInt(partes[2]);
+    const hoje = new Date();
+    const diffMs = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
+    const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
+    if (hoje.getDate() < diaNasc) diffMeses--;
+    let diffAnos = hoje.getFullYear() - anoNasc;
+    if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
+    if (diffDias < 30) return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
+    if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
+    return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
+  };
+
   const getCorStatus = (status: string) => {
     if (!status) return 'bg-gray-200 text-black';
     if (status.includes('CRITICA') || status.includes('DEFICIÊNCIA')) {
@@ -81,20 +107,25 @@ const RelatorioNutricional = () => {
   };
 
   const colunasDinamicas = relatorio.length > 0
-    ? Object.keys(relatorio[0]).filter(key =>
-        !['nutriente', 'Total_Dieta', 'Exigido_NRC', 'Saldo', 'Percentual_Atendido', 'status_nutricional'].includes(key)
-      )
-    : [];
+  ? Object.keys(relatorio[0]).filter(key =>
+      !['nutriente', 'unidade', 'Total_Dieta', 'Exigido_NRC', 'Saldo', 'Percentual_Atendido', 'status_nutricional'].includes(key)
+    )
+  : [];
 
   const loadAnimais = async () => {
     if (!user?.id) return;
     try {
       const res = await api.get('/animais');
-      const lista = res.data || [];
+      const lista = res.data?.dados ?? res.data ?? [];
       setAnimaisDoProprietario(lista);
 
       if (lista.length === 1 && !selectedAnimal) {
-        setSelectedAnimal(lista[0]);
+        setSelectedAnimal({
+          ...lista[0],
+          photoUrl:       lista[0].photoUrl       ?? undefined,
+          dataNascimento: lista[0].dataNascimento ?? undefined,
+          idadeAnos:      lista[0].idadeAnos      ?? undefined,
+        });
         if (!paramAnimalId) navigate(`/relatorio-nutricional/${lista[0].id}`, { replace: true });
       }
     } catch (error) {
@@ -106,7 +137,7 @@ const RelatorioNutricional = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
-      setCurrentAnimal(res.data);
+      setCurrentAnimal(res.data?.dados ?? res.data);
     } catch (error) {
       console.error(error);
     }
@@ -118,7 +149,8 @@ const RelatorioNutricional = () => {
     try {
       // ✅ CHAMADA CORRETA (sem duplicar /api)
       const res = await api.get(`/relatorio/animal/${effectiveAnimalId}`);
-      setRelatorio(res.data.dados || []);
+      const dados = res.data?.dados;
+      setRelatorio(dados?.linhas ?? []);
       console.log('✅ Relatório carregado com sucesso!');
     } catch (error) {
       console.error('Erro ao gerar relatório:', error);
@@ -141,7 +173,12 @@ const RelatorioNutricional = () => {
   const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = animaisDoProprietario.find(a => a.id === Number(e.target.value));
     if (selected) {
-      setSelectedAnimal(selected);
+      setSelectedAnimal({
+        ...selected,
+        photoUrl:       selected.photoUrl       ?? undefined,
+        dataNascimento: selected.dataNascimento ?? undefined,
+        idadeAnos:      selected.idadeAnos      ?? undefined,
+      });
       navigate(`/relatorio-nutricional/${selected.id}`);
     }
   };
@@ -175,42 +212,58 @@ const RelatorioNutricional = () => {
         )}
 
         {currentAnimal && (
-          <div className="bg-white rounded-2xl shadow p-2.5 flex gap-3 mb-6">
-            <div className="w-24 self-stretch bg-gray-200 rounded-xl overflow-hidden flex-shrink-0">
-              <img 
-                src={currentAnimal.photoUrl || 'https://picsum.photos/id/1015/400/400'} 
-                alt={currentAnimal.nome} 
-                className="w-full h-full object-cover" 
-              />
-            </div>
-
-            <div className="flex-1 flex flex-col justify-between">
-              <div className="grid grid-cols-3 gap-3 items-start">
-                <div>
-                  <span className="text-[11px] text-gray-500">Nome</span>
-                  <p className="text-lg font-semibold text-gray-900 leading-tight">{currentAnimal.nome}</p>
+            <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-6">
+              <div className="w-16 self-stretch bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
+                <img
+                  src={currentAnimal.photoUrl || 'https://picsum.photos/id/1015/400/400'}
+                  alt={currentAnimal.nome}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="grid grid-cols-4 gap-x-3 gap-y-0">
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">Nome</span>
+                    <p className="text-xs font-semibold text-gray-900 truncate">{currentAnimal.nome}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">Nascimento</span>
+                    <p className="text-xs text-gray-900">
+                      {currentAnimal.dataNascimento ? formatarDataBR(currentAnimal.dataNascimento) : '-'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">Idade</span>
+                    <p className="text-xs text-gray-900">
+                      {currentAnimal.dataNascimento
+                        ? calcularIdade(currentAnimal.dataNascimento)
+                        : currentAnimal.idadeAnos
+                          ? `${currentAnimal.idadeAnos} ${currentAnimal.idadeAnos === 1 ? 'ano' : 'anos'}`
+                          : '-'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">Raça</span>
+                    <p className="text-xs text-gray-900 truncate">{currentAnimal.raca?.nome || '-'}</p>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[11px] text-gray-500">Nascimento</span>
-                  <p className="text-xs text-gray-900">
-                    {currentAnimal.dataNascimento ? new Date(currentAnimal.dataNascimento).toLocaleDateString('pt-BR') : '-'}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-[11px] text-gray-500">Raça</span>
-                  <p className="text-xs text-gray-900">{currentAnimal.raca?.nome || 'Não informada'}</p>
+                <div className="mt-1.5 pt-1.5 border-t border-gray-100 grid grid-cols-2 gap-x-3">
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">Proprietário</span>
+                    <p className="text-xs font-medium text-gray-900 truncate">
+                      {currentAnimal.user?.fullName || user?.fullName}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 leading-none">E-mail</span>
+                    <p className="text-xs text-gray-900 truncate">
+                      {currentAnimal.user?.email || user?.email}
+                    </p>
+                  </div>
                 </div>
               </div>
-
-              <div className="mt-2 pt-2 border-t">
-                <span className="text-[11px] text-gray-500 block">Proprietário</span>
-                <p className="text-xs font-medium text-gray-900">
-                  {currentAnimal.user?.fullName || user?.fullName}
-                </p>
-              </div>
             </div>
-          </div>
-        )}
+          )}
 
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-bold text-gray-900">Relatório Nutricional</h2>

@@ -1,8 +1,10 @@
+// backend/src/routes/relatorio.routes.js
 const express = require('express');
-const router = express.Router();
-const relatorioController = require('../controllers/relatorio.controller');
+const RelatorioController = require('../controllers/relatorio.controller');
+const { authenticate } = require('../middlewares/auth');
 
-// Rota principal
-router.get('/animal/:animalId', relatorioController.gerarRelatorio);
+const router = express.Router();
+
+router.get('/animal/:animalId', authenticate, RelatorioController.gerarPorAnimal);
 
 module.exports = router;

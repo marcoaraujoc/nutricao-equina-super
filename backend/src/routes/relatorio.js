@@ -1,9 +1,10 @@
+// backend/src/routes/relatorio.routes.js
 const express = require('express');
+const RelatorioController = require('../controllers/relatorio.controller');
+const { authenticate } = require('../middlewares/auth');
+
 const router = express.Router();
 
-// Teste mínimo - sem depender do controller
-router.get('/relatorio/:animalId', (req, res) => {
-  res.json({ message: '✅ Rota de relatório funcionando (teste mínimo)' });
-});
+router.get('/animal/:animalId', authenticate, RelatorioController.gerarPorAnimal);
 
 module.exports = router;

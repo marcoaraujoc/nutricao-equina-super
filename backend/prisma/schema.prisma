@@ -45,20 +45,18 @@ model Animal {
   especieId          Int
   racaId             Int?
   userId             Int
-  exercise           String?              @db.Text      // ← Adicionado aqui
-  periodicidade      String?              @db.Text      // Opcional: se quiser separar
-
+  categoriaAnimal    String?              @db.VarChar(100)
+  tipoExercicio      String?              @db.VarChar(100)
+  veterinarioNome    String?              @db.VarChar(255)
+  veterinarioClinica String?              @db.VarChar(255)
+  idadeAnos          Int?
   especie            Especie              @relation(fields: [especieId], references: [id])
   raca               Raca?                @relation(fields: [racaId], references: [id])
   user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // Remova ou comente este bloco se não for mais usar a tabela separada
-  // tb_animal_exercise tb_animal_exercise[]
-
   dietas             Dieta[]
   exames             ExameNutricional[]
   ocorrencias        OcorrenciaSaude[]
-  planosDieta  PlanoDieta[]
+  planosDieta        PlanoDieta[]
 
   @@index([especieId], map: "tb_animais_especieId_fkey")
   @@index([racaId], map: "tb_animais_racaId_fkey")
@@ -67,11 +65,12 @@ model Animal {
 }
 
 model Especie {
-  id      Int      @id @default(autoincrement())
-  nome    String   @db.Text
-  animais Animal[]
+  id            Int                  @id @default(autoincrement())
+  nome          String               @db.Text
+  animais       Animal[]
   composicoes   ComposicaoAlimento[]
-  racas   Raca[]
+  racas         Raca[]
+  exigenciasNRC ExigenciasNRC[]
 
   @@map("tb_especies")
 }
@@ -219,15 +218,22 @@ model AuditLog {
 }
 
 model ExigenciasNRC {
-  id            Int       @id @default(autoincrement())
-  nutrienteId   Int
-  peso          Float     @db.Float
-  tipoExercicio String    @db.VarChar(100)
-  valorExigido  Float     @db.Float
-  createdAt     DateTime  @default(now()) @db.DateTime(0)
-  updatedAt     DateTime  @default(now()) @updatedAt @db.DateTime(0)
-  nutriente     Nutriente @relation(fields: [nutrienteId], references: [id])
+  id              Int       @id @default(autoincrement())
+  nutrienteId     Int
+  peso            Int
+  categoriaAnimal String?   @db.VarChar(100)
+  tipoExercicio   String    @db.VarChar(100)
+  valorExigido    Float     @db.Float
+  unidade         String?   @db.VarChar(20)
+  fonte           String?   @db.VarChar(100)
+  especieId       Int?
+  createdAt       DateTime  @default(now()) @db.DateTime(0)
+  updatedAt       DateTime  @updatedAt @db.DateTime(0)
+  nutriente       Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie         Especie?  @relation(fields: [especieId], references: [id])
 
-  @@unique([nutrienteId, peso, tipoExercicio], map: "tb_exigencias_nrc_unique")
+  @@unique([nutrienteId, peso, categoriaAnimal, tipoExercicio], map: "tb_exigencias_nrc_unique")
+  @@index([nutrienteId], map: "tb_exigencias_nrc_nutrienteId_fkey")
+  @@index([especieId], map: "tb_exigencias_nrc_especieId_fkey")
   @@map("tb_exigencias_nrc")
 }

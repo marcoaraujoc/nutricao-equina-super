@@ -1,29 +1,39 @@
-const { RelatorioNutricionalService } = require('../services/relatorioNutricional.service');
+// backend/src/controllers/relatorio.controller.js
+const { computarRelatorio } = require('../services/relatorioNutricional.service');
 
-const service = new RelatorioNutricionalService();
+const RelatorioController = {
 
-class RelatorioController {
-  async gerarRelatorio(req, res) {
-    try {
-      const { animalId } = req.params;
-      const { peso = 500, tipoExercicio = 'Exercício Moderado' } = req.query;
+  /**
+   * GET /api/relatorio/animal/:animalId
+   *
+   * Busca o plano ativo do animal e computa o relatório nutricional
+   * comparando a dieta com as exigências NRC cadastradas.
+   *
+   * Usa automaticamente o peso, categoriaAnimal e tipoExercicio
+   * do próprio cadastro do animal — sem necessidade de query params.
+   */
+  gerarPorAnimal: async (req, res) => {
+    const { animalId } = req.params;
 
-      if (!animalId) {
-        return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
-      }
-
-      const dados = await service.gerarRelatorioParaLLM(Number(animalId), Number(peso), tipoExercicio);
-
-      res.json({
-        sucesso: true,
-        animalId: Number(animalId),
-        dados: dados
+    if (!animalId || isNaN(Number(animalId))) {
+      return res.status(400).json({
+        sucesso: false,
+        mensagem: 'animalId inválido ou não informado',
       });
-    } catch (error) {
-      console.error('Erro relatório:', error);
-      res.status(500).json({ sucesso: false, mensagem: error.message });
     }
-  }
-}
 
-module.exports = new RelatorioController();
+    try {
+      const dados = await computarRelatorio(animalId);
+      res.json({ sucesso: true, dados });
+    } catch (error) {
+      console.error('Erro ao gerar relatório nutricional:', error);
+      res.status(500).json({
+        sucesso: false,
+        mensagem: error.message || 'Erro interno ao gerar relatório',
+      });
+    }
+  },
+
+};
+
+module.exports = RelatorioController;

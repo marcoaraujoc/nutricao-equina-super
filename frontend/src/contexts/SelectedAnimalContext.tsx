@@ -8,10 +8,16 @@ interface Animal {
   nome: string;
   photoUrl?: string;
   dataNascimento?: string;
-  raca?: any;
-  especie?: any;
+  idadeAnos?: number;
+  peso?: number;
   sexo?: string;
-  user?: any;
+  categoriaAnimal?: string;
+  tipoExercicio?: string;
+  veterinarioNome?: string;
+  veterinarioClinica?: string;
+  raca?: { nome: string };
+  especie?: { nome: string };
+  user?: { fullName: string; email: string };
 }
 
 interface SelectedAnimalContextType {
@@ -44,8 +50,8 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
 
       // Animais
       const animais = animaisRes.status === 'fulfilled'
-        ? (animaisRes.value.data as Animal[])
-        : [];
+      ? ((animaisRes.value.data?.dados ?? animaisRes.value.data ?? []) as Animal[])
+      : [];
 
       setHasAnimals(animais.length > 0);
       setHasSingleAnimal(animais.length === 1);

@@ -1,78 +1,211 @@
+// backend/src/services/relatorioNutricional.service.js
 const { PrismaClient } = require('@prisma/client');
-
 const prisma = new PrismaClient();
 
-class RelatorioNutricionalService {
+// -------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------
 
-  async gerarRelatorioParaLLM(animalId, peso = 500, tipoExercicio = 'Exercício Moderado') {
-    
-    // 1. Busca alimentos da dieta (sem ORDER BY problemático)
-    const alimentosRaw = await prisma.$queryRawUnsafe(`
-      SELECT DISTINCT COALESCE(ta.nome, 'Sem_Alimento') AS alimento_nome
-      FROM tb_dieta td
-      LEFT JOIN tb_alimentos ta ON ta.id = td.alimentoId
-      WHERE td.animalId = ?
-    `, animalId);
+/**
+ * Determina o status nutricional com base no percentual de atendimento.
+ */
+const resolverStatus = (percentual) => {
+  if (percentual === null) return 'SEM REFERÊNCIA';
+  if (percentual <= 70)   return 'DEFICIÊNCIA CRÍTICA';
+  if (percentual <= 90)   return 'DEFICIÊNCIA';
+  if (percentual <= 120)  return 'ADEQUADO';
+  if (percentual <= 200)  return 'EXCESSO';
+  return 'EXCESSO CRÍTICO';
+};
 
-    const alimentos = alimentosRaw.map(r => r.alimento_nome);
+/**
+ * Aproxima o peso do animal ao bucket mais próximo da tabela NRC.
+ * Buckets disponíveis: 200, 400, 500 kg.
+ */
+const aproximarPesoNRC = (peso) => {
+  const buckets = [200, 400, 500];
+  return buckets.reduce((prev, curr) =>
+    Math.abs(curr - peso) < Math.abs(prev - peso) ? curr : prev
+  );
+};
 
-    // 2. Gera colunas do pivot (mantém acentuação)
-    let pivotColumns = alimentos
-      .map(nome => {
-        const safeNome = nome.replace(/'/g, "''");
-        const colName = nome
-          .normalize('NFC')
-          .replace(/[^a-zA-Z0-9áéíóúãõçÁÉÍÓÚÃÕÇ\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '_');
-        
-        return `ROUND(MAX(CASE WHEN ta.nome = '${safeNome}' THEN (tca.valorPorKg * td.qtdGramasDia) ELSE 0 END), 8) AS \`${colName}\``;
-      })
-      .join(',\n            ');
+// -------------------------------------------------------------------
+// Busca de dados
+// -------------------------------------------------------------------
 
-    if (!pivotColumns) pivotColumns = 'NULL AS sem_alimentos';
+const buscarAnimal = async (animalId) => {
+  const animal = await prisma.animal.findUnique({
+    where: { id: Number(animalId) },
+    include: {
+      raca:    { select: { nome: true } },
+      especie: { select: { nome: true } },
+      user:    { select: { fullName: true, email: true } },
+    },
+  });
+  if (!animal) throw new Error(`Animal ${animalId} não encontrado`);
+  return animal;
+};
 
-    // 3. Query principal - Mais portável
-    const sql = `
-      SELECT
-        tn.nome AS nutriente,
-        ${pivotColumns},
-        ROUND(SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)), 8) AS \`Total_Dieta\`,
-        ROUND(COALESCE(nrc.valorExigido, 0), 8) AS \`Exigido_NRC\`,
-        ROUND(SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) - COALESCE(nrc.valorExigido, 0), 8) AS \`Saldo\`,
-        ROUND(
-          SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) / NULLIF(COALESCE(nrc.valorExigido, 0), 0) * 100, 
-        4) AS \`Percentual_Atendido\`,
-        CASE
-          WHEN SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) < COALESCE(nrc.valorExigido, 0) * 0.7 THEN 'DEFICIÊNCIA CRÍTICA'
-          WHEN SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) < COALESCE(nrc.valorExigido, 0) THEN 'DEFICIÊNCIA'
-          WHEN SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) <= COALESCE(nrc.valorExigido, 0) * 1.2 THEN 'ADEQUADO'
-          WHEN SUM(COALESCE(tca.valorPorKg * td.qtdGramasDia, 0)) <= COALESCE(nrc.valorExigido, 0) * 2 THEN 'EXCESSO'
-          ELSE 'EXCESSO ALTO'
-        END AS \`status_nutricional\`
-      FROM tb_nutrientes tn
-      LEFT JOIN tb_composicao_alimento tca ON tca.nutrienteId = tn.id
-      LEFT JOIN tb_dieta td ON td.alimentoId = tca.alimentoId AND td.animalId = ?
-      LEFT JOIN tb_alimentos ta ON ta.id = td.alimentoId
-      LEFT JOIN tb_exigencias_nrc nrc 
-        ON nrc.nutrienteId = tn.id 
-       AND nrc.peso = ?
-       AND nrc.tipoExercicio = ?
-      GROUP BY tn.id, tn.nome, nrc.valorExigido
-      ORDER BY 
-        CASE 
-          WHEN \`status_nutricional\` = 'DEFICIÊNCIA CRÍTICA' THEN 1
-          WHEN \`status_nutricional\` = 'DEFICIÊNCIA' THEN 2
-          WHEN \`status_nutricional\` = 'ADEQUADO' THEN 3
-          WHEN \`status_nutricional\` = 'EXCESSO' THEN 4
-          ELSE 5
-        END,
-        \`Percentual_Atendido\` ASC;
-    `;
+const buscarPlanoAtivo = async (animalId) => {
+  const plano = await prisma.planoDieta.findFirst({
+    where: { animalId: Number(animalId), ativo: true },
+    orderBy: { dataCriacao: 'desc' },
+  });
+  return plano;
+};
 
-    const resultado = await prisma.$queryRawUnsafe(sql, animalId, peso, tipoExercicio);
-    return resultado;
+const buscarItensDieta = async (planoDietaId) => {
+  return prisma.dieta.findMany({
+    where: { planoDietaId: Number(planoDietaId) },
+    include: {
+      alimento: {
+        include: {
+          composicoes: {
+            include: { nutriente: true },
+          },
+        },
+      },
+    },
+  });
+};
+
+const buscarExigenciasNRC = async (animal) => {
+  const pesoAproximado = aproximarPesoNRC(animal.peso || 500);
+
+  const exigencias = await prisma.exigenciasNRC.findMany({
+    where: {
+      peso:            pesoAproximado,
+      categoriaAnimal: animal.categoriaAnimal ?? undefined,
+      tipoExercicio:   animal.tipoExercicio   ?? undefined,
+    },
+    include: { nutriente: true },
+  });
+
+  // Mapa: nomeNutriente → { valorExigido, unidade }
+  return exigencias.reduce((acc, ex) => {
+    acc[ex.nutriente.nome] = {
+      valorExigido: ex.valorExigido,
+      unidade:      ex.unidade ?? ex.nutriente.unidadePadrao ?? '',
+    };
+    return acc;
+  }, {});
+};
+
+// -------------------------------------------------------------------
+// Computação do relatório
+// -------------------------------------------------------------------
+
+const computarRelatorio = async (animalId) => {
+  const animal = await buscarAnimal(animalId);
+  const plano  = await buscarPlanoAtivo(animalId);
+
+  if (!plano) {
+    return {
+      animal: {
+        id:              animal.id,
+        nome:            animal.nome,
+        peso:            animal.peso,
+        categoriaAnimal: animal.categoriaAnimal,
+        tipoExercicio:   animal.tipoExercicio,
+      },
+      plano:     null,
+      alimentos: [],
+      linhas:    [],
+      aviso:     'Nenhum plano de dieta ativo encontrado para este animal.',
+      geradoEm:  new Date().toISOString(),
+    };
   }
-}
 
-module.exports = { RelatorioNutricionalService };
+  const [itensDieta, mapExigencias] = await Promise.all([
+    buscarItensDieta(plano.id),
+    buscarExigenciasNRC(animal),
+  ]);
+
+  // -------------------------------------------------------------------
+  // Pivot: nutriente → { porAlimento, total }
+  // -------------------------------------------------------------------
+  const alimentosOrdenados = [];
+  const tabelaNutrientes   = {};
+
+  for (const item of itensDieta) {
+    const nomeAlimento = item.alimento?.nome;
+    if (!nomeAlimento) continue;
+
+    if (!alimentosOrdenados.includes(nomeAlimento)) {
+      alimentosOrdenados.push(nomeAlimento);
+    }
+
+    // Converte gramas/dia para kg (composição é por kg de alimento)
+    const qtdKg = (item.qtdGramasDia || 0) / 1000;
+
+    for (const comp of item.alimento?.composicoes ?? []) {
+      const nomeNutriente = comp.nutriente?.nome;
+      if (!nomeNutriente) continue;
+
+      const valorProporcional = Number(comp.valorPorKg) * qtdKg;
+
+      if (!tabelaNutrientes[nomeNutriente]) {
+        tabelaNutrientes[nomeNutriente] = {
+          nutriente:   nomeNutriente,
+          unidade:     comp.nutriente.unidadePadrao || '',
+          porAlimento: {},
+          total:       0,
+        };
+      }
+
+      tabelaNutrientes[nomeNutriente].porAlimento[nomeAlimento] =
+        (tabelaNutrientes[nomeNutriente].porAlimento[nomeAlimento] || 0) + valorProporcional;
+      tabelaNutrientes[nomeNutriente].total += valorProporcional;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Monta linhas finais com colunas dinâmicas por alimento
+  // -------------------------------------------------------------------
+  const linhas = Object.values(tabelaNutrientes).map((entrada) => {
+    const exigencia  = mapExigencias[entrada.nutriente];
+    const exigido    = exigencia?.valorExigido ?? null;
+    const saldo      = exigido !== null ? entrada.total - exigido : null;
+    const percentual = exigido !== null && exigido > 0
+      ? Number(((entrada.total / exigido) * 100).toFixed(2))
+      : null;
+
+    const linha = {
+      nutriente: entrada.nutriente,
+      unidade:   entrada.unidade,
+    };
+
+    // Colunas dinâmicas — um valor por alimento na dieta
+    for (const nomeAlimento of alimentosOrdenados) {
+      linha[nomeAlimento] = Number((entrada.porAlimento[nomeAlimento] || 0).toFixed(4));
+    }
+
+    linha.Total_Dieta         = Number(entrada.total.toFixed(4));
+    linha.Exigido_NRC         = exigido;
+    linha.Saldo               = saldo !== null ? Number(saldo.toFixed(4)) : null;
+    linha.Percentual_Atendido = percentual;
+    linha.status_nutricional  = resolverStatus(percentual);
+
+    return linha;
+  });
+
+  return {
+    animal: {
+      id:              animal.id,
+      nome:            animal.nome,
+      peso:            animal.peso,
+      categoriaAnimal: animal.categoriaAnimal,
+      tipoExercicio:   animal.tipoExercicio,
+    },
+    plano: {
+      id:   plano.id,
+      nome: plano.nome,
+      ativo: plano.ativo,
+    },
+    alimentos: alimentosOrdenados,
+    linhas,
+    geradoEm: new Date().toISOString(),
+  };
+};
+
+module.exports = { computarRelatorio, resolverStatus };

@@ -14,6 +14,7 @@ import { gerarHtmlDieta } from '../utils/Dietaprint';
 type Animal = NonNullable<ReturnType<typeof useSelectedAnimal>['selectedAnimal']>;
 type AnimalExtended = Animal & {
   dataNascimento?: string | Date | null;
+  idadeAnos?: number | null;
   raca?: { nome: string } | null;
   user?: { fullName: string; email: string } | null;
 };
@@ -94,6 +95,23 @@ const formatarDataBR = (data: string | Date | null | undefined): string => {
   return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
 };
 
+const calcularIdade = (dataNascimento: string): string => {
+  const partes = dataNascimento.split('T')[0].split('-');
+  const anoNasc = parseInt(partes[0]);
+  const mesNasc = parseInt(partes[1]) - 1;
+  const diaNasc = parseInt(partes[2]);
+  const hoje = new Date();
+  const diffMs = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
+  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
+  if (hoje.getDate() < diaNasc) diffMeses--;
+  let diffAnos = hoje.getFullYear() - anoNasc;
+  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
+  if (diffDias < 30) return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
+  if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
+  return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
+};
+
 // ─── Constantes de UI ─────────────────────────────────────────────────────────
 
 const inputClass  = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
@@ -121,34 +139,55 @@ const FeedbackBanner = ({ feedback, onClose }: { feedback: FeedbackState; onClos
 // ─── Card do animal ───────────────────────────────────────────────────────────
 
 const AnimalCard = ({ animal, user }: { animal: AnimalExtended; user: ReturnType<typeof useAuth>['user'] }) => (
-  <div className="bg-white rounded-2xl shadow p-2.5 flex gap-3 mb-4">
-    <div className="w-24 self-stretch bg-gray-200 rounded-xl overflow-hidden flex-shrink-0">
+  <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-4">
+    <div className="w-16 self-stretch bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
       <img
         src={animal.photoUrl ?? 'https://picsum.photos/id/1015/400/400'}
         alt={animal.nome}
         className="w-full h-full object-cover"
       />
     </div>
-    <div className="flex-1 flex flex-col justify-between">
-      <div className="grid grid-cols-3 gap-2">
+    <div className="flex-1 min-w-0">
+      <div className="grid grid-cols-4 gap-x-3 gap-y-0">
         <div>
-          <span className="text-[11px] text-gray-500">Nome</span>
-          <p className="text-lg font-semibold text-gray-900 leading-tight">{animal.nome}</p>
+          <span className="text-[10px] text-gray-400 leading-none">Nome</span>
+          <p className="text-xs font-semibold text-gray-900 truncate">{animal.nome}</p>
         </div>
         <div>
-          <span className="text-[11px] text-gray-500">Nascimento</span>
-          <p className="text-xs text-gray-900">{formatarDataBR(animal.dataNascimento)}</p>
+          <span className="text-[10px] text-gray-400 leading-none">Nascimento</span>
+          <p className="text-xs text-gray-900">
+            {animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}
+          </p>
         </div>
         <div>
-          <span className="text-[11px] text-gray-500">Raça</span>
-          <p className="text-xs text-gray-900">{animal.raca?.nome ?? 'Não informada'}</p>
+          <span className="text-[10px] text-gray-400 leading-none">Idade</span>
+          <p className="text-xs text-gray-900">
+            {animal.dataNascimento
+              ? calcularIdade(String(animal.dataNascimento))
+              : animal.idadeAnos
+                ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}`
+                : '-'}
+          </p>
+        </div>
+        <div>
+          <span className="text-[10px] text-gray-400 leading-none">Raça</span>
+          <p className="text-xs text-gray-900 truncate">{animal.raca?.nome ?? '-'}</p>
         </div>
       </div>
-      <div className="mt-2 pt-2 border-t">
-        <span className="text-[11px] text-gray-500 block">Proprietário</span>
-        <p className="text-xs font-medium text-gray-900">{animal.user?.fullName ?? user?.fullName}</p>
-        <p className="text-[11px] text-gray-500 truncate">{animal.user?.email ?? user?.email}</p>
+      <div className="mt-1.5 pt-1.5 border-t border-gray-100 grid grid-cols-2 gap-x-3">
+      <div>
+        <span className="text-[10px] text-gray-400 leading-none">Proprietário</span>
+        <p className="text-xs font-medium text-gray-900 truncate">
+          {animal.user?.fullName ?? user?.fullName}
+        </p>
       </div>
+      <div>
+        <span className="text-[10px] text-gray-400 leading-none">E-mail</span>
+        <p className="text-xs text-gray-900 truncate">
+          {animal.user?.email ?? user?.email}
+        </p>
+      </div>
+    </div>
     </div>
   </div>
 );
@@ -215,7 +254,7 @@ const Dieta = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
-      const animalAtual = res.data as AnimalExtended;
+      const animalAtual = (res.data?.dados ?? res.data) as AnimalExtended;
       setAnimal(animalAtual);
       setSelectedAnimal(animalAtual);
       await refreshSelectedAnimal?.();
@@ -225,14 +264,14 @@ const Dieta = () => {
   const carregarAnimais = useCallback(async () => {
     try {
       const res = await api.get('/animais');
-      setAnimaisDoProprietario(res.data as AnimalExtended[]);
+      setAnimaisDoProprietario((res.data?.dados ?? res.data ?? []) as AnimalExtended[]);
     } catch (err) { console.error('Erro ao carregar animais:', err); }
   }, []);
 
   const carregarAlimentos = useCallback(async () => {
     try {
       const res = await api.get('/alimentos');
-      setAlimentos(res.data as Alimento[]);
+      setAlimentos((res.data?.dados ?? res.data ?? []) as Alimento[]);
     } catch (err) { console.error('Erro ao carregar alimentos:', err); }
   }, []);
 
