@@ -38,11 +38,7 @@ interface ComposicaoItem {
 }
 
 interface EditValues {
-  alimentoId: number | null;
-  nutrienteId: number | null;
-  especieId: number | null;
   valorPorKg: string;
-  base: string;
 }
 
 // =====================================================================
@@ -54,23 +50,17 @@ const ComposicaoAlimentar = () => {
   const navigate = useNavigate();
 
   const [composicoes, setComposicoes] = useState<ComposicaoItem[]>([]);
-  const [alimentos, setAlimentos] = useState<Alimento[]>([]);
-  const [nutrientes, setNutrientes] = useState<Nutriente[]>([]);
   const [especies, setEspecies] = useState<Especie[]>([]);
 
   const [search, setSearch] = useState('');
   const [especieFiltro, setEspecieFiltro] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // ── Edição inline — apenas valor ────────────────────────────────────
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editValues, setEditValues] = useState<EditValues>({
-    alimentoId: null,
-    nutrienteId: null,
-    especieId: null,
-    valorPorKg: '',
-    base: 'Seca',
-  });
+  const [editValues, setEditValues] = useState<EditValues>({ valorPorKg: '' });
 
+  // ── Exclusão ────────────────────────────────────────────────────────
   const [itemToDelete, setItemToDelete] = useState<ComposicaoItem | null>(null);
 
   // =====================================================================
@@ -94,16 +84,10 @@ const ComposicaoAlimentar = () => {
   useEffect(() => {
     const loadAuxData = async () => {
       try {
-        const [alRes, nutRes, espRes] = await Promise.all([
-          api.get('/alimentos'),
-          api.get('/nutrientes'),
-          api.get('/especies'),
-        ]);
-        setAlimentos(alRes.data?.dados ?? alRes.data ?? []);
-        setNutrientes(nutRes.data?.dados ?? nutRes.data ?? []);
+        const espRes = await api.get('/especies');
         setEspecies(espRes.data?.dados ?? espRes.data ?? []);
       } catch (e) {
-        console.error('Erro ao carregar dados auxiliares:', e);
+        console.error('Erro ao carregar espécies:', e);
       }
     };
     loadAuxData();
@@ -114,49 +98,37 @@ const ComposicaoAlimentar = () => {
   }, [loadComposicoes]);
 
   // =====================================================================
-  // EDIÇÃO INLINE
+  // EDIÇÃO INLINE — apenas valorPorKg
   // =====================================================================
 
   const startEdit = (item: ComposicaoItem) => {
     setEditingId(item.id);
-    setEditValues({
-      alimentoId: item.alimentoId,
-      nutrienteId: item.nutrienteId,
-      especieId: item.especieId ?? null,
-      valorPorKg: String(item.valorPorKg),
-      base: item.base,
-    });
+    setEditValues({ valorPorKg: String(item.valorPorKg) });
   };
 
   const cancelEdit = () => {
     setEditingId(null);
-    setEditValues({
-      alimentoId: null,
-      nutrienteId: null,
-      especieId: null,
-      valorPorKg: '',
-      base: 'Seca',
-    });
+    setEditValues({ valorPorKg: '' });
   };
 
   const saveEdit = async (id: number) => {
-    if (!editValues.alimentoId || !editValues.nutrienteId || !editValues.valorPorKg) {
-      toast.error('Preencha todos os campos obrigatórios antes de salvar');
+    if (
+      !editValues.valorPorKg ||
+      isNaN(parseFloat(editValues.valorPorKg)) ||
+      parseFloat(editValues.valorPorKg) < 0
+    ) {
+      toast.error('Informe um valor numérico válido');
       return;
     }
 
     try {
       await api.put(`/composicoes-alimentares/${id}`, {
-        alimentoId: editValues.alimentoId,
-        nutrienteId: editValues.nutrienteId,
-        especieId: editValues.especieId ?? null,
         valorPorKg: parseFloat(editValues.valorPorKg),
-        base: editValues.base,
       });
       toast.success('Composição atualizada!');
       cancelEdit();
       loadComposicoes();
-    } catch (error) {
+    } catch {
       toast.error('Erro ao salvar edição');
     }
   };
@@ -188,7 +160,6 @@ const ComposicaoAlimentar = () => {
       .includes(search.toLowerCase())
   );
 
-  // Suprime warning de unused — user disponível para uso futuro (ex: RBAC)
   void user;
 
   // =====================================================================
@@ -212,7 +183,7 @@ const ComposicaoAlimentar = () => {
           Composição Alimentar
         </h1>
 
-        {/* Filtros + botão */}
+        {/* Filtros + botões */}
         <div className="flex flex-col sm:flex-row gap-4 items-end mb-6">
 
           {/* Filtro de espécie */}
@@ -246,14 +217,23 @@ const ComposicaoAlimentar = () => {
             />
           </div>
 
-          {/* Nova composição */}
-          <button
-            onClick={() => navigate('/composicao-alimentar/novo')}
-            className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
-          >
-            <Plus size={20} />
-            Nova Composição
-          </button>
+          {/* Botões de ação */}
+          <div className="flex gap-3 flex-shrink-0">
+            <button
+              onClick={() => navigate('/composicao-alimentar/nutriente/novo')}
+              className="flex items-center justify-center gap-2 bg-white hover:bg-gray-50 text-emerald-700 border-2 border-emerald-700 px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
+            >
+              <Plus size={20} />
+              Novo Nutriente
+            </button>
+            <button
+              onClick={() => navigate('/composicao-alimentar/novo')}
+              className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
+            >
+              <Plus size={20} />
+              Nova Composição
+            </button>
+          </div>
 
         </div>
 
@@ -268,7 +248,7 @@ const ComposicaoAlimentar = () => {
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Alimento</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Espécie</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nutriente</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Valor (g/kg)</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Valor (/kg)</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Base</th>
                   <th className="text-right px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
                 </tr>
@@ -286,89 +266,32 @@ const ComposicaoAlimentar = () => {
                     return (
                       <tr key={item.id} className="border-t hover:bg-gray-50">
 
-                        {/* Alimento */}
+                        {/* Alimento — somente leitura */}
                         <td className="px-6 py-4 font-medium text-gray-900">
-                          {isEditing ? (
-                            <select
-                              value={editValues.alimentoId ?? ''}
-                              onChange={(e) =>
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  alimentoId: Number(e.target.value),
-                                }))
-                              }
-                              className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white w-full focus:outline-none focus:border-emerald-600"
-                            >
-                              <option value="">Selecione</option>
-                              {alimentos.map((a) => (
-                                <option key={a.id} value={a.id}>{a.nome}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            item.alimento?.nome ?? '—'
-                          )}
+                          {item.alimento?.nome ?? '—'}
                         </td>
 
-                        {/* Espécie */}
+                        {/* Espécie — somente leitura */}
                         <td className="px-6 py-4 text-sm text-gray-700">
-                          {isEditing ? (
-                            <select
-                              value={editValues.especieId ?? ''}
-                              onChange={(e) =>
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  especieId: e.target.value ? Number(e.target.value) : null,
-                                }))
-                              }
-                              className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-                            >
-                              <option value="">Todas</option>
-                              {especies.map((e) => (
-                                <option key={e.id} value={e.id}>{e.nome}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            item.especie?.nome ?? <span className="text-gray-300">—</span>
-                          )}
+                          {item.especie?.nome ?? <span className="text-gray-300">—</span>}
                         </td>
 
-                        {/* Nutriente */}
+                        {/* Nutriente — somente leitura */}
                         <td className="px-6 py-4 font-medium text-gray-900">
-                          {isEditing ? (
-                            <select
-                              value={editValues.nutrienteId ?? ''}
-                              onChange={(e) =>
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  nutrienteId: Number(e.target.value),
-                                }))
-                              }
-                              className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white w-full focus:outline-none focus:border-emerald-600"
-                            >
-                              <option value="">Selecione</option>
-                              {nutrientes.map((n) => (
-                                <option key={n.id} value={n.id}>
-                                  {n.nome} ({n.unidadePadrao})
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            item.nutriente?.nome ?? '—'
-                          )}
+                          {item.nutriente?.nome ?? '—'}
                         </td>
 
-                        {/* Valor */}
+                        {/* Valor — editável inline */}
                         <td className="px-6 py-4 font-semibold text-emerald-700">
                           {isEditing ? (
                             <input
                               type="number"
                               step="0.0001"
+                              min="0"
+                              autoFocus
                               value={editValues.valorPorKg}
                               onChange={(e) =>
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  valorPorKg: e.target.value,
-                                }))
+                                setEditValues({ valorPorKg: e.target.value })
                               }
                               className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white w-28 focus:outline-none focus:border-emerald-600"
                             />
@@ -377,25 +300,9 @@ const ComposicaoAlimentar = () => {
                           )}
                         </td>
 
-                        {/* Base */}
+                        {/* Base — somente leitura */}
                         <td className="px-6 py-4 text-gray-900">
-                          {isEditing ? (
-                            <select
-                              value={editValues.base}
-                              onChange={(e) =>
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  base: e.target.value,
-                                }))
-                              }
-                              className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-                            >
-                              <option value="Seca">Seca</option>
-                              <option value="Úmida">Úmida</option>
-                            </select>
-                          ) : (
-                            item.base
-                          )}
+                          {item.base}
                         </td>
 
                         {/* Ações */}
@@ -420,12 +327,14 @@ const ComposicaoAlimentar = () => {
                               <>
                                 <button
                                   onClick={() => startEdit(item)}
+                                  title="Editar valor"
                                   className="text-emerald-600 hover:text-emerald-700"
                                 >
                                   <Edit size={18} />
                                 </button>
                                 <button
                                   onClick={() => setItemToDelete(item)}
+                                  title="Excluir"
                                   className="text-red-500 hover:text-red-700"
                                 >
                                   <Trash2 size={18} />

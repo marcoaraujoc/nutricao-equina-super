@@ -20,7 +20,7 @@ const PlanoDietaController = {
         include: {
           _count: { select: { itens: true } }
         },
-        orderBy: [{ ativo: 'desc' }, { dataCriacao: 'desc' }]
+        orderBy: [{ ativo: 'asc' }, { dataCriacao: 'desc' }]
       });
 
       res.json({ sucesso: true, dados: planos });
@@ -101,6 +101,13 @@ const PlanoDietaController = {
     try {
       const plano = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+
+      if (!plano.ativo) {
+        await prisma.planoDieta.updateMany({
+          where: { animalId: plano.animalId, id: { not: Number(id) } },
+          data: { ativo: false },
+        });
+      }
 
       const atualizado = await prisma.planoDieta.update({
         where: { id: Number(id) },

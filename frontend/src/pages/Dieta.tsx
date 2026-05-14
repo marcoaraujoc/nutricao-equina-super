@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import {
-  ArrowLeft, Plus, Save, Pencil, Trash2,
+  ArrowLeft, Plus, Pencil, Trash2,
   Check, X, Search, ToggleLeft, ToggleRight, Printer,
 } from 'lucide-react';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
@@ -235,6 +235,7 @@ const Dieta = () => {
 
   // ── Conflitos de frequência ────────────────────────────────────────────────
   const [conflitosFrequencia, setConflitosFrequencia] = useState<string[]>([]);
+  const [pendingCriarPlano, setPendingCriarPlano]     = useState<{ nome: string; planoAtivoNome: string } | null>(null);
 
   // ── Feedback ───────────────────────────────────────────────────────────────
   const exibirFeedback = (tipo: 'sucesso' | 'info' | 'erro', mensagem: string) => {
@@ -352,6 +353,17 @@ const Dieta = () => {
 
   useEffect(() => { carregarPlanos(); }, [effectiveAnimalId, search, filtroAtivo]);
 
+  useEffect(() => {
+    if (location.state?.planoAberto && planos.length > 0) {
+      const plano = planos.find(p => p.id === location.state.planoAberto);
+      if (plano) {
+        carregarItens(plano.id);
+        setTimeout(() => itensRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+        window.history.replaceState({}, '');
+      }
+    }
+  }, [planos]);
+
   // ── Impressão ──────────────────────────────────────────────────────────────
   const dispararImpressao = () => {
     if (!planoSelecionado) return;
@@ -389,12 +401,30 @@ const Dieta = () => {
 
   // ── Handlers: planos ───────────────────────────────────────────────────────
   const handleCriarPlano = async () => {
-    if (!novoPlanoNome.trim()) { exibirFeedback('erro', 'Informe um nome para o plano'); return; }
+    const nomeParaCriar = (pendingCriarPlano?.nome ?? novoPlanoNome).trim();
+    if (!nomeParaCriar) { exibirFeedback('erro', 'Informe um nome para o plano'); return; }
+
+    // Primeira chamada: verifica se há plano ativo e pede confirmação
+    if (!pendingCriarPlano) {
+      const planoAtivo = planos.find(p => p.ativo);
+      if (planoAtivo) {
+        setPendingCriarPlano({ nome: nomeParaCriar, planoAtivoNome: planoAtivo.nome });
+        return;
+      }
+    }
+
     try {
-      await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: novoPlanoNome.trim() });
-      setNovoPlanoNome(''); setCriandoPlano(false);
-      exibirFeedback('sucesso', 'Plano criado com sucesso!');
-      carregarPlanos();
+      const planoAtivo = planos.find(p => p.ativo);
+      const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeParaCriar });
+      const novoPlano  = res.data.dados as PlanoDieta;
+
+      // Desativa o plano que estava ativo
+      if (planoAtivo) {
+        await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
+      }
+
+      setNovoPlanoNome(''); setCriandoPlano(false); setPendingCriarPlano(null);
+      navigate(`/dieta/${effectiveAnimalId}/plano/${novoPlano.id}/novo`);
     } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao criar plano'); }
   };
 
@@ -578,7 +608,7 @@ const Dieta = () => {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50 pt-6 pb-10">
-      <div className="max-w-3xl mx-auto px-4">
+      <div className="max-w-5xl mx-auto px-4">
 
         {/* Voltar */}
         <div className="mb-4">
@@ -650,18 +680,40 @@ const Dieta = () => {
 
         {/* Form novo plano */}
         {criandoPlano && (
-          <div className="bg-white rounded-2xl shadow border border-emerald-200 p-4 mb-3 flex gap-2 items-center">
-            <input
-              autoFocus
-              type="text"
-              placeholder="Nome do plano..."
-              value={novoPlanoNome}
-              onChange={(e) => setNovoPlanoNome(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleCriarPlano(); if (e.key === 'Escape') setCriandoPlano(false); }}
-              className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-            />
-            <button onClick={handleCriarPlano} className="p-2 text-emerald-700 hover:text-emerald-800"><Check size={18} /></button>
-            <button onClick={() => setCriandoPlano(false)} className="p-2 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <div className="bg-white rounded-2xl shadow border border-emerald-200 p-4 mb-3 space-y-3">
+            <div className="flex gap-2 items-center">
+              <input
+                autoFocus
+                type="text"
+                placeholder="Nome do plano..."
+                value={novoPlanoNome}
+                onChange={(e) => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCriarPlano(); if (e.key === 'Escape') { setCriandoPlano(false); setPendingCriarPlano(null); } }}
+                className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
+              />
+              <button onClick={handleCriarPlano} className="p-2 text-emerald-700 hover:text-emerald-800"><Check size={18} /></button>
+              <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-2 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            {pendingCriarPlano && (
+              <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                <p className="font-semibold mb-1">⚠️ Atenção</p>
+                <p>O plano <strong>"{pendingCriarPlano.planoAtivoNome}"</strong> será inativado automaticamente. Deseja continuar?</p>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={handleCriarPlano}
+                    className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium"
+                  >
+                    Confirmar
+                  </button>
+                  <button
+                    onClick={() => setPendingCriarPlano(null)}
+                    className="px-3 py-1 border border-amber-300 text-amber-700 rounded-lg text-xs font-medium hover:bg-amber-100"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -799,18 +851,12 @@ const Dieta = () => {
             )}
 
             {/* Botões de ação */}
-            <div className="flex gap-2 mb-4">
+            <div className="mb-4">
               <button
                 onClick={() => navigate(`/dieta/${effectiveAnimalId}/plano/${planoSelecionado.id}/novo`)}
-                className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
               >
                 <Plus size={16} /> Adicionar alimento
-              </button>
-              <button
-                onClick={handleSalvarDieta}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
-              >
-                <Save size={16} /> Salvar dieta
               </button>
             </div>
 

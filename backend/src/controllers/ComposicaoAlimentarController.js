@@ -1,6 +1,14 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+// Remove o sufixo "/kg" ou "/g" da unidade — armazena só a grandeza
+const normalizarUnidade = (unidade) => {
+  return String(unidade || 'g')
+    .trim()
+    .replace(/\/(kg|g)$/i, '')
+    .trim() || 'g';
+};
+
 // =====================================================================
 // CONVERSÃO DE UNIDADES → g/g (base interna do banco)
 // =====================================================================
@@ -79,32 +87,48 @@ const ComposicaoAlimentarController = {
   criar: async (req, res) => {
     const { alimentoId, nutrienteId, valorPorKg, base, especieId } = req.body;
 
-    if (!alimentoId || !nutrienteId || valorPorKg === undefined) {
+    if (!alimentoId || !nutrienteId || valorPorKg === undefined || valorPorKg === null) {
       return res.status(400).json({
         sucesso: false,
         mensagem: 'alimentoId, nutrienteId e valorPorKg são obrigatórios',
       });
     }
+    if (isNaN(Number(valorPorKg)) || Number(valorPorKg) < 0) {
+      return res.status(400).json({ sucesso: false, mensagem: 'valorPorKg deve ser um número positivo' });
+    }
 
     try {
-      const nutriente = await prisma.nutriente.findUnique({
-        where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true },
+      // Check explícito com mensagem descritiva — antes de depender do P2002
+      const existente = await prisma.composicaoAlimento.findFirst({
+        where: {
+          alimentoId: Number(alimentoId),
+          nutrienteId: Number(nutrienteId),
+        },
+        include: {
+          alimento: { select: { nome: true } },
+          nutriente: { select: { nome: true } },
+        },
       });
 
-      if (!nutriente) {
-        return res.status(404).json({ sucesso: false, mensagem: 'Nutriente não encontrado' });
+      if (existente) {
+        return res.status(409).json({
+          sucesso: false,
+          mensagem: `"${existente.nutriente?.nome}" já está cadastrado para "${existente.alimento?.nome}" com o valor ${existente.valorPorKg}. Use a edição para alterar o valor.`,
+        });
       }
-
-      const valorConvertido = converterParaGramasPorGrama(valorPorKg, nutriente.unidadePadrao);
 
       const item = await prisma.composicaoAlimento.create({
         data: {
           alimentoId: Number(alimentoId),
           nutrienteId: Number(nutrienteId),
-          valorPorKg: valorConvertido,
+          valorPorKg: Number(valorPorKg),
           base: base || 'Seca',
           ...(especieId ? { especieId: Number(especieId) } : {}),
+        },
+        include: {
+          alimento: { select: { id: true, nome: true } },
+          nutriente: { select: { id: true, nome: true, unidadePadrao: true } },
+          especie: { select: { id: true, nome: true } },
         },
       });
 
@@ -113,7 +137,7 @@ const ComposicaoAlimentarController = {
       if (error.code === 'P2002') {
         return res.status(409).json({
           sucesso: false,
-          mensagem: 'Esta combinação de alimento e nutriente já existe.',
+          mensagem: 'Este nutriente já está cadastrado para o alimento.',
         });
       }
       console.error('Erro ao criar composição:', error);
@@ -126,30 +150,22 @@ const ComposicaoAlimentarController = {
   // -------------------------------------------------------------------
   atualizar: async (req, res) => {
     const { id } = req.params;
-    const { alimentoId, nutrienteId, valorPorKg, base, especieId } = req.body;
+    const { valorPorKg } = req.body;
+
+    if (valorPorKg === undefined || valorPorKg === null || isNaN(Number(valorPorKg))) {
+      return res.status(400).json({ sucesso: false, mensagem: 'valorPorKg é obrigatório e deve ser número' });
+    }
 
     try {
-      const nutriente = await prisma.nutriente.findUnique({
-        where: { id: Number(nutrienteId) },
-        select: { unidadePadrao: true },
-      });
-
-      if (!nutriente) {
-        return res.status(404).json({ sucesso: false, mensagem: 'Nutriente não encontrado' });
+      const existe = await prisma.composicaoAlimento.findUnique({ where: { id: Number(id) } });
+      if (!existe) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
       }
-
-      const valorConvertido = converterParaGramasPorGrama(valorPorKg, nutriente.unidadePadrao);
 
       const item = await prisma.composicaoAlimento.update({
         where: { id: Number(id) },
-        data: {
-          alimentoId: Number(alimentoId),
-          nutrienteId: Number(nutrienteId),
-          valorPorKg: valorConvertido,
-          base: base || 'Seca',
-          especieId: especieId ? Number(especieId) : null,
-        },
-      });
+        data: { valorPorKg: Number(valorPorKg) },
+    });
 
       res.json({ sucesso: true, dados: item });
     } catch (error) {
@@ -259,33 +275,31 @@ const ComposicaoAlimentarController = {
         }
 
         // Busca nutriente pelo nome (case-insensitive)
+        const unidadeComp = normalizarUnidade(comp.unidade);
+
         let nutriente = await prisma.nutriente.findFirst({
-          where: { nome: comp.nutrienteNome.trim() },
+          where: {
+            nome: comp.nutrienteNome.trim(),
+            unidadePadrao: unidadeComp,
+          },
         });
 
-        // Cria o nutriente se não existir
         if (!nutriente) {
           nutriente = await prisma.nutriente.create({
             data: {
               nome: comp.nutrienteNome.trim(),
               categoria: 'Importado',
-              unidadePadrao: comp.unidade || 'g/kg',
+              unidadePadrao: unidadeComp,
             },
           });
         }
-
-        // Converte o valor para a unidade padrão interna
-        const valorConvertido = converterParaGramasPorGrama(
-          comp.valorPorKg,
-          nutriente.unidadePadrao
-        );
 
         try {
           await prisma.composicaoAlimento.create({
             data: {
               alimentoId: alimento.id,
               nutrienteId: nutriente.id,
-              valorPorKg: valorConvertido,
+              valorPorKg: Number(comp.valorPorKg),
               base: comp.base || 'Seca',
               ...(especieId ? { especieId: Number(especieId) } : {}),
             },

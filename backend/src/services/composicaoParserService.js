@@ -22,9 +22,10 @@ FORMATOS POSSÍVEIS — saiba identificar cada um:
 4. LISTA SIMPLES: nutriente em uma linha, valor e unidade na mesma linha ou na próxima.
 
 BASE DE CÁLCULO:
-- Se o título disser "por kg" ou "g/kg": use os valores como estão.
-- Se o título disser "por 100g" ou "100g": multiplique TODOS os valores por 10 para converter para por kg.
-- Se a unidade for %, mantenha como % (não converta).
+- Se o título disser "por kg" ou "g/kg": use os valores como estão — não altere nada.
+- Se o título disser "por 100g" ou "100g": multiplique APENAS O VALOR NUMÉRICO por 10. Nunca altere a unidade. Exemplos corretos: 635mg → valor 6350, unidade "mg"; 2,26g → valor 22,6, unidade "g"; 450UI → valor 4500, unidade "UI".
+- Se a unidade for %, mantenha como % (não converta e não multiplique por 10).
+- PROIBIDO converter entre unidades: não transforme mg em g, não transforme g em mg, não transforme UI em mg. A unidade de saída deve ser idêntica à unidade impressa no rótulo.
 
 Retorne APENAS um objeto JSON válido, sem texto antes ou depois, sem blocos de código markdown:
 
@@ -69,7 +70,7 @@ Retorne APENAS um objeto JSON válido, sem texto antes ou depois, sem blocos de 
 }
 
 Regras:
-1. Se valores forem por 100g, multiplique por 10 para converter para por kg.
+1. Se valores forem por 100g, multiplique APENAS O VALOR NUMÉRICO por 10 para converter para por kg. Nunca altere a unidade (mg continua mg, g continua g). Exemplo: 635mg/100g → valor 6350, unidade "mg".
 2. Se a unidade for %, mantenha como % (não converta).
 3. Não invente valores — use apenas o que está no texto.
 4. Inclua todos os nutrientes encontrados.

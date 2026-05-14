@@ -19,14 +19,15 @@ import CadastroPessoal from './pages/CadastroPessoal';
 import ResetPassword from './pages/ResetPassword';
 import Nutrientes from './pages/Nutrientes';
 import CriaNutrientes from './pages/CriaNutrientes';
-import ComposicaoAlimentar from './pages/ComposicaoAlimentar';
-import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
 import CriaDieta from './pages/CriaDieta';
 import AnimalDetail from './pages/AnimalDetail';
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import Exames from './pages/Exames';
 import CriaExameNutricional from './pages/CriaExameNutricional';
 import RelatorioNutricional from './pages/RelatorioNutricional';
+import ComposicaoAlimentar from './pages/ComposicaoAlimentar';
+import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
+import NovoNutrienteComposicao from './pages/NovoNutrienteComposicao';
 
 //Import Temporário
 import QueryAdHoc from './pages/query-adhoc';
@@ -99,6 +100,7 @@ function App() {
                           <Route path="/composicao-alimentar" element={<ComposicaoAlimentar />} />
                           <Route path="/composicao-alimentar/novo" element={<CriaComposicaoAlimentar />} />
                           <Route path="/composicao-alimentar/:id" element={<CriaComposicaoAlimentar />} />
+                          <Route path="/composicao-alimentar/nutriente/novo" element={<NovoNutrienteComposicao />} />
 
                           {/* Rotas de Dieta */}
                           <Route path="/dieta"                                              element={<Dieta />} />

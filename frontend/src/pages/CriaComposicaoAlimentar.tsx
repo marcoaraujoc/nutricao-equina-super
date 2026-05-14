@@ -9,7 +9,7 @@ import { ArrowLeft, Upload, FileText, AlertCircle, Edit, Trash2, Check, X, Penci
 // CONSTANTES
 // =====================================================================
 
-const UNIDADES_PADRAO = ['g/kg', 'mg/kg', 'mcg/kg', 'ui/kg', 'UFC/g', 'kcal/kg', '%'];
+const UNIDADES_PADRAO = ['g', 'mg', 'mcg', 'ui', 'kcal', 'UFC', '%'];
 
 const CATEGORIAS_ALIMENTO = [
   'Concentrado',
@@ -264,7 +264,6 @@ const CriaComposicaoAlimentar = () => {
       const dados: ResultadoIA = res.data?.dados ?? null;
       setResultadoIA(dados);
       inicializarEditaveis(dados);
-      if (dados?.nomeAlimento) setNomeAlimento(dados.nomeAlimento);
       setProgress(100);
       setShowConfirmModal(true);
     } catch (err: unknown) {
@@ -635,7 +634,7 @@ const CriaComposicaoAlimentar = () => {
               />
             </div>
             <p className="text-center text-xs text-gray-500 mt-1">
-              Analisando rótulo com IA... {progress}%
+              Analisando rótulo ... {progress}%
             </p>
           </div>
         )}
@@ -1191,10 +1190,9 @@ const CriaComposicaoAlimentar = () => {
 
               <div className="p-6 space-y-4">
 
-                {resultadoIA.nomeAlimento && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-800">
-                    IA sugeriu: <strong>{resultadoIA.nomeAlimento}</strong>
-                    <span className="text-emerald-600 ml-1">— edite abaixo se necessário</span>
+                {resultadoIA.nomeAlimento && resultadoIA.nomeAlimento !== nomeAlimento && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 text-sm text-blue-800">
+                    Foi identificado no rótulo o nome: <strong>{resultadoIA.nomeAlimento}</strong>
                   </div>
                 )}
 
