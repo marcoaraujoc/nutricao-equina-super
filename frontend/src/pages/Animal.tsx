@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Calendar } from 'lucide-react';
+import { ArrowLeft, Calendar, Camera } from 'lucide-react';
 
 // -------------------------------------------------------------------
 // Mapa completo de categorias NRC
@@ -62,7 +62,6 @@ interface FormData {
 // Helpers
 // -------------------------------------------------------------------
 
-/** Calcula idade em meses a partir da data ou da idade em anos */
 const calcularIdadeEmMeses = (dataNascimento: string, idadeAnos: string): number | null => {
   if (dataNascimento) {
     const nasc = new Date(dataNascimento);
@@ -79,59 +78,31 @@ const calcularIdadeEmMeses = (dataNascimento: string, idadeAnos: string): number
   return null;
 };
 
-/** Categorias NRC disponíveis por sexo e idade */
 const getCategoriasDisponiveis = (
   sexo: string,
   dataNascimento: string,
   idadeAnos: string,
 ): string[] => {
   const meses = calcularIdadeEmMeses(dataNascimento, idadeAnos);
-
-  // ≤ 24 meses → apenas Potros em Crescimento (independe do sexo)
-  if (meses !== null && meses <= 24) {
-    return ['Potros em Crescimento'];
-  }
-
-  if (sexo === 'Fêmea') {
-    return ['Adulto - Manutenção', 'Trabalhando', 'Éguas Prenhas', 'Éguas em Lactação'];
-  }
-  if (sexo === 'Macho') {
-    return ['Adulto - Manutenção', 'Trabalhando', 'Garanhões'];
-  }
+  if (meses !== null && meses <= 24) return ['Potros em Crescimento'];
+  if (sexo === 'Fêmea') return ['Adulto - Manutenção', 'Trabalhando', 'Éguas Prenhas', 'Éguas em Lactação'];
+  if (sexo === 'Macho') return ['Adulto - Manutenção', 'Trabalhando', 'Garanhões'];
   return Object.keys(NRC_CATEGORIAS);
 };
 
-/** Tipos/estágios disponíveis — para Potros filtra por faixa etária */
 const getTiposDisponiveis = (
   categoria: string,
   dataNascimento: string,
   idadeAnos: string,
 ): string[] => {
-  if (categoria !== 'Potros em Crescimento') {
-    return NRC_CATEGORIAS[categoria] ?? [];
-  }
-
+  if (categoria !== 'Potros em Crescimento') return NRC_CATEGORIAS[categoria] ?? [];
   const meses = calcularIdadeEmMeses(dataNascimento, idadeAnos);
-
   if (meses === null) return NRC_CATEGORIAS['Potros em Crescimento'];
-
-  if (meses < 18) {
-    return ['4 Meses', '6 Meses', '12 Meses'];
-  }
-  if (meses < 24) {
-    return [
-      '18 Meses',
-      '18 Meses Exercício Leve',
-      '18 Meses Exercício Moderado',
-    ];
-  }
-  // >= 24 meses
+  if (meses < 18) return ['4 Meses', '6 Meses', '12 Meses'];
+  if (meses < 24) return ['18 Meses', '18 Meses Exercício Leve', '18 Meses Exercício Moderado'];
   return [
-    '24 Meses',
-    '24 Meses Exercício Leve',
-    '24 Meses Exercício Moderado',
-    '24 Meses Exercício Pesado',
-    '24 Meses Exercício Muito Pesado',
+    '24 Meses', '24 Meses Exercício Leve', '24 Meses Exercício Moderado',
+    '24 Meses Exercício Pesado', '24 Meses Exercício Muito Pesado',
   ];
 };
 
@@ -144,22 +115,22 @@ const Animal = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
 
-  const [loading, setLoading]       = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading]           = useState(true);
+  const [submitting, setSubmitting]     = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [photoFile, setPhotoFile]   = useState<File | null>(null);
-  const [especies, setEspecies]     = useState<{ id: number; nome: string }[]>([]);
-  const [todasRacas, setTodasRacas] = useState<{ id: number; nome: string; especieId: number }[]>([]);
+  const [photoFile, setPhotoFile]       = useState<File | null>(null);
+  const [especies, setEspecies]         = useState<{ id: number; nome: string }[]>([]);
+  const [todasRacas, setTodasRacas]     = useState<{ id: number; nome: string; especieId: number }[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
 
   const [formData, setFormData] = useState<FormData>({
     nome: '',
-    especieId: 1,
+    especieId: 0,
     racaId: null,
     peso: '',
     dataNascimento: '',
     idadeAnos: '',
-    sexo: 'Macho',
+    sexo: '',
     categoriaAnimal: '',
     tipoExercicio: '',
     veterinarioNome: '',
@@ -180,7 +151,7 @@ const Animal = () => {
     [formData.sexo, formData.dataNascimento, formData.idadeAnos],
   );
 
-  const tiposDisponiveis: string[] = useMemo(
+  const tiposDisponiveis = useMemo(
     () => formData.categoriaAnimal
       ? getTiposDisponiveis(formData.categoriaAnimal, formData.dataNascimento, formData.idadeAnos)
       : [],
@@ -192,15 +163,12 @@ const Animal = () => {
   // -------------------------------------------------------------------
   // Efeitos de limpeza
   // -------------------------------------------------------------------
-
-  // Limpa NRC quando não é equino
   useEffect(() => {
     if (!isEquino && (formData.categoriaAnimal || formData.tipoExercicio)) {
       setFormData((prev) => ({ ...prev, categoriaAnimal: '', tipoExercicio: '' }));
     }
   }, [isEquino]);
 
-  // Limpa categoria/tipo quando ficam indisponíveis
   useEffect(() => {
     if (formData.categoriaAnimal && !categoriasDisponiveis.includes(formData.categoriaAnimal)) {
       setFormData((prev) => ({ ...prev, categoriaAnimal: '', tipoExercicio: '' }));
@@ -211,14 +179,13 @@ const Animal = () => {
     }
   }, [categoriasDisponiveis, tiposDisponiveis]);
 
-  // Filtra raças quando a espécie muda
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
       const filtradas = todasRacas.filter((r) => r.especieId === formData.especieId);
       setRacasFiltradas(filtradas);
       setFormData((prev) => {
-        if (!prev.racaId || !filtradas.some((r) => r.id === prev.racaId)) {
-          return { ...prev, racaId: filtradas[0]?.id ?? null };
+        if (prev.racaId && !filtradas.some((r) => r.id === prev.racaId)) {
+          return { ...prev, racaId: null };
         }
         return prev;
       });
@@ -237,7 +204,7 @@ const Animal = () => {
         ]);
 
         const especiesData = espRes.data?.dados ?? espRes.data ?? [];
-        const racasData   = racRes.data?.dados  ?? racRes.data  ?? [];
+        const racasData    = racRes.data?.dados  ?? racRes.data  ?? [];
         setEspecies(especiesData);
         setTodasRacas(racasData);
 
@@ -307,6 +274,7 @@ const Animal = () => {
         setFormData((prev) => ({ ...prev, dataNascimento: '' }));
         return;
       }
+
       const hoje = new Date();
       hoje.setHours(0, 0, 0, 0);
       if (dataObj > hoje) {
@@ -314,6 +282,7 @@ const Animal = () => {
         setFormData((prev) => ({ ...prev, dataNascimento: '' }));
         return;
       }
+
       setFormData((prev) => ({
         ...prev,
         dataNascimento: `${parts[2]}-${parts[1]}-${parts[0]}`,
@@ -398,8 +367,13 @@ const Animal = () => {
       }
 
       toast.success(isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!');
-      await refreshSelectedAnimal();
-      navigate('/meus-animais');
+        await refreshSelectedAnimal();
+        if (!isEditMode && localStorage.getItem('s2vet_ob') === 'a') {
+          localStorage.setItem('s2vet_ob', 'p');
+          navigate('/');
+        } else {
+          navigate('/meus-animais');
+        }
     } catch (error: unknown) {
       const msg =
         (error as { response?: { data?: { mensagem?: string } } })
@@ -440,65 +414,93 @@ const Animal = () => {
             </button>
           </div>
 
-          {/* Foto + Nome */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-8">
-            <label className="cursor-pointer group flex-shrink-0 self-center sm:self-start">
-              <div className="w-28 h-28 sm:w-40 sm:h-40 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-100 shadow-inner transition-all group-hover:scale-105">
+          {/* ── FOTO CENTRALIZADA ── */}
+          <div className="flex flex-col items-center gap-3 mb-8">
+            <label className="cursor-pointer group">
+              <div className="w-32 h-32 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
                 {photoPreview ? (
-                  <img src={photoPreview} alt="Foto" className="w-full h-full object-cover" />
+                  <img
+                    src={photoPreview}
+                    alt="Foto do animal"
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-emerald-600 text-center p-4">
-                    <div>
-                      <span className="block text-sm font-medium">Adicionar foto</span>
-                      <span className="text-xs">Clique aqui</span>
-                    </div>
+                  <div className="flex flex-col items-center gap-1 text-emerald-500 p-3">
+                    <Camera size={28} />
+                    <span className="text-xs font-medium text-gray-400 text-center leading-tight">
+                      Adicionar foto
+                    </span>
                   </div>
                 )}
               </div>
-              <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoChange}
+              />
             </label>
-            <div className="flex-1 pt-2 sm:pt-4">
+            {photoPreview && (
+              <button
+                type="button"
+                onClick={() => { setPhotoPreview(null); setPhotoFile(null); }}
+                className="text-xs text-gray-400 hover:text-red-500 underline transition-colors"
+              >
+                Remover foto
+              </button>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+
+            {/* ── NOME — campo padrão, igual aos demais ── */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Nome do animal <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 required
                 value={formData.nome}
                 onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-                className="w-full text-2xl sm:text-4xl font-bold text-gray-900 focus:outline-none border-b border-transparent focus:border-emerald-600"
-                placeholder="Nome do Animal"
+                placeholder="Ex: Trovão, Mel, Rex..."
+                className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 text-base
+                           focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                           transition-colors"
               />
             </div>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
 
             {/* Espécie + Sexo */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
-                <select
-                  value={formData.especieId}
-                  onChange={(e) =>
-                    setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })
-                  }
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
-                >
-                  {especies.map((esp) => (
-                    <option key={esp.id} value={esp.id}>{esp.nome}</option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
+                  <select
+                    value={formData.especieId}
+                    onChange={(e) =>
+                      setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })
+                    }
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 ..."
+                  >
+                    <option value={0} disabled>Selecione a espécie</option>  {/* ← aqui */}
+                    {especies.map((esp) => (
+                      <option key={esp.id} value={esp.id}>{esp.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
+                  <select
+                    value={formData.sexo}
+                    onChange={(e) => setFormData({ ...formData, sexo: e.target.value })}
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 ..."
+                  >
+                    <option value="" disabled>Selecione o sexo</option>  {/* ← aqui */}
+                    <option value="Macho">Macho</option>
+                    <option value="Fêmea">Fêmea</option>
+                  </select>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
-                <select
-                  value={formData.sexo}
-                  onChange={(e) => setFormData({ ...formData, sexo: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
-                >
-                  <option value="Macho">Macho</option>
-                  <option value="Fêmea">Fêmea</option>
-                </select>
-              </div>
-            </div>
+
 
             {/* Raça + Peso */}
             <div className="grid grid-cols-2 gap-4">
@@ -510,7 +512,9 @@ const Animal = () => {
                   value={formData.racaId || ''}
                   onChange={(e) => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
                   required
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                             focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                             transition-colors"
                 >
                   <option value="">Selecione</option>
                   {racasFiltradas.map((raca) => (
@@ -519,7 +523,9 @@ const Animal = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Peso (kg)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Peso (kg) <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="number"
                   step="0.1"
@@ -528,7 +534,9 @@ const Animal = () => {
                   placeholder="Ex: 450"
                   value={formData.peso}
                   onChange={(e) => setFormData({ ...formData, peso: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                             focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                             transition-colors"
                 />
               </div>
             </div>
@@ -548,9 +556,10 @@ const Animal = () => {
                   value={formData.idadeAnos}
                   disabled={!!formData.dataNascimento}
                   onChange={(e) => setFormData({ ...formData, idadeAnos: e.target.value })}
-                  className={`w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 ${
-                    formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''
-                  }`}
+                  className={`w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                              focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                              transition-colors
+                              ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                 />
                 {formData.dataNascimento && (
                   <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>
@@ -559,7 +568,7 @@ const Animal = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nascimento
+                  Data de nascimento
                   {!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 <div className="relative">
@@ -573,8 +582,11 @@ const Animal = () => {
                         : ''
                     }
                     onChange={handleDateTextChange}
-                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 pr-10 text-gray-900"
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-3 pr-10 text-gray-900
+                               focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                               transition-colors"
                   />
+                  {/* Ícone calendário + input date sobreposto */}
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
                     <Calendar size={18} className="text-emerald-600 pointer-events-none" />
                     <input
@@ -584,6 +596,13 @@ const Animal = () => {
                       onChange={(e) => {
                         const val = e.target.value;
                         if (!val) return;
+                        const d = new Date(val + 'T00:00');
+                        const hoje = new Date();
+                        hoje.setHours(0, 0, 0, 0);
+                        if (d > hoje) {
+                          toast.error('A data de nascimento não pode ser uma data futura.');
+                          return;
+                        }
                         setFormData({ ...formData, dataNascimento: val, idadeAnos: '' });
                       }}
                       className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
@@ -594,9 +613,9 @@ const Animal = () => {
                   <button
                     type="button"
                     onClick={() => setFormData({ ...formData, dataNascimento: '' })}
-                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline"
+                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors"
                   >
-                    Limpar
+                    Limpar data
                   </button>
                 )}
               </div>
@@ -625,9 +644,10 @@ const Animal = () => {
                     }
                     required
                     disabled={!temIdadeOuData}
-                    className={`w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 ${
-                      !temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''
-                    }`}
+                    className={`w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                                focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                                transition-colors
+                                ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                   >
                     <option value="">Selecione a categoria</option>
                     {categoriasDisponiveis.map((cat) => (
@@ -645,7 +665,9 @@ const Animal = () => {
                       value={formData.tipoExercicio}
                       onChange={(e) => setFormData({ ...formData, tipoExercicio: e.target.value })}
                       required
-                      className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                      className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                                 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                                 transition-colors"
                     >
                       <option value="">Selecione o tipo</option>
                       {tiposDisponiveis.map((tipo) => (
@@ -666,14 +688,18 @@ const Animal = () => {
                   placeholder="Nome do veterinário (opcional)"
                   value={formData.veterinarioNome}
                   onChange={(e) => setFormData({ ...formData, veterinarioNome: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                             focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                             transition-colors"
                 />
                 <input
                   type="text"
                   placeholder="Clínica / Hospital (opcional)"
                   value={formData.veterinarioClinica}
                   onChange={(e) => setFormData({ ...formData, veterinarioClinica: e.target.value })}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900"
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900
+                             focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100
+                             transition-colors"
                 />
               </div>
             </div>
@@ -682,12 +708,15 @@ const Animal = () => {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors"
+              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                         disabled:cursor-not-allowed text-white py-3.5 rounded-2xl font-semibold
+                         text-base md:text-lg transition-colors"
             >
               {submitting
                 ? isEditMode ? 'Atualizando...' : 'Cadastrando...'
-                : isEditMode ? 'Atualizar Animal' : 'Cadastrar Animal'}
+                : isEditMode ? 'Atualizar Animal'  : 'Cadastrar Animal'}
             </button>
+
           </form>
         </div>
       </div>

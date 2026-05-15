@@ -1,204 +1,209 @@
-import { useState, useEffect } from 'react';
+// src/pages/Alimentos.tsx
+
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { Pencil, Trash2, Plus } from 'lucide-react';
+import api from '../services/api';
+import toast from 'react-hot-toast';
+import { Plus, Pencil, Trash2, ArrowLeft } from 'lucide-react';
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
+interface Alimento {
+  id: number;
+  nome: string;
+  categoria: string | null;
+  fabricante: string | null;
+  forma: string | null;
+  unidade: string | null;
+  ativo: boolean;
+}
+
+const CATEGORIAS = ['Concentrado', 'Óleo / Gordura', 'Suplemento', 'Volumoso'];
+
+// ─── Componente ───────────────────────────────────────────────────────────────
 
 const Alimentos = () => {
   const navigate = useNavigate();
-  const [alimentos, setAlimentos] = useState<any[]>([]);
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [alimentoToDelete, setAlimentoToDelete] = useState<any | null>(null);
 
-  const loadAlimentos = async () => {
+  const [alimentos,       setAlimentos]       = useState<Alimento[]>([]);
+  const [search,          setSearch]          = useState('');
+  const [categoriaFiltro, setCategoriaFiltro] = useState('');
+  const [loading,         setLoading]         = useState(true);
+  const [itemToDelete,    setItemToDelete]     = useState<Alimento | null>(null);
+
+  // ── Carregamento ──────────────────────────────────────────────────────────
+
+  const loadAlimentos = useCallback(async () => {
     try {
-      const res = await axios.get('/api/alimentos');
-      setAlimentos(res.data);
+      setLoading(true);
+      const res = await api.get('/alimentos');
+      setAlimentos(res.data?.dados ?? res.data ?? []);
     } catch (error) {
-      console.error(error);
+      console.error('Erro ao carregar alimentos:', error);
+      toast.error('Erro ao carregar alimentos');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadAlimentos();
   }, []);
 
-  const filteredAlimentos = alimentos.filter((a) =>
-    a.nome.toLowerCase().includes(search.toLowerCase())
-  );
+  useEffect(() => { loadAlimentos(); }, [loadAlimentos]);
 
-  const handleEdit = (alimento: any) => {
-    navigate(`/alimentos/${alimento.id}`);
-  };
+  // ── Filtro local ──────────────────────────────────────────────────────────
 
-  const handleDeleteClick = (alimento: any) => {
-    setAlimentoToDelete(alimento);
-  };
+  const filtrados = alimentos.filter(a => {
+    const termo = search.toLowerCase();
+    const matchTexto = a.nome.toLowerCase().includes(termo)
+      || (a.fabricante ?? '').toLowerCase().includes(termo);
+    const matchCategoria = !categoriaFiltro || a.categoria === categoriaFiltro;
+    return matchTexto && matchCategoria;
+  });
+
+  // ── Exclusão ──────────────────────────────────────────────────────────────
 
   const confirmDelete = async () => {
-    if (!alimentoToDelete) return;
+    if (!itemToDelete) return;
     try {
-      await axios.delete(`/api/alimentos/${alimentoToDelete.id}`);
-      alert('✅ Alimento excluído com sucesso!');
-      setAlimentoToDelete(null);
+      await api.delete(`/alimentos/${itemToDelete.id}`);
+      toast.success('Alimento desativado com sucesso!');
+      setItemToDelete(null);
       loadAlimentos();
     } catch (error) {
       console.error(error);
-      alert('❌ Erro ao excluir alimento');
+      toast.error('Erro ao excluir alimento');
     }
   };
 
-  const handleViewDetail = (alimento: any) => {
-    navigate(`/alimentos/${alimento.id}`);
-  };
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 md:space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-3xl font-bold text-gray-900">Alimentos</h1>
-        <button
-          onClick={() => navigate('/alimentos/novo')}
-          className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"
-        >
-          <Plus size={20} />
-          Novo Alimento
+    <div className="min-h-screen bg-gray-50 pb-10">
+      <div className="max-w-6xl mx-auto px-4">
+
+        {/* Voltar */}
+        <button onClick={() => navigate('/')}
+          className="flex items-center gap-2 text-emerald-700 mb-4 mt-6 hover:text-emerald-800 font-medium text-sm">
+          <ArrowLeft size={18} /> Voltar
         </button>
-      </div>
 
-      {/* Search */}
-      <div className="mb-6">
-        <input
-          type="text"
-          placeholder="Buscar por nome..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md border border-gray-300 rounded-3xl px-6 py-4 text-gray-900 focus:outline-none focus:border-emerald-600"
-        />
-      </div>
-
-      {loading ? (
-        <p className="text-center text-gray-500 py-12">Carregando alimentos...</p>
-      ) : (
-        <div className="space-y-4">
-          {filteredAlimentos.map((alimento) => (
-            <div
-              key={alimento.id}
-              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all flex overflow-hidden w-full"
-            >
-              {/* Área clicável */}
-              <div
-                onClick={() => handleViewDetail(alimento)}
-                className="flex flex-1 cursor-pointer"
-              >
-                {/* Ícone / Placeholder (sem foto) */}
-                <div className="w-28 h-28 flex-shrink-0 bg-emerald-100 flex items-center justify-center text-5xl">
-                  🌾
-                </div>
-
-                {/* Informações */}
-                <div className="flex-1 p-6 flex items-center">
-                  <div className="w-full flex items-center">
-                    {/* Nome + Categoria */}
-                    <div className="flex-1 min-w-0 pr-8">
-                      <h3 className="text-2xl font-bold text-gray-900 truncate">
-                        {alimento.nome}
-                      </h3>
-                      <p className="text-emerald-700 font-medium text-lg truncate">
-                        {alimento.categoria || '—'}
-                      </p>
-                    </div>
-
-                    {/* Fabricante + Forma */}
-                    <div className="flex items-center gap-10 flex-shrink-0">
-                      <div className="text-right min-w-[100px]">
-                        <span className="block text-xs uppercase text-gray-500 tracking-widest">FABRICANTE</span>
-                        <span className="font-semibold text-gray-800 text-lg">
-                          {alimento.fabricante || '—'}
-                        </span>
-                      </div>
-                      <div className="text-right min-w-[100px]">
-                        <span className="block text-xs uppercase text-gray-500 tracking-widest">FORMA</span>
-                        <span className="font-semibold text-gray-800 text-lg">
-                          {alimento.forma || '—'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Botões de ação */}
-              <div className="flex items-center p-6 gap-3 border-l border-gray-100">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleEdit(alimento);
-                  }}
-                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Pencil size={18} />
-                  Editar
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteClick(alimento);
-                  }}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-3xl text-sm font-medium transition-colors"
-                >
-                  <Trash2 size={18} />
-                  Excluir
-                </button>
-              </div>
-            </div>
-          ))}
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Alimentos</h1>
+          <button
+            onClick={() => navigate('/alimentos/novo')}
+            className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold transition-colors text-sm w-full sm:w-auto">
+            <Plus size={18} /> Novo Alimento
+          </button>
         </div>
-      )}
 
-      {/* Modal de exclusão */}
-      {alimentoToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="bg-emerald-700 text-white p-6 text-center">
-              <div className="mx-auto w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4">
-                ⚠️
-              </div>
-              <h2 className="text-2xl font-bold">Excluir alimento?</h2>
-              <p className="text-emerald-100 mt-2">
-                Tem certeza que deseja excluir <strong>{alimentoToDelete.nome}</strong> permanentemente?
-                <br />Essa ação não pode ser desfeita.
-              </p>
-            </div>
-
-            <div className="p-6">
-              <div className="flex gap-4 items-center bg-gray-50 rounded-2xl p-4">
-                <div>
-                  <h3 className="font-semibold text-xl">{alimentoToDelete.nome}</h3>
-                  <p className="text-gray-600">{alimentoToDelete.categoria}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t flex">
-              <button
-                onClick={() => setAlimentoToDelete(null)}
-                className="flex-1 py-6 text-lg font-semibold text-gray-700 hover:bg-gray-100"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="flex-1 py-6 text-lg font-semibold text-red-600 hover:bg-red-50 border-l"
-              >
-                Sim, Excluir
-              </button>
-            </div>
+        {/* Filtros */}
+        <div className="flex flex-col sm:flex-row gap-3 mb-6">
+          <div className="w-full sm:w-52">
+            <select
+              value={categoriaFiltro}
+              onChange={e => setCategoriaFiltro(e.target.value)}
+              className="w-full rounded-2xl border border-gray-300 px-4 py-3 bg-white text-gray-900 focus:outline-none focus:border-emerald-600 text-sm">
+              <option value="">Todas as categorias</option>
+              {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="flex-1">
+            <input
+              type="text"
+              placeholder="Buscar por nome ou fabricante..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full border border-gray-300 rounded-2xl px-5 py-3 text-gray-900 bg-white focus:outline-none focus:border-emerald-600 text-sm" />
           </div>
         </div>
-      )}
+
+        {/* Tabela */}
+        {loading ? (
+          <p className="text-center text-gray-500 py-12">Carregando alimentos...</p>
+        ) : (
+          <div className="bg-white rounded-3xl shadow overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nome</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Categoria</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Fabricante</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Forma</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Unidade</th>
+                  <th className="text-right px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center text-gray-400">
+                      Nenhum alimento encontrado.
+                    </td>
+                  </tr>
+                ) : filtrados.map(alimento => (
+                  <tr key={alimento.id} className="border-t hover:bg-gray-50">
+                    <td className="px-6 py-4 font-semibold text-gray-900">{alimento.nome}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{alimento.categoria ?? '—'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{alimento.fabricante ?? '—'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{alimento.forma ?? '—'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{alimento.unidade ?? '—'}</td>
+                    <td className="px-6 py-4">
+                      <div className="flex justify-end gap-3">
+                        <button
+                          onClick={() => navigate(`/alimentos/${alimento.id}`)}
+                          className="text-emerald-600 hover:text-emerald-700"
+                          title="Editar">
+                          <Pencil size={18} />
+                        </button>
+                        <button
+                          onClick={() => setItemToDelete(alimento)}
+                          className="text-red-500 hover:text-red-700"
+                          title="Excluir">
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Contagem */}
+        {!loading && filtrados.length > 0 && (
+          <p className="text-center text-sm text-gray-400 mt-4">
+            {filtrados.length} {filtrados.length === 1 ? 'alimento encontrado' : 'alimentos encontrados'}
+          </p>
+        )}
+
+        {/* Modal de exclusão */}
+        {itemToDelete && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
+              <div className="bg-emerald-700 text-white p-6 text-center">
+                <h2 className="text-xl font-bold">Excluir alimento?</h2>
+                <p className="text-emerald-100 mt-2 text-sm">
+                  Tem certeza que deseja desativar <strong>{itemToDelete.nome}</strong>?
+                  O alimento não aparecerá mais nas listagens, mas o histórico de dietas é preservado.
+                </p>
+              </div>
+              <div className="p-6 flex gap-3">
+                <button
+                  onClick={() => setItemToDelete(null)}
+                  className="flex-1 py-3 text-gray-700 font-semibold border border-gray-300 rounded-2xl hover:bg-gray-50 transition-colors">
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="flex-1 py-3 bg-red-600 text-white font-semibold rounded-2xl hover:bg-red-700 transition-colors">
+                  Sim, Excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 };

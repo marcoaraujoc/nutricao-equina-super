@@ -9,6 +9,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+
 import Animal from './pages/Animal';
 import MeusAnimais from './pages/MeusAnimais';
 import Alimentos from './pages/Alimentos';
@@ -27,7 +28,7 @@ import CriaExameNutricional from './pages/CriaExameNutricional';
 import RelatorioNutricional from './pages/RelatorioNutricional';
 import ComposicaoAlimentar from './pages/ComposicaoAlimentar';
 import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
-import NovoNutrienteComposicao from './pages/NovoNutrienteComposicao';
+import NovoNutrienteComposicao from './pages/Novonutrientecomposicao';
 
 //Import Temporário
 import QueryAdHoc from './pages/query-adhoc';
@@ -83,9 +84,11 @@ function App() {
 
                           {/* Rotas de Animais */}
                           <Route path="/meus-animais" element={<MeusAnimais />} />
+
+                          {/* Rotas de Animais - Retirado para testar o CHAT  */}                        
                           <Route path="/animais" element={<Animal />} />
                           <Route path="/animais/:id" element={<Animal />} />
-
+                          
                           {/* Rotas de Alimentos */}
                           <Route path="/alimentos" element={<Alimentos />} />
                           <Route path="/alimentos/novo" element={<CriaAlimentos />} />

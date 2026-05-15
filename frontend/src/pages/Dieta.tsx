@@ -1,11 +1,14 @@
+// src/pages/Dieta.tsx
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import {
-  ArrowLeft, Plus, Pencil, Trash2,
-  Check, X, Search, ToggleLeft, ToggleRight, Printer,
+  ArrowLeft, Plus, Pencil, Trash2, Check, X,
+  Search, ToggleLeft, ToggleRight, Printer, AlertTriangle,
 } from 'lucide-react';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
 
@@ -31,6 +34,7 @@ interface PlanoDieta {
 interface Alimento {
   id: number;
   nome: string;
+  unidade?: string | null;
 }
 
 interface DietaItem {
@@ -52,25 +56,52 @@ interface EditItemValues {
   periodicidade: string;
 }
 
-type FeedbackState = { tipo: 'sucesso' | 'info' | 'erro'; mensagem: string } | null;
 type FiltroAtivo = 'todos' | 'ativos' | 'inativos';
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const OPCOES_HORARIO       = ['Manhã', 'Meio-dia', 'Tarde', 'Noite'];
+const OPCOES_DIA_SEMANA    = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+const OPCOES_DIA_MES       = ['Dia 1', 'Dia 7', 'Dia 15', 'Dia 22', 'Último dia'];
+const OPCOES_UNIDADE       = ['kg', 'g', 'L', 'mL', 'unidade', 'porção'];
+const OPCOES_PERIODICIDADE = [
+  '1x ao dia', '2x ao dia', '3x ao dia',
+  '1x por semana', '2x por semana', '3x por semana',
+  '1x por mês', '2x por mês',
+];
+
+const DEFAULT_HORARIOS    = ['Manhã', 'Tarde', 'Noite'];
+const DEFAULT_DIAS_SEMANA = ['Segunda', 'Quarta', 'Sexta'];
+const DEFAULT_DIAS_MES    = ['Dia 1', 'Dia 15', 'Último dia'];
+
+const SLOT_EMOJI: Record<string, string> = {
+  'Manhã': '🌅', 'Meio-dia': '☀️', 'Tarde': '🌤️', 'Noite': '🌙',
+  'Segunda': '📅', 'Terça': '📅', 'Quarta': '📅', 'Quinta': '📅',
+  'Sexta': '📅', 'Sábado': '📅', 'Domingo': '📅',
+  'Dia 1': '📆', 'Dia 7': '📆', 'Dia 15': '📆', 'Dia 22': '📆', 'Último dia': '📆',
+};
+
+// ─── Helper de tipo de periodicidade ─────────────────────────────────────────
+
+const getTipo = (p: string): 'diario' | 'semanal' | 'mensal' =>
+  p.includes('semana') ? 'semanal' : p.includes('mês') ? 'mensal' : 'diario';
 
 // ─── Helpers de snapshot ──────────────────────────────────────────────────────
 
 type ItemSnapshot = Pick<DietaItem, 'id' | 'qtdGramasDia' | 'periodicidade' | 'unidade' | 'horario'>;
 
-const snapshotKey = (planoDietaId: string) => `dieta_snapshot_plano_${planoDietaId}`;
+const snapshotKey = (planId: string) => `dieta_snapshot_plano_${planId}`;
 
-const salvarSnapshot = (planoDietaId: string, itens: DietaItem[]) => {
+const salvarSnapshot = (planId: string, itens: DietaItem[]) => {
   const snap: ItemSnapshot[] = itens.map(({ id, qtdGramasDia, periodicidade, unidade, horario }) => ({
     id, qtdGramasDia, periodicidade, unidade, horario,
   }));
-  sessionStorage.setItem(snapshotKey(planoDietaId), JSON.stringify(snap));
+  sessionStorage.setItem(snapshotKey(planId), JSON.stringify(snap));
 };
 
-const lerSnapshot = (planoDietaId: string): ItemSnapshot[] => {
+const lerSnapshot = (planId: string): ItemSnapshot[] => {
   try {
-    const raw = sessionStorage.getItem(snapshotKey(planoDietaId));
+    const raw = sessionStorage.getItem(snapshotKey(planId));
     return raw ? (JSON.parse(raw) as ItemSnapshot[]) : [];
   } catch { return []; }
 };
@@ -86,7 +117,7 @@ const itensForamAlterados = (snapshot: ItemSnapshot[], atual: DietaItem[]): bool
   });
 };
 
-// ─── Helpers de data ──────────────────────────────────────────────────────────
+// ─── Helpers de data e frequência ────────────────────────────────────────────
 
 const formatarDataBR = (data: string | Date | null | undefined): string => {
   if (!data) return '-';
@@ -96,169 +127,442 @@ const formatarDataBR = (data: string | Date | null | undefined): string => {
 };
 
 const calcularIdade = (dataNascimento: string): string => {
-  const partes = dataNascimento.split('T')[0].split('-');
-  const anoNasc = parseInt(partes[0]);
-  const mesNasc = parseInt(partes[1]) - 1;
-  const diaNasc = parseInt(partes[2]);
-  const hoje = new Date();
-  const diffMs = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
+  const partes   = dataNascimento.split('T')[0].split('-');
+  const anoNasc  = parseInt(partes[0]);
+  const mesNasc  = parseInt(partes[1]) - 1;
+  const diaNasc  = parseInt(partes[2]);
+  const hoje     = new Date();
+  const diffMs   = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
   const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
+  let diffMeses  = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
   if (hoje.getDate() < diaNasc) diffMeses--;
   let diffAnos = hoje.getFullYear() - anoNasc;
   if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
-  if (diffDias < 30) return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
+  if (diffDias < 30)  return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
   if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
   return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
 };
 
-// ─── Constantes de UI ─────────────────────────────────────────────────────────
+const GRUPOS_FREQ: Record<string, string> = {
+  '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
+  '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
+  '1x por mês': 'mensal', '2x por mês': 'mensal',
+};
+const getGrupo = (p: string) => GRUPOS_FREQ[p] ?? p;
 
-const inputClass  = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
-const selectClass = 'border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 w-full';
-const OPCOES_HORARIO = ['Manhã', 'Meio-dia', 'Tarde', 'Janta', 'Noite'];
-
-// ─── Componente de feedback ───────────────────────────────────────────────────
-
-const FeedbackBanner = ({ feedback, onClose }: { feedback: FeedbackState; onClose: () => void }) => {
-  if (!feedback) return null;
-  const styles = {
-    sucesso: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    erro:    'bg-red-50 text-red-700 border-red-200',
-    info:    'bg-blue-50 text-blue-700 border-blue-200',
-  };
-  const icons = { sucesso: '✅', erro: '❌', info: 'ℹ️' };
-  return (
-    <div className={`mb-4 px-4 py-3 rounded-xl text-sm font-medium flex items-center justify-between gap-3 border ${styles[feedback.tipo]}`}>
-      <span>{icons[feedback.tipo]} {feedback.mensagem}</span>
-      <button onClick={onClose} className="opacity-50 hover:opacity-100 leading-none">✕</button>
-    </div>
-  );
+const getPeriodicidadeByCount = (grupo: string, count: number): string => {
+  if (grupo === 'diario')  { if (count===1) return '1x ao dia'; if (count===2) return '2x ao dia'; if (count===3) return '3x ao dia'; }
+  if (grupo === 'semanal') { if (count===1) return '1x por semana'; if (count===2) return '2x por semana'; if (count===3) return '3x por semana'; }
+  if (grupo === 'mensal')  { if (count===1) return '1x por mês'; if (count===2) return '2x por mês'; }
+  return `${count}x`;
 };
 
-// ─── Card do animal ───────────────────────────────────────────────────────────
+// ─── Validação de item ────────────────────────────────────────────────────────
 
-const AnimalCard = ({ animal, user }: { animal: AnimalExtended; user: ReturnType<typeof useAuth>['user'] }) => (
-  <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-4">
-    <div className="w-16 self-stretch bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
-      <img
-        src={animal.photoUrl ?? 'https://picsum.photos/id/1015/400/400'}
-        alt={animal.nome}
-        className="w-full h-full object-cover"
-      />
-    </div>
-    <div className="flex-1 min-w-0">
-      <div className="grid grid-cols-4 gap-x-3 gap-y-0">
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Nome</span>
-          <p className="text-xs font-semibold text-gray-900 truncate">{animal.nome}</p>
-        </div>
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Nascimento</span>
-          <p className="text-xs text-gray-900">
-            {animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}
-          </p>
-        </div>
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Idade</span>
-          <p className="text-xs text-gray-900">
-            {animal.dataNascimento
-              ? calcularIdade(String(animal.dataNascimento))
-              : animal.idadeAnos
-                ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}`
-                : '-'}
-          </p>
-        </div>
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Raça</span>
-          <p className="text-xs text-gray-900 truncate">{animal.raca?.nome ?? '-'}</p>
-        </div>
+const validarItem = (
+  alimentoIdNum: number,
+  novaPeriodicidade: string,
+  novoHorario: string,
+  itens: DietaItem[],
+  alimentos: Alimento[],
+  excludeId?: number,
+): string | null => {
+  const novoGrupo    = getGrupo(novaPeriodicidade);
+  const nomeAlimento = alimentos.find(a => a.id === alimentoIdNum)?.nome ?? 'Este alimento';
+  for (const item of itens) {
+    if (item.id === excludeId) continue;
+    if (item.alimentoId !== alimentoIdNum) continue;
+    if (item.horario === novoHorario) return `"${nomeAlimento}" já está cadastrado neste período/dia.`;
+    if (getGrupo(item.periodicidade) !== novoGrupo)
+      return `"${nomeAlimento}" já existe com frequência "${item.periodicidade}". Um alimento só pode pertencer a um grupo de frequência por plano.`;
+  }
+  return null;
+};
+
+// ─── Subcomponente: Card do animal ────────────────────────────────────────────
+
+function AnimalCard({ animal, user }: {
+  animal: AnimalExtended;
+  user: ReturnType<typeof useAuth>['user'];
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
+      <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
+        <img src={animal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'} alt={animal.nome} className="w-full h-full object-cover" />
       </div>
-      <div className="mt-1.5 pt-1.5 border-t border-gray-100 grid grid-cols-2 gap-x-3">
-      <div>
-        <span className="text-[10px] text-gray-400 leading-none">Proprietário</span>
-        <p className="text-xs font-medium text-gray-900 truncate">
-          {animal.user?.fullName ?? user?.fullName}
-        </p>
-      </div>
-      <div>
-        <span className="text-[10px] text-gray-400 leading-none">E-mail</span>
-        <p className="text-xs text-gray-900 truncate">
-          {animal.user?.email ?? user?.email}
-        </p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 flex-1 min-w-0">
+        <div><span className="block text-[10px] text-gray-400">Nome</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.nome}</span></div>
+        <div><span className="block text-[10px] text-gray-400">Nascimento</span><span className="text-xs font-semibold text-gray-900 block">{animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}</span></div>
+        <div><span className="block text-[10px] text-gray-400">Idade</span><span className="text-xs font-semibold text-gray-900 block">{animal.dataNascimento ? calcularIdade(String(animal.dataNascimento)) : animal.idadeAnos ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
+        <div><span className="block text-[10px] text-gray-400">Raça</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.raca?.nome ?? '-'}</span></div>
+        <div><span className="block text-[10px] text-gray-400">Proprietário</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
+        <div><span className="block text-[10px] text-gray-400">E-mail</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.user?.email ?? user?.email ?? '-'}</span></div>
+        <div><span className="block text-[10px] text-gray-400">Veterinário Responsável</span><span className="text-xs font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
       </div>
     </div>
+  );
+}
+
+// ─── Subcomponente: Slot de horário ───────────────────────────────────────────
+
+function HorarioSlot({
+  horario, items, alimentos, editingItemId, editItemValues,
+  onEditStart, onCancelEdit, onSaveEdit, onDelete, setEditItemValues,
+}: {
+  horario:           string;
+  items:             DietaItem[];
+  alimentos:         Alimento[];
+  editingItemId:     number | null;
+  editItemValues:    EditItemValues;
+  onEditStart:       (item: DietaItem) => void;
+  onCancelEdit:      () => void;
+  onSaveEdit:        (id: number) => void;
+  onDelete:          (item: DietaItem) => void;
+  setEditItemValues: React.Dispatch<React.SetStateAction<EditItemValues>>;
+}) {
+  if (items.length === 0) return null;
+
+  const totalKg = items.reduce((acc, i) => {
+    if (i.unidade === 'g')  return acc + i.qtdGramasDia / 1000;
+    if (i.unidade === 'kg') return acc + i.qtdGramasDia;
+    return acc;
+  }, 0);
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-center gap-2 px-4 py-2 sticky top-0 bg-white z-10">
+        <span className="text-base leading-none">{SLOT_EMOJI[horario] ?? '🍽️'}</span>
+        <span className="text-sm font-semibold text-gray-700">{horario}</span>
+        <span className="text-xs text-gray-400">{items.length} {items.length === 1 ? 'item' : 'itens'} · {totalKg.toFixed(1)} kg</span>
+      </div>
+      {items.map(item => (
+        <div key={item.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-gray-50 border-b border-gray-50 last:border-0">
+          {editingItemId === item.id ? (
+            <>
+              <select value={editItemValues.alimentoId} onChange={e => setEditItemValues(v => ({ ...v, alimentoId: e.target.value }))}
+                className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-900 focus:outline-none focus:border-emerald-500 min-w-0">
+                <option value="">— Selecionar —</option>
+                {alimentos.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </select>
+              <select value={editItemValues.periodicidade} onChange={e => setEditItemValues(v => ({ ...v, periodicidade: e.target.value }))}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-900 focus:outline-none focus:border-emerald-500">
+                {OPCOES_PERIODICIDADE.map(p => <option key={p}>{p}</option>)}
+              </select>
+              <input type="number" step="0.01" min="0" value={editItemValues.qtdGramasDia}
+                onChange={e => setEditItemValues(v => ({ ...v, qtdGramasDia: e.target.value }))}
+                className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-900 focus:outline-none focus:border-emerald-500" />
+              <select value={editItemValues.unidade} onChange={e => setEditItemValues(v => ({ ...v, unidade: e.target.value }))}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-900 focus:outline-none focus:border-emerald-500">
+                {OPCOES_UNIDADE.map(u => <option key={u}>{u}</option>)}
+              </select>
+              <button onClick={() => onSaveEdit(item.id)} className="text-emerald-600 hover:text-emerald-700 flex-shrink-0"><Check size={14} /></button>
+              <button onClick={onCancelEdit} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><X size={14} /></button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1 text-sm text-gray-900 min-w-0 truncate">{item.alimento?.nome}</span>
+              <span className="text-xs text-gray-900 font-medium flex-shrink-0 w-16 text-right">{item.qtdGramasDia} {item.unidade}</span>
+              <button onClick={() => onEditStart(item)} className="text-emerald-400 hover:text-emerald-600 flex-shrink-0 p-0.5"><Pencil size={14} /></button>
+              <button onClick={() => onDelete(item)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-0.5"><Trash2 size={14} /></button>
+            </>
+          )}
+        </div>
+      ))}
     </div>
-  </div>
-);
+  );
+}
+
+// ─── Subcomponente: Divisor de seção ─────────────────────────────────────────
+
+function SectionDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-2 mt-3 mb-1">
+      <div className="flex-1 h-px bg-gray-100" />
+      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</span>
+      <div className="flex-1 h-px bg-gray-100" />
+    </div>
+  );
+}
+
+// ─── Subcomponente: Modal de múltiplos slots ──────────────────────────────────
+
+function ModalMultiSlot({
+  alimento, periodicidade, slotCount, unidadesDisponiveis,
+  opcoesSeletor, defaultSeletores, labelSeletor,
+  onConfirm, onClose,
+}: {
+  alimento:            Alimento;
+  periodicidade:       string;
+  slotCount:           number;
+  unidadesDisponiveis: string[];
+  opcoesSeletor:       string[];
+  defaultSeletores:    string[];
+  labelSeletor:        string;
+  onConfirm:           (slots: { horario: string; qty: string; unidade: string }[]) => Promise<void>;
+  onClose:             () => void;
+}) {
+  const [slots, setSlots] = useState(() =>
+    Array.from({ length: slotCount }, (_, i) => ({
+      horario: defaultSeletores[i] ?? opcoesSeletor[0] ?? 'Manhã',
+      qty:     '',
+      unidade: unidadesDisponiveis[0] ?? 'kg',
+    }))
+  );
+  const [saving, setSaving] = useState(false);
+
+  const updateSlot = (i: number, field: 'horario' | 'qty' | 'unidade', value: string) =>
+    setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s));
+
+  const handleConfirm = async () => {
+    if (slots.some(s => !s.qty || Number(s.qty) <= 0)) {
+      toast.error('Informe a quantidade em todos os slots');
+      return;
+    }
+    setSaving(true);
+    try { await onConfirm(slots); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+        <div className="mb-5">
+          <p className="text-xs text-gray-400 uppercase tracking-wide mb-0.5">Adicionando alimento</p>
+          <h3 className="text-base font-bold text-gray-900">{alimento.nome}</h3>
+          <span className="inline-block mt-1 text-xs font-medium bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">
+            {periodicidade}
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {slots.map((slot, i) => (
+            <div key={i} className="bg-gray-50 rounded-xl p-3">
+              <p className="text-xs font-semibold text-gray-500 mb-2">
+                {SLOT_EMOJI[slot.horario] ?? '📅'} {labelSeletor} {i + 1}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <select value={slot.horario} onChange={e => updateSlot(i, 'horario', e.target.value)}
+                  className="text-sm border border-gray-200 rounded-xl px-2 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+                  {opcoesSeletor.map(h => <option key={h}>{h}</option>)}
+                </select>
+                <input type="number" value={slot.qty} onChange={e => updateSlot(i, 'qty', e.target.value)}
+                  placeholder="Quantidade" min="0" step="0.01"
+                  className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500" />
+                <select value={slot.unidade} onChange={e => updateSlot(i, 'unidade', e.target.value)}
+                  className="text-sm border border-gray-200 rounded-xl px-2 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+                  {unidadesDisponiveis.map(u => <option key={u}>{u}</option>)}
+                </select>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-3 mt-6">
+          <button onClick={onClose} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">Cancelar</button>
+          <button onClick={handleConfirm} disabled={saving}
+            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
+            {saving ? 'Salvando...' : 'Confirmar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Subcomponente: Barra de adição rápida ────────────────────────────────────
+
+function BottomAddBar({
+  alimentos, onAdd, mobile = false,
+}: {
+  alimentos: Alimento[];
+  onAdd:     (alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string) => Promise<void>;
+  mobile?:   boolean;
+}) {
+  const [alimentoId,    setAlimentoId]    = useState('');
+  const [periodicidade, setPeriodicidade] = useState('1x ao dia');
+  const [qty,           setQty]           = useState('');
+  const [horario,       setHorario]       = useState('Manhã');
+  const [unidade,       setUnidade]       = useState('kg');
+  const [saving,        setSaving]        = useState(false);
+  const [showModal,     setShowModal]     = useState(false);
+
+  // slotCount via regex: /^3x/ → 3, /^2x/ → 2, resto → 1
+  const slotCount = /^3x/.test(periodicidade) ? 3 : /^2x/.test(periodicidade) ? 2 : 1;
+
+  const tipo             = getTipo(periodicidade);
+  const precisaModal     = tipo !== 'diario' || slotCount > 1;
+  const opcoesSeletor    = tipo === 'semanal' ? OPCOES_DIA_SEMANA : tipo === 'mensal' ? OPCOES_DIA_MES : OPCOES_HORARIO;
+  const defaultSeletores = tipo === 'semanal' ? DEFAULT_DIAS_SEMANA : tipo === 'mensal' ? DEFAULT_DIAS_MES : DEFAULT_HORARIOS;
+  const labelSeletor     = tipo === 'semanal' ? 'Dia da semana' : tipo === 'mensal' ? 'Dia do mês' : 'Horário';
+
+  const alimentoSelecionado = alimentos.find(a => a.id === Number(alimentoId));
+  const unidadesDisponiveis = alimentoSelecionado?.unidade
+    ? OPCOES_UNIDADE.filter(u => u === alimentoSelecionado.unidade || u === 'g' || u === 'kg')
+    : OPCOES_UNIDADE;
+
+  // Ajusta unidade ao trocar alimento
+  useEffect(() => {
+    if (alimentoSelecionado?.unidade) setUnidade(alimentoSelecionado.unidade);
+  }, [alimentoId]);
+
+  // Abre modal automaticamente ao trocar periodicidade se alimento já selecionado
+  useEffect(() => {
+    if (precisaModal && alimentoId) setShowModal(true);
+  }, [periodicidade]);
+
+  const handleAdd = async () => {
+    if (!alimentoId) { toast.error('Selecione um alimento'); return; }
+    if (precisaModal) { setShowModal(true); return; }
+    if (!qty || Number(qty) <= 0) { toast.error('Informe a quantidade'); return; }
+    setSaving(true);
+    try {
+      await onAdd(Number(alimentoId), horario, periodicidade, Number(qty), unidade);
+      setAlimentoId(''); setQty('');
+    } finally { setSaving(false); }
+  };
+
+  const handleModalConfirm = async (slots: { horario: string; qty: string; unidade: string }[]) => {
+    for (const slot of slots) {
+      await onAdd(Number(alimentoId), slot.horario, periodicidade, Number(slot.qty), slot.unidade);
+    }
+    setAlimentoId(''); setQty('');
+    setShowModal(false);
+  };
+
+  const modalNode = showModal && alimentoSelecionado ? (
+    <ModalMultiSlot
+      alimento={alimentoSelecionado}
+      periodicidade={periodicidade}
+      slotCount={slotCount}
+      unidadesDisponiveis={unidadesDisponiveis}
+      opcoesSeletor={opcoesSeletor}
+      defaultSeletores={defaultSeletores}
+      labelSeletor={labelSeletor}
+      onConfirm={handleModalConfirm}
+      onClose={() => setShowModal(false)}
+    />
+  ) : null;
+
+  if (mobile) {
+    return (
+      <>
+        <div className="border-t border-gray-100 bg-white p-3 space-y-2 flex-shrink-0">
+          <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 focus:outline-none focus:border-emerald-500">
+            <option value="">Selecionar alimento...</option>
+            {alimentos.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </select>
+          <select value={periodicidade} onChange={e => setPeriodicidade(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-xl px-2 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+            {OPCOES_PERIODICIDADE.map(p => <option key={p}>{p}</option>)}
+          </select>
+          {!precisaModal && (
+            <>
+              <select value={horario} onChange={e => setHorario(e.target.value)}
+                className="w-full text-sm border border-gray-200 rounded-xl px-2 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+                {OPCOES_HORARIO.map(h => <option key={h}>{h}</option>)}
+              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <input type="number" value={qty} onChange={e => setQty(e.target.value)}
+                  placeholder="Quantidade" min="0" step="0.01"
+                  className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500" />
+                <select value={unidade} onChange={e => setUnidade(e.target.value)}
+                  className="text-sm border border-gray-200 rounded-xl px-2 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+                  {unidadesDisponiveis.map(u => <option key={u}>{u}</option>)}
+                </select>
+              </div>
+            </>
+          )}
+          <button onClick={handleAdd} disabled={saving}
+            className="w-full flex items-center justify-center gap-2 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors">
+            <Plus size={15} /> {saving ? 'Adicionando...' : 'Adicionar'}
+          </button>
+        </div>
+        {modalNode}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="border-t border-gray-100 bg-white p-2 flex gap-2 items-center flex-shrink-0">
+        <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
+          className="flex-1 min-w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+          <option value="">Selecionar alimento...</option>
+          {alimentos.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+        </select>
+        <select value={periodicidade} onChange={e => setPeriodicidade(e.target.value)}
+          className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
+          {OPCOES_PERIODICIDADE.map(p => <option key={p}>{p}</option>)}
+        </select>
+        <select value={horario} onChange={e => setHorario(e.target.value)}
+          disabled={precisaModal}
+          className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500 disabled:opacity-40">
+          {OPCOES_HORARIO.map(h => <option key={h}>{h}</option>)}
+        </select>
+        <input type="number" value={qty} onChange={e => setQty(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+          placeholder="Qtd" min="0" step="0.01" disabled={precisaModal}
+          className="w-20 text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500 text-center disabled:opacity-40" />
+        <select value={unidade} onChange={e => setUnidade(e.target.value)}
+          disabled={precisaModal}
+          className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500 disabled:opacity-40">
+          {unidadesDisponiveis.map(u => <option key={u}>{u}</option>)}
+        </select>
+        <button onClick={handleAdd} disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors flex-shrink-0">
+          <Plus size={14} /> {saving ? 'Salvando...' : 'Adicionar'}
+        </button>
+      </div>
+      {modalNode}
+    </>
+  );
+}
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 const Dieta = () => {
   const { user } = useAuth();
-  const { selectedAnimal, setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
+  const navigate  = useNavigate();
+  const location  = useLocation();
   const { animalId } = useParams<{ animalId?: string }>();
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
-  const itensRef = useRef<HTMLDivElement>(null);
-
-  // ── Estado compartilhado ───────────────────────────────────────────────────
-  const [animal, setAnimal]                               = useState<AnimalExtended | null>(null);
+  const [animal,                setAnimal]                = useState<AnimalExtended | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<AnimalExtended[]>([]);
-  const [feedback, setFeedback]                           = useState<FeedbackState>(null);
-  const [loading, setLoading]                             = useState(true);
-  const [loadingItens, setLoadingItens]                   = useState(false);
-
-  // ── Planos ────────────────────────────────────────────────────────────────
-  const [planos, setPlanos]                 = useState<PlanoDieta[]>([]);
-  const [search, setSearch]                 = useState('');
-  const [filtroAtivo, setFiltroAtivo]       = useState<FiltroAtivo>('todos');
-  const [criandoPlano, setCriandoPlano]     = useState(false);
-  const [novoPlanoNome, setNovoPlanoNome]   = useState('');
-  const [editandoPlanoId, setEditandoPlanoId] = useState<number | null>(null);
-  const [editandoNome, setEditandoNome]     = useState('');
-
-  // ── Plano selecionado + itens ──────────────────────────────────────────────
-  const [planoSelecionado, setPlanoSelecionado] = useState<PlanoDieta | null>(null);
-  const [itens, setItens]                       = useState<DietaItem[]>([]);
-  const [alimentos, setAlimentos]               = useState<Alimento[]>([]);
-  const [itemParaExcluir, setItemParaExcluir]   = useState<DietaItem | null>(null);
-
-  // ── Edição inline de itens ─────────────────────────────────────────────────
-  const [editingItemId, setEditingItemId]   = useState<number | null>(null);
-  const [editItemValues, setEditItemValues] = useState<EditItemValues>({
+  const [loading,               setLoading]               = useState(true);
+  const [loadingItens,          setLoadingItens]          = useState(false);
+  const [planos,                setPlanos]                = useState<PlanoDieta[]>([]);
+  const [planoSelecionado,      setPlanoSelecionado]      = useState<PlanoDieta | null>(null);
+  const [itens,                 setItens]                 = useState<DietaItem[]>([]);
+  const [alimentos,             setAlimentos]             = useState<Alimento[]>([]);
+  const [search,                setSearch]                = useState('');
+  const [filtroAtivo,           setFiltroAtivo]           = useState<FiltroAtivo>('todos');
+  const [criandoPlano,          setCriandoPlano]          = useState(false);
+  const [novoPlanoNome,         setNovoPlanoNome]         = useState('');
+  const [editandoPlanoId,       setEditandoPlanoId]       = useState<number | null>(null);
+  const [editandoNome,          setEditandoNome]          = useState('');
+  const [itemParaExcluir,       setItemParaExcluir]       = useState<DietaItem | null>(null);
+  const [editingItemId,         setEditingItemId]         = useState<number | null>(null);
+  const [editItemValues,        setEditItemValues]        = useState<EditItemValues>({
     alimentoId: '', qtdGramasDia: '', unidade: '', horario: '', periodicidade: '',
   });
+  const [conflitosFrequencia,   setConflitosFrequencia]  = useState<string[]>([]);
+  const [pendingCriarPlano,     setPendingCriarPlano]    = useState<{ nome: string; planoAtivoNome: string } | null>(null);
+  const [showMobileItems,       setShowMobileItems]       = useState(false);
 
-  // ── Conflitos de frequência ────────────────────────────────────────────────
-  const [conflitosFrequencia, setConflitosFrequencia] = useState<string[]>([]);
-  const [pendingCriarPlano, setPendingCriarPlano]     = useState<{ nome: string; planoAtivoNome: string } | null>(null);
+  const itensRef = useRef<HTMLDivElement>(null);
 
-  // ── Feedback ───────────────────────────────────────────────────────────────
-  const exibirFeedback = (tipo: 'sucesso' | 'info' | 'erro', mensagem: string) => {
-    setFeedback({ tipo, mensagem });
-    setTimeout(() => setFeedback(null), 5000);
-  };
+  // ── Loaders ───────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (location.state?.mensagem) {
-      exibirFeedback('sucesso', location.state.mensagem);
-      window.history.replaceState({}, '');
-    }
-  }, []);
-
-  // ── Loaders ────────────────────────────────────────────────────────────────
   const carregarAnimal = useCallback(async () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
-      const animalAtual = (res.data?.dados ?? res.data) as AnimalExtended;
-      setAnimal(animalAtual);
-      setSelectedAnimal(animalAtual);
-      await refreshSelectedAnimal?.();
+      const a   = (res.data?.dados ?? res.data) as AnimalExtended;
+      setAnimal(a); setSelectedAnimal(a);
     } catch (err) { console.error('Erro ao carregar animal:', err); }
   }, [effectiveAnimalId]);
 
@@ -289,17 +593,12 @@ const Dieta = () => {
       const res = await api.get(endpoint);
       setPlanos(res.data.dados ?? []);
     } catch (err) {
-      console.error(err);
-      exibirFeedback('erro', 'Erro ao carregar planos de dieta');
-    } finally {
-      setLoading(false);
-    }
+      console.error(err); toast.error('Erro ao carregar planos de dieta');
+    } finally { setLoading(false); }
   }, [effectiveAnimalId, search, filtroAtivo]);
 
   const carregarItens = useCallback(async (planId: number) => {
-    setLoadingItens(true);
-    setEditingItemId(null);
-    setConflitosFrequencia([]);
+    setLoadingItens(true); setEditingItemId(null); setConflitosFrequencia([]);
     try {
       const [planoRes, itensRes] = await Promise.all([
         api.get(`/dietas/planos/${planId}`),
@@ -307,198 +606,123 @@ const Dieta = () => {
       ]);
       const plano     = planoRes.data.dados as PlanoDieta;
       const itensList = itensRes.data.dados as DietaItem[];
-      setPlanoSelecionado(plano);
-      setItens(itensList);
+      setPlanoSelecionado(plano); setItens(itensList);
 
-      // ── Detecta alimentos com frequências diferentes no mesmo plano ──────
       const freqPorAlimento  = new Map<number, Set<string>>();
       const nomesPorAlimento = new Map<number, string>();
       itensList.forEach(item => {
-        if (!freqPorAlimento.has(item.alimentoId)) {
-          freqPorAlimento.set(item.alimentoId, new Set());
-        }
+        if (!freqPorAlimento.has(item.alimentoId)) freqPorAlimento.set(item.alimentoId, new Set());
         freqPorAlimento.get(item.alimentoId)!.add(item.periodicidade);
         nomesPorAlimento.set(item.alimentoId, item.alimento?.nome ?? String(item.alimentoId));
       });
-      const GRUPOS_FREQ: Record<string, string> = {
-        '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
-        '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
-        '1x por mês': 'mensal', '2x por mês': 'mensal',
-      };
       const conflitos: string[] = [];
       freqPorAlimento.forEach((freqs, alimentoId) => {
         const grupos = new Set([...freqs].map(f => GRUPOS_FREQ[f] ?? f));
-        if (grupos.size > 1) {
+        if (grupos.size > 1)
           conflitos.push(`${nomesPorAlimento.get(alimentoId)} (${[...freqs].join(' + ')})`);
-        }
       });
       setConflitosFrequencia(conflitos);
 
       const key = snapshotKey(String(planId));
       if (!sessionStorage.getItem(key)) salvarSnapshot(String(planId), itensList);
     } catch (err) {
-      console.error(err);
-      exibirFeedback('erro', 'Erro ao carregar itens da dieta');
-    } finally {
-      setLoadingItens(false);
-    }
+      console.error(err); toast.error('Erro ao carregar itens da dieta');
+    } finally { setLoadingItens(false); }
   }, []);
 
-  // ── Effects ────────────────────────────────────────────────────────────────
+  // ── Effects ───────────────────────────────────────────────────────────────
+
   useEffect(() => {
-    carregarAnimal();
-    carregarAnimais();
-    carregarAlimentos();
+    carregarAnimal(); carregarAnimais(); carregarAlimentos();
   }, [effectiveAnimalId]);
 
   useEffect(() => { carregarPlanos(); }, [effectiveAnimalId, search, filtroAtivo]);
 
   useEffect(() => {
-    if (location.state?.planoAberto && planos.length > 0) {
+    if (planos.length === 0) return;
+    if (location.state?.planoAberto) {
       const plano = planos.find(p => p.id === location.state.planoAberto);
-      if (plano) {
-        carregarItens(plano.id);
-        setTimeout(() => itensRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
-        window.history.replaceState({}, '');
-      }
+      if (plano) { carregarItens(plano.id); setShowMobileItems(true); window.history.replaceState({}, ''); return; }
+    }
+    if (!planoSelecionado) {
+      const ativo = planos.find(p => p.ativo) ?? planos[0];
+      if (ativo) carregarItens(ativo.id);
     }
   }, [planos]);
 
-  // ── Impressão ──────────────────────────────────────────────────────────────
-  const dispararImpressao = () => {
-    if (!planoSelecionado) return;
-    const pw = window.open('', '_blank', 'width=900,height=700');
-    if (!pw) {
-      exibirFeedback('erro', 'Popup bloqueado. Permita popups neste site para imprimir.');
-      return;
-    }
-    pw.document.write(gerarHtmlDieta(animal, planoSelecionado, itens, user));
-    pw.document.close();
-  };
+  // ── Handlers: planos ──────────────────────────────────────────────────────
 
-  // ── Toggle do plano selecionado (header) ───────────────────────────────────
-  const handleTogglePlanoSelecionado = async () => {
-    if (!planoSelecionado) return;
-    try {
-      const res       = await api.patch(`/dietas/planos/${planoSelecionado.id}/toggle`);
-      const atualizado = res.data.dados as PlanoDieta;
-      setPlanoSelecionado(atualizado);
-      setPlanos(prev => prev.map(p => p.id === atualizado.id ? { ...p, ativo: atualizado.ativo } : p));
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao alterar status'); }
-  };
-
-  // ── Selecionar plano inline ────────────────────────────────────────────────
   const handleSelecionarPlano = (plano: PlanoDieta) => {
     if (planoSelecionado?.id === plano.id) {
-      setPlanoSelecionado(null);
-      setItens([]);
-      setEditingItemId(null);
-      return;
+      setPlanoSelecionado(null); setItens([]); setEditingItemId(null); setShowMobileItems(false); return;
     }
-    carregarItens(plano.id);
-    setTimeout(() => itensRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+    carregarItens(plano.id); setShowMobileItems(true);
   };
 
-  // ── Handlers: planos ───────────────────────────────────────────────────────
   const handleCriarPlano = async () => {
-    const nomeParaCriar = (pendingCriarPlano?.nome ?? novoPlanoNome).trim();
-    if (!nomeParaCriar) { exibirFeedback('erro', 'Informe um nome para o plano'); return; }
-
-    // Primeira chamada: verifica se há plano ativo e pede confirmação
+    const nomeFinal = (pendingCriarPlano?.nome ?? novoPlanoNome).trim();
+    if (!nomeFinal) { toast.error('Informe um nome para o plano'); return; }
     if (!pendingCriarPlano) {
       const planoAtivo = planos.find(p => p.ativo);
-      if (planoAtivo) {
-        setPendingCriarPlano({ nome: nomeParaCriar, planoAtivoNome: planoAtivo.nome });
-        return;
-      }
+      if (planoAtivo) { setPendingCriarPlano({ nome: nomeFinal, planoAtivoNome: planoAtivo.nome }); return; }
     }
-
     try {
       const planoAtivo = planos.find(p => p.ativo);
-      const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeParaCriar });
+      const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeFinal });
       const novoPlano  = res.data.dados as PlanoDieta;
-
-      // Desativa o plano que estava ativo
-      if (planoAtivo) {
-        await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
-      }
-
+      if (planoAtivo) await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
       setNovoPlanoNome(''); setCriandoPlano(false); setPendingCriarPlano(null);
-      navigate(`/dieta/${effectiveAnimalId}/plano/${novoPlano.id}/novo`);
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao criar plano'); }
+      await carregarPlanos();
+      carregarItens(novoPlano.id); setShowMobileItems(true);
+    } catch (err) { console.error(err); toast.error('Erro ao criar plano'); }
   };
 
   const handleSalvarNomePlano = async (id: number) => {
-    if (!editandoNome.trim()) { exibirFeedback('erro', 'O nome não pode ser vazio'); return; }
+    if (!editandoNome.trim()) { toast.error('O nome não pode ser vazio'); return; }
     try {
       await api.put(`/dietas/planos/${id}`, { nome: editandoNome.trim() });
       setEditandoPlanoId(null);
-      if (planoSelecionado?.id === id) {
+      if (planoSelecionado?.id === id)
         setPlanoSelecionado(prev => prev ? { ...prev, nome: editandoNome.trim() } : prev);
-      }
       carregarPlanos();
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao atualizar nome'); }
+    } catch (err) { console.error(err); toast.error('Erro ao atualizar nome'); }
   };
 
-  // ── Validação de edição: grupo de frequência + horário duplicado ───────────
-
-  const GRUPOS_FREQUENCIA: Record<string, string> = {
-    '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
-    '1x por semana': 'semanal', '2x por semana': 'semanal', '3x por semana': 'semanal',
-    '1x por mês': 'mensal', '2x por mês': 'mensal',
-    'Diário': 'diario', 'Semanal': 'semanal', 'Quinzenal': 'quinzenal', 'Mensal': 'mensal',
+  const handleTogglePlano = async () => {
+    if (!planoSelecionado) return;
+    try {
+      const res        = await api.patch(`/dietas/planos/${planoSelecionado.id}/toggle`);
+      const atualizado = res.data.dados as PlanoDieta;
+      setPlanoSelecionado(atualizado);
+      setPlanos(prev => prev.map(p => {
+        if (p.id === atualizado.id) return { ...p, ativo: atualizado.ativo };
+        if (atualizado.ativo) return { ...p, ativo: false };
+        return p;
+      }));
+    } catch (err) { console.error(err); toast.error('Erro ao alterar status'); }
   };
 
-  const getGrupo = (p: string): string => GRUPOS_FREQUENCIA[p] ?? p;
+  // ── Handlers: itens ───────────────────────────────────────────────────────
 
-  const getPeriodicidadeByCount = (grupo: string, count: number): string => {
-    if (grupo === 'diario')  {
-      if (count === 1) return '1x ao dia';
-      if (count === 2) return '2x ao dia';
-      if (count === 3) return '3x ao dia';
-    }
-    if (grupo === 'semanal') {
-      if (count === 1) return '1x por semana';
-      if (count === 2) return '2x por semana';
-      if (count === 3) return '3x por semana';
-    }
-    if (grupo === 'mensal')  {
-      if (count === 1) return '1x por mês';
-      if (count === 2) return '2x por mês';
-    }
-    return `${count}x`;
+  const handleAddItem = async (
+    alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string,
+  ) => {
+    if (!planoSelecionado) { toast.error('Selecione um plano primeiro'); return; }
+    const erro = validarItem(alimentoId, periodicidade, horario, itens, alimentos);
+    if (erro) { toast.error(erro); return; }
+    try {
+      await api.post('/dietas', {
+        animalId:      Number(effectiveAnimalId),
+        planoDietaId:  planoSelecionado.id,
+        alimentoId, periodicidade, qtdGramasDia: qty, unidade, horario,
+      });
+      toast.success('Alimento adicionado!');
+      sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
+      carregarItens(planoSelecionado.id); carregarPlanos();
+    } catch (err) { console.error(err); toast.error('Erro ao adicionar alimento'); throw err; }
   };
 
-  const validarEdicaoItem = (
-    alimentoIdNum: number,
-    novaPeriodicidade: string,
-    novoHorario: string,
-    excludeItemId: number,
-  ): string | null => {
-    const novoGrupo    = getGrupo(novaPeriodicidade);
-    const nomeAlimento = alimentos.find(a => a.id === alimentoIdNum)?.nome ?? 'Este alimento';
-
-    for (const item of itens) {
-      if (item.id === excludeItemId) continue;
-      if (item.alimentoId !== alimentoIdNum) continue;
-
-      // Regra 1 — mesmo alimento, mesmo horário
-      if (item.horario === novoHorario) {
-        return `"${nomeAlimento}" já está cadastrado no horário "${novoHorario}".`;
-      }
-
-      // Regra 2/3 — mesmo alimento em grupo de frequência diferente
-      if (getGrupo(item.periodicidade) !== novoGrupo) {
-        return `"${nomeAlimento}" já existe com frequência "${item.periodicidade}". Um alimento só pode pertencer a um grupo de frequência por plano.`;
-      }
-    }
-
-    return null;
-  };
-
-  // ── Handlers: itens ────────────────────────────────────────────────────────
-
-  const handleStartEditItem = (item: DietaItem) => {
+  const handleStartEdit = (item: DietaItem) => {
     setEditingItemId(item.id);
     setEditItemValues({
       alimentoId:    String(item.alimentoId),
@@ -509,515 +733,408 @@ const Dieta = () => {
     });
   };
 
-  const handleCancelEditItem = () => {
-    setEditingItemId(null);
-    setEditItemValues({ alimentoId: '', qtdGramasDia: '', unidade: '', horario: '', periodicidade: '' });
-  };
-
-  const handleSaveEditItem = async (id: number) => {
+  const handleSaveEdit = async (id: number) => {
     const alimentoIdNum = Number(editItemValues.alimentoId);
-    const erroValidacao = validarEdicaoItem(
-      alimentoIdNum,
-      editItemValues.periodicidade,
-      editItemValues.horario,
-      id,
-    );
-
-    if (erroValidacao) {
-      exibirFeedback('erro', erroValidacao);
-      return;
-    }
-
+    const erro = validarItem(alimentoIdNum, editItemValues.periodicidade, editItemValues.horario, itens, alimentos, id);
+    if (erro) { toast.error(erro); return; }
     try {
       await api.put(`/dietas/${id}`, {
-        alimentoId:    Number(editItemValues.alimentoId),
+        alimentoId:    alimentoIdNum,
         qtdGramasDia:  Number(editItemValues.qtdGramasDia),
         unidade:       editItemValues.unidade,
         horario:       editItemValues.horario || null,
         periodicidade: editItemValues.periodicidade,
       });
-      setEditingItemId(null);
-      exibirFeedback('sucesso', 'Alimento atualizado');
+      setEditingItemId(null); toast.success('Alimento atualizado');
       if (planoSelecionado) carregarItens(planoSelecionado.id);
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao atualizar alimento'); }
+    } catch (err) { console.error(err); toast.error('Erro ao atualizar alimento'); }
   };
 
   const handleExcluirItem = async () => {
     if (!itemParaExcluir || !planoSelecionado) return;
     try {
       await api.delete(`/dietas/${itemParaExcluir.id}`);
-
-      // Recalcula periodicidade dos irmãos (mesmo alimento, mesmo grupo de frequência)
-      const grupo   = getGrupo(itemParaExcluir.periodicidade);
-      const irmaos  = itens.filter(i =>
+      const grupo  = getGrupo(itemParaExcluir.periodicidade);
+      const irmaos = itens.filter(i =>
         i.id !== itemParaExcluir.id &&
         i.alimentoId === itemParaExcluir.alimentoId &&
         getGrupo(i.periodicidade) === grupo
       );
       if (irmaos.length > 0) {
         const novaPeriodicidade = getPeriodicidadeByCount(grupo, irmaos.length);
-        await Promise.all(
-          irmaos.map(irmao => api.put(`/dietas/${irmao.id}`, {
-            alimentoId:    irmao.alimentoId,
-            qtdGramasDia:  irmao.qtdGramasDia,
-            unidade:       irmao.unidade,
-            horario:       irmao.horario,
-            periodicidade: novaPeriodicidade,
-          }))
-        );
+        await Promise.all(irmaos.map(irmao => api.put(`/dietas/${irmao.id}`, {
+          alimentoId: irmao.alimentoId, qtdGramasDia: irmao.qtdGramasDia,
+          unidade: irmao.unidade, horario: irmao.horario, periodicidade: novaPeriodicidade,
+        })));
       }
-
       setItemParaExcluir(null);
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
-      exibirFeedback('sucesso', 'Alimento removido da dieta');
-      carregarItens(planoSelecionado.id);
-    } catch (err) { console.error(err); exibirFeedback('erro', 'Erro ao excluir alimento'); }
+      toast.success('Alimento removido da dieta');
+      carregarItens(planoSelecionado.id); carregarPlanos();
+    } catch (err) { console.error(err); toast.error('Erro ao excluir alimento'); }
   };
 
-  const handleSalvarDieta = () => {
+  const dispararImpressao = () => {
     if (!planoSelecionado) return;
-    if (itens.length === 0) { exibirFeedback('erro', 'Adicione ao menos um alimento antes de salvar'); return; }
-    const planId = String(planoSelecionado.id);
-    if (!itensForamAlterados(lerSnapshot(planId), itens)) {
-      exibirFeedback('info', 'Nenhuma alteração foi realizada na dieta'); return;
-    }
-    salvarSnapshot(planId, itens);
-    exibirFeedback('sucesso', 'Dieta salva com sucesso!');
+    const pw = window.open('', '_blank', 'width=900,height=700');
+    if (!pw) { toast.error('Popup bloqueado. Permita popups para imprimir.'); return; }
+    pw.document.write(gerarHtmlDieta(animal, planoSelecionado, itens, user));
+    pw.document.close();
   };
 
-  const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = animaisDoProprietario.find((a) => a.id === Number(e.target.value));
-    if (selected) {
-      setSelectedAnimal(selected);
-      setPlanoSelecionado(null);
-      setItens([]);
-      setEditingItemId(null);
-      navigate(`/dieta/${selected.id}`);
-    }
+  // ── Derived ───────────────────────────────────────────────────────────────
+
+  const itensDiarios  = itens.filter(i => getTipo(i.periodicidade) === 'diario');
+  const itensSemanais = itens.filter(i => getTipo(i.periodicidade) === 'semanal');
+  const itensMensais  = itens.filter(i => getTipo(i.periodicidade) === 'mensal');
+
+  const itensPorSlotSubset = (h: string, subset: DietaItem[]) => subset.filter(i => i.horario === h);
+
+  const slotsDiarios  = [...new Set(itensDiarios.map(i  => i.horario ?? 'Sem horário'))].sort((a, b) => {
+    const ai = OPCOES_HORARIO.indexOf(a); const bi = OPCOES_HORARIO.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+  const slotsSemanais = [...new Set(itensSemanais.map(i => i.horario ?? 'Sem dia'))].sort((a, b) => {
+    const ai = OPCOES_DIA_SEMANA.indexOf(a); const bi = OPCOES_DIA_SEMANA.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+  const slotsMensais  = [...new Set(itensMensais.map(i  => i.horario ?? 'Sem dia'))].sort((a, b) => {
+    const ai = OPCOES_DIA_MES.indexOf(a); const bi = OPCOES_DIA_MES.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+
+  const commonSlotProps = {
+    alimentos, editingItemId, editItemValues, setEditItemValues,
+    onEditStart:  handleStartEdit,
+    onCancelEdit: () => setEditingItemId(null),
+    onSaveEdit:   handleSaveEdit,
+    onDelete:     (item: DietaItem) => setItemParaExcluir(item),
   };
 
-  // ── Guard ──────────────────────────────────────────────────────────────────
+  const renderItensPanel = (loadingItens: boolean) => {
+    if (loadingItens) return <p className="text-center py-8 text-gray-400 text-sm">Carregando...</p>;
+    if (itens.length === 0) return <p className="text-center py-8 text-gray-300 text-sm">Nenhum alimento. Use a barra abaixo para adicionar.</p>;
+
+    return (
+      <>
+        {/* Diário */}
+        {slotsDiarios.map(h => (
+          <HorarioSlot key={`d-${h}`} horario={h} items={itensPorSlotSubset(h, itensDiarios)} {...commonSlotProps} />
+        ))}
+
+        {/* Semanal */}
+        {itensSemanais.length > 0 && (
+          <>
+            <SectionDivider label="📅 Semanal" />
+            {slotsSemanais.map(h => (
+              <HorarioSlot key={`s-${h}`} horario={h} items={itensPorSlotSubset(h, itensSemanais)} {...commonSlotProps} />
+            ))}
+          </>
+        )}
+
+        {/* Mensal */}
+        {itensMensais.length > 0 && (
+          <>
+            <SectionDivider label="📆 Mensal" />
+            {slotsMensais.map(h => (
+              <HorarioSlot key={`m-${h}`} horario={h} items={itensPorSlotSubset(h, itensMensais)} {...commonSlotProps} />
+            ))}
+          </>
+        )}
+      </>
+    );
+  };
+
+  // ── Guard ─────────────────────────────────────────────────────────────────
+
   if (!effectiveAnimalId || (!animal && loading)) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-500 text-sm">Carregando...</p>
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-3" />
+          <p className="text-gray-400 text-sm">Carregando...</p>
+        </div>
       </div>
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
-    <div className="min-h-screen bg-gray-50 pt-6 pb-10">
+    <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-5xl mx-auto px-4">
 
-        {/* Voltar */}
-        <div className="mb-4">
-          <button
-            onClick={() => navigate('/')}
-            className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
-          >
-            <ArrowLeft size={20} />
-            <span className="text-sm">Voltar</span>
-          </button>
-        </div>
+        <button onClick={() => navigate('/')}
+          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-4 mt-6 text-sm">
+          <ArrowLeft size={18} /> Voltar
+        </button>
 
-        {/* Seletor de animal */}
+        {animal && <AnimalCard animal={animal} user={user} />}
+
         {animaisDoProprietario.length > 1 && (
           <div className="mb-4">
-            <label className="block text-xs font-medium text-gray-500 mb-1">Animal</label>
-            <select
-              value={effectiveAnimalId}
-              onChange={handleAnimalChange}
-              className="w-full rounded-2xl border border-gray-300 p-3 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-            >
-              {animaisDoProprietario.map((a) => (
-                <option key={a.id} value={a.id}>{a.nome}</option>
-              ))}
+            <select value={effectiveAnimalId}
+              onChange={e => {
+                const sel = animaisDoProprietario.find(a => a.id === Number(e.target.value));
+                if (sel) { setSelectedAnimal(sel); setPlanoSelecionado(null); setItens([]); navigate(`/dieta/${sel.id}`); }
+              }}
+              className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500">
+              {animaisDoProprietario.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
             </select>
           </div>
         )}
 
-        {animal && <AnimalCard animal={animal} user={user} />}
+        {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
+        <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
 
-        <FeedbackBanner feedback={feedback} onClose={() => setFeedback(null)} />
-
-        {/* ── Busca + novo plano ──────────────────────────────────────────── */}
-        <div className="flex gap-2 mb-4">
-          <div className="flex-1 relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Buscar plano..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-300 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-          <button
-            onClick={() => { setCriandoPlano(true); setNovoPlanoNome(''); }}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-medium transition-colors"
-          >
-            <Plus size={15} /> Novo plano
-          </button>
-        </div>
-
-        {/* Filtros */}
-        <div className="flex gap-2 mb-4">
-          {(['todos', 'ativos', 'inativos'] as FiltroAtivo[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFiltroAtivo(f)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize transition-colors ${
-                filtroAtivo === f
-                  ? 'bg-emerald-700 text-white'
-                  : 'bg-white border border-gray-300 text-gray-600 hover:border-emerald-500'
-              }`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-
-        {/* Form novo plano */}
-        {criandoPlano && (
-          <div className="bg-white rounded-2xl shadow border border-emerald-200 p-4 mb-3 space-y-3">
-            <div className="flex gap-2 items-center">
-              <input
-                autoFocus
-                type="text"
-                placeholder="Nome do plano..."
-                value={novoPlanoNome}
-                onChange={(e) => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleCriarPlano(); if (e.key === 'Escape') { setCriandoPlano(false); setPendingCriarPlano(null); } }}
-                className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-              />
-              <button onClick={handleCriarPlano} className="p-2 text-emerald-700 hover:text-emerald-800"><Check size={18} /></button>
-              <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-2 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          {/* Header full-width com nome centralizado */}
+          <div className="relative flex items-center px-4 py-3 border-b border-gray-100 flex-shrink-0">
+            <span className="absolute inset-x-0 text-base font-semibold text-gray-900 text-center pointer-events-none">
+              {planoSelecionado?.nome ?? ''}
+            </span>
+            <div className="ml-auto flex items-center gap-2 relative z-10">
+              {planoSelecionado && (
+                <>
+                  <button onClick={handleTogglePlano}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                      planoSelecionado.ativo ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}>
+                    {planoSelecionado.ativo ? <ToggleRight size={13} /> : <ToggleLeft size={13} />}
+                    {planoSelecionado.ativo ? 'Ativo' : 'Inativo'}
+                  </button>
+                  <button onClick={dispararImpressao}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-xs text-gray-600 transition-colors">
+                    <Printer size={13} /> Imprimir
+                  </button>
+                </>
+              )}
             </div>
-            {pendingCriarPlano && (
-              <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                <p className="font-semibold mb-1">⚠️ Atenção</p>
-                <p>O plano <strong>"{pendingCriarPlano.planoAtivoNome}"</strong> será inativado automaticamente. Deseja continuar?</p>
-                <div className="flex gap-2 mt-2">
-                  <button
-                    onClick={handleCriarPlano}
-                    className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium"
-                  >
-                    Confirmar
-                  </button>
-                  <button
-                    onClick={() => setPendingCriarPlano(null)}
-                    className="px-3 py-1 border border-amber-300 text-amber-700 rounded-lg text-xs font-medium hover:bg-amber-100"
-                  >
-                    Cancelar
-                  </button>
+          </div>
+
+          {/* Corpo: duas colunas */}
+          <div className="flex flex-1 min-h-0">
+
+            {/* Coluna esquerda: planos */}
+            <div className="w-56 flex-shrink-0 border-r border-gray-100 flex flex-col">
+              <div className="p-3 space-y-2 border-b border-gray-100">
+                <div className="relative">
+                  <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar plano..."
+                    className="w-full pl-8 pr-2 py-2 text-xs text-gray-900 border border-gray-200 rounded-xl focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="flex gap-1">
+                  {(['todos','ativos','inativos'] as FiltroAtivo[]).map(f => (
+                    <button key={f} onClick={() => setFiltroAtivo(f)}
+                      className={`flex-1 py-1 text-[11px] rounded-full font-medium capitalize transition-colors ${
+                        filtroAtivo === f ? 'bg-emerald-700 text-white' : 'border border-gray-200 text-gray-500 hover:border-emerald-300'
+                      }`}>{f}</button>
+                  ))}
                 </div>
               </div>
-            )}
-          </div>
-        )}
 
-        {/* ── Lista de planos ─────────────────────────────────────────────── */}
-        {loading ? (
-          <p className="text-center py-12 text-gray-400 text-sm">Carregando planos...</p>
-        ) : planos.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-gray-400 text-sm">Nenhum plano de dieta encontrado.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {planos.map((plano) => {
-              const isSelecionado = planoSelecionado?.id === plano.id;
-
-              return (
-                <div
-                  key={plano.id}
-                  className={`bg-white rounded-2xl shadow border transition-colors ${
-                    isSelecionado ? 'border-emerald-400' : 'border-gray-100'
-                  } p-4`}
-                >
-                  {editandoPlanoId === plano.id ? (
-                    <div className="flex gap-2 items-center">
-                      <input
-                        autoFocus
-                        type="text"
-                        value={editandoNome}
-                        onChange={(e) => setEditandoNome(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSalvarNomePlano(plano.id);
-                          if (e.key === 'Escape') setEditandoPlanoId(null);
-                        }}
-                        className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
-                      />
-                      <button onClick={() => handleSalvarNomePlano(plano.id)} className="p-1.5 text-emerald-700 hover:text-emerald-800"><Check size={16} /></button>
-                      <button onClick={() => setEditandoPlanoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600"><X size={16} /></button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-3">
-
-                      {/* Info clicável */}
-                      <div
-                        className="flex-1 min-w-0 cursor-pointer"
-                        onClick={() => handleSelecionarPlano(plano)}
-                      >
-                        <p className="text-sm font-semibold text-gray-900 truncate">{plano.nome}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {plano._count?.itens ?? 0} {plano._count?.itens === 1 ? 'alimento' : 'alimentos'}
-                        </p>
+              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {loading ? (
+                  <p className="text-xs text-gray-400 text-center py-4">Carregando...</p>
+                ) : planos.length === 0 ? (
+                  <p className="text-xs text-gray-400 text-center py-4">Nenhum plano encontrado</p>
+                ) : planos.map(plano => (
+                  <div key={plano.id} className={`rounded-xl border transition-all ${planoSelecionado?.id === plano.id ? 'border-emerald-400 bg-emerald-50' : 'border-transparent hover:bg-gray-50'}`}>
+                    {editandoPlanoId === plano.id ? (
+                      <div className="flex gap-1 items-center p-2">
+                        <input autoFocus value={editandoNome} onChange={e => setEditandoNome(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handleSalvarNomePlano(plano.id); if (e.key === 'Escape') setEditandoPlanoId(null); }}
+                          className="flex-1 text-xs text-gray-900 border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500" />
+                        <button onClick={() => handleSalvarNomePlano(plano.id)} className="text-emerald-600"><Check size={12} /></button>
+                        <button onClick={() => setEditandoPlanoId(null)} className="text-gray-400"><X size={12} /></button>
                       </div>
+                    ) : (
+                      <div className="flex items-center gap-1 px-2 py-2">
+                        <button className="flex-1 text-left min-w-0" onClick={() => handleSelecionarPlano(plano)}>
+                          <div className="flex items-center gap-1 justify-between">
+                            <span className={`text-sm font-semibold truncate ${planoSelecionado?.id === plano.id ? 'text-emerald-800' : 'text-gray-900'}`}>{plano.nome}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{plano._count?.itens ?? 0} alimento{plano._count?.itens !== 1 ? 's' : ''}</span>
+                        </button>
+                        <button onClick={() => { setEditandoPlanoId(plano.id); setEditandoNome(plano.nome); }} className="p-1 text-gray-300 hover:text-gray-600 flex-shrink-0">
+                          <Pencil size={11} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
 
-                      {/* Status */}
-                      <span className={`text-xs font-medium px-2.5 py-1 rounded-full flex-shrink-0 ${
-                        plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {plano.ativo ? 'Ativo' : 'Inativo'}
-                      </span>
+              <div className="p-2 border-t border-gray-100">
+                {criandoPlano ? (
+                  <div className="space-y-2">
+                    <div className="flex gap-1 items-center">
+                      <input autoFocus value={novoPlanoNome}
+                        onChange={e => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
+                        onKeyDown={e => { if (e.key === 'Enter') handleCriarPlano(); if (e.key === 'Escape') { setCriandoPlano(false); setPendingCriarPlano(null); } }}
+                        placeholder="Nome do plano..."
+                        className="flex-1 text-xs text-gray-900 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500" />
+                      <button onClick={handleCriarPlano} className="p-1.5 text-emerald-600"><Check size={12} /></button>
+                      <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-1.5 text-gray-400"><X size={12} /></button>
+                    </div>
+                    {pendingCriarPlano && (
+                      <div className="px-2 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                        <p className="font-semibold mb-1">⚠️ Atenção</p>
+                        <p>O plano <strong>"{pendingCriarPlano.planoAtivoNome}"</strong> será inativado. Continuar?</p>
+                        <div className="flex gap-1.5 mt-2">
+                          <button onClick={handleCriarPlano} className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-medium">Confirmar</button>
+                          <button onClick={() => setPendingCriarPlano(null)} className="px-2 py-1 border border-amber-300 text-amber-700 rounded-lg text-[11px] font-medium">Cancelar</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <button onClick={() => { setCriandoPlano(true); setNovoPlanoNome(''); }}
+                    className="w-full flex items-center justify-center gap-1 py-2 text-xs text-emerald-700 border border-dashed border-emerald-300 rounded-xl hover:bg-emerald-50 transition-colors">
+                    <Plus size={12} /> Novo plano
+                  </button>
+                )}
+              </div>
+            </div>
 
-                      {/* Ações da linha */}
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => handleSelecionarPlano(plano)}
-                          className="text-xs text-emerald-700 font-medium hover:underline px-2"
-                        >
-                          {isSelecionado ? 'Fechar' : 'Ver'}
-                        </button>
-                        <button
-                          onClick={() => navigate(`/dieta/${effectiveAnimalId}/plano/${plano.id}/novo`)}
-                          className="text-xs text-emerald-600 font-medium hover:underline px-2 border-l border-gray-200 ml-1 pl-2"
-                        >
-                          + Alimento
-                        </button>
-                        <button
-                          onClick={() => { setEditandoPlanoId(plano.id); setEditandoNome(plano.nome); }}
-                          className="p-1.5 text-gray-400 hover:text-gray-700"
-                          aria-label="Editar nome"
-                        >
-                          <Pencil size={14} />
-                        </button>
+            {/* Coluna direita: itens */}
+            <div className="flex-1 min-w-0 flex flex-col">
+              {!planoSelecionado ? (
+                <div className="flex-1 flex items-center justify-center text-gray-300 flex-col gap-2">
+                  <Plus size={28} />
+                  <span className="text-sm">Selecione ou crie um plano</span>
+                </div>
+              ) : (
+                <>
+                  {conflitosFrequencia.length > 0 && (
+                    <div className="mx-4 mt-3 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 flex-shrink-0">
+                      <AlertTriangle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
+                      <div className="text-xs text-red-700">
+                        <p className="font-semibold mb-1">Conflito de frequências</p>
+                        {conflitosFrequencia.map(c => <p key={c}>· {c}</p>)}
+                      </div>
+                    </div>
+                  )}
+                  <div ref={itensRef} className="flex-1 overflow-y-auto py-2">
+                    {renderItensPanel(loadingItens)}
+                  </div>
+                  <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} />
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ══ MOBILE ════════════════════════════════════════════════════════ */}
+        <div className="md:hidden">
+          {!showMobileItems ? (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar plano..."
+                    className="w-full pl-8 pr-3 py-2.5 text-sm text-gray-900 border border-gray-200 rounded-2xl focus:outline-none focus:border-emerald-500 bg-white shadow-sm" />
+                </div>
+                <button onClick={() => { setCriandoPlano(true); setNovoPlanoNome(''); }}
+                  className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-2xl shadow-sm">
+                  <Plus size={15} /> Novo
+                </button>
+              </div>
+
+              {criandoPlano && (
+                <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-3 space-y-2">
+                  <div className="flex gap-2">
+                    <input autoFocus value={novoPlanoNome}
+                      onChange={e => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
+                      onKeyDown={e => { if (e.key === 'Enter') handleCriarPlano(); }}
+                      placeholder="Nome do plano..."
+                      className="flex-1 text-sm text-gray-900 border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500" />
+                    <button onClick={handleCriarPlano} className="p-2 text-emerald-600"><Check size={16} /></button>
+                    <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-2 text-gray-400"><X size={16} /></button>
+                  </div>
+                  {pendingCriarPlano && (
+                    <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                      <p className="font-semibold mb-1">⚠️ O plano "{pendingCriarPlano.planoAtivoNome}" será inativado.</p>
+                      <div className="flex gap-2 mt-1">
+                        <button onClick={handleCriarPlano} className="px-3 py-1 bg-amber-600 text-white rounded-lg text-xs font-medium">Confirmar</button>
+                        <button onClick={() => setPendingCriarPlano(null)} className="px-3 py-1 border border-amber-300 text-amber-700 rounded-lg text-xs">Cancelar</button>
                       </div>
                     </div>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
 
-        {/* ── Seção de itens do plano selecionado ─────────────────────────── */}
-        {planoSelecionado && (
-          <div ref={itensRef} className="mt-6">
-
-            {/* Cabeçalho do plano — Toggle + Imprimir */}
-            <div className="bg-white rounded-2xl shadow p-4 mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Plano de dieta</p>
-                <p className="text-base font-semibold text-gray-900">{planoSelecionado.nome}</p>
+              <div className="flex gap-2">
+                {(['todos','ativos','inativos'] as FiltroAtivo[]).map(f => (
+                  <button key={f} onClick={() => setFiltroAtivo(f)}
+                    className={`px-3 py-1.5 text-xs rounded-full font-medium capitalize transition-colors ${
+                      filtroAtivo === f ? 'bg-emerald-700 text-white' : 'border border-gray-200 text-gray-600 bg-white'
+                    }`}>{f}</button>
+                ))}
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleTogglePlanoSelecionado}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                    planoSelecionado.ativo
-                      ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                  }`}
-                >
-                  {planoSelecionado.ativo
-                    ? <><ToggleRight size={15} /> Ativo</>
-                    : <><ToggleLeft size={15} /> Inativo</>}
-                </button>
-                <button
-                  onClick={dispararImpressao}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  aria-label="Imprimir plano de dieta"
-                >
-                  <Printer size={14} /> Imprimir
-                </button>
+
+              <div className="space-y-2">
+                {loading ? (
+                  <p className="text-center py-8 text-gray-400 text-sm">Carregando...</p>
+                ) : planos.map(plano => (
+                  <button key={plano.id} onClick={() => handleSelecionarPlano(plano)}
+                    className="w-full bg-white rounded-2xl border border-gray-100 shadow-sm p-4 text-left flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-gray-900 text-sm">{plano.nome}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
+                      </div>
+                      <span className="text-xs text-gray-500">{plano._count?.itens ?? 0} alimento{plano._count?.itens !== 1 ? 's' : ''}</span>
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
-
-            {/* Aviso de conflito de frequências */}
-            {conflitosFrequencia.length > 0 && (
-              <div className="mb-4 px-4 py-3 rounded-xl text-sm bg-red-50 border border-red-200 text-red-800">
-                <p className="font-semibold mb-1">⚠️ Conflito de frequências detectado</p>
-                <p className="text-xs">
-                  Os seguintes alimentos estão cadastrados com mais de uma frequência no mesmo plano.
-                  Isso não é permitido — edite ou remova as entradas duplicadas:
-                </p>
-                <ul className="mt-1.5 list-disc list-inside text-xs space-y-0.5">
-                  {conflitosFrequencia.map(c => <li key={c}>{c}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* Botões de ação */}
-            <div className="mb-4">
-              <button
-                onClick={() => navigate(`/dieta/${effectiveAnimalId}/plano/${planoSelecionado.id}/novo`)}
-                className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
-              >
-                <Plus size={16} /> Adicionar alimento
-              </button>
-            </div>
-
-            {/* Tabela de itens com edição inline */}
-            <div className="bg-white rounded-2xl shadow overflow-hidden">
-              <div className="px-4 py-3 border-b bg-gray-50">
-                <h2 className="text-sm font-semibold text-gray-900">Alimentos da Dieta</h2>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col" style={{ minHeight: '75vh' }}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
+                <button onClick={() => setShowMobileItems(false)} className="flex items-center gap-1 text-emerald-700 font-medium text-sm">
+                  <ArrowLeft size={16} />
+                </button>
+                <span className="font-semibold text-gray-900 text-sm">{planoSelecionado?.nome}</span>
+                <button onClick={handleTogglePlano}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${planoSelecionado?.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {planoSelecionado?.ativo ? <ToggleRight size={12} /> : <ToggleLeft size={12} />}
+                  {planoSelecionado?.ativo ? 'Ativo' : 'Inativo'}
+                </button>
               </div>
 
-              {loadingItens ? (
-                <p className="text-center py-8 text-gray-400 text-sm">Carregando...</p>
-              ) : itens.length === 0 ? (
-                <p className="text-center py-8 text-gray-400 text-sm">Nenhum alimento cadastrado ainda.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left px-4 py-2 font-medium text-gray-500">Alimento</th>
-                        <th className="text-left px-4 py-2 font-medium text-gray-500">Horário</th>
-                        <th className="text-left px-4 py-2 font-medium text-gray-500">Qtd</th>
-                        <th className="text-left px-4 py-2 font-medium text-gray-500">Unidade</th>
-                        <th className="text-right px-4 py-2 font-medium text-gray-500 w-24">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {itens.map((item) => {
-                        const isEditing = editingItemId === item.id;
-
-                        return (
-                          <tr key={item.id} className="border-b last:border-none hover:bg-gray-50">
-                            {isEditing ? (
-                              /* ── Linha em modo edição inline ─────────── */
-                              <>
-                                <td className="px-2 py-2">
-                                  <select
-                                    value={editItemValues.alimentoId}
-                                    onChange={(e) => setEditItemValues(v => ({ ...v, alimentoId: e.target.value }))}
-                                    className={selectClass}
-                                  >
-                                    <option value="">— Selecionar —</option>
-                                    {alimentos.map(a => (
-                                      <option key={a.id} value={a.id}>{a.nome}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td className="px-2 py-2">
-                                  <select
-                                    value={editItemValues.horario}
-                                    onChange={(e) => setEditItemValues(v => ({ ...v, horario: e.target.value }))}
-                                    className={selectClass}
-                                  >
-                                    <option value="">Selecione...</option>
-                                    {OPCOES_HORARIO.map(h => (
-                                      <option key={h} value={h}>{h}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td className="px-2 py-2">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={editItemValues.qtdGramasDia}
-                                    onChange={(e) => setEditItemValues(v => ({ ...v, qtdGramasDia: e.target.value }))}
-                                    className={`${inputClass} w-20`}
-                                  />
-                                </td>
-                                <td className="px-2 py-2">
-                                  <select
-                                    value={editItemValues.unidade}
-                                    onChange={(e) => setEditItemValues(v => ({ ...v, unidade: e.target.value }))}
-                                    className={selectClass}
-                                  >
-                                    {['kg', 'g', 'L', 'mL', 'unidade', 'porção'].map(u => (
-                                      <option key={u} value={u}>{u}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td className="px-2 py-2 text-right">
-                                  <div className="flex justify-end gap-2">
-                                    <button
-                                      onClick={() => handleSaveEditItem(item.id)}
-                                      className="text-emerald-600 hover:text-emerald-700 font-medium text-xs"
-                                    >
-                                      Salvar
-                                    </button>
-                                    <button
-                                      onClick={handleCancelEditItem}
-                                      className="text-gray-400 hover:text-gray-600 text-xs"
-                                    >
-                                      Cancelar
-                                    </button>
-                                  </div>
-                                </td>
-                              </>
-                            ) : (
-                              /* ── Linha em modo visualização ──────────── */
-                              <>
-                                <td className="px-4 py-3 text-gray-900">{item.alimento?.nome}</td>
-                                <td className="px-4 py-3 text-gray-700">
-                                  {item.horario
-                                    ? item.horario.split(',').map((h, i) => (
-                                        <span key={i} className="block text-xs leading-5">{h}</span>
-                                      ))
-                                    : '-'}
-                                </td>
-                                <td className="px-4 py-3 text-gray-700">{item.qtdGramasDia}</td>
-                                <td className="px-4 py-3 text-gray-700">{item.unidade}</td>
-                                <td className="px-4 py-3 text-right">
-                                  <div className="flex justify-end gap-3">
-                                    <button
-                                      onClick={() => handleStartEditItem(item)}
-                                      className="text-emerald-600 hover:text-emerald-700"
-                                      aria-label="Editar"
-                                    >
-                                      <Pencil size={15} />
-                                    </button>
-                                    <button
-                                      onClick={() => setItemParaExcluir(item)}
-                                      className="text-red-500 hover:text-red-700"
-                                      aria-label="Excluir"
-                                    >
-                                      <Trash2 size={15} />
-                                    </button>
-                                  </div>
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+              {conflitosFrequencia.length > 0 && (
+                <div className="mx-3 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2">
+                  <AlertTriangle size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-700 font-medium">Conflito de frequências detectado</p>
                 </div>
               )}
+
+              <div className="flex-1 overflow-y-auto py-2">
+                {renderItensPanel(loadingItens)}
+              </div>
+
+              {planoSelecionado && (
+                <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} mobile />
+              )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
       </div>
 
-      {/* Modal excluir item */}
+      {/* Modal de exclusão */}
       {itemParaExcluir && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-5">
-            <h3 className="font-semibold text-lg text-gray-900">Excluir alimento?</h3>
-            <p className="mt-2 text-sm text-gray-600">{itemParaExcluir.alimento?.nome}</p>
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={() => setItemParaExcluir(null)}
-                className="flex-1 py-2 border rounded-xl text-sm text-gray-700 hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleExcluirItem}
-                className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm"
-              >
-                Excluir
-              </button>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+            <h3 className="font-semibold text-lg text-gray-900 mb-1">Excluir alimento?</h3>
+            <p className="text-sm text-gray-500 mb-6">{itemParaExcluir.alimento?.nome}</p>
+            <div className="flex gap-3">
+              <button onClick={() => setItemParaExcluir(null)}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">Cancelar</button>
+              <button onClick={handleExcluirItem}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-colors">Excluir</button>
             </div>
           </div>
         </div>

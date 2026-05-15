@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import toast from 'react-hot-toast';
 
 export default function CadastroPessoal() {
   const { user } = useAuth();
@@ -62,7 +63,7 @@ export default function CadastroPessoal() {
     try {
       const res = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
       const data = await res.json();
-      if (data.erro) return alert('CEP não encontrado');
+      if (data.erro) { toast.error('CEP não encontrado'); return; }
       setForm(prev => ({
         ...prev,
         endereco: data.logradouro || '',
@@ -71,7 +72,7 @@ export default function CadastroPessoal() {
         estado: data.uf || '',
       }));
     } catch {
-      alert('Erro ao buscar CEP');
+      toast.error('Erro ao buscar CEP');
     }
   };
 
@@ -84,7 +85,7 @@ export default function CadastroPessoal() {
     e.preventDefault();
     setSaving(true);
     const token = localStorage.getItem('token');
-    if (!token) { alert('Você precisa estar logado'); setSaving(false); return; }
+    if (!token) { toast.error('Você precisa estar logado'); setSaving(false); return; }
 
     const payload = {
       fullName: form.nomeCompleto,
@@ -105,13 +106,18 @@ export default function CadastroPessoal() {
         body: JSON.stringify(payload),
       });
       if (res.ok) {
-        alert('✅ Cadastro pessoal salvo com sucesso no banco!');
-        await refreshSelectedAnimal();
-        navigate('/meus-animais');
-      } else {
-        const errorData = await res.json();
-        alert(`Erro ao salvar: ${errorData.error || 'Tente novamente'}`);
-      }
+          toast.success('Cadastro pessoal salvo com sucesso!');
+          await refreshSelectedAnimal();
+          if (localStorage.getItem('s2vet_ob') === 'p') {
+            localStorage.setItem('s2vet_ob', 'd');
+            navigate('/');
+          } else {
+            navigate('/meus-animais');
+          }
+        } else {
+          const errorData = await res.json();
+          toast.error(`Erro ao salvar: ${errorData.error || 'Tente novamente'}`);
+        }
     } catch (err) {
       console.error('Erro ao salvar:', err);
       alert('Erro de conexão com o servidor');
