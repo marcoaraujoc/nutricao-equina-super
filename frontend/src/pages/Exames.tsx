@@ -201,55 +201,24 @@ const Exames = () => {
           </div>
         )}
 
-        {currentAnimal && (
-          <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-6">
-            <div className="w-16 self-stretch bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
-              <img
-                src={currentAnimal.photoUrl || 'https://picsum.photos/id/1015/400/400'}
-                alt={currentAnimal.nome}
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="grid grid-cols-4 gap-x-3 gap-y-0">
-                <div>
-                  <span className="text-[10px] text-gray-400 leading-none">Nome</span>
-                  <p className="text-xs font-semibold text-gray-900 truncate">{currentAnimal.nome}</p>
-                </div>
-                <div>
-                  <span className="text-[10px] text-gray-400 leading-none">Nascimento</span>
-                  <p className="text-xs text-gray-900">
-                    {currentAnimal.dataNascimento ? formatarDataBR(currentAnimal.dataNascimento) : '-'}
-                  </p>
-                </div>
-                <div>
-                <span className="text-[10px] text-gray-400 leading-none">Idade</span>
-                <p className="text-xs text-gray-900">
-                  {currentAnimal.dataNascimento
-                    ? calcularIdade(currentAnimal.dataNascimento)
-                    : currentAnimal.idadeAnos
-                      ? `${currentAnimal.idadeAnos} ${currentAnimal.idadeAnos === 1 ? 'ano' : 'anos'}`
-                      : '-'}
-                </p>
-              </div>
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Raça</span>
-          <p className="text-xs text-gray-900 truncate">{currentAnimal.raca?.nome || '-'}</p>
-        </div>
-      </div>
-      <div className="mt-1.5 pt-1.5 border-t border-gray-100 grid grid-cols-2 gap-x-3">
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">Proprietário</span>
-          <p className="text-xs font-medium text-gray-900 truncate">
-            {currentAnimal.user?.fullName || user?.fullName}
-          </p>
-        </div>
-        <div>
-          <span className="text-[10px] text-gray-400 leading-none">E-mail</span>
-          <p className="text-xs text-gray-900 truncate">
-            {currentAnimal.user?.email || user?.email}
-          </p>
-        </div>
+{currentAnimal && (
+  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
+    <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
+      <img
+        src={currentAnimal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'}
+        alt={currentAnimal.nome}
+        className="w-full h-full object-cover"
+      />
+    </div>
+    <div className="flex flex-col flex-1 min-w-0">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1">
+        <div><span className="block text-xs text-gray-400">Nome</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.nome}</span></div>
+        <div><span className="block text-xs text-gray-400">Nascimento</span><span className="text-sm font-semibold text-gray-900 block">{currentAnimal.dataNascimento ? formatarDataBR(currentAnimal.dataNascimento) : '-'}</span></div>
+        <div><span className="block text-xs text-gray-400">Idade</span><span className="text-sm font-semibold text-gray-900 block">{currentAnimal.dataNascimento ? calcularIdade(currentAnimal.dataNascimento) : currentAnimal.idadeAnos ? `${currentAnimal.idadeAnos} ${currentAnimal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
+        <div><span className="block text-xs text-gray-400">Raça</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.raca?.nome ?? '-'}</span></div>
+        <div><span className="block text-xs text-gray-400">Proprietário</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
+        <div><span className="block text-xs text-gray-400">E-mail</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.user?.email ?? user?.email ?? '-'}</span></div>
+        <div><span className="block text-xs text-gray-400">Veterinário Responsável</span><span className="text-sm font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
       </div>
     </div>
   </div>

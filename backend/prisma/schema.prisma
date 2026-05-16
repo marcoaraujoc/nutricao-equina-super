@@ -57,6 +57,7 @@ model Animal {
   exames             ExameNutricional[]
   ocorrencias        OcorrenciaSaude[]
   planosDieta        PlanoDieta[]
+  relatorios         RelatorioSalvo[]     // ← NOVO
 
   @@index([especieId], map: "tb_animais_especieId_fkey")
   @@index([racaId], map: "tb_animais_racaId_fkey")
@@ -103,11 +104,11 @@ model Dieta {
   modificadopor   Int
   planoDietaId    Int?
 
-  plano  PlanoDieta? @relation(fields: [planoDietaId], references: [id])
-  alimento        Alimento  @relation(fields: [alimentoId], references: [id])
-  animal          Animal    @relation(fields: [animalId], references: [id])
-  userCriador     User      @relation("CriadorDieta", fields: [criadopor], references: [id])
-  userModificador User      @relation("ModificadorDieta", fields: [modificadopor], references: [id])
+  plano           PlanoDieta? @relation(fields: [planoDietaId], references: [id])
+  alimento        Alimento    @relation(fields: [alimentoId], references: [id])
+  animal          Animal      @relation(fields: [animalId], references: [id])
+  userCriador     User        @relation("CriadorDieta", fields: [criadopor], references: [id])
+  userModificador User        @relation("ModificadorDieta", fields: [modificadopor], references: [id])
 
   @@index([alimentoId], map: "tb_dieta_alimentoId_fkey")
   @@index([animalId], map: "tb_dieta_animalId_fkey")
@@ -236,4 +237,22 @@ model ExigenciasNRC {
   @@index([nutrienteId], map: "tb_exigencias_nrc_nutrienteId_fkey")
   @@index([especieId], map: "tb_exigencias_nrc_especieId_fkey")
   @@map("tb_exigencias_nrc")
+}
+
+// ─── NOVO ─────────────────────────────────────────────────────────────────────
+model RelatorioSalvo {
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  planoDietaId   Int?
+  payload        String   @db.LongText
+  fonteCalculo   String   @db.VarChar(50)
+  pesoCalculado  Float?
+  categoriaUsada String?  @db.VarChar(100)
+  especieNome    String?  @db.VarChar(100)
+  geradoEm       DateTime @default(now())
+  animal         Animal   @relation(fields: [animalId], references: [id])
+
+  @@index([animalId])
+  @@index([geradoEm])
+  @@map("tb_relatorios_salvos")
 }

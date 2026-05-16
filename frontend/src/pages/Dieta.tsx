@@ -99,24 +99,6 @@ const salvarSnapshot = (planId: string, itens: DietaItem[]) => {
   sessionStorage.setItem(snapshotKey(planId), JSON.stringify(snap));
 };
 
-const lerSnapshot = (planId: string): ItemSnapshot[] => {
-  try {
-    const raw = sessionStorage.getItem(snapshotKey(planId));
-    return raw ? (JSON.parse(raw) as ItemSnapshot[]) : [];
-  } catch { return []; }
-};
-
-const itensForamAlterados = (snapshot: ItemSnapshot[], atual: DietaItem[]): boolean => {
-  if (snapshot.length !== atual.length) return true;
-  const sort = <T extends { id: number }>(a: T[]) => [...a].sort((x, y) => x.id - y.id);
-  return sort(snapshot).some((s, i) => {
-    const c = sort(atual)[i];
-    return s.id !== c.id || s.qtdGramasDia !== c.qtdGramasDia
-      || s.periodicidade !== c.periodicidade || s.unidade !== c.unidade
-      || s.horario !== c.horario;
-  });
-};
-
 // ─── Helpers de data e frequência ────────────────────────────────────────────
 
 const formatarDataBR = (data: string | Date | null | undefined): string => {
@@ -181,23 +163,31 @@ const validarItem = (
 
 // ─── Subcomponente: Card do animal ────────────────────────────────────────────
 
-function AnimalCard({ animal, user }: {
+function AnimalCard({ animal, user, planoNome }: {
   animal: AnimalExtended;
   user: ReturnType<typeof useAuth>['user'];
+  planoNome?: string | null;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
       <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
         <img src={animal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'} alt={animal.nome} className="w-full h-full object-cover" />
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 flex-1 min-w-0">
-        <div><span className="block text-[10px] text-gray-400">Nome</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.nome}</span></div>
-        <div><span className="block text-[10px] text-gray-400">Nascimento</span><span className="text-xs font-semibold text-gray-900 block">{animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}</span></div>
-        <div><span className="block text-[10px] text-gray-400">Idade</span><span className="text-xs font-semibold text-gray-900 block">{animal.dataNascimento ? calcularIdade(String(animal.dataNascimento)) : animal.idadeAnos ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
-        <div><span className="block text-[10px] text-gray-400">Raça</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.raca?.nome ?? '-'}</span></div>
-        <div><span className="block text-[10px] text-gray-400">Proprietário</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
-        <div><span className="block text-[10px] text-gray-400">E-mail</span><span className="text-xs font-semibold text-gray-900 truncate block">{animal.user?.email ?? user?.email ?? '-'}</span></div>
-        <div><span className="block text-[10px] text-gray-400">Veterinário Responsável</span><span className="text-xs font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
+      <div className="flex flex-col flex-1 min-w-0">
+        {planoNome && (
+          <span className="text-sm font-bold text-emerald-700 mb-2">
+            Dieta {planoNome}
+          </span>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1">
+          <div><span className="block text-xs text-gray-400">Nome</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.nome}</span></div>
+          <div><span className="block text-xs text-gray-400">Nascimento</span><span className="text-sm font-semibold text-gray-900 block">{animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}</span></div>
+          <div><span className="block text-xs text-gray-400">Idade</span><span className="text-sm font-semibold text-gray-900 block">{animal.dataNascimento ? calcularIdade(String(animal.dataNascimento)) : animal.idadeAnos ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
+          <div><span className="block text-xs text-gray-400">Raça</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.raca?.nome ?? '-'}</span></div>
+          <div><span className="block text-xs text-gray-400">Proprietário</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
+          <div><span className="block text-xs text-gray-400">E-mail</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.user?.email ?? user?.email ?? '-'}</span></div>
+          <div><span className="block text-xs text-gray-400">Veterinário Responsável</span><span className="text-sm font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
+        </div>
       </div>
     </div>
   );
@@ -278,7 +268,7 @@ function SectionDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3 px-4 py-2 mt-3 mb-1">
       <div className="flex-1 h-px bg-gray-100" />
-      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</span>
+      <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{label}</span>
       <div className="flex-1 h-px bg-gray-100" />
     </div>
   );
@@ -386,7 +376,6 @@ function BottomAddBar({
   const [saving,        setSaving]        = useState(false);
   const [showModal,     setShowModal]     = useState(false);
 
-  // slotCount via regex: /^3x/ → 3, /^2x/ → 2, resto → 1
   const slotCount = /^3x/.test(periodicidade) ? 3 : /^2x/.test(periodicidade) ? 2 : 1;
 
   const tipo             = getTipo(periodicidade);
@@ -400,12 +389,10 @@ function BottomAddBar({
     ? OPCOES_UNIDADE.filter(u => u === alimentoSelecionado.unidade || u === 'g' || u === 'kg')
     : OPCOES_UNIDADE;
 
-  // Ajusta unidade ao trocar alimento
   useEffect(() => {
     if (alimentoSelecionado?.unidade) setUnidade(alimentoSelecionado.unidade);
   }, [alimentoId]);
 
-  // Abre modal automaticamente ao trocar periodicidade se alimento já selecionado
   useEffect(() => {
     if (precisaModal && alimentoId) setShowModal(true);
   }, [periodicidade]);
@@ -540,7 +527,6 @@ const Dieta = () => {
   const [alimentos,             setAlimentos]             = useState<Alimento[]>([]);
   const [search,                setSearch]                = useState('');
   const [filtroAtivo,           setFiltroAtivo]           = useState<FiltroAtivo>('todos');
-  const [criandoPlano,          setCriandoPlano]          = useState(false);
   const [novoPlanoNome,         setNovoPlanoNome]         = useState('');
   const [editandoPlanoId,       setEditandoPlanoId]       = useState<number | null>(null);
   const [editandoNome,          setEditandoNome]          = useState('');
@@ -552,6 +538,7 @@ const Dieta = () => {
   const [conflitosFrequencia,   setConflitosFrequencia]  = useState<string[]>([]);
   const [pendingCriarPlano,     setPendingCriarPlano]    = useState<{ nome: string; planoAtivoNome: string } | null>(null);
   const [showMobileItems,       setShowMobileItems]       = useState(false);
+  const [showModalNovoPlano,    setShowModalNovoPlano]    = useState(false);
 
   const itensRef = useRef<HTMLDivElement>(null);
 
@@ -671,9 +658,11 @@ const Dieta = () => {
       const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeFinal });
       const novoPlano  = res.data.dados as PlanoDieta;
       if (planoAtivo) await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
-      setNovoPlanoNome(''); setCriandoPlano(false); setPendingCriarPlano(null);
+      setNovoPlanoNome(''); setPendingCriarPlano(null);
+      setShowModalNovoPlano(false);
       await carregarPlanos();
       carregarItens(novoPlano.id); setShowMobileItems(true);
+      toast.success('Plano criado! Adicione alimentos pela barra na parte inferior direita.');
     } catch (err) { console.error(err); toast.error('Erro ao criar plano'); }
   };
 
@@ -811,18 +800,15 @@ const Dieta = () => {
     onDelete:     (item: DietaItem) => setItemParaExcluir(item),
   };
 
-  const renderItensPanel = (loadingItens: boolean) => {
-    if (loadingItens) return <p className="text-center py-8 text-gray-400 text-sm">Carregando...</p>;
+  const renderItensPanel = (isLoading: boolean) => {
+    if (isLoading) return <p className="text-center py-8 text-gray-400 text-sm">Carregando...</p>;
     if (itens.length === 0) return <p className="text-center py-8 text-gray-300 text-sm">Nenhum alimento. Use a barra abaixo para adicionar.</p>;
 
     return (
       <>
-        {/* Diário */}
         {slotsDiarios.map(h => (
           <HorarioSlot key={`d-${h}`} horario={h} items={itensPorSlotSubset(h, itensDiarios)} {...commonSlotProps} />
         ))}
-
-        {/* Semanal */}
         {itensSemanais.length > 0 && (
           <>
             <SectionDivider label="📅 Semanal" />
@@ -831,8 +817,6 @@ const Dieta = () => {
             ))}
           </>
         )}
-
-        {/* Mensal */}
         {itensMensais.length > 0 && (
           <>
             <SectionDivider label="📆 Mensal" />
@@ -869,7 +853,7 @@ const Dieta = () => {
           <ArrowLeft size={18} /> Voltar
         </button>
 
-        {animal && <AnimalCard animal={animal} user={user} />}
+        {animal && <AnimalCard animal={animal} user={user} planoNome={planoSelecionado?.nome} />}
 
         {animaisDoProprietario.length > 1 && (
           <div className="mb-4">
@@ -887,7 +871,7 @@ const Dieta = () => {
         {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
         <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
 
-          {/* Header full-width com nome centralizado */}
+          {/* Header */}
           <div className="relative flex items-center px-4 py-3 border-b border-gray-100 flex-shrink-0">
             <span className="absolute inset-x-0 text-base font-semibold text-gray-900 text-center pointer-events-none">
               {planoSelecionado?.nome ?? ''}
@@ -911,12 +895,20 @@ const Dieta = () => {
             </div>
           </div>
 
-          {/* Corpo: duas colunas */}
+          {/* Corpo */}
           <div className="flex flex-1 min-h-0">
 
             {/* Coluna esquerda: planos */}
             <div className="w-56 flex-shrink-0 border-r border-gray-100 flex flex-col">
               <div className="p-3 space-y-2 border-b border-gray-100">
+
+                {/* Botão + Novo Plano ACIMA do search */}
+                <button
+                  onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
+                  className="w-full flex items-center justify-center gap-1 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors">
+                  <Plus size={12} /> Novo Plano
+                </button>
+
                 <div className="relative">
                   <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar plano..."
@@ -925,7 +917,7 @@ const Dieta = () => {
                 <div className="flex gap-1">
                   {(['todos','ativos','inativos'] as FiltroAtivo[]).map(f => (
                     <button key={f} onClick={() => setFiltroAtivo(f)}
-                      className={`flex-1 py-1 text-[11px] rounded-full font-medium capitalize transition-colors ${
+                      className={`flex-1 py-1 text-xs rounded-full font-medium capitalize transition-colors ${
                         filtroAtivo === f ? 'bg-emerald-700 text-white' : 'border border-gray-200 text-gray-500 hover:border-emerald-300'
                       }`}>{f}</button>
                   ))}
@@ -952,7 +944,7 @@ const Dieta = () => {
                         <button className="flex-1 text-left min-w-0" onClick={() => handleSelecionarPlano(plano)}>
                           <div className="flex items-center gap-1 justify-between">
                             <span className={`text-sm font-semibold truncate ${planoSelecionado?.id === plano.id ? 'text-emerald-800' : 'text-gray-900'}`}>{plano.nome}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full flex-shrink-0 ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
                           </div>
                           <span className="text-xs text-gray-500">{plano._count?.itens ?? 0} alimento{plano._count?.itens !== 1 ? 's' : ''}</span>
                         </button>
@@ -963,37 +955,6 @@ const Dieta = () => {
                     )}
                   </div>
                 ))}
-              </div>
-
-              <div className="p-2 border-t border-gray-100">
-                {criandoPlano ? (
-                  <div className="space-y-2">
-                    <div className="flex gap-1 items-center">
-                      <input autoFocus value={novoPlanoNome}
-                        onChange={e => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
-                        onKeyDown={e => { if (e.key === 'Enter') handleCriarPlano(); if (e.key === 'Escape') { setCriandoPlano(false); setPendingCriarPlano(null); } }}
-                        placeholder="Nome do plano..."
-                        className="flex-1 text-xs text-gray-900 border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500" />
-                      <button onClick={handleCriarPlano} className="p-1.5 text-emerald-600"><Check size={12} /></button>
-                      <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-1.5 text-gray-400"><X size={12} /></button>
-                    </div>
-                    {pendingCriarPlano && (
-                      <div className="px-2 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-                        <p className="font-semibold mb-1">⚠️ Atenção</p>
-                        <p>O plano <strong>"{pendingCriarPlano.planoAtivoNome}"</strong> será inativado. Continuar?</p>
-                        <div className="flex gap-1.5 mt-2">
-                          <button onClick={handleCriarPlano} className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-medium">Confirmar</button>
-                          <button onClick={() => setPendingCriarPlano(null)} className="px-2 py-1 border border-amber-300 text-amber-700 rounded-lg text-[11px] font-medium">Cancelar</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <button onClick={() => { setCriandoPlano(true); setNovoPlanoNome(''); }}
-                    className="w-full flex items-center justify-center gap-1 py-2 text-xs text-emerald-700 border border-dashed border-emerald-300 rounded-xl hover:bg-emerald-50 transition-colors">
-                    <Plus size={12} /> Novo plano
-                  </button>
-                )}
               </div>
             </div>
 
@@ -1035,34 +996,11 @@ const Dieta = () => {
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar plano..."
                     className="w-full pl-8 pr-3 py-2.5 text-sm text-gray-900 border border-gray-200 rounded-2xl focus:outline-none focus:border-emerald-500 bg-white shadow-sm" />
                 </div>
-                <button onClick={() => { setCriandoPlano(true); setNovoPlanoNome(''); }}
+                <button onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
                   className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-2xl shadow-sm">
                   <Plus size={15} /> Novo
                 </button>
               </div>
-
-              {criandoPlano && (
-                <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-3 space-y-2">
-                  <div className="flex gap-2">
-                    <input autoFocus value={novoPlanoNome}
-                      onChange={e => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
-                      onKeyDown={e => { if (e.key === 'Enter') handleCriarPlano(); }}
-                      placeholder="Nome do plano..."
-                      className="flex-1 text-sm text-gray-900 border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500" />
-                    <button onClick={handleCriarPlano} className="p-2 text-emerald-600"><Check size={16} /></button>
-                    <button onClick={() => { setCriandoPlano(false); setPendingCriarPlano(null); }} className="p-2 text-gray-400"><X size={16} /></button>
-                  </div>
-                  {pendingCriarPlano && (
-                    <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-                      <p className="font-semibold mb-1">⚠️ O plano "{pendingCriarPlano.planoAtivoNome}" será inativado.</p>
-                      <div className="flex gap-2 mt-1">
-                        <button onClick={handleCriarPlano} className="px-3 py-1 bg-amber-600 text-white rounded-lg text-xs font-medium">Confirmar</button>
-                        <button onClick={() => setPendingCriarPlano(null)} className="px-3 py-1 border border-amber-300 text-amber-700 rounded-lg text-xs">Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
 
               <div className="flex gap-2">
                 {(['todos','ativos','inativos'] as FiltroAtivo[]).map(f => (
@@ -1082,7 +1020,7 @@ const Dieta = () => {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-gray-900 text-sm">{plano.nome}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${plano.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{plano.ativo ? 'ativo' : 'inativo'}</span>
                       </div>
                       <span className="text-xs text-gray-500">{plano._count?.itens ?? 0} alimento{plano._count?.itens !== 1 ? 's' : ''}</span>
                     </div>
@@ -1123,6 +1061,45 @@ const Dieta = () => {
         </div>
 
       </div>
+
+      {/* Modal novo plano */}
+      {showModalNovoPlano && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-base font-bold text-gray-900 mb-1">Novo Plano de Dieta</h3>
+            <p className="text-sm text-gray-500 mb-4">Informe o nome do plano para continuar.</p>
+            <input
+              autoFocus
+              value={novoPlanoNome}
+              onChange={e => { setNovoPlanoNome(e.target.value); setPendingCriarPlano(null); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleCriarPlano();
+                if (e.key === 'Escape') { setShowModalNovoPlano(false); setNovoPlanoNome(''); }
+              }}
+              placeholder="Ex: Plano Verão 2025..."
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 mb-4"
+            />
+            {pendingCriarPlano && (
+              <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-4">
+                <p className="font-semibold mb-1">⚠️ Atenção</p>
+                <p>O plano <strong>"{pendingCriarPlano.planoAtivoNome}"</strong> será inativado. Continuar?</p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowModalNovoPlano(false); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+                Cancelar
+              </button>
+              <button
+                onClick={handleCriarPlano}
+                className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold transition-colors">
+                {pendingCriarPlano ? 'Confirmar' : 'Criar Plano'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de exclusão */}
       {itemParaExcluir && (

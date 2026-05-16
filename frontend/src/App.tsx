@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
+import Usuarios from './pages/Usuarios';
 
 // Pages
 import Login from './pages/Login';
@@ -124,6 +125,9 @@ function App() {
                           {/* Rotas de Relatório Nutricional */}
                           <Route path="/relatorio-nutricional" element={<RelatorioNutricional />} />
                           <Route path="/relatorio-nutricional/:animalId" element={<RelatorioNutricional />} />
+
+                          {/* Rotas dos Usuários */}
+                          <Route path="/usuarios" element={<Usuarios />} />
 
                           {/* Rotas Temporárias */}
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />

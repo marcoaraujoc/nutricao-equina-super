@@ -2,89 +2,53 @@
 'use strict';
 
 const { PrismaClient } = require('@prisma/client');
+const { getCalculator } = require('./speciesCalculatorRegistry');
+
 const prisma = new PrismaClient();
 
-// -------------------------------------------------------------------
-// Status nutricional
-// -------------------------------------------------------------------
+// ─── Status nutricional ───────────────────────────────────────────────────────
 
 const resolverStatus = (percentual) => {
   if (percentual === null) return 'SEM REFERÊNCIA';
-  if (percentual <= 70)   return 'DEFICIÊNCIA CRÍTICA';
-  if (percentual <= 90)   return 'DEFICIÊNCIA';
+  if (percentual < 70)    return 'DEFICIÊNCIA CRÍTICA';
+  if (percentual < 90)    return 'DEFICIÊNCIA';
   if (percentual <= 120)  return 'ADEQUADO';
   if (percentual <= 200)  return 'EXCESSO';
   return 'EXCESSO CRÍTICO';
 };
 
-const aproximarPesoNRC = (peso) => {
-  const buckets = [200, 400, 500];
-  return buckets.reduce((prev, curr) =>
-    Math.abs(curr - peso) < Math.abs(prev - peso) ? curr : prev
-  );
-};
+// ─── Helpers de normalização ──────────────────────────────────────────────────
 
-/**
- * Normaliza o nome do nutriente para agrupamento case-insensitive.
- * 'enxofre', 'Enxofre', 'ENXOFRE' → 'enxofre'
- * 'vitamina A', 'Vitamina A', 'VITAMINA A' → 'vitamina a'
- */
 const normalizarNomeNutriente = (nome) =>
   (nome || '').trim().toLowerCase().normalize('NFC');
 
-/**
- * Capitaliza apenas a primeira letra para exibição.
- * 'enxofre' → 'Enxofre' | 'Ácido Aspártico' → 'Ácido Aspártico'
- */
 const capitalizarNome = (nome) => {
   if (!nome) return '';
   const n = nome.trim();
   return n.charAt(0).toUpperCase() + n.slice(1);
 };
 
-// -------------------------------------------------------------------
-// Conversão da quantidade de alimento na dieta → kg
-// -------------------------------------------------------------------
+// ─── Conversão quantidade de dieta → kg ──────────────────────────────────────
+
 const converterDietaParaKg = (qtd, unidade) => {
   const u = (unidade || '').toLowerCase().trim();
-
-  if (u === 'kg'  || u === 'quilograma'  || u === 'quilogramas') return qtd;
-  if (u === 'g'   || u === 'grama'       || u === 'gramas')      return qtd / 1000;
-  if (u === 'mg'  || u === 'miligrama'   || u === 'miligramas')  return qtd / 1_000_000;
-  if (u === 'l'   || u === 'litro'       || u === 'litros')      return qtd;
-  if (u === 'ml'  || u === 'mililitro'   || u === 'mililitros')  return qtd / 1000;
-
-  if (u === 'feixe' || u === 'feixe de capim')                   return qtd * 3;
-  if (
-    u === 'pão'           || u === 'pao'           ||
-    u === 'pão de alfafa' || u === 'pao de alfafa' ||
-    u === 'pão de feno'   || u === 'pao de feno'
-  )                                                               return qtd * 3;
-
-  console.warn(
-    `[Relatório] Unidade de dieta não reconhecida: "${unidade}" (qtd=${qtd}) — tratando como kg.`
-  );
+  if (['kg', 'quilograma', 'quilogramas'].includes(u))  return qtd;
+  if (['g', 'grama', 'gramas'].includes(u))             return qtd / 1000;
+  if (['mg', 'miligrama', 'miligramas'].includes(u))    return qtd / 1_000_000;
+  if (['l', 'litro', 'litros'].includes(u))             return qtd;
+  if (['ml', 'mililitro', 'mililitros'].includes(u))    return qtd / 1000;
+  if (u === 'feixe' || u === 'feixe de capim')          return qtd * 3;
+  if (['pão', 'pao', 'pão de alfafa', 'pao de alfafa',
+       'pão de feno', 'pao de feno'].includes(u))       return qtd * 3;
+  console.warn(`[Relatório] Unidade não reconhecida: "${unidade}" — tratando como kg.`);
   return qtd;
 };
 
-// -------------------------------------------------------------------
-// Normalização de unidades de nutrientes
-//
-// REGRA GENERALISTA: sempre use normalizarUnidade() para comparar.
-// Nunca compare strings brutas de unidade.
-//
-// Exemplos que normalizam para o mesmo token:
-//   'UI', 'U.I.', 'U.I', 'IU'        → 'ui'
-//   'mg', 'Mg', 'MG', 'Miligrama'    → 'mg'
-//   'g', 'G', 'Grama', 'Gramas'      → 'g'
-//   'Mcal', 'mcal', 'MCAL'           → 'mcal'
-// -------------------------------------------------------------------
-const normalizarUnidade = (unidade) => {
-  // Remove pontos e espaços, lowercase: 'U.I.' → 'ui', 'Mcal' → 'mcal'
-  const u = (unidade || '').toLowerCase().trim().replace(/\./g, '');
+// ─── Normalização de unidades ─────────────────────────────────────────────────
 
+const normalizarUnidade = (unidade) => {
+  const u = (unidade || '').toLowerCase().trim().replace(/\./g, '');
   if (['kg', 'quilograma', 'quilogramas'].includes(u))                return 'kg';
-  if (['kg/dia', 'kg/day'].includes(u))                              return 'kg';
   if (['g', 'grama', 'gramas'].includes(u))                          return 'g';
   if (['mg', 'miligrama', 'miligramas'].includes(u))                 return 'mg';
   if (['mcg', 'µg', 'micrograma', 'microgramas', 'ug'].includes(u)) return 'mcg';
@@ -96,71 +60,42 @@ const normalizarUnidade = (unidade) => {
   return u;
 };
 
-// Expoentes de massa (base 10): kg=3, g=0, mg=-3, mcg=-6
 const MASSA_EXP = { kg: 3, g: 0, mg: -3, mcg: -6 };
-
-// Unidades sem conversão inter-escala (UI, Mcal, ml, L)
 const UNIDADES_SEM_CONVERSAO = new Set(['ui', 'mcal', 'kcal', 'ml', 'l']);
 
-/**
- * Converte `valor` de `deUnidade` para `paraUnidade`.
- * Retorna null se a conversão não for possível.
- * Aceita unidades brutas (não normalizadas) — normaliza internamente.
- */
 const converterUnidade = (valor, deUnidade, paraUnidade) => {
   if (valor === null || valor === undefined) return null;
-
   const de   = normalizarUnidade(deUnidade);
   const para = normalizarUnidade(paraUnidade);
-
   if (de === para) return valor;
-
-  if (MASSA_EXP[de] !== undefined && MASSA_EXP[para] !== undefined) {
+  if (MASSA_EXP[de] !== undefined && MASSA_EXP[para] !== undefined)
     return valor * Math.pow(10, MASSA_EXP[de] - MASSA_EXP[para]);
-  }
-
   if (de === 'mcal' && para === 'kcal') return valor * 1000;
   if (de === 'kcal' && para === 'mcal') return valor / 1000;
-
   console.warn(`[Relatório] Conversão impossível: ${valor} ${deUnidade} → ${paraUnidade}`);
   return null;
 };
 
-/**
- * Determina a unidade canônica para acumular os valores de um nutriente.
- * Retorna o TOKEN NORMALIZADO (não a string bruta).
- *
- * Prioridade:
- *   1. Unidade normalizada do NRC (se compatível com a do nutriente)
- *   2. Token normalizado da unidade original do nutriente
- */
 const resolverUnidadeCanonica = (unidadeNutriente, chaveNutriente, mapExigencias) => {
   const exigencia = mapExigencias[chaveNutriente];
-
   if (exigencia?.unidadeNRC) {
     const nrcNorm = normalizarUnidade(exigencia.unidadeNRC);
     const nutNorm = normalizarUnidade(unidadeNutriente);
     const ambosEmMassa = MASSA_EXP[nrcNorm] !== undefined && MASSA_EXP[nutNorm] !== undefined;
-    const ambosEnergia = ['mcal', 'kcal'].includes(nrcNorm) && ['mcal', 'kcal'].includes(nutNorm);
-
-    if (ambosEmMassa || ambosEnergia || nrcNorm === nutNorm) {
-      return nrcNorm; // token normalizado da unidade NRC
-    }
+    const ambosEnergia = ['mcal','kcal'].includes(nrcNorm) && ['mcal','kcal'].includes(nutNorm);
+    if (ambosEmMassa || ambosEnergia || nrcNorm === nutNorm) return nrcNorm;
   }
-
-  return normalizarUnidade(unidadeNutriente); // token normalizado da unidade original
+  return normalizarUnidade(unidadeNutriente);
 };
 
-// -------------------------------------------------------------------
-// Busca de dados
-// -------------------------------------------------------------------
+// ─── Busca de dados ───────────────────────────────────────────────────────────
 
 const buscarAnimal = async (animalId) => {
   const animal = await prisma.animal.findUnique({
-    where: { id: Number(animalId) },
+    where:   { id: Number(animalId) },
     include: {
       raca:    { select: { nome: true } },
-      especie: { select: { nome: true } },
+      especie: { select: { id: true, nome: true } },
       user:    { select: { fullName: true, email: true } },
     },
   });
@@ -168,42 +103,52 @@ const buscarAnimal = async (animalId) => {
   return animal;
 };
 
-const buscarPlanoAtivo = async (animalId) => {
-  return prisma.planoDieta.findFirst({
+const buscarPlanoAtivo = async (animalId) =>
+  prisma.planoDieta.findFirst({
     where:   { animalId: Number(animalId), ativo: true },
     orderBy: { dataCriacao: 'desc' },
   });
-};
 
-const buscarItensDieta = async (planoDietaId) => {
-  return prisma.dieta.findMany({
-    where: { planoDietaId: Number(planoDietaId) },
+const buscarItensDieta = async (planoDietaId) =>
+  prisma.dieta.findMany({
+    where:   { planoDietaId: Number(planoDietaId) },
     include: {
       alimento: {
-        include: {
-          composicoes: {
-            include: { nutriente: true },
-          },
-        },
+        include: { composicoes: { include: { nutriente: true } } },
       },
     },
   });
-};
 
-const buscarExigenciasNRC = async (animal) => {
-  const pesoAproximado = aproximarPesoNRC(animal.peso || 500);
+// ─── Resolução de exigências — multi-espécie ──────────────────────────────────
 
+/**
+ * Retorna o mapa de exigências no formato:
+ *   { [nomeNutrienteNormalizado]: { valorExigido: number, unidadeNRC: string } }
+ *
+ * Prioridade:
+ *   1. Calculadora dinâmica (ex: NRC 2007 para equinos)
+ *   2. Tabela tb_exigencias_nrc (fallback para outras espécies)
+ */
+const resolverExigencias = async (animal) => {
+  const especieNome  = animal.especie?.nome || '';
+  const calculadora  = getCalculator(especieNome);
+
+  if (calculadora) {
+    const map = calculadora.calcular(animal);
+    return { map, fonte: calculadora.FONTE };
+  }
+
+  // Fallback: tabela estática (outras espécies)
   const exigencias = await prisma.exigenciasNRC.findMany({
     where: {
-      peso:            pesoAproximado,
+      especieId:       animal.especie?.id ?? undefined,
       categoriaAnimal: animal.categoriaAnimal ?? undefined,
       tipoExercicio:   animal.tipoExercicio   ?? undefined,
     },
     include: { nutriente: true },
   });
 
-  // Indexa pelo nome normalizado para busca case-insensitive
-  return exigencias.reduce((acc, ex) => {
+  const map = exigencias.reduce((acc, ex) => {
     const chave = normalizarNomeNutriente(ex.nutriente.nome);
     acc[chave] = {
       valorExigido: ex.valorExigido,
@@ -211,25 +156,47 @@ const buscarExigenciasNRC = async (animal) => {
     };
     return acc;
   }, {});
+
+  return { map, fonte: 'TABELA' };
 };
 
-// -------------------------------------------------------------------
-// Computação do relatório
-// -------------------------------------------------------------------
+// ─── Salvar snapshot ──────────────────────────────────────────────────────────
 
-const computarRelatorio = async (animalId) => {
+/**
+ * Salva o relatório como snapshot histórico em tb_relatorios_salvos.
+ * Falha silenciosamente — não deve interromper a geração do relatório.
+ */
+const salvarSnapshot = async (animalId, planoDietaId, resultado, fonteCalculo, animal) => {
+  try {
+    await prisma.relatorioSalvo.create({
+      data: {
+        animalId:      Number(animalId),
+        planoDietaId:  planoDietaId ? Number(planoDietaId) : null,
+        payload:       JSON.stringify(resultado),
+        fonteCalculo,
+        pesoCalculado: animal.peso,
+        categoriaUsada: animal.categoriaAnimal,
+        especieNome:   animal.especie?.nome,
+      },
+    });
+  } catch (err) {
+    // Tabela pode não existir ainda (migration pendente) — silencioso
+    if (!err.message?.includes('does not exist') && !err.code === 'P2021') {
+      console.warn('[Relatório] Não foi possível salvar snapshot:', err.message);
+    }
+  }
+};
+
+// ─── Computação principal ─────────────────────────────────────────────────────
+
+const computarRelatorio = async (animalId, { salvar = true } = {}) => {
   const animal = await buscarAnimal(animalId);
   const plano  = await buscarPlanoAtivo(animalId);
 
   if (!plano) {
     return {
-      animal: {
-        id:              animal.id,
-        nome:            animal.nome,
-        peso:            animal.peso,
-        categoriaAnimal: animal.categoriaAnimal,
-        tipoExercicio:   animal.tipoExercicio,
-      },
+      animal:    { id: animal.id, nome: animal.nome, peso: animal.peso,
+                   especie: animal.especie?.nome, categoriaAnimal: animal.categoriaAnimal },
       plano:     null,
       alimentos: [],
       linhas:    [],
@@ -238,243 +205,173 @@ const computarRelatorio = async (animalId) => {
     };
   }
 
-  const [itensDieta, mapExigencias] = await Promise.all([
+  const [itensDieta, { map: mapExigencias, fonte: fonteCalculo }] = await Promise.all([
     buscarItensDieta(plano.id),
-    buscarExigenciasNRC(animal),
+    resolverExigencias(animal),
   ]);
 
-  // -------------------------------------------------------------------
-  // Passo 1 — Soma o total diário de cada alimento em kg
-  // -------------------------------------------------------------------
-  const totalDiarioPorAlimento = new Map();
+  // ── Passo 1: total diário por alimento em kg ──────────────────────────────
 
+  const totalDiarioPorAlimento = new Map();
   for (const item of itensDieta) {
     const nomeAlimento = item.alimento?.nome;
     if (!nomeAlimento) continue;
-
     const qtdKg = converterDietaParaKg(item.qtdGramasDia || 0, item.unidade);
-
     if (!totalDiarioPorAlimento.has(item.alimentoId)) {
       totalDiarioPorAlimento.set(item.alimentoId, {
-        alimentoId: item.alimentoId,
-        nome:       nomeAlimento,
-        totalKg:    0,
-        alimento:   item.alimento,
+        alimentoId: item.alimentoId, nome: nomeAlimento, totalKg: 0, alimento: item.alimento,
       });
     }
-
     totalDiarioPorAlimento.get(item.alimentoId).totalKg += qtdKg;
   }
 
-  // -------------------------------------------------------------------
-  // Passo 2 — Pivot: nutriente → consumo por alimento e total diário
-  //
-  // REGRA GENERALISTA de unidades mistas:
-  //
-  //   A unidade do acumulador (`entrada.unidade`) é sempre um TOKEN
-  //   NORMALIZADO (ex: 'ui', 'g', 'mg'). A comparação entre unidades
-  //   SEMPRE usa tokens normalizados — nunca strings brutas.
-  //
-  //   Isso resolve:
-  //     'UI' vs 'U.I.' vs 'IU'      → todos normalizam para 'ui' → mesma unidade
-  //     'mg' vs 'Mg' vs 'Miligrama' → todos normalizam para 'mg' → mesma unidade
-  //     'g'  vs 'mg'                → unidades diferentes de massa → converte para 'g'
-  //
-  //   Quando tokens normalizados diferem:
-  //     Ambos de massa (kg/g/mg/mcg) → converte tudo para 'g'
-  //     UI, Mcal, ml, L             → incompatível → loga e ignora
-  // -------------------------------------------------------------------
+  // ── Passo 2: pivot nutriente × alimento ──────────────────────────────────
+
   const alimentosOrdenados = [];
   const tabelaNutrientes   = {};
 
   for (const { nome: nomeAlimento, totalKg, alimento } of totalDiarioPorAlimento.values()) {
-    if (!alimentosOrdenados.includes(nomeAlimento)) {
-      alimentosOrdenados.push(nomeAlimento);
-    }
+    if (!alimentosOrdenados.includes(nomeAlimento)) alimentosOrdenados.push(nomeAlimento);
 
     for (const comp of alimento?.composicoes ?? []) {
       const nomeNutriente    = comp.nutriente?.nome;
       const unidadeNutriente = comp.nutriente?.unidadePadrao ?? '';
       if (!nomeNutriente) continue;
 
-      // Chave normalizada para agrupamento (case-insensitive)
       const chaveNutriente = normalizarNomeNutriente(nomeNutriente);
+      const tokenCanonico  = resolverUnidadeCanonica(unidadeNutriente, chaveNutriente, mapExigencias);
 
-      // Token normalizado da unidade canônica para esta composição
-      const tokenCanonico = resolverUnidadeCanonica(
-        unidadeNutriente,
-        chaveNutriente,
-        mapExigencias,
-      );
-
-      // Converte valorPorKg da unidade original para o token canônico
-      const valorPorKgCanonical = converterUnidade(
-        Number(comp.valorPorKg),
-        unidadeNutriente,
-        tokenCanonico,
-      );
-
+      const valorPorKgCanonical = converterUnidade(Number(comp.valorPorKg), unidadeNutriente, tokenCanonico);
       if (valorPorKgCanonical === null) {
-        console.warn(
-          `[Relatório] Não foi possível converter ${nomeNutriente}: ` +
-          `${comp.valorPorKg} ${unidadeNutriente} → ${tokenCanonico}. ` +
-          `Alimento: ${nomeAlimento}`
-        );
+        console.warn(`[Relatório] Conversão impossível: ${nomeNutriente} ${comp.valorPorKg} ${unidadeNutriente} → ${tokenCanonico}`);
         continue;
       }
 
-      // Consumo desta composição no token canônico
-      let consumo      = valorPorKgCanonical * totalKg;
-      let tokenAtual   = tokenCanonico;
+      let consumo    = valorPorKgCanonical * totalKg;
+      let tokenAtual = tokenCanonico;
 
       if (!tabelaNutrientes[chaveNutriente]) {
-        // Primeira vez — cria entrada com token normalizado como unidade
         tabelaNutrientes[chaveNutriente] = {
-          nutriente:   capitalizarNome(nomeNutriente),
-          unidade:     tokenAtual,  // já normalizado
-          porAlimento: {},
-          total:       0,
+          nutriente: capitalizarNome(nomeNutriente),
+          unidade:   tokenAtual, porAlimento: {}, total: 0,
         };
       } else {
-        // Entrada já existe — compara tokens normalizados (nunca strings brutas)
-        const entrada   = tabelaNutrientes[chaveNutriente];
-        const tokenAcc  = entrada.unidade; // já está normalizado
-
+        const entrada  = tabelaNutrientes[chaveNutriente];
+        const tokenAcc = entrada.unidade;
         if (tokenAcc !== tokenAtual) {
-          // Tokens diferentes — aplica regra de reconciliação
-          const ambosEmMassa =
-            MASSA_EXP[tokenAcc] !== undefined && MASSA_EXP[tokenAtual] !== undefined;
-
+          const ambosEmMassa = MASSA_EXP[tokenAcc] !== undefined && MASSA_EXP[tokenAtual] !== undefined;
           if (ambosEmMassa) {
-            // ── Massa vs massa diferente → converte TUDO para 'g' ──
-
-            // 1. Converte o que já foi acumulado para 'g'
             if (tokenAcc !== 'g') {
-              const fator = Math.pow(10, MASSA_EXP[tokenAcc]); // tokenAcc → g
+              const fator = Math.pow(10, MASSA_EXP[tokenAcc]);
               entrada.total *= fator;
-              for (const k of Object.keys(entrada.porAlimento)) {
-                entrada.porAlimento[k] = (entrada.porAlimento[k] || 0) * fator;
-              }
+              for (const k of Object.keys(entrada.porAlimento)) entrada.porAlimento[k] = (entrada.porAlimento[k] || 0) * fator;
               entrada.unidade = 'g';
             }
-
-            // 2. Converte o consumo atual para 'g'
-            const fatorCur = Math.pow(10, MASSA_EXP[tokenAtual]); // tokenAtual → g
-            consumo    = consumo * fatorCur;
+            consumo    = consumo * Math.pow(10, MASSA_EXP[tokenAtual]);
             tokenAtual = 'g';
-
           } else if (UNIDADES_SEM_CONVERSAO.has(tokenAcc) || UNIDADES_SEM_CONVERSAO.has(tokenAtual)) {
-            // UI, Mcal, ml, L — sem conversão entre escalas diferentes
-            console.warn(
-              `[Relatório] Unidades incompatíveis para "${nomeNutriente}": ` +
-              `acumulador="${tokenAcc}", novo="${tokenAtual}" (${nomeAlimento}). ` +
-              `Valor ignorado.`
-            );
+            console.warn(`[Relatório] Unidades incompatíveis: "${nomeNutriente}" acc="${tokenAcc}" novo="${tokenAtual}". Ignorado.`);
             continue;
-
           } else {
-            // Tenta converter para a unidade do acumulador
             const converted = converterUnidade(consumo, tokenAtual, tokenAcc);
-            if (converted !== null) {
-              consumo    = converted;
-              tokenAtual = tokenAcc;
-            } else {
-              console.warn(
-                `[Relatório] Não foi possível reconciliar "${nomeNutriente}": ` +
-                `"${tokenAtual}" → "${tokenAcc}". Valor ignorado.`
-              );
-              continue;
-            }
+            if (converted !== null) { consumo = converted; tokenAtual = tokenAcc; }
+            else { console.warn(`[Relatório] Reconciliação impossível "${nomeNutriente}". Ignorado.`); continue; }
           }
         }
-        // Se tokenAcc === tokenAtual → mesma unidade, soma diretamente
       }
 
       const entrada = tabelaNutrientes[chaveNutriente];
-      entrada.porAlimento[nomeAlimento] =
-        (entrada.porAlimento[nomeAlimento] || 0) + consumo;
+      entrada.porAlimento[nomeAlimento] = (entrada.porAlimento[nomeAlimento] || 0) + consumo;
       entrada.total += consumo;
     }
   }
 
-  // -------------------------------------------------------------------
-  // Passo 3 — Cruza com NRC
-  // A unidade do acumulador já está normalizada, então a comparação
-  // com NRC também usa tokens normalizados via converterUnidade().
-  // -------------------------------------------------------------------
+  // ── Passo 3: cruzamento com exigências NRC ────────────────────────────────
+
   const linhas = Object.values(tabelaNutrientes).map((entrada) => {
     const chave     = normalizarNomeNutriente(entrada.nutriente);
     const exigencia = mapExigencias[chave];
 
-    let exigidoNaUnidadeNutriente = null;
-    let exigidoExibicao           = null;
+    let exigidoNaUnidade = null;
+    let exigidoExibicao  = null;
 
     if (exigencia) {
-      const convertido = converterUnidade(
-        exigencia.valorExigido,
-        exigencia.unidadeNRC,
-        entrada.unidade,
-      );
-
-      if (convertido !== null) {
-        exigidoNaUnidadeNutriente = convertido;
-      } else {
-        exigidoExibicao = `${exigencia.valorExigido} ${exigencia.unidadeNRC}`;
-      }
+      const convertido = converterUnidade(exigencia.valorExigido, exigencia.unidadeNRC, entrada.unidade);
+      if (convertido !== null) exigidoNaUnidade = convertido;
+      else exigidoExibicao = `${exigencia.valorExigido} ${exigencia.unidadeNRC}`;
     }
 
-    const saldo = exigidoNaUnidadeNutriente !== null
-      ? Number((entrada.total - exigidoNaUnidadeNutriente).toFixed(4))
+    const saldo      = exigidoNaUnidade !== null
+      ? Number((entrada.total - exigidoNaUnidade).toFixed(4))
+      : null;
+    const percentual = exigidoNaUnidade !== null && exigidoNaUnidade > 0
+      ? Number(((entrada.total / exigidoNaUnidade) * 100).toFixed(2))
       : null;
 
-    const percentual = exigidoNaUnidadeNutriente !== null && exigidoNaUnidadeNutriente > 0
-      ? Number(((entrada.total / exigidoNaUnidadeNutriente) * 100).toFixed(2))
-      : null;
-
-    const linha = {
-      nutriente: entrada.nutriente,
-      unidade:   entrada.unidade,
-    };
-
+    const linha = { nutriente: entrada.nutriente, unidade: entrada.unidade };
     for (const nomeAlimento of alimentosOrdenados) {
-      linha[nomeAlimento] = Number(
-        (entrada.porAlimento[nomeAlimento] || 0).toFixed(4)
-      );
+      linha[nomeAlimento] = Number((entrada.porAlimento[nomeAlimento] || 0).toFixed(4));
     }
-
     linha.Total_Dieta         = Number(entrada.total.toFixed(4));
-    linha.Exigido_NRC         = exigidoNaUnidadeNutriente !== null
-      ? Number(exigidoNaUnidadeNutriente.toFixed(4))
-      : exigidoExibicao ?? null;
+    linha.Exigido_NRC         = exigidoNaUnidade !== null
+      ? Number(exigidoNaUnidade.toFixed(4))
+      : (exigidoExibicao ?? null);
     linha.Saldo               = saldo;
     linha.Percentual_Atendido = percentual;
     linha.status_nutricional  = resolverStatus(percentual);
-
     return linha;
   });
 
-  // Ordena alfabeticamente pelo nome do nutriente (pt-BR, ignora acentos)
-  linhas.sort((a, b) =>
-    a.nutriente.localeCompare(b.nutriente, 'pt-BR', { sensitivity: 'base' })
-  );
+  linhas.sort((a, b) => a.nutriente.localeCompare(b.nutriente, 'pt-BR', { sensitivity: 'base' }));
 
-  return {
+  const resultado = {
     animal: {
-      id:              animal.id,
-      nome:            animal.nome,
-      peso:            animal.peso,
-      categoriaAnimal: animal.categoriaAnimal,
-      tipoExercicio:   animal.tipoExercicio,
+      id: animal.id, nome: animal.nome, peso: animal.peso,
+      especie: animal.especie?.nome, categoriaAnimal: animal.categoriaAnimal,
+      tipoExercicio: animal.tipoExercicio,
     },
-    plano: {
-      id:    plano.id,
-      nome:  plano.nome,
-      ativo: plano.ativo,
-    },
+    plano:     { id: plano.id, nome: plano.nome, ativo: plano.ativo },
+    fonteCalculo,
     alimentos: alimentosOrdenados,
     linhas,
-    geradoEm: new Date().toISOString(),
+    geradoEm:  new Date().toISOString(),
   };
+
+  // ── Salvar snapshot histórico ─────────────────────────────────────────────
+  if (salvar && linhas.length > 0) {
+    await salvarSnapshot(animalId, plano.id, resultado, fonteCalculo, animal);
+  }
+
+  return resultado;
 };
 
-module.exports = { computarRelatorio, resolverStatus };
+// ─── Buscar histórico de snapshots ───────────────────────────────────────────
+
+const listarSnapshots = async (animalId, limite = 10) => {
+  try {
+    const registros = await prisma.relatorioSalvo.findMany({
+      where:   { animalId: Number(animalId) },
+      orderBy: { geradoEm: 'desc' },
+      take:    limite,
+      select:  {
+        id: true, geradoEm: true, fonteCalculo: true,
+        pesoCalculado: true, categoriaUsada: true, especieNome: true,
+      },
+    });
+    return registros;
+  } catch {
+    return [];
+  }
+};
+
+const buscarSnapshot = async (snapshotId) => {
+  try {
+    const reg = await prisma.relatorioSalvo.findUnique({ where: { id: Number(snapshotId) } });
+    if (!reg) return null;
+    return { ...reg, payload: JSON.parse(reg.payload) };
+  } catch {
+    return null;
+  }
+};
+
+module.exports = { computarRelatorio, resolverStatus, listarSnapshots, buscarSnapshot };
