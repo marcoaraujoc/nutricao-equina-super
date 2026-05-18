@@ -58,13 +58,17 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
 
       // Perfil
       if (perfilRes.status === 'fulfilled') {
-        const perfil = perfilRes.value.data;
-        const perfilCompleto = !!(
-          perfil?.phone &&
-          perfil?.endereco &&
-          perfil?.cep
-        );
+        const perfil        = perfilRes.value.data;
+        const isVeterinario = perfil?.userType === 'VETERINARIO';
+        const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
+
         setCadastroCompleto(perfilCompleto);
+
+        // Veterinário sem animais ainda tem acesso — não bloqueia os módulos
+        if (isVeterinario && animais.length === 0) {
+          setHasAnimals(true);
+          setHasSingleAnimal(false);
+        }
       } else {
         console.warn('Não foi possível carregar cadastro pessoal:', perfilRes.reason);
         setCadastroCompleto(false);

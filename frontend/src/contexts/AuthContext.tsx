@@ -7,6 +7,7 @@ interface User {
   email: string;
   fullName: string;
   role: string;
+  userType?: string; 
 }
 
 interface AuditLog {
@@ -42,22 +43,48 @@ function decodeToken(token: string): User | null {
   }
 }
 
+async function enriquecerComPerfil(userData: User): Promise<User> {
+  try {
+    const token = localStorage.getItem('token');
+    const res   = await fetch('/api/users/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return userData;
+    const perfil = await res.json();
+    return {
+      ...userData,
+      userType: perfil.userType ?? userData.role,
+      // Se o userType for VETERINARIO, eleva o role para que o Sidebar reconheça
+      role: perfil.userType === 'VETERINARIO' ? 'VETERINARIO' : userData.role,
+    };
+  } catch {
+    return userData; // falha silenciosa — não quebra o login
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      const userData = decodeToken(token);
-      if (userData) setUser(userData);
-    }
+    const init = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        const userData = decodeToken(token);
+        if (userData) {
+          // Enriquece com userType do backend antes de liberar a UI
+          const enriquecido = await enriquecerComPerfil(userData);
+          setUser(enriquecido);
+        }
+      }
 
-    const savedLogs = localStorage.getItem('auditLogs');
-    if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
+      const savedLogs = localStorage.getItem('auditLogs');
+      if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
 
-    setLoading(false);
+      setLoading(false);
+    };
+    init();
   }, []);
 
   // Função para registrar auditoria (não bloqueia o login)
@@ -86,13 +113,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = (token: string) => {
+  const login = async (token: string) => {
     localStorage.setItem('token', token);
     const userData = decodeToken(token);
 
     if (userData) {
+      // Seta o user básico imediatamente para não travar a UI
       setUser(userData);
-      registrarAuditoria('LOGIN');   // ← agora não bloqueia
+      // Enriquece com userType em paralelo
+      enriquecerComPerfil(userData).then(enriquecido => setUser(enriquecido));
+      registrarAuditoria('LOGIN');
     }
   };
 

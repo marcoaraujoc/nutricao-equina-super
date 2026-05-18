@@ -1,7 +1,11 @@
+// backend/src/services/composicaoParserService.js
 'use strict';
 
-const fs = require('fs');
+const fs       = require('fs');
 const pdfParse = require('pdf-parse');
+const { logAiUsage } = require('./aiLogger.service');
+// Nota: composicaoParserService usa Gemini (não Groq), então usa logAiUsage
+// diretamente em vez de chamarGroqComLog
 
 const GEMINI_API_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
@@ -81,69 +85,123 @@ ${texto.slice(0, 20000)}
 }
 
 // =====================================================================
-// CHAMADAS GEMINI
+// CHAMADAS GEMINI (com logging manual via logAiUsage)
 // =====================================================================
 
-async function chamarGeminiVisao(imageBase64, mimeType) {
+async function chamarGeminiVisao(imageBase64, mimeType, userId = null, animalId = null) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
 
-  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType, data: imageBase64 } },
-            { text: PROMPT_VISAO },
-          ],
-        },
-      ],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-    }),
-  });
+  const inicio = Date.now();
+  let sucesso      = true;
+  let erroMensagem = null;
+  let respostaTexto = '';
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini Vision Error HTTP ${response.status}: ${err}`);
+  try {
+    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { inlineData: { mimeType, data: imageBase64 } },
+              { text: PROMPT_VISAO },
+            ],
+          },
+        ],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Gemini Vision Error HTTP ${response.status}: ${err}`);
+    }
+
+    const data    = await response.json();
+    respostaTexto = data.candidates[0].content.parts[0].text.trim();
+
+    return respostaTexto;
+
+  } catch (err) {
+    sucesso      = false;
+    erroMensagem = err.message;
+    throw err;
+
+  } finally {
+    await logAiUsage({
+      operacao:      'parse_composicao_visao',
+      modelo:        'gemini-2.5-flash',
+      provedor:      'google',
+      promptTexto:   PROMPT_VISAO,
+      respostaTexto,
+      latenciaMs:    Date.now() - inicio,
+      userId,
+      animalId,
+      sucesso,
+      erroMensagem,
+    });
   }
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text.trim();
 }
 
-async function chamarGeminiTexto(prompt) {
+async function chamarGeminiTexto(prompt, userId = null, animalId = null) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
 
-  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-    }),
-  });
+  const inicio = Date.now();
+  let sucesso      = true;
+  let erroMensagem = null;
+  let respostaTexto = '';
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini Text Error HTTP ${response.status}: ${err}`);
+  try {
+    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Gemini Text Error HTTP ${response.status}: ${err}`);
+    }
+
+    const data    = await response.json();
+    respostaTexto = data.candidates[0].content.parts[0].text.trim();
+
+    return respostaTexto;
+
+  } catch (err) {
+    sucesso      = false;
+    erroMensagem = err.message;
+    throw err;
+
+  } finally {
+    await logAiUsage({
+      operacao:      'parse_composicao_texto',
+      modelo:        'gemini-2.5-flash',
+      provedor:      'google',
+      promptTexto:   prompt,
+      respostaTexto,
+      latenciaMs:    Date.now() - inicio,
+      userId,
+      animalId,
+      sucesso,
+      erroMensagem,
+    });
   }
-
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text.trim();
 }
 
 // =====================================================================
-// PARSER DA RESPOSTA
+// PARSER DA RESPOSTA GEMINI
 // =====================================================================
 
-// Tenta fechar um JSON truncado contando chaves e colchetes abertos
 function tentarRepararJSON(texto) {
-  // Localiza o último objeto completo (último '}' antes do truncamento)
   let trabalho = texto.trim();
 
-  // Remove o último objeto incompleto (sem fechar '}')
   const ultimoObjeto = trabalho.lastIndexOf('},');
   if (ultimoObjeto !== -1) {
     trabalho = trabalho.substring(0, ultimoObjeto + 1);
@@ -154,7 +212,6 @@ function tentarRepararJSON(texto) {
     }
   }
 
-  // Fecha colchetes e chaves abertos
   let abreCol = 0, fechaCol = 0, abreChave = 0, fechaChave = 0;
   for (const c of trabalho) {
     if (c === '[') abreCol++;
@@ -162,14 +219,11 @@ function tentarRepararJSON(texto) {
     if (c === '{') abreChave++;
     if (c === '}') fechaChave++;
   }
-  while (fechaCol < abreCol)   { trabalho += ']'; fechaCol++; }
+  while (fechaCol   < abreCol)   { trabalho += ']'; fechaCol++;   }
   while (fechaChave < abreChave) { trabalho += '}'; fechaChave++; }
 
-  try {
-    return JSON.parse(trabalho);
-  } catch {
-    return null;
-  }
+  try   { return JSON.parse(trabalho); }
+  catch { return null; }
 }
 
 function parsearRespostaGemini(textoResposta) {
@@ -180,7 +234,6 @@ function parsearRespostaGemini(textoResposta) {
     const clean = textoResposta.replace(/```json|```/g, '').trim();
     parsed = JSON.parse(clean);
   } catch {
-    // Tenta reparar JSON truncado antes de desistir
     const clean = textoResposta.replace(/```json|```/g, '').trim();
     parsed = tentarRepararJSON(clean);
 
@@ -189,8 +242,9 @@ function parsearRespostaGemini(textoResposta) {
       throw new Error('O modelo retornou resposta em formato inválido');
     }
 
-    console.warn('[composicaoParserService] JSON reparado — resposta estava truncada. Aumente maxOutputTokens se isso persistir.');
+    console.warn('[composicaoParserService] JSON reparado — resposta estava truncada.');
   }
+
   if (!parsed.nutrientes || !Array.isArray(parsed.nutrientes)) {
     throw new Error('Resposta não contém lista de nutrientes');
   }
@@ -198,11 +252,11 @@ function parsearRespostaGemini(textoResposta) {
   const composicoes = parsed.nutrientes
     .filter((n) => n.nome && n.valor !== null && n.valor !== undefined)
     .map((n) => ({
-      alimentoNome: parsed.nomeAlimento || 'Produto detectado',
-      nutrienteNome: String(n.nome).trim(),
-      valorPorKg: Number(n.valor),
+      alimentoNome:     parsed.nomeAlimento || 'Produto detectado',
+      nutrienteNome:    String(n.nome).trim(),
+      valorPorKg:       Number(n.valor),
       unidadeDetectada: String(n.unidade || 'g/kg').trim(),
-      base: 'Seca',
+      base:             'Seca',
     }));
 
   console.log(`[composicaoParserService] ${composicoes.length} nutrientes extraídos`);
@@ -214,26 +268,35 @@ function parsearRespostaGemini(textoResposta) {
 // =====================================================================
 
 module.exports = {
-  async processarArquivo(filePath, mimetype = '') {
+  /**
+   * @param {string} filePath   — caminho absoluto do arquivo em disco
+   * @param {string} [mimetype] — mime type do arquivo
+   * @param {number} [userId]   — id do usuário (para log)
+   * @param {number} [animalId] — id do animal (para log)
+   */
+  async processarArquivo(filePath, mimetype = '', userId = null, animalId = null) {
     const isPdf =
       mimetype === 'application/pdf' || filePath.toLowerCase().endsWith('.pdf');
 
     if (isPdf) {
-      const dataBuffer = fs.readFileSync(filePath);
-      const { text } = await pdfParse(dataBuffer);
+      const dataBuffer    = fs.readFileSync(filePath);
+      const { text }      = await pdfParse(dataBuffer);
       if (!text?.trim()) {
         throw new Error('PDF sem texto extraível. Envie uma imagem do rótulo.');
       }
-      const respostaGemini = await chamarGeminiTexto(montarPromptTexto(text));
+      const prompt         = montarPromptTexto(text);
+      const respostaGemini = await chamarGeminiTexto(prompt, userId, animalId);
       return parsearRespostaGemini(respostaGemini);
     }
 
-    // Imagem → Gemini Vision direto, zero OCR
-    const imageBuffer = fs.readFileSync(filePath);
-    const imageBase64 = imageBuffer.toString('base64');
+    // Imagem → Gemini Vision
+    const imageBuffer    = fs.readFileSync(filePath);
+    const imageBase64    = imageBuffer.toString('base64');
     const respostaGemini = await chamarGeminiVisao(
       imageBase64,
-      mimetype || 'image/jpeg'
+      mimetype || 'image/jpeg',
+      userId,
+      animalId,
     );
     return parsearRespostaGemini(respostaGemini);
   },

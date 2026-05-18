@@ -28,6 +28,19 @@ const nutrientesRoutes = require('./routes/nutrientes');
 const composicaoAlimentarRoutes = require('./routes/composicaoAlimentar');
 const usersRoutes = require('./routes/users');
 
+const crmvRoutes = require('./routes/crmv');
+
+//RBAC Veterinário
+const veterinariosRoutes = require('./routes/veterinarios');
+const equipesRoutes      = require('./routes/equipes');
+
+
+const evolucaoRoutes = require('./routes/evolucao');
+const faturaRoutes   = require('./routes/fatura');
+
+//Monitoração de Custo IA
+const aiUsageRoutes = require('./routes/aiUsage');
+
 //Rota Temporária
 const testeRoutes = require('./routes/teste');
 const queryRoutes = require('./routes/query');
@@ -51,8 +64,20 @@ app.use('/api/nutrientes', nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 app.use('/api/users', usersRoutes);
 
+app.use('/api/clinica/evolucoes', evolucaoRoutes);
+app.use('/api/clinica/faturas',   faturaRoutes);
+
+app.use('/api/crmv', crmvRoutes);
+
+// Monitoração de Custo IA
+app.use('/api/ai-usage', aiUsageRoutes);
+
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+//RBAC Veterinário
+app.use('/api/veterinarios', veterinariosRoutes);
+app.use('/api/equipes',      equipesRoutes);
 
 // === ROTA DO RELATÓRIO ===
 app.use('/api/relatorio', relatorioRoutes);

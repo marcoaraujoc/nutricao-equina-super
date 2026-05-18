@@ -1,31 +1,52 @@
+// backend/src/controllers/UserController.js
+'use strict';
+
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+// Remove zeros à esquerda do número CRMV, mantém a UF
+// Ex: "00123/SP" → "123/SP" | "13557/RJ" → "13557/RJ"
+const normalizarCRMV = (v) => {
+  const parts = v.trim().toUpperCase().split('/');
+  if (parts.length !== 2) return v.trim().toUpperCase();
+  const [num, uf] = parts;
+  return `${parseInt(num, 10)}/${uf}`;
+};
+
 const UserController = {
+
   /**
    * GET /api/users/me
-   * Busca os dados do usuário usando o e-mail do token JWT (WHERE email)
+   * Busca os dados do usuário usando o e-mail do token JWT
    */
   getMe: async (req, res) => {
     try {
-      const { email } = req.user; // vem do middleware authenticate
+      const { email } = req.user;
 
       const user = await prisma.user.findUnique({
         where: { email },
         select: {
-          id: true,
-          fullName: true,
-          email: true,
-          phone: true,
-          userType: true,
-          cep: true,
-          endereco: true,
+          id:          true,
+          fullName:    true,
+          email:       true,
+          phone:       true,
+          userType:    true,
+          cep:         true,
+          endereco:    true,
           complemento: true,
-          bairro: true,
-          cidade: true,
-          estado: true,
-          createdAt: true,
-          ativo: true,
+          bairro:      true,
+          cidade:      true,
+          estado:      true,
+          createdAt:   true,
+          ativo:       true,
+          vetPerfil: {
+            select: {
+              crmv:    true,
+              especies: {
+                select: { especieId: true },
+              },
+            },
+          },
         },
       });
 
@@ -33,7 +54,13 @@ const UserController = {
         return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
       }
 
-      return res.status(200).json(user);
+      const { vetPerfil, ...userData } = user;
+      return res.status(200).json({
+        ...userData,
+        crmv:              vetPerfil?.crmv ?? null,
+        especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
+      });
+
     } catch (error) {
       console.error('Erro em getMe:', error);
       return res.status(500).json({ success: false, error: 'Erro interno ao buscar usuário' });
@@ -42,7 +69,8 @@ const UserController = {
 
   /**
    * PUT /api/users/me
-   * Atualiza o cadastro pessoal usando o e-mail do token (WHERE email)
+   * Atualiza o cadastro pessoal usando o e-mail do token
+   * Se for veterinário, salva também CRMV e espécies atendidas no VetPerfil
    */
   updateMe: async (req, res) => {
     try {
@@ -57,40 +85,80 @@ const UserController = {
         bairro,
         cidade,
         estado,
-        userType
+        userType,
+        crmv,
+        especiesAtendidas,
       } = req.body;
 
       const updatedUser = await prisma.user.update({
-        where: { email },                    // ← WHERE por email (único na tabela)
+        where: { email },
         data: {
-          fullName: fullName || undefined,
-          phone: phone || undefined,
-          cep: cep || undefined,
-          endereco: endereco || undefined,
+          fullName:    fullName    || undefined,
+          phone:       phone       || undefined,
+          cep:         cep         || undefined,
+          endereco:    endereco    || undefined,
           complemento: complemento || undefined,
-          bairro: bairro || undefined,
-          cidade: cidade || undefined,
-          estado: estado || undefined,
-          userType: userType || undefined,
+          bairro:      bairro      || undefined,
+          cidade:      cidade      || undefined,
+          estado:      estado      || undefined,
+          userType:    userType    || undefined,
         },
       });
+
+      // Salvar dados do veterinário
+      if (userType === 'VETERINARIO' && crmv !== undefined) {
+        const crmvNormalizado = normalizarCRMV(crmv);
+
+        const vetPerfil = await prisma.vetPerfil.upsert({
+          where:  { userId: updatedUser.id },
+          create: { userId: updatedUser.id, crmv: crmvNormalizado },
+          update: { crmv: crmvNormalizado },
+        });
+
+        // Recria lista de espécies (delete + insert)
+        if (Array.isArray(especiesAtendidas)) {
+          await prisma.vetEspecie.deleteMany({
+            where: { vetPerfilId: vetPerfil.id },
+          });
+
+          if (especiesAtendidas.length > 0) {
+            await prisma.vetEspecie.createMany({
+              data: especiesAtendidas.map(eid => ({
+                vetPerfilId: vetPerfil.id,
+                especieId:   Number(eid),
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+      }
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
 
       return res.status(200).json({
         success: true,
         message: 'Cadastro pessoal salvo com sucesso!',
-        user: updatedUser
+        user:    updatedUser,
       });
 
     } catch (error) {
       console.error('Erro ao atualizar cadastro pessoal:', error);
+
+      // CRMV duplicado
+      if (error.code === 'P2002' && error.meta?.target?.includes('crmv')) {
+        return res.status(409).json({
+          success: false,
+          error: 'Este CRMV já está cadastrado no sistema.',
+        });
+      }
+
       return res.status(500).json({
         success: false,
-        error: 'Erro interno ao salvar cadastro pessoal'
+        error: 'Erro interno ao salvar cadastro pessoal',
       });
     }
   },
+
 };
 
 module.exports = UserController;

@@ -11,6 +11,8 @@ import {
   Search, ToggleLeft, ToggleRight, Printer, AlertTriangle,
 } from 'lucide-react';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
+import AnimalCard from '../components/AnimalCard';
+
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -160,38 +162,6 @@ const validarItem = (
   }
   return null;
 };
-
-// ─── Subcomponente: Card do animal ────────────────────────────────────────────
-
-function AnimalCard({ animal, user, planoNome }: {
-  animal: AnimalExtended;
-  user: ReturnType<typeof useAuth>['user'];
-  planoNome?: string | null;
-}) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
-      <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
-        <img src={animal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'} alt={animal.nome} className="w-full h-full object-cover" />
-      </div>
-      <div className="flex flex-col flex-1 min-w-0">
-        {planoNome && (
-          <span className="text-sm font-bold text-emerald-700 mb-2">
-            Dieta {planoNome}
-          </span>
-        )}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1">
-          <div><span className="block text-xs text-gray-400">Nome</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.nome}</span></div>
-          <div><span className="block text-xs text-gray-400">Nascimento</span><span className="text-sm font-semibold text-gray-900 block">{animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}</span></div>
-          <div><span className="block text-xs text-gray-400">Idade</span><span className="text-sm font-semibold text-gray-900 block">{animal.dataNascimento ? calcularIdade(String(animal.dataNascimento)) : animal.idadeAnos ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
-          <div><span className="block text-xs text-gray-400">Raça</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.raca?.nome ?? '-'}</span></div>
-          <div><span className="block text-xs text-gray-400">Proprietário</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
-          <div><span className="block text-xs text-gray-400">E-mail</span><span className="text-sm font-semibold text-gray-900 truncate block">{animal.user?.email ?? user?.email ?? '-'}</span></div>
-          <div><span className="block text-xs text-gray-400">Veterinário Responsável</span><span className="text-sm font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Subcomponente: Slot de horário ───────────────────────────────────────────
 
@@ -853,7 +823,7 @@ const Dieta = () => {
           <ArrowLeft size={18} /> Voltar
         </button>
 
-        {animal && <AnimalCard animal={animal} user={user} planoNome={planoSelecionado?.nome} />}
+        {animal && <AnimalCard animal={animal} planoNome={planoSelecionado?.nome} />}
 
         {animaisDoProprietario.length > 1 && (
           <div className="mb-4">

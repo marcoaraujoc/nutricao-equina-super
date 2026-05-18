@@ -39,7 +39,8 @@ export default function Login() {
       const data = await res.json();
 
       if (res.ok && data.token) {
-        login(data.token);                    // ← Token gerado pelo backend
+        login(data.token);
+        localStorage.removeItem('s2vet_ob');
         console.log('🎉 Login Google realizado com sucesso!');
         navigate('/');
       } else {
@@ -71,6 +72,7 @@ export default function Login() {
       const data = await res.json();
       if (res.ok) {
         login(data.token);
+        localStorage.removeItem('s2vet_ob');
         navigate('/');
       } else {
         setError('Usuário ou senha inválidos');

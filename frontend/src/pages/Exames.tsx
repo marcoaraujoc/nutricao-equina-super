@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import { Plus, Eye, Download, Calendar, Edit, Trash2, ArrowLeft } from 'lucide-react';
+import AnimalCard from '../components/AnimalCard';
+
 
 const Exames = () => {
   const { user } = useAuth();
@@ -177,7 +179,7 @@ const Exames = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="max-w-4xl mx-auto px-4">
+      <div className="max-w-5xl mx-auto px-4">
 
         <button 
           onClick={() => navigate('/')} 
@@ -201,28 +203,7 @@ const Exames = () => {
           </div>
         )}
 
-{currentAnimal && (
-  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
-    <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
-      <img
-        src={currentAnimal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'}
-        alt={currentAnimal.nome}
-        className="w-full h-full object-cover"
-      />
-    </div>
-    <div className="flex flex-col flex-1 min-w-0">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1">
-        <div><span className="block text-xs text-gray-400">Nome</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.nome}</span></div>
-        <div><span className="block text-xs text-gray-400">Nascimento</span><span className="text-sm font-semibold text-gray-900 block">{currentAnimal.dataNascimento ? formatarDataBR(currentAnimal.dataNascimento) : '-'}</span></div>
-        <div><span className="block text-xs text-gray-400">Idade</span><span className="text-sm font-semibold text-gray-900 block">{currentAnimal.dataNascimento ? calcularIdade(currentAnimal.dataNascimento) : currentAnimal.idadeAnos ? `${currentAnimal.idadeAnos} ${currentAnimal.idadeAnos === 1 ? 'ano' : 'anos'}` : '-'}</span></div>
-        <div><span className="block text-xs text-gray-400">Raça</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.raca?.nome ?? '-'}</span></div>
-        <div><span className="block text-xs text-gray-400">Proprietário</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.user?.fullName ?? user?.fullName ?? '-'}</span></div>
-        <div><span className="block text-xs text-gray-400">E-mail</span><span className="text-sm font-semibold text-gray-900 truncate block">{currentAnimal.user?.email ?? user?.email ?? '-'}</span></div>
-        <div><span className="block text-xs text-gray-400">Veterinário Responsável</span><span className="text-sm font-semibold text-gray-900 truncate block">{user?.fullName ?? '-'}</span></div>
-      </div>
-    </div>
-  </div>
-)}
+        {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
         <button onClick={handleNovoExame} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-3xl flex items-center justify-center gap-2 mb-6">
           <Plus size={20} /> Novo Exame Nutricional

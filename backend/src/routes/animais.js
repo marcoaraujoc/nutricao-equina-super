@@ -31,6 +31,7 @@ router.get('/', animalController.listar);
 router.get('/:id', animalController.obterPorId);
 router.delete('/:id', animalController.excluir);
 
+router.post('/vincular-vet', animalController.vincularVet);
 router.post('/', upload.single('foto'), animalController.criar);
 router.put('/:id', upload.single('foto'), animalController.atualizar);
 

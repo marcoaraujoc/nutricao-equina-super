@@ -1,11 +1,13 @@
-// backend/services/exameParserService.js
-const fs = require('fs');
-const pdfParse = require('pdf-parse');
+// backend/src/services/exameParserService.js
+'use strict';
 
-async function extrairTextoPDF(fileBuffer) {
-  const data = await pdfParse(fileBuffer);
-  return data.text || '';
-}
+const fs                             = require('fs');
+const pdfParse                       = require('pdf-parse');
+const { chamarGroqComLog }           = require('./aiLogger.service');
+
+// =====================================================================
+// PROMPT
+// =====================================================================
 
 function montarPrompt(texto) {
   return `Você é um especialista em extração de laudos laboratoriais veterinários.
@@ -19,7 +21,7 @@ Depois, extraia **TODOS** os exames, incluindo:
 - Relação Sódio/Potássio
 - Qualquer outro nutriente que aparecer na tabela.
 
-Retorne APENAS um JSON válido:
+Retorne APENAS um JSON válido, sem markdown, sem texto antes ou depois:
 
 {
   "dataExame": "YYYY-MM-DD",
@@ -40,38 +42,50 @@ Texto completo do laudo:
 ${texto.slice(0, 22000)}`;
 }
 
-async function chamarGroq(prompt) {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.1,
-      max_tokens: 1500
-    })
-  });
+// =====================================================================
+// EXTRAÇÃO DE TEXTO DO PDF
+// =====================================================================
 
-  if (!response.ok) throw new Error(await response.text());
-
-  const data = await response.json();
-  const text = data.choices[0].message.content.trim();
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('Não encontrou JSON na resposta');
-
-  return JSON.parse(jsonMatch[0]);
+async function extrairTextoPDF(fileBuffer) {
+  const data = await pdfParse(fileBuffer);
+  return data.text || '';
 }
 
+// =====================================================================
+// EXPORTAÇÃO PRINCIPAL
+// =====================================================================
+
 module.exports = {
-  async processarExame(filePath) {
+  /**
+   * @param {string} filePath   — caminho absoluto do PDF/imagem em disco
+   * @param {number} [userId]   — id do usuário que disparou a ação (para log)
+   * @param {number} [animalId] — id do animal relacionado (para log)
+   */
+  async processarExame(filePath, userId = null, animalId = null) {
     const fileBuffer = fs.readFileSync(filePath);
-    const texto = await extrairTextoPDF(fileBuffer);
-    const prompt = montarPrompt(texto);
-    const parsed = await chamarGroq(prompt);
-    return parsed;
-  }
+    const texto      = await extrairTextoPDF(fileBuffer);
+    const prompt     = montarPrompt(texto);
+
+    // chamarGroqComLog já faz o fetch, trata erro e loga automaticamente
+    const respostaTexto = await chamarGroqComLog({
+      operacao:    'parse_laudo',
+      prompt,
+      modelo:      'llama-3.3-70b-versatile',
+      maxTokens:   1500,
+      temperature: 0.1,
+      userId,
+      animalId,
+    });
+
+    // Parse da resposta
+    const jsonMatch = respostaTexto.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('Não encontrou JSON na resposta do modelo');
+
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch (err) {
+      console.error('[exameParserService] Erro ao parsear JSON:', respostaTexto);
+      throw new Error('Modelo retornou resposta em formato inválido');
+    }
+  },
 };
