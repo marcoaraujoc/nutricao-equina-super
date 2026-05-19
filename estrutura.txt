@@ -1,0 +1,3916 @@
+.:
+total 156
+drwxrwxrwx 1 vscode vscode   4096 May 18 09:27 .
+drwxr-xr-x 3 root   root     4096 May  4 01:17 ..
+drwxrwxrwx 1 vscode vscode   4096 May  2 21:41 attachments
+drwxrwxrwx 1 vscode vscode   4096 May  9 15:31 backend
+drwxrwxrwx 1 vscode vscode   4096 May  4 01:40 backup-nutricao
+drwxrwxrwx 1 vscode vscode   4096 Mar 30 00:11 data
+drwxrwxrwx 1 vscode vscode   4096 Mar 30 00:11 database
+drwxrwxrwx 1 vscode vscode   4096 May  4 00:56 .devcontainer
+-rwxrwxrwx 1 vscode vscode    630 May  3 20:04 docker-compose.yml
+drwxrwxrwx 1 vscode vscode   4096 May 10 12:55 docs
+-rwxrwxrwx 1 vscode vscode      0 May 18 09:27 estrutura.txt
+drwxrwxrwx 1 vscode vscode   4096 May 14 01:07 frontend
+drwxrwxrwx 1 vscode vscode   4096 May 18 02:04 .git
+-rwxrwxrwx 1 vscode vscode   2291 Mar 30 00:11 .gitignore
+-rwxrwxrwx 1 vscode vscode    148 May  3 20:37 insert_alimentos.sql
+-rwxrwxrwx 1 vscode vscode    264 May  3 20:34 insert_animais.sql
+-rwxrwxrwx 1 vscode vscode    115 May  3 20:38 insert_composicao.sql
+-rwxrwxrwx 1 vscode vscode    246 May  3 20:36 insert_dieta.sql
+-rwxrwxrwx 1 vscode vscode    173 May  3 20:30 insert_especies.sql
+-rwxrwxrwx 1 vscode vscode      0 May  3 20:43 insert_exigencias.sql
+-rwxrwxrwx 1 vscode vscode    110 May  3 20:37 insert_nutrientes.sql
+-rwxrwxrwx 1 vscode vscode    160 May  3 20:30 insert_racas.sql
+-rwxrwxrwx 1 vscode vscode    436 May  3 20:34 insert_users.sql
+-rwxrwxrwx 1 vscode vscode   1090 Mar 30 00:06 LICENSE
+drwxrwxrwx 1 vscode vscode   4096 May 15 08:48 node_modules
+-rwxrwxrwx 1 vscode vscode  15549 May 15 08:46 nrcteste.js
+-rwxrwxrwx 1 vscode vscode    538 May 15 08:48 package.json
+-rwxrwxrwx 1 vscode vscode 120767 May 15 08:48 package-lock.json
+-rwxrwxrwx 1 vscode vscode    146 May  7 17:23 README.md
+-rwxrwxrwx 1 vscode vscode   3347 May  2 21:41 RelatorioNutricionalCompleto.sql
+
+./attachments:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  2 21:41 .
+drwxrwxrwx 1 vscode vscode 4096 May 18 09:27 ..
+
+./backend:
+total 7552
+drwxrwxrwx 1 vscode vscode    4096 May  9 15:31 .
+drwxrwxrwx 1 vscode vscode    4096 May 18 09:27 ..
+-rwxrwxrwx 1 vscode vscode     248 May  3 19:30 Dockerfile
+-rwxrwxrwx 1 vscode vscode 5199098 May  6 18:29 eng.traineddata
+-rwxrwxrwx 1 vscode vscode     326 May 17 21:39 .env
+-rwxrwxrwx 1 vscode vscode     530 Mar 30 00:23 .env_backup
+-rwxrwxrwx 1 vscode vscode       0 Mar 30 00:11 .env.example
+-rwxrwxrwx 1 vscode vscode      93 Mar 30 00:23 .gitignore
+drwxrwxrwx 1 vscode vscode    4096 May  6 17:34 node_modules
+-rwxrwxrwx 1 vscode vscode     875 May  6 17:34 package.json
+-rwxrwxrwx 1 vscode vscode   91754 May  6 17:34 package-lock.json
+-rwxrwxrwx 1 vscode vscode 2422444 May  6 16:13 por.traineddata
+drwxrwxrwx 1 vscode vscode    4096 May  4 16:13 prisma
+-rwxrwxrwx 1 vscode vscode     291 Apr 30 22:48 prismaClient.ts
+drwxrwxrwx 1 vscode vscode    4096 May 11 18:56 scripts
+-rwxrwxrwx 1 vscode vscode    1029 Apr 19 14:40 seed.js
+drwxrwxrwx 1 vscode vscode    4096 May  2 23:54 src
+-rwxrwxrwx 1 vscode vscode     468 May  5 21:30 test-relatorio.js
+drwxrwxrwx 1 vscode vscode    4096 May 16 09:29 uploads
+
+./backend/node_modules:
+total 76
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  9 15:31 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 accepts
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 anymatch
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 append-field
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 array-flatten
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 asynckit
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 axios
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 balanced-match
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 bcryptjs
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .bin
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 binary-extensions
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 bmp-js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 body-parser
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 brace-expansion
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 braces
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 buffer-equal-constant-time
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 buffer-from
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 busboy
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 bytes
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 call-bind-apply-helpers
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 call-bound
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 chokidar
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 combined-stream
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 concat-stream
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 content-disposition
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 content-type
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 cookie
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 cookie-signature
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 cors
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 csv-parser
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 debug
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 delayed-stream
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 depd
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 destroy
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 detect-libc
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 dotenv
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 dunder-proto
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ecdsa-sig-formatter
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ee-first
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 @emnapi
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 encodeurl
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 escape-html
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 es-define-property
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 es-errors
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 es-object-atoms
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 es-set-tostringtag
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 etag
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 express
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 fill-range
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 finalhandler
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 follow-redirects
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 form-data
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 forwarded
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 fresh
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 function-bind
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 get-intrinsic
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 get-proto
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 glob-parent
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 gopd
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 groq-sdk
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 has-flag
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 hasown
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 has-symbols
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 has-tostringtag
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 http-errors
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 iconv-lite
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 idb-keyval
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ignore-by-default
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 @img
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 inherits
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ipaddr.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 is-binary-path
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 is-extglob
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 is-glob
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 is-number
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 is-url
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 jsonwebtoken
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 jwa
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 jws
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.includes
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.isboolean
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.isinteger
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.isnumber
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.isplainobject
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.isstring
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lodash.once
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 math-intrinsics
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 media-typer
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 merge-descriptors
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 methods
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 mime
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 mime-db
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 mime-types
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 minimatch
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ms
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 multer
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:32 @napi-rs
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 negotiator
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 node-ensure
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 node-fetch
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 nodemailer
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 nodemon
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 normalize-path
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 object-assign
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 object-inspect
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ollama
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 on-finished
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 opencollective-postinstall
+-rwxrwxrwx 1 vscode vscode 77520 May  6 17:34 .package-lock.json
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 parseurl
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 path-to-regexp
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 pdf-parse
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 picomatch
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .prisma
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 @prisma
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 prisma
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 proxy-addr
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 proxy-from-env
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 pstree.remy
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 qs
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 range-parser
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 raw-body
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 readable-stream
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 readdirp
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 regenerator-runtime
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 safe-buffer
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 safer-buffer
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 semver
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 send
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 serve-static
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 setprototypeof
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 sharp
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 side-channel
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 side-channel-list
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 side-channel-map
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 side-channel-weakmap
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 simple-update-notifier
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 statuses
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 streamsearch
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 string_decoder
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 supports-color
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 tesseract.js
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 tesseract.js-core
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 toidentifier
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 to-regex-range
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 touch
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 tr46
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 typedarray
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 type-is
+drwxrwxrwx 1 vscode vscode  4096 May  2 03:09 @types
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 undefsafe
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 undici-types
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 unpipe
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 util-deprecate
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 utils-merge
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 vary
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 wasm-feature-detect
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 webidl-conversions
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 whatwg-fetch
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 whatwg-url
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 zlibjs
+
+./backend/node_modules/accepts:
+total 32
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 5096 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 5252 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1167 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1157 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4123 Apr 30 22:56 README.md
+
+./backend/node_modules/anymatch:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  763 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode 3180 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  784 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  904 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4023 Apr 30 22:56 README.md
+
+./backend/node_modules/append-field:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  307 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1082 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   14 Apr 30 22:56 .npmignore
+-rwxrwxrwx 1 vscode vscode  416 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1016 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+
+./backend/node_modules/append-field/lib:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1112 Apr 30 22:56 parse-path.js
+-rwxrwxrwx 1 vscode vscode 1642 Apr 30 22:56 set-value.js
+
+./backend/node_modules/append-field/test:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  450 Apr 30 22:56 forms.js
+
+./backend/node_modules/array-flatten:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1195 Apr 30 22:56 array-flatten.js
+-rwxrwxrwx 1 vscode vscode 1103 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  879 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1245 Apr 30 22:56 README.md
+
+./backend/node_modules/asynckit:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1256 Apr 30 22:56 bench.js
+-rwxrwxrwx 1 vscode vscode  156 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1078 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1611 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1017 Apr 30 22:56 parallel.js
+-rwxrwxrwx 1 vscode vscode 7640 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  501 Apr 30 22:56 serial.js
+-rwxrwxrwx 1 vscode vscode 1751 Apr 30 22:56 serialOrdered.js
+-rwxrwxrwx 1 vscode vscode  703 Apr 30 22:56 stream.js
+
+./backend/node_modules/asynckit/lib:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  497 Apr 30 22:56 abort.js
+-rwxrwxrwx 1 vscode vscode  599 Apr 30 22:56 async.js
+-rwxrwxrwx 1 vscode vscode  441 Apr 30 22:56 defer.js
+-rwxrwxrwx 1 vscode vscode 1794 Apr 30 22:56 iterate.js
+-rwxrwxrwx 1 vscode vscode 1611 Apr 30 22:56 readable_asynckit.js
+-rwxrwxrwx 1 vscode vscode  673 Apr 30 22:56 readable_parallel.js
+-rwxrwxrwx 1 vscode vscode  655 Apr 30 22:56 readable_serial.js
+-rwxrwxrwx 1 vscode vscode  941 Apr 30 22:56 readable_serial_ordered.js
+-rwxrwxrwx 1 vscode vscode  941 Apr 30 22:56 state.js
+-rwxrwxrwx 1 vscode vscode 2964 Apr 30 22:56 streamify.js
+-rwxrwxrwx 1 vscode vscode  533 Apr 30 22:56 terminator.js
+
+./backend/node_modules/axios:
+total 284
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 118102 Apr 30 22:56 CHANGELOG.md
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode  20560 Apr 30 22:56 index.d.cts
+-rwxrwxrwx 1 vscode vscode  20307 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode    684 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode   1084 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  21742 Apr 30 22:56 MIGRATION_GUIDE.md
+-rwxrwxrwx 1 vscode vscode   6347 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  86115 Apr 30 22:56 README.md
+
+./backend/node_modules/axios/dist:
+total 660
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 154714 Apr 30 22:56 axios.js
+-rwxrwxrwx 1 vscode vscode 264208 Apr 30 22:56 axios.js.map
+-rwxrwxrwx 1 vscode vscode  54311 Apr 30 22:56 axios.min.js
+-rwxrwxrwx 1 vscode vscode 193862 Apr 30 22:56 axios.min.js.map
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 browser
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 esm
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 node
+
+./backend/node_modules/axios/dist/browser:
+total 336
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 113530 Apr 30 22:56 axios.cjs
+-rwxrwxrwx 1 vscode vscode 228033 Apr 30 22:56 axios.cjs.map
+
+./backend/node_modules/axios/dist/esm:
+total 560
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 114429 Apr 30 22:56 axios.js
+-rwxrwxrwx 1 vscode vscode 229352 Apr 30 22:56 axios.js.map
+-rwxrwxrwx 1 vscode vscode  38519 Apr 30 22:56 axios.min.js
+-rwxrwxrwx 1 vscode vscode 185094 Apr 30 22:56 axios.min.js.map
+
+./backend/node_modules/axios/dist/node:
+total 504
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 158168 Apr 30 22:56 axios.cjs
+-rwxrwxrwx 1 vscode vscode 352792 Apr 30 22:56 axios.cjs.map
+
+./backend/node_modules/axios/lib:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 adapters
+-rwxrwxrwx 1 vscode vscode  2558 Apr 30 22:56 axios.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 cancel
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 core
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 defaults
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 env
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 helpers
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 platform
+-rwxrwxrwx 1 vscode vscode 23539 Apr 30 22:56 utils.js
+
+./backend/node_modules/axios/lib/adapters:
+total 64
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  3310 Apr 30 22:56 adapters.js
+-rwxrwxrwx 1 vscode vscode  9237 Apr 30 22:56 fetch.js
+-rwxrwxrwx 1 vscode vscode 34816 Apr 30 22:56 http.js
+-rwxrwxrwx 1 vscode vscode   911 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  7448 Apr 30 22:56 xhr.js
+
+./backend/node_modules/axios/lib/cancel:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  618 Apr 30 22:56 CanceledError.js
+-rwxrwxrwx 1 vscode vscode 2796 Apr 30 22:56 CancelToken.js
+-rwxrwxrwx 1 vscode vscode   99 Apr 30 22:56 isCancel.js
+
+./backend/node_modules/axios/lib/core:
+total 52
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2908 Apr 30 22:56 AxiosError.js
+-rwxrwxrwx 1 vscode vscode 8258 Apr 30 22:56 AxiosHeaders.js
+-rwxrwxrwx 1 vscode vscode 8015 Apr 30 22:56 Axios.js
+-rwxrwxrwx 1 vscode vscode  784 Apr 30 22:56 buildFullPath.js
+-rwxrwxrwx 1 vscode vscode 2211 Apr 30 22:56 dispatchRequest.js
+-rwxrwxrwx 1 vscode vscode 1594 Apr 30 22:56 InterceptorManager.js
+-rwxrwxrwx 1 vscode vscode 4184 Apr 30 22:56 mergeConfig.js
+-rwxrwxrwx 1 vscode vscode  399 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  880 Apr 30 22:56 settle.js
+-rwxrwxrwx 1 vscode vscode  776 Apr 30 22:56 transformData.js
+
+./backend/node_modules/axios/lib/defaults:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 4968 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  160 Apr 30 22:56 transitional.js
+
+./backend/node_modules/axios/lib/env:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 classes
+-rwxrwxrwx 1 vscode vscode   32 Apr 30 22:56 data.js
+-rwxrwxrwx 1 vscode vscode  131 Apr 30 22:56 README.md
+
+./backend/node_modules/axios/lib/env/classes:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  106 Apr 30 22:56 FormData.js
+
+./backend/node_modules/axios/lib/helpers:
+total 84
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3809 Apr 30 22:56 AxiosTransformStream.js
+-rwxrwxrwx 1 vscode vscode 1448 Apr 30 22:56 AxiosURLSearchParams.js
+-rwxrwxrwx 1 vscode vscode  444 Apr 30 22:56 bind.js
+-rwxrwxrwx 1 vscode vscode 1590 Apr 30 22:56 buildURL.js
+-rwxrwxrwx 1 vscode vscode  417 Apr 30 22:56 callbackify.js
+-rwxrwxrwx 1 vscode vscode  382 Apr 30 22:56 combineURLs.js
+-rwxrwxrwx 1 vscode vscode 1460 Apr 30 22:56 composeSignals.js
+-rwxrwxrwx 1 vscode vscode 1399 Apr 30 22:56 cookies.js
+-rwxrwxrwx 1 vscode vscode  777 Apr 30 22:56 deprecatedMethod.js
+-rwxrwxrwx 1 vscode vscode 2060 Apr 30 22:56 estimateDataURLDecodedBytes.js
+-rwxrwxrwx 1 vscode vscode 2245 Apr 30 22:56 formDataToJSON.js
+-rwxrwxrwx 1 vscode vscode 3093 Apr 30 22:56 formDataToStream.js
+-rwxrwxrwx 1 vscode vscode 1369 Apr 30 22:56 fromDataURI.js
+-rwxrwxrwx 1 vscode vscode 1760 Apr 30 22:56 HttpStatusCode.js
+-rwxrwxrwx 1 vscode vscode  617 Apr 30 22:56 isAbsoluteURL.js
+-rwxrwxrwx 1 vscode vscode  369 Apr 30 22:56 isAxiosError.js
+-rwxrwxrwx 1 vscode vscode  464 Apr 30 22:56 isURLSameOrigin.js
+-rwxrwxrwx 1 vscode vscode   56 Apr 30 22:56 null.js
+-rwxrwxrwx 1 vscode vscode 1445 Apr 30 22:56 parseHeaders.js
+-rwxrwxrwx 1 vscode vscode  153 Apr 30 22:56 parseProtocol.js
+-rwxrwxrwx 1 vscode vscode 1350 Apr 30 22:56 progressEventReducer.js
+-rwxrwxrwx 1 vscode vscode  323 Apr 30 22:56 readBlob.js
+-rwxrwxrwx 1 vscode vscode  351 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode 3045 Apr 30 22:56 resolveConfig.js
+-rwxrwxrwx 1 vscode vscode 3925 Apr 30 22:56 shouldBypassProxy.js
+-rwxrwxrwx 1 vscode vscode 1094 Apr 30 22:56 speedometer.js
+-rwxrwxrwx 1 vscode vscode  566 Apr 30 22:56 spread.js
+-rwxrwxrwx 1 vscode vscode  854 Apr 30 22:56 throttle.js
+-rwxrwxrwx 1 vscode vscode 6739 Apr 30 22:56 toFormData.js
+-rwxrwxrwx 1 vscode vscode  542 Apr 30 22:56 toURLEncodedForm.js
+-rwxrwxrwx 1 vscode vscode 1764 Apr 30 22:56 trackStream.js
+-rwxrwxrwx 1 vscode vscode 3088 Apr 30 22:56 validator.js
+-rwxrwxrwx 1 vscode vscode  688 Apr 30 22:56 ZlibHeaderTransformStream.js
+
+./backend/node_modules/axios/lib/platform:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 browser
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 common
+-rwxrwxrwx 1 vscode vscode  132 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 node
+
+./backend/node_modules/axios/lib/platform/browser:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 classes
+-rwxrwxrwx 1 vscode vscode  310 Apr 30 22:56 index.js
+
+./backend/node_modules/axios/lib/platform/browser/classes:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 Blob.js
+-rwxrwxrwx 1 vscode vscode   81 Apr 30 22:56 FormData.js
+-rwxrwxrwx 1 vscode vscode  188 Apr 30 22:56 URLSearchParams.js
+
+./backend/node_modules/axios/lib/platform/common:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1603 Apr 30 22:56 utils.js
+
+./backend/node_modules/axios/lib/platform/node:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 classes
+-rwxrwxrwx 1 vscode vscode  837 Apr 30 22:56 index.js
+
+./backend/node_modules/axios/lib/platform/node/classes:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   60 Apr 30 22:56 FormData.js
+-rwxrwxrwx 1 vscode vscode   74 Apr 30 22:56 URLSearchParams.js
+
+./backend/node_modules/balanced-match:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode 1155 Apr 30 22:56 LICENSE.md
+-rwxrwxrwx 1 vscode vscode 1596 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1740 Apr 30 22:56 README.md
+
+./backend/node_modules/balanced-match/dist:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 commonjs
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 esm
+
+./backend/node_modules/balanced-match/dist/commonjs:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  334 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  323 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1779 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 4189 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode   25 Apr 30 22:56 package.json
+
+./backend/node_modules/balanced-match/dist/esm:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  334 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  323 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1608 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 4155 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode   23 Apr 30 22:56 package.json
+
+./backend/node_modules/bcryptjs:
+total 68
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 bin
+-rwxrwxrwx 1 vscode vscode    89 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode 41528 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1530 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  2068 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  7628 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  5653 Apr 30 22:56 types.d.ts
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 umd
+
+./backend/node_modules/bcryptjs/bin:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  528 Apr 30 22:56 bcrypt
+
+./backend/node_modules/bcryptjs/umd:
+total 56
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode    83 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode 47507 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode    25 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  5653 Apr 30 22:56 types.d.ts
+
+./backend/node_modules/.bin:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+lrwxrwxrwx 1 vscode vscode   22 Apr 30 22:56 bcrypt -> ../bcryptjs/bin/bcrypt
+lrwxrwxrwx 1 vscode vscode   28 Apr 30 22:56 csv-parser -> ../csv-parser/bin/csv-parser
+lrwxrwxrwx 1 vscode vscode   19 May  6 17:34 groq-sdk -> ../groq-sdk/bin/cli
+lrwxrwxrwx 1 vscode vscode   14 Apr 30 22:56 mime -> ../mime/cli.js
+lrwxrwxrwx 1 vscode vscode   25 Apr 30 22:56 nodemon -> ../nodemon/bin/nodemon.js
+lrwxrwxrwx 1 vscode vscode   25 Apr 30 22:56 nodetouch -> ../touch/bin/nodetouch.js
+lrwxrwxrwx 1 vscode vscode   38 May  1 00:22 opencollective-postinstall -> ../opencollective-postinstall/index.js
+lrwxrwxrwx 1 vscode vscode   24 Apr 30 22:56 prisma -> ../prisma/build/index.js
+lrwxrwxrwx 1 vscode vscode   23 Apr 30 22:56 semver -> ../semver/bin/semver.js
+
+./backend/node_modules/binary-extensions:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2193 Apr 30 22:56 binary-extensions.json
+-rwxrwxrwx 1 vscode vscode   87 Apr 30 22:56 binary-extensions.json.d.ts
+-rwxrwxrwx 1 vscode vscode  249 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   54 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1167 Apr 30 22:56 license
+-rwxrwxrwx 1 vscode vscode  739 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  541 Apr 30 22:56 readme.md
+
+./backend/node_modules/bmp-js:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  335 May  1 00:22 bmp-js.iml
+-rwxrwxrwx 1 vscode vscode  233 May  1 00:22 index.js
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 lib
+-rwxrwxrwx 1 vscode vscode 1077 May  1 00:22 LICENSE
+-rwxrwxrwx 1 vscode vscode   18 May  1 00:22 .npmignore
+-rwxrwxrwx 1 vscode vscode  546 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode  862 May  1 00:22 README.md
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 test
+
+./backend/node_modules/bmp-js/lib:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 14445 May  1 00:22 decoder.js
+-rwxrwxrwx 1 vscode vscode  2429 May  1 00:22 encoder.js
+
+./backend/node_modules/bmp-js/test:
+total 664
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 20072 May  1 00:22 bit16_565.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit16_565_out.bmp
+-rwxrwxrwx 1 vscode vscode 20072 May  1 00:22 bit16_a444.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit16_a444_out.bmp
+-rwxrwxrwx 1 vscode vscode 20072 May  1 00:22 bit16_a555.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit16_a555_out.bmp
+-rwxrwxrwx 1 vscode vscode 20072 May  1 00:22 bit16_x444.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit16_x444_out.bmp
+-rwxrwxrwx 1 vscode vscode 20056 May  1 00:22 bit16_x555.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit16_x555_out.bmp
+-rwxrwxrwx 1 vscode vscode  1664 May  1 00:22 bit1.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit1_out.bmp
+-rwxrwxrwx 1 vscode vscode 30056 May  1 00:22 bit24.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit24_out.bmp
+-rwxrwxrwx 1 vscode vscode 40056 May  1 00:22 bit32_alpha.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit32_alpha_out.bmp
+-rwxrwxrwx 1 vscode vscode 40072 May  1 00:22 bit32.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit32_out.bmp
+-rwxrwxrwx 1 vscode vscode  5288 May  1 00:22 bit4.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit4_out.bmp
+-rwxrwxrwx 1 vscode vscode  2708 May  1 00:22 bit4_RLE.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit4_RLE_out.bmp
+-rwxrwxrwx 1 vscode vscode 10556 May  1 00:22 bit8.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit8_out.bmp
+-rwxrwxrwx 1 vscode vscode  3528 May  1 00:22 bit8_RLE.bmp
+-rwxrwxrwx 1 vscode vscode 30054 May  1 00:22 bit8_RLE_out.bmp
+-rwxrwxrwx 1 vscode vscode   801 May  1 00:22 test.js
+
+./backend/node_modules/body-parser:
+total 52
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 17090 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode  2681 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1172 Apr 30 22:56 LICENSE
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 node_modules
+-rwxrwxrwx 1 vscode vscode  1461 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 19180 Apr 30 22:56 README.md
+
+./backend/node_modules/body-parser/lib:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 4325 Apr 30 22:56 read.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 types
+
+./backend/node_modules/body-parser/lib/types:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 5247 Apr 30 22:56 json.js
+-rwxrwxrwx 1 vscode vscode 1884 Apr 30 22:56 raw.js
+-rwxrwxrwx 1 vscode vscode 2285 Apr 30 22:56 text.js
+-rwxrwxrwx 1 vscode vscode 6252 Apr 30 22:56 urlencoded.js
+
+./backend/node_modules/body-parser/node_modules:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 qs
+
+./backend/node_modules/body-parser/node_modules/qs:
+total 80
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 40898 Apr 30 22:56 CHANGELOG.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode   597 Apr 30 22:56 .editorconfig
+-rwxrwxrwx 1 vscode vscode  1450 Apr 30 22:56 eslint.config.mjs
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .github
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1600 Apr 30 22:56 LICENSE.md
+-rwxrwxrwx 1 vscode vscode   216 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode  3151 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 26906 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 test
+
+./backend/node_modules/body-parser/node_modules/qs/dist:
+total 52
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 51594 Apr 30 22:56 qs.js
+
+./backend/node_modules/body-parser/node_modules/qs/.github:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  548 Apr 30 22:56 FUNDING.yml
+-rwxrwxrwx 1 vscode vscode  413 Apr 30 22:56 SECURITY.md
+-rwxrwxrwx 1 vscode vscode 4665 Apr 30 22:56 THREAT_MODEL.md
+
+./backend/node_modules/body-parser/node_modules/qs/lib:
+total 40
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   476 Apr 30 22:56 formats.js
+-rwxrwxrwx 1 vscode vscode   211 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 14308 Apr 30 22:56 parse.js
+-rwxrwxrwx 1 vscode vscode 11475 Apr 30 22:56 stringify.js
+-rwxrwxrwx 1 vscode vscode 10249 Apr 30 22:56 utils.js
+
+./backend/node_modules/body-parser/node_modules/qs/test:
+total 152
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  7698 Apr 30 22:56 empty-keys-cases.js
+-rwxrwxrwx 1 vscode vscode 66004 Apr 30 22:56 parse.js
+-rwxrwxrwx 1 vscode vscode 53675 Apr 30 22:56 stringify.js
+-rwxrwxrwx 1 vscode vscode 16720 Apr 30 22:56 utils.js
+
+./backend/node_modules/brace-expansion:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode 1144 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1559 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2414 Apr 30 22:56 README.md
+
+./backend/node_modules/brace-expansion/dist:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 commonjs
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 esm
+
+./backend/node_modules/brace-expansion/dist/commonjs:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   227 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   273 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode  6888 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 13854 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode    25 Apr 30 22:56 package.json
+
+./backend/node_modules/brace-expansion/dist/esm:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   227 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   273 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode  6705 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 13868 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode    23 Apr 30 22:56 package.json
+
+./backend/node_modules/braces:
+total 40
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  4380 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1091 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1647 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 21505 Apr 30 22:56 README.md
+
+./backend/node_modules/braces/lib:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1501 Apr 30 22:56 compile.js
+-rwxrwxrwx 1 vscode vscode 1589 Apr 30 22:56 constants.js
+-rwxrwxrwx 1 vscode vscode 2797 Apr 30 22:56 expand.js
+-rwxrwxrwx 1 vscode vscode 6899 Apr 30 22:56 parse.js
+-rwxrwxrwx 1 vscode vscode  708 Apr 30 22:56 stringify.js
+-rwxrwxrwx 1 vscode vscode 2518 Apr 30 22:56 utils.js
+
+./backend/node_modules/buffer-equal-constant-time:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1045 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1518 Apr 30 22:56 LICENSE.txt
+-rwxrwxrwx 1 vscode vscode   26 Apr 30 22:56 .npmignore
+-rwxrwxrwx 1 vscode vscode  484 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1101 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode 1013 Apr 30 22:56 test.js
+-rwxrwxrwx 1 vscode vscode   45 Apr 30 22:56 .travis.yml
+
+./backend/node_modules/buffer-from:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1675 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1078 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  304 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1990 Apr 30 22:56 readme.md
+
+./backend/node_modules/busboy:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 bench
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 .eslintrc.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1067 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  810 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 7926 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+
+./backend/node_modules/busboy/bench:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3178 Apr 30 22:56 bench-multipart-fields-100mb-big.js
+-rwxrwxrwx 1 vscode vscode 3169 Apr 30 22:56 bench-multipart-fields-100mb-small.js
+-rwxrwxrwx 1 vscode vscode 3349 Apr 30 22:56 bench-multipart-files-100mb-big.js
+-rwxrwxrwx 1 vscode vscode 3340 Apr 30 22:56 bench-multipart-files-100mb-small.js
+-rwxrwxrwx 1 vscode vscode 2211 Apr 30 22:56 bench-urlencoded-fields-100pairs-small.js
+-rwxrwxrwx 1 vscode vscode 1808 Apr 30 22:56 bench-urlencoded-fields-900pairs-small-alt.js
+
+./backend/node_modules/busboy/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 workflows
+
+./backend/node_modules/busboy/.github/workflows:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  518 Apr 30 22:56 ci.yml
+-rwxrwxrwx 1 vscode vscode  471 Apr 30 22:56 lint.yml
+
+./backend/node_modules/busboy/lib:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  1576 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 types
+-rwxrwxrwx 1 vscode vscode 16220 Apr 30 22:56 utils.js
+
+./backend/node_modules/busboy/lib/types:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 18985 Apr 30 22:56 multipart.js
+-rwxrwxrwx 1 vscode vscode 10705 Apr 30 22:56 urlencoded.js
+
+./backend/node_modules/busboy/test:
+total 56
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  2799 Apr 30 22:56 common.js
+-rwxrwxrwx 1 vscode vscode   539 Apr 30 22:56 test.js
+-rwxrwxrwx 1 vscode vscode  2061 Apr 30 22:56 test-types-multipart-charsets.js
+-rwxrwxrwx 1 vscode vscode 30013 Apr 30 22:56 test-types-multipart.js
+-rwxrwxrwx 1 vscode vscode  2369 Apr 30 22:56 test-types-multipart-stream-pause.js
+-rwxrwxrwx 1 vscode vscode 11210 Apr 30 22:56 test-types-urlencoded.js
+
+./backend/node_modules/bytes:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1775 Apr 30 22:56 History.md
+-rwxrwxrwx 1 vscode vscode 3613 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1153 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  959 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4770 Apr 30 22:56 Readme.md
+
+./backend/node_modules/call-bind-apply-helpers:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   23 Apr 30 22:56 actualApply.d.ts
+-rwxrwxrwx 1 vscode vscode  280 Apr 30 22:56 actualApply.js
+-rwxrwxrwx 1 vscode vscode  614 Apr 30 22:56 applyBind.d.ts
+-rwxrwxrwx 1 vscode vscode  264 Apr 30 22:56 applyBind.js
+-rwxrwxrwx 1 vscode vscode 1938 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  232 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode   34 Apr 30 22:56 functionApply.d.ts
+-rwxrwxrwx 1 vscode vscode   99 Apr 30 22:56 functionApply.js
+-rwxrwxrwx 1 vscode vscode   33 Apr 30 22:56 functionCall.d.ts
+-rwxrwxrwx 1 vscode vscode   97 Apr 30 22:56 functionCall.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode 2226 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  511 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2480 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2330 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   82 Apr 30 22:56 reflectApply.d.ts
+-rwxrwxrwx 1 vscode vscode  132 Apr 30 22:56 reflectApply.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  115 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/call-bind-apply-helpers/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  594 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/call-bind-apply-helpers/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2658 Apr 30 22:56 index.js
+
+./backend/node_modules/call-bound:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2880 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  138 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode 4651 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  687 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2507 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1897 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  137 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/call-bound/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  581 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/call-bound/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2418 Apr 30 22:56 index.js
+
+./backend/node_modules/chokidar:
+total 52
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 28379 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1129 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1648 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 14392 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 types
+
+./backend/node_modules/chokidar/lib:
+total 40
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  1878 Apr 30 22:56 constants.js
+-rwxrwxrwx 1 vscode vscode 16368 Apr 30 22:56 fsevents-handler.js
+-rwxrwxrwx 1 vscode vscode 20067 Apr 30 22:56 nodefs-handler.js
+
+./backend/node_modules/chokidar/types:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6339 Apr 30 22:56 index.d.ts
+
+./backend/node_modules/combined-stream:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1085 Apr 30 22:56 License
+-rwxrwxrwx 1 vscode vscode  640 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4551 Apr 30 22:56 Readme.md
+-rwxrwxrwx 1 vscode vscode  551 Apr 30 22:56 yarn.lock
+
+./backend/node_modules/combined-stream/lib:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 4687 Apr 30 22:56 combined_stream.js
+
+./backend/node_modules/concat-stream:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3775 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1084 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1187 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3510 Apr 30 22:56 readme.md
+
+./backend/node_modules/content-disposition:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  1020 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 10594 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1094 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1200 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  5205 Apr 30 22:56 README.md
+
+./backend/node_modules/content-type:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  523 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 5002 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1089 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1075 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2782 Apr 30 22:56 README.md
+
+./backend/node_modules/cookie:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  8166 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1175 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1092 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 11769 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  1180 Apr 30 22:56 SECURITY.md
+
+./backend/node_modules/cookie-signature:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  818 Apr 30 22:56 History.md
+-rwxrwxrwx 1 vscode vscode 1284 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  491 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1490 Apr 30 22:56 Readme.md
+
+./backend/node_modules/cors:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1095 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   926 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 11348 Apr 30 22:56 README.md
+
+./backend/node_modules/cors/lib:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6587 Apr 30 22:56 index.js
+
+./backend/node_modules/csv-parser:
+total 36
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 bin
+-rwxrwxrwx 1 vscode vscode  4916 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  7319 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1078 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  2113 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 10720 Apr 30 22:56 README.md
+
+./backend/node_modules/csv-parser/bin:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3402 Apr 30 22:56 csv-parser
+
+./backend/node_modules/debug:
+total 48
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 11707 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   321 Apr 30 22:56 component.json
+-rwxrwxrwx 1 vscode vscode    46 Apr 30 22:56 .coveralls.yml
+-rwxrwxrwx 1 vscode vscode   180 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode  1736 Apr 30 22:56 karma.conf.js
+-rwxrwxrwx 1 vscode vscode  1107 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1059 Apr 30 22:56 Makefile
+-rwxrwxrwx 1 vscode vscode    40 Apr 30 22:56 node.js
+-rwxrwxrwx 1 vscode vscode    72 Apr 30 22:56 .npmignore
+-rwxrwxrwx 1 vscode vscode  1138 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 17918 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 src
+-rwxrwxrwx 1 vscode vscode   140 Apr 30 22:56 .travis.yml
+
+./backend/node_modules/debug/src:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 4734 Apr 30 22:56 browser.js
+-rwxrwxrwx 1 vscode vscode 4394 Apr 30 22:56 debug.js
+-rwxrwxrwx 1 vscode vscode  263 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  373 Apr 30 22:56 inspector-log.js
+-rwxrwxrwx 1 vscode vscode 6015 Apr 30 22:56 node.js
+
+./backend/node_modules/delayed-stream:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1085 Apr 30 22:56 License
+-rwxrwxrwx 1 vscode vscode   57 Apr 30 22:56 Makefile
+-rwxrwxrwx 1 vscode vscode    5 Apr 30 22:56 .npmignore
+-rwxrwxrwx 1 vscode vscode  684 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3871 Apr 30 22:56 Readme.md
+
+./backend/node_modules/delayed-stream/lib:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2319 Apr 30 22:56 delayed_stream.js
+
+./backend/node_modules/depd:
+total 36
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  2256 Apr 30 22:56 History.md
+-rwxrwxrwx 1 vscode vscode 10932 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1094 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1335 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  9988 Apr 30 22:56 Readme.md
+
+./backend/node_modules/depd/lib:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 browser
+
+./backend/node_modules/depd/lib/browser:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1512 Apr 30 22:56 index.js
+
+./backend/node_modules/destroy:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4258 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1173 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1128 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2459 Apr 30 22:56 README.md
+
+./backend/node_modules/detect-libc:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   436 Apr 30 22:56 index.d.ts
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 11357 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1278 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  3215 Apr 30 22:56 README.md
+
+./backend/node_modules/detect-libc/lib:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 7503 Apr 30 22:56 detect-libc.js
+-rwxrwxrwx 1 vscode vscode  982 Apr 30 22:56 elf.js
+-rwxrwxrwx 1 vscode vscode 1097 Apr 30 22:56 filesystem.js
+-rwxrwxrwx 1 vscode vscode  569 Apr 30 22:56 process.js
+
+./backend/node_modules/dotenv:
+total 68
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 18344 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode    11 Apr 30 22:56 config.d.ts
+-rwxrwxrwx 1 vscode vscode   176 Apr 30 22:56 config.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1294 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1688 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 15605 Apr 30 22:56 README-es.md
+-rwxrwxrwx 1 vscode vscode 22474 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode    69 Apr 30 22:56 SECURITY.md
+
+./backend/node_modules/dotenv/lib:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   385 Apr 30 22:56 cli-options.js
+-rwxrwxrwx 1 vscode vscode   733 Apr 30 22:56 env-options.js
+-rwxrwxrwx 1 vscode vscode  5109 Apr 30 22:56 main.d.ts
+-rwxrwxrwx 1 vscode vscode 10703 Apr 30 22:56 main.js
+
+./backend/node_modules/dunder-proto:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1547 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   43 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode  121 Apr 30 22:56 get.d.ts
+-rwxrwxrwx 1 vscode vscode  980 Apr 30 22:56 get.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode 1073 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  216 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2108 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1907 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  144 Apr 30 22:56 set.d.ts
+-rwxrwxrwx 1 vscode vscode 1276 Apr 30 22:56 set.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  116 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/dunder-proto/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  583 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/dunder-proto/test:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1143 Apr 30 22:56 get.js
+-rwxrwxrwx 1 vscode vscode   51 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1695 Apr 30 22:56 set.js
+
+./backend/node_modules/ecdsa-sig-formatter:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode    11 Apr 30 22:56 CODEOWNERS
+-rwxrwxrwx 1 vscode vscode 11312 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1234 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  1872 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 src
+
+./backend/node_modules/ecdsa-sig-formatter/src:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  694 Apr 30 22:56 ecdsa-sig-formatter.d.ts
+-rwxrwxrwx 1 vscode vscode 5009 Apr 30 22:56 ecdsa-sig-formatter.js
+-rwxrwxrwx 1 vscode vscode  456 Apr 30 22:56 param-bytes-for-alg.js
+
+./backend/node_modules/ee-first:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1684 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1099 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  859 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2617 Apr 30 22:56 README.md
+
+./backend/node_modules/@emnapi:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+
+./backend/node_modules/encodeurl:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1578 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1089 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1092 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3221 Apr 30 22:56 README.md
+
+./backend/node_modules/escape-html:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1362 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1157 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  434 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  707 Apr 30 22:56 Readme.md
+
+./backend/node_modules/es-define-property:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2296 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  144 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   93 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  288 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2129 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2056 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  138 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/es-define-property/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  564 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/es-define-property/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1299 Apr 30 22:56 index.js
+
+./backend/node_modules/es-errors:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1833 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   43 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode   68 Apr 30 22:56 eval.d.ts
+-rwxrwxrwx 1 vscode vscode   75 Apr 30 22:56 eval.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   56 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   66 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 2174 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   71 Apr 30 22:56 range.d.ts
+-rwxrwxrwx 1 vscode vscode   77 Apr 30 22:56 range.js
+-rwxrwxrwx 1 vscode vscode 2114 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   83 Apr 30 22:56 ref.d.ts
+-rwxrwxrwx 1 vscode vscode   79 Apr 30 22:56 ref.js
+-rwxrwxrwx 1 vscode vscode   74 Apr 30 22:56 syntax.d.ts
+-rwxrwxrwx 1 vscode vscode   79 Apr 30 22:56 syntax.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode 3170 Apr 30 22:56 tsconfig.json
+-rwxrwxrwx 1 vscode vscode   67 Apr 30 22:56 type.d.ts
+-rwxrwxrwx 1 vscode vscode   75 Apr 30 22:56 type.js
+-rwxrwxrwx 1 vscode vscode   65 Apr 30 22:56 uri.d.ts
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 uri.js
+
+./backend/node_modules/es-errors/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  555 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/es-errors/test:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  356 Apr 30 22:56 index.js
+
+./backend/node_modules/es-object-atoms:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2136 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  229 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   59 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   67 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode   72 Apr 30 22:56 isObject.d.ts
+-rwxrwxrwx 1 vscode vscode  161 Apr 30 22:56 isObject.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 2273 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2603 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  123 Apr 30 22:56 RequireObjectCoercible.d.ts
+-rwxrwxrwx 1 vscode vscode  313 Apr 30 22:56 RequireObjectCoercible.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  352 Apr 30 22:56 ToObject.d.ts
+-rwxrwxrwx 1 vscode vscode  250 Apr 30 22:56 ToObject.js
+-rwxrwxrwx 1 vscode vscode   81 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/es-object-atoms/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  555 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/es-object-atoms/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1097 Apr 30 22:56 index.js
+
+./backend/node_modules/es-set-tostringtag:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4968 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  138 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode  236 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode 1213 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1073 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2193 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2233 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  116 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/es-set-tostringtag/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2235 Apr 30 22:56 index.js
+
+./backend/node_modules/etag:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1732 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 2479 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1094 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1306 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4198 Apr 30 22:56 README.md
+
+./backend/node_modules/express:
+total 136
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 115669 Apr 30 22:56 History.md
+-rwxrwxrwx 1 vscode vscode    224 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode   1249 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   2821 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   9806 Apr 30 22:56 Readme.md
+
+./backend/node_modules/express/lib:
+total 80
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 14593 Apr 30 22:56 application.js
+-rwxrwxrwx 1 vscode vscode  2409 Apr 30 22:56 express.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 middleware
+-rwxrwxrwx 1 vscode vscode 12505 Apr 30 22:56 request.js
+-rwxrwxrwx 1 vscode vscode 28729 Apr 30 22:56 response.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 router
+-rwxrwxrwx 1 vscode vscode  5871 Apr 30 22:56 utils.js
+-rwxrwxrwx 1 vscode vscode  3325 Apr 30 22:56 view.js
+
+./backend/node_modules/express/lib/middleware:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  853 Apr 30 22:56 init.js
+-rwxrwxrwx 1 vscode vscode  885 Apr 30 22:56 query.js
+
+./backend/node_modules/express/lib/router:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 15123 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  3296 Apr 30 22:56 layer.js
+-rwxrwxrwx 1 vscode vscode  4399 Apr 30 22:56 route.js
+
+./backend/node_modules/fill-range:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 6406 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1091 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1760 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 7486 Apr 30 22:56 README.md
+
+./backend/node_modules/finalhandler:
+total 36
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4662 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 6768 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1119 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1278 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4120 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode 1202 Apr 30 22:56 SECURITY.md
+
+./backend/node_modules/follow-redirects:
+total 40
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   315 Apr 30 22:56 debug.js
+-rwxrwxrwx 1 vscode vscode    37 Apr 30 22:56 http.js
+-rwxrwxrwx 1 vscode vscode    38 Apr 30 22:56 https.js
+-rwxrwxrwx 1 vscode vscode 21194 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1136 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1289 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  6605 Apr 30 22:56 README.md
+
+./backend/node_modules/form-data:
+total 72
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 48300 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  1825 Apr 30 22:56 index.d.ts
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1118 Apr 30 22:56 License
+-rwxrwxrwx 1 vscode vscode  3008 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 12034 Apr 30 22:56 README.md
+
+./backend/node_modules/form-data/lib:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   117 Apr 30 22:56 browser.js
+-rwxrwxrwx 1 vscode vscode 14577 Apr 30 22:56 form_data.js
+-rwxrwxrwx 1 vscode vscode   232 Apr 30 22:56 populate.js
+
+./backend/node_modules/forwarded:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  400 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 1578 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1094 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1150 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1654 Apr 30 22:56 README.md
+
+./backend/node_modules/fresh:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1500 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 2711 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1174 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1357 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3374 Apr 30 22:56 README.md
+
+./backend/node_modules/function-bind:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 13812 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   253 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode  2043 Apr 30 22:56 implementation.js
+-rwxrwxrwx 1 vscode vscode   126 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1052 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   216 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode  2262 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  1755 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 test
+
+./backend/node_modules/function-bind/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  584 Apr 30 22:56 FUNDING.yml
+-rwxrwxrwx 1 vscode vscode  157 Apr 30 22:56 SECURITY.md
+
+./backend/node_modules/function-bind/test:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  176 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode 8991 Apr 30 22:56 index.js
+
+./backend/node_modules/get-intrinsic:
+total 44
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 15537 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   647 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode 14439 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode  2576 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  2791 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 test
+
+./backend/node_modules/get-intrinsic/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  584 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/get-intrinsic/test:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 8758 Apr 30 22:56 GetIntrinsic.js
+
+./backend/node_modules/get-proto:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1054 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  104 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode  126 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  821 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode  125 Apr 30 22:56 Object.getPrototypeOf.d.ts
+-rwxrwxrwx 1 vscode vscode  156 Apr 30 22:56 Object.getPrototypeOf.js
+-rwxrwxrwx 1 vscode vscode 2176 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1794 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   67 Apr 30 22:56 Reflect.getPrototypeOf.d.ts
+-rwxrwxrwx 1 vscode vscode  150 Apr 30 22:56 Reflect.getPrototypeOf.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  118 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/get-proto/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  580 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/get-proto/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2359 Apr 30 22:56 index.js
+
+./backend/node_modules/glob-parent:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4510 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode 1120 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  753 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1105 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4646 Apr 30 22:56 README.md
+
+./backend/node_modules/gopd:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3077 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  224 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   42 Apr 30 22:56 gOPD.d.ts
+-rwxrwxrwx 1 vscode vscode   97 Apr 30 22:56 gOPD.js
+-rwxrwxrwx 1 vscode vscode  173 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  206 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 2070 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1562 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  116 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/gopd/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  575 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/gopd/test:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  656 Apr 30 22:56 index.js
+
+./backend/node_modules/groq-sdk:
+total 196
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode    82 May  6 17:34 api-promise.d.mts
+-rwxrwxrwx 1 vscode vscode   114 May  6 17:34 api-promise.d.mts.map
+-rwxrwxrwx 1 vscode vscode    80 May  6 17:34 api-promise.d.ts
+-rwxrwxrwx 1 vscode vscode   113 May  6 17:34 api-promise.d.ts.map
+-rwxrwxrwx 1 vscode vscode   287 May  6 17:34 api-promise.js
+-rwxrwxrwx 1 vscode vscode   138 May  6 17:34 api-promise.js.map
+-rwxrwxrwx 1 vscode vscode    80 May  6 17:34 api-promise.mjs
+-rwxrwxrwx 1 vscode vscode   112 May  6 17:34 api-promise.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 bin
+-rwxrwxrwx 1 vscode vscode 32506 May  6 17:34 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode 10548 May  6 17:34 client.d.mts
+-rwxrwxrwx 1 vscode vscode  5641 May  6 17:34 client.d.mts.map
+-rwxrwxrwx 1 vscode vscode 10528 May  6 17:34 client.d.ts
+-rwxrwxrwx 1 vscode vscode  5640 May  6 17:34 client.d.ts.map
+-rwxrwxrwx 1 vscode vscode 24460 May  6 17:34 client.js
+-rwxrwxrwx 1 vscode vscode 17513 May  6 17:34 client.js.map
+-rwxrwxrwx 1 vscode vscode 23782 May  6 17:34 client.mjs
+-rwxrwxrwx 1 vscode vscode 17518 May  6 17:34 client.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 core
+-rwxrwxrwx 1 vscode vscode    70 May  6 17:34 error.d.mts
+-rwxrwxrwx 1 vscode vscode   102 May  6 17:34 error.d.mts.map
+-rwxrwxrwx 1 vscode vscode    68 May  6 17:34 error.d.ts
+-rwxrwxrwx 1 vscode vscode   101 May  6 17:34 error.d.ts.map
+-rwxrwxrwx 1 vscode vscode   269 May  6 17:34 error.js
+-rwxrwxrwx 1 vscode vscode   126 May  6 17:34 error.js.map
+-rwxrwxrwx 1 vscode vscode    68 May  6 17:34 error.mjs
+-rwxrwxrwx 1 vscode vscode   100 May  6 17:34 error.mjs.map
+-rwxrwxrwx 1 vscode vscode   533 May  6 17:34 index.d.mts
+-rwxrwxrwx 1 vscode vscode   385 May  6 17:34 index.d.mts.map
+-rwxrwxrwx 1 vscode vscode   527 May  6 17:34 index.d.ts
+-rwxrwxrwx 1 vscode vscode   384 May  6 17:34 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode  3082 May  6 17:34 index.js
+-rwxrwxrwx 1 vscode vscode   559 May  6 17:34 index.js.map
+-rwxrwxrwx 1 vscode vscode   581 May  6 17:34 index.mjs
+-rwxrwxrwx 1 vscode vscode   368 May  6 17:34 index.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 internal
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 lib
+-rwxrwxrwx 1 vscode vscode 11334 May  6 17:34 LICENSE
+-rwxrwxrwx 1 vscode vscode  3471 May  6 17:34 package.json
+-rwxrwxrwx 1 vscode vscode 15710 May  6 17:34 README.md
+-rwxrwxrwx 1 vscode vscode    76 May  6 17:34 resource.d.mts
+-rwxrwxrwx 1 vscode vscode   108 May  6 17:34 resource.d.mts.map
+-rwxrwxrwx 1 vscode vscode    74 May  6 17:34 resource.d.ts
+-rwxrwxrwx 1 vscode vscode   107 May  6 17:34 resource.d.ts.map
+-rwxrwxrwx 1 vscode vscode   278 May  6 17:34 resource.js
+-rwxrwxrwx 1 vscode vscode   132 May  6 17:34 resource.js.map
+-rwxrwxrwx 1 vscode vscode    74 May  6 17:34 resource.mjs
+-rwxrwxrwx 1 vscode vscode   106 May  6 17:34 resource.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 resources
+-rwxrwxrwx 1 vscode vscode    79 May  6 17:34 resources.d.mts
+-rwxrwxrwx 1 vscode vscode   110 May  6 17:34 resources.d.mts.map
+-rwxrwxrwx 1 vscode vscode    77 May  6 17:34 resources.d.ts
+-rwxrwxrwx 1 vscode vscode   109 May  6 17:34 resources.d.ts.map
+-rwxrwxrwx 1 vscode vscode   226 May  6 17:34 resources.js
+-rwxrwxrwx 1 vscode vscode   121 May  6 17:34 resources.js.map
+-rwxrwxrwx 1 vscode vscode    77 May  6 17:34 resources.mjs
+-rwxrwxrwx 1 vscode vscode   108 May  6 17:34 resources.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 src
+-rwxrwxrwx 1 vscode vscode    74 May  6 17:34 uploads.d.mts
+-rwxrwxrwx 1 vscode vscode   106 May  6 17:34 uploads.d.mts.map
+-rwxrwxrwx 1 vscode vscode    72 May  6 17:34 uploads.d.ts
+-rwxrwxrwx 1 vscode vscode   105 May  6 17:34 uploads.d.ts.map
+-rwxrwxrwx 1 vscode vscode   275 May  6 17:34 uploads.js
+-rwxrwxrwx 1 vscode vscode   130 May  6 17:34 uploads.js.map
+-rwxrwxrwx 1 vscode vscode    72 May  6 17:34 uploads.mjs
+-rwxrwxrwx 1 vscode vscode   104 May  6 17:34 uploads.mjs.map
+-rwxrwxrwx 1 vscode vscode    78 May  6 17:34 version.d.mts
+-rwxrwxrwx 1 vscode vscode   135 May  6 17:34 version.d.mts.map
+-rwxrwxrwx 1 vscode vscode    77 May  6 17:34 version.d.ts
+-rwxrwxrwx 1 vscode vscode   134 May  6 17:34 version.d.ts.map
+-rwxrwxrwx 1 vscode vscode   193 May  6 17:34 version.js
+-rwxrwxrwx 1 vscode vscode   147 May  6 17:34 version.js.map
+-rwxrwxrwx 1 vscode vscode    96 May  6 17:34 version.mjs
+-rwxrwxrwx 1 vscode vscode   155 May  6 17:34 version.mjs.map
+
+./backend/node_modules/groq-sdk/bin:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1198 May  6 17:34 cli
+-rwxrwxrwx 1 vscode vscode  125 May  6 17:34 migration-config.json
+
+./backend/node_modules/groq-sdk/core:
+total 132
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  2088 May  6 17:34 api-promise.d.mts
+-rwxrwxrwx 1 vscode vscode  1344 May  6 17:34 api-promise.d.mts.map
+-rwxrwxrwx 1 vscode vscode  2084 May  6 17:34 api-promise.d.ts
+-rwxrwxrwx 1 vscode vscode  1343 May  6 17:34 api-promise.d.ts.map
+-rwxrwxrwx 1 vscode vscode  2949 May  6 17:34 api-promise.js
+-rwxrwxrwx 1 vscode vscode  1612 May  6 17:34 api-promise.js.map
+-rwxrwxrwx 1 vscode vscode  2838 May  6 17:34 api-promise.mjs
+-rwxrwxrwx 1 vscode vscode  1613 May  6 17:34 api-promise.mjs.map
+-rwxrwxrwx 1 vscode vscode  1979 May  6 17:34 error.d.mts
+-rwxrwxrwx 1 vscode vscode  1641 May  6 17:34 error.d.mts.map
+-rwxrwxrwx 1 vscode vscode  1978 May  6 17:34 error.d.ts
+-rwxrwxrwx 1 vscode vscode  1640 May  6 17:34 error.d.ts.map
+-rwxrwxrwx 1 vscode vscode  4299 May  6 17:34 error.js
+-rwxrwxrwx 1 vscode vscode  3225 May  6 17:34 error.js.map
+-rwxrwxrwx 1 vscode vscode  3338 May  6 17:34 error.mjs
+-rwxrwxrwx 1 vscode vscode  3127 May  6 17:34 error.mjs.map
+-rwxrwxrwx 1 vscode vscode   188 May  6 17:34 resource.d.mts
+-rwxrwxrwx 1 vscode vscode   221 May  6 17:34 resource.d.mts.map
+-rwxrwxrwx 1 vscode vscode   186 May  6 17:34 resource.d.ts
+-rwxrwxrwx 1 vscode vscode   220 May  6 17:34 resource.d.ts.map
+-rwxrwxrwx 1 vscode vscode   350 May  6 17:34 resource.js
+-rwxrwxrwx 1 vscode vscode   223 May  6 17:34 resource.js.map
+-rwxrwxrwx 1 vscode vscode   216 May  6 17:34 resource.mjs
+-rwxrwxrwx 1 vscode vscode   215 May  6 17:34 resource.mjs.map
+-rwxrwxrwx 1 vscode vscode  1450 May  6 17:34 streaming.d.mts
+-rwxrwxrwx 1 vscode vscode  1045 May  6 17:34 streaming.d.mts.map
+-rwxrwxrwx 1 vscode vscode  1447 May  6 17:34 streaming.d.ts
+-rwxrwxrwx 1 vscode vscode  1044 May  6 17:34 streaming.d.ts.map
+-rwxrwxrwx 1 vscode vscode 10765 May  6 17:34 streaming.js
+-rwxrwxrwx 1 vscode vscode  8496 May  6 17:34 streaming.js.map
+-rwxrwxrwx 1 vscode vscode 10521 May  6 17:34 streaming.mjs
+-rwxrwxrwx 1 vscode vscode  8502 May  6 17:34 streaming.mjs.map
+-rwxrwxrwx 1 vscode vscode   165 May  6 17:34 uploads.d.mts
+-rwxrwxrwx 1 vscode vscode   174 May  6 17:34 uploads.d.mts.map
+-rwxrwxrwx 1 vscode vscode   162 May  6 17:34 uploads.d.ts
+-rwxrwxrwx 1 vscode vscode   173 May  6 17:34 uploads.d.ts.map
+-rwxrwxrwx 1 vscode vscode   299 May  6 17:34 uploads.js
+-rwxrwxrwx 1 vscode vscode   147 May  6 17:34 uploads.js.map
+-rwxrwxrwx 1 vscode vscode    86 May  6 17:34 uploads.mjs
+-rwxrwxrwx 1 vscode vscode   132 May  6 17:34 uploads.mjs.map
+
+./backend/node_modules/groq-sdk/internal:
+total 288
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2847 May  6 17:34 builtin-types.d.mts
+-rwxrwxrwx 1 vscode vscode 1099 May  6 17:34 builtin-types.d.mts.map
+-rwxrwxrwx 1 vscode vscode 2846 May  6 17:34 builtin-types.d.ts
+-rwxrwxrwx 1 vscode vscode 1098 May  6 17:34 builtin-types.d.ts.map
+-rwxrwxrwx 1 vscode vscode  205 May  6 17:34 builtin-types.js
+-rwxrwxrwx 1 vscode vscode  139 May  6 17:34 builtin-types.js.map
+-rwxrwxrwx 1 vscode vscode  140 May  6 17:34 builtin-types.mjs
+-rwxrwxrwx 1 vscode vscode  139 May  6 17:34 builtin-types.mjs.map
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 decoders
+-rwxrwxrwx 1 vscode vscode  749 May  6 17:34 detect-platform.d.mts
+-rwxrwxrwx 1 vscode vscode  736 May  6 17:34 detect-platform.d.mts.map
+-rwxrwxrwx 1 vscode vscode  748 May  6 17:34 detect-platform.d.ts
+-rwxrwxrwx 1 vscode vscode  735 May  6 17:34 detect-platform.d.ts.map
+-rwxrwxrwx 1 vscode vscode 6200 May  6 17:34 detect-platform.js
+-rwxrwxrwx 1 vscode vscode 4417 May  6 17:34 detect-platform.js.map
+-rwxrwxrwx 1 vscode vscode 5922 May  6 17:34 detect-platform.mjs
+-rwxrwxrwx 1 vscode vscode 4390 May  6 17:34 detect-platform.mjs.map
+-rwxrwxrwx 1 vscode vscode  153 May  6 17:34 errors.d.mts
+-rwxrwxrwx 1 vscode vscode  210 May  6 17:34 errors.d.mts.map
+-rwxrwxrwx 1 vscode vscode  152 May  6 17:34 errors.d.ts
+-rwxrwxrwx 1 vscode vscode  209 May  6 17:34 errors.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1539 May  6 17:34 errors.js
+-rwxrwxrwx 1 vscode vscode 1370 May  6 17:34 errors.js.map
+-rwxrwxrwx 1 vscode vscode 1375 May  6 17:34 errors.mjs
+-rwxrwxrwx 1 vscode vscode 1348 May  6 17:34 errors.mjs.map
+-rwxrwxrwx 1 vscode vscode  917 May  6 17:34 headers.d.mts
+-rwxrwxrwx 1 vscode vscode  648 May  6 17:34 headers.d.mts.map
+-rwxrwxrwx 1 vscode vscode  916 May  6 17:34 headers.d.ts
+-rwxrwxrwx 1 vscode vscode  647 May  6 17:34 headers.d.ts.map
+-rwxrwxrwx 1 vscode vscode 2745 May  6 17:34 headers.js
+-rwxrwxrwx 1 vscode vscode 2523 May  6 17:34 headers.js.map
+-rwxrwxrwx 1 vscode vscode 2528 May  6 17:34 headers.mjs
+-rwxrwxrwx 1 vscode vscode 2491 May  6 17:34 headers.mjs.map
+-rwxrwxrwx 1 vscode vscode  466 May  6 17:34 parse.d.mts
+-rwxrwxrwx 1 vscode vscode  478 May  6 17:34 parse.d.mts.map
+-rwxrwxrwx 1 vscode vscode  463 May  6 17:34 parse.d.ts
+-rwxrwxrwx 1 vscode vscode  477 May  6 17:34 parse.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1795 May  6 17:34 parse.js
+-rwxrwxrwx 1 vscode vscode 1500 May  6 17:34 parse.js.map
+-rwxrwxrwx 1 vscode vscode 1660 May  6 17:34 parse.mjs
+-rwxrwxrwx 1 vscode vscode 1511 May  6 17:34 parse.mjs.map
+-rwxrwxrwx 1 vscode vscode 2357 May  6 17:34 request-options.d.mts
+-rwxrwxrwx 1 vscode vscode 1216 May  6 17:34 request-options.d.mts.map
+-rwxrwxrwx 1 vscode vscode 2352 May  6 17:34 request-options.d.ts
+-rwxrwxrwx 1 vscode vscode 1215 May  6 17:34 request-options.d.ts.map
+-rwxrwxrwx 1 vscode vscode  474 May  6 17:34 request-options.js
+-rwxrwxrwx 1 vscode vscode  355 May  6 17:34 request-options.js.map
+-rwxrwxrwx 1 vscode vscode  328 May  6 17:34 request-options.mjs
+-rwxrwxrwx 1 vscode vscode  341 May  6 17:34 request-options.mjs.map
+-rwxrwxrwx 1 vscode vscode 1051 May  6 17:34 shims.d.mts
+-rwxrwxrwx 1 vscode vscode  614 May  6 17:34 shims.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1048 May  6 17:34 shims.d.ts
+-rwxrwxrwx 1 vscode vscode  613 May  6 17:34 shims.d.ts.map
+-rwxrwxrwx 1 vscode vscode 3429 May  6 17:34 shims.js
+-rwxrwxrwx 1 vscode vscode 2271 May  6 17:34 shims.js.map
+-rwxrwxrwx 1 vscode vscode 3123 May  6 17:34 shims.mjs
+-rwxrwxrwx 1 vscode vscode 2238 May  6 17:34 shims.mjs.map
+-rwxrwxrwx 1 vscode vscode  873 May  6 17:34 shim-types.d.mts
+-rwxrwxrwx 1 vscode vscode  852 May  6 17:34 shim-types.d.mts.map
+-rwxrwxrwx 1 vscode vscode  872 May  6 17:34 shim-types.d.ts
+-rwxrwxrwx 1 vscode vscode  851 May  6 17:34 shim-types.d.ts.map
+-rwxrwxrwx 1 vscode vscode  202 May  6 17:34 shim-types.js
+-rwxrwxrwx 1 vscode vscode  133 May  6 17:34 shim-types.js.map
+-rwxrwxrwx 1 vscode vscode  137 May  6 17:34 shim-types.mjs
+-rwxrwxrwx 1 vscode vscode  133 May  6 17:34 shim-types.mjs.map
+-rwxrwxrwx 1 vscode vscode 2216 May  6 17:34 to-file.d.mts
+-rwxrwxrwx 1 vscode vscode 1048 May  6 17:34 to-file.d.mts.map
+-rwxrwxrwx 1 vscode vscode 2214 May  6 17:34 to-file.d.ts
+-rwxrwxrwx 1 vscode vscode 1047 May  6 17:34 to-file.d.ts.map
+-rwxrwxrwx 1 vscode vscode 3721 May  6 17:34 to-file.js
+-rwxrwxrwx 1 vscode vscode 3080 May  6 17:34 to-file.js.map
+-rwxrwxrwx 1 vscode vscode 3569 May  6 17:34 to-file.mjs
+-rwxrwxrwx 1 vscode vscode 3078 May  6 17:34 to-file.mjs.map
+-rwxrwxrwx 1 vscode vscode 3089 May  6 17:34 tslib.js
+-rwxrwxrwx 1 vscode vscode 1080 May  6 17:34 tslib.mjs
+-rwxrwxrwx 1 vscode vscode 6231 May  6 17:34 types.d.mts
+-rwxrwxrwx 1 vscode vscode 3657 May  6 17:34 types.d.mts.map
+-rwxrwxrwx 1 vscode vscode 6230 May  6 17:34 types.d.ts
+-rwxrwxrwx 1 vscode vscode 3656 May  6 17:34 types.d.ts.map
+-rwxrwxrwx 1 vscode vscode  197 May  6 17:34 types.js
+-rwxrwxrwx 1 vscode vscode  123 May  6 17:34 types.js.map
+-rwxrwxrwx 1 vscode vscode  132 May  6 17:34 types.mjs
+-rwxrwxrwx 1 vscode vscode  123 May  6 17:34 types.mjs.map
+-rwxrwxrwx 1 vscode vscode 1918 May  6 17:34 uploads.d.mts
+-rwxrwxrwx 1 vscode vscode 1312 May  6 17:34 uploads.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1914 May  6 17:34 uploads.d.ts
+-rwxrwxrwx 1 vscode vscode 1311 May  6 17:34 uploads.d.ts.map
+-rwxrwxrwx 1 vscode vscode 6151 May  6 17:34 uploads.js
+-rwxrwxrwx 1 vscode vscode 5384 May  6 17:34 uploads.js.map
+-rwxrwxrwx 1 vscode vscode 5573 May  6 17:34 uploads.mjs
+-rwxrwxrwx 1 vscode vscode 5276 May  6 17:34 uploads.mjs.map
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 utils
+-rwxrwxrwx 1 vscode vscode  278 May  6 17:34 utils.d.mts
+-rwxrwxrwx 1 vscode vscode  114 May  6 17:34 utils.d.mts.map
+-rwxrwxrwx 1 vscode vscode  270 May  6 17:34 utils.d.ts
+-rwxrwxrwx 1 vscode vscode  113 May  6 17:34 utils.d.ts.map
+-rwxrwxrwx 1 vscode vscode  653 May  6 17:34 utils.js
+-rwxrwxrwx 1 vscode vscode  216 May  6 17:34 utils.js.map
+-rwxrwxrwx 1 vscode vscode  363 May  6 17:34 utils.mjs
+-rwxrwxrwx 1 vscode vscode  123 May  6 17:34 utils.mjs.map
+
+./backend/node_modules/groq-sdk/internal/decoders:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  617 May  6 17:34 line.d.mts
+-rwxrwxrwx 1 vscode vscode  421 May  6 17:34 line.d.mts.map
+-rwxrwxrwx 1 vscode vscode  616 May  6 17:34 line.d.ts
+-rwxrwxrwx 1 vscode vscode  420 May  6 17:34 line.d.ts.map
+-rwxrwxrwx 1 vscode vscode 5526 May  6 17:34 line.js
+-rwxrwxrwx 1 vscode vscode 3570 May  6 17:34 line.js.map
+-rwxrwxrwx 1 vscode vscode 5181 May  6 17:34 line.mjs
+-rwxrwxrwx 1 vscode vscode 3554 May  6 17:34 line.mjs.map
+
+./backend/node_modules/groq-sdk/internal/utils:
+total 148
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  188 May  6 17:34 base64.d.mts
+-rwxrwxrwx 1 vscode vscode  258 May  6 17:34 base64.d.mts.map
+-rwxrwxrwx 1 vscode vscode  187 May  6 17:34 base64.d.ts
+-rwxrwxrwx 1 vscode vscode  257 May  6 17:34 base64.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1462 May  6 17:34 base64.js
+-rwxrwxrwx 1 vscode vscode 1395 May  6 17:34 base64.js.map
+-rwxrwxrwx 1 vscode vscode 1266 May  6 17:34 base64.mjs
+-rwxrwxrwx 1 vscode vscode 1374 May  6 17:34 base64.mjs.map
+-rwxrwxrwx 1 vscode vscode  249 May  6 17:34 bytes.d.mts
+-rwxrwxrwx 1 vscode vscode  267 May  6 17:34 bytes.d.mts.map
+-rwxrwxrwx 1 vscode vscode  248 May  6 17:34 bytes.d.ts
+-rwxrwxrwx 1 vscode vscode  266 May  6 17:34 bytes.d.ts.map
+-rwxrwxrwx 1 vscode vscode  922 May  6 17:34 bytes.js
+-rwxrwxrwx 1 vscode vscode 1053 May  6 17:34 bytes.js.map
+-rwxrwxrwx 1 vscode vscode  766 May  6 17:34 bytes.mjs
+-rwxrwxrwx 1 vscode vscode 1030 May  6 17:34 bytes.mjs.map
+-rwxrwxrwx 1 vscode vscode  282 May  6 17:34 env.d.mts
+-rwxrwxrwx 1 vscode vscode  194 May  6 17:34 env.d.mts.map
+-rwxrwxrwx 1 vscode vscode  281 May  6 17:34 env.d.ts
+-rwxrwxrwx 1 vscode vscode  193 May  6 17:34 env.d.ts.map
+-rwxrwxrwx 1 vscode vscode  719 May  6 17:34 env.js
+-rwxrwxrwx 1 vscode vscode  543 May  6 17:34 env.js.map
+-rwxrwxrwx 1 vscode vscode  597 May  6 17:34 env.mjs
+-rwxrwxrwx 1 vscode vscode  530 May  6 17:34 env.mjs.map
+-rwxrwxrwx 1 vscode vscode 1339 May  6 17:34 log.d.mts
+-rwxrwxrwx 1 vscode vscode 1319 May  6 17:34 log.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1336 May  6 17:34 log.d.ts
+-rwxrwxrwx 1 vscode vscode 1318 May  6 17:34 log.d.ts.map
+-rwxrwxrwx 1 vscode vscode 2838 May  6 17:34 log.js
+-rwxrwxrwx 1 vscode vscode 2810 May  6 17:34 log.js.map
+-rwxrwxrwx 1 vscode vscode 2581 May  6 17:34 log.mjs
+-rwxrwxrwx 1 vscode vscode 2771 May  6 17:34 log.mjs.map
+-rwxrwxrwx 1 vscode vscode  832 May  6 17:34 path.d.mts
+-rwxrwxrwx 1 vscode vscode  374 May  6 17:34 path.d.mts.map
+-rwxrwxrwx 1 vscode vscode  831 May  6 17:34 path.d.ts
+-rwxrwxrwx 1 vscode vscode  373 May  6 17:34 path.d.ts.map
+-rwxrwxrwx 1 vscode vscode 3501 May  6 17:34 path.js
+-rwxrwxrwx 1 vscode vscode 2843 May  6 17:34 path.js.map
+-rwxrwxrwx 1 vscode vscode 3292 May  6 17:34 path.mjs
+-rwxrwxrwx 1 vscode vscode 2839 May  6 17:34 path.mjs.map
+-rwxrwxrwx 1 vscode vscode  199 May  6 17:34 query.d.mts
+-rwxrwxrwx 1 vscode vscode  211 May  6 17:34 query.d.mts.map
+-rwxrwxrwx 1 vscode vscode  198 May  6 17:34 query.d.ts
+-rwxrwxrwx 1 vscode vscode  210 May  6 17:34 query.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1163 May  6 17:34 query.js
+-rwxrwxrwx 1 vscode vscode  768 May  6 17:34 query.js.map
+-rwxrwxrwx 1 vscode vscode 1047 May  6 17:34 query.mjs
+-rwxrwxrwx 1 vscode vscode  766 May  6 17:34 query.mjs.map
+-rwxrwxrwx 1 vscode vscode   95 May  6 17:34 sleep.d.mts
+-rwxrwxrwx 1 vscode vscode  169 May  6 17:34 sleep.d.mts.map
+-rwxrwxrwx 1 vscode vscode   94 May  6 17:34 sleep.d.ts
+-rwxrwxrwx 1 vscode vscode  168 May  6 17:34 sleep.d.ts.map
+-rwxrwxrwx 1 vscode vscode  317 May  6 17:34 sleep.js
+-rwxrwxrwx 1 vscode vscode  282 May  6 17:34 sleep.js.map
+-rwxrwxrwx 1 vscode vscode  201 May  6 17:34 sleep.mjs
+-rwxrwxrwx 1 vscode vscode  268 May  6 17:34 sleep.mjs.map
+-rwxrwxrwx 1 vscode vscode  119 May  6 17:34 uuid.d.mts
+-rwxrwxrwx 1 vscode vscode  161 May  6 17:34 uuid.d.mts.map
+-rwxrwxrwx 1 vscode vscode  118 May  6 17:34 uuid.d.ts
+-rwxrwxrwx 1 vscode vscode  160 May  6 17:34 uuid.d.ts.map
+-rwxrwxrwx 1 vscode vscode  754 May  6 17:34 uuid.js
+-rwxrwxrwx 1 vscode vscode  826 May  6 17:34 uuid.js.map
+-rwxrwxrwx 1 vscode vscode  630 May  6 17:34 uuid.mjs
+-rwxrwxrwx 1 vscode vscode  814 May  6 17:34 uuid.mjs.map
+-rwxrwxrwx 1 vscode vscode 1284 May  6 17:34 values.d.mts
+-rwxrwxrwx 1 vscode vscode 1205 May  6 17:34 values.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1283 May  6 17:34 values.d.ts
+-rwxrwxrwx 1 vscode vscode 1204 May  6 17:34 values.d.ts.map
+-rwxrwxrwx 1 vscode vscode 3810 May  6 17:34 values.js
+-rwxrwxrwx 1 vscode vscode 3263 May  6 17:34 values.js.map
+-rwxrwxrwx 1 vscode vscode 2869 May  6 17:34 values.mjs
+-rwxrwxrwx 1 vscode vscode 3084 May  6 17:34 values.mjs.map
+
+./backend/node_modules/groq-sdk/lib:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   79 May  6 17:34 streaming.d.mts
+-rwxrwxrwx 1 vscode vscode  117 May  6 17:34 streaming.d.mts.map
+-rwxrwxrwx 1 vscode vscode   77 May  6 17:34 streaming.d.ts
+-rwxrwxrwx 1 vscode vscode  116 May  6 17:34 streaming.d.ts.map
+-rwxrwxrwx 1 vscode vscode  283 May  6 17:34 streaming.js
+-rwxrwxrwx 1 vscode vscode  141 May  6 17:34 streaming.js.map
+-rwxrwxrwx 1 vscode vscode   77 May  6 17:34 streaming.mjs
+-rwxrwxrwx 1 vscode vscode  115 May  6 17:34 streaming.mjs.map
+
+./backend/node_modules/groq-sdk/resources:
+total 196
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 audio
+-rwxrwxrwx 1 vscode vscode    71 May  6 17:34 audio.d.mts
+-rwxrwxrwx 1 vscode vscode   115 May  6 17:34 audio.d.mts.map
+-rwxrwxrwx 1 vscode vscode    69 May  6 17:34 audio.d.ts
+-rwxrwxrwx 1 vscode vscode   114 May  6 17:34 audio.d.ts.map
+-rwxrwxrwx 1 vscode vscode   306 May  6 17:34 audio.js
+-rwxrwxrwx 1 vscode vscode   139 May  6 17:34 audio.js.map
+-rwxrwxrwx 1 vscode vscode   156 May  6 17:34 audio.mjs
+-rwxrwxrwx 1 vscode vscode   124 May  6 17:34 audio.mjs.map
+-rwxrwxrwx 1 vscode vscode 16818 May  6 17:34 batches.d.mts
+-rwxrwxrwx 1 vscode vscode  6939 May  6 17:34 batches.d.mts.map
+-rwxrwxrwx 1 vscode vscode 16814 May  6 17:34 batches.d.ts
+-rwxrwxrwx 1 vscode vscode  6938 May  6 17:34 batches.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1135 May  6 17:34 batches.js
+-rwxrwxrwx 1 vscode vscode   753 May  6 17:34 batches.js.map
+-rwxrwxrwx 1 vscode vscode   977 May  6 17:34 batches.mjs
+-rwxrwxrwx 1 vscode vscode   746 May  6 17:34 batches.mjs.map
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 chat
+-rwxrwxrwx 1 vscode vscode    69 May  6 17:34 chat.d.mts
+-rwxrwxrwx 1 vscode vscode   113 May  6 17:34 chat.d.mts.map
+-rwxrwxrwx 1 vscode vscode    67 May  6 17:34 chat.d.ts
+-rwxrwxrwx 1 vscode vscode   112 May  6 17:34 chat.d.ts.map
+-rwxrwxrwx 1 vscode vscode   304 May  6 17:34 chat.js
+-rwxrwxrwx 1 vscode vscode   137 May  6 17:34 chat.js.map
+-rwxrwxrwx 1 vscode vscode   154 May  6 17:34 chat.mjs
+-rwxrwxrwx 1 vscode vscode   122 May  6 17:34 chat.mjs.map
+-rwxrwxrwx 1 vscode vscode  1742 May  6 17:34 completions.d.mts
+-rwxrwxrwx 1 vscode vscode   890 May  6 17:34 completions.d.mts.map
+-rwxrwxrwx 1 vscode vscode  1740 May  6 17:34 completions.d.ts
+-rwxrwxrwx 1 vscode vscode   889 May  6 17:34 completions.d.ts.map
+-rwxrwxrwx 1 vscode vscode   372 May  6 17:34 completions.js
+-rwxrwxrwx 1 vscode vscode   196 May  6 17:34 completions.js.map
+-rwxrwxrwx 1 vscode vscode   228 May  6 17:34 completions.mjs
+-rwxrwxrwx 1 vscode vscode   193 May  6 17:34 completions.mjs.map
+-rwxrwxrwx 1 vscode vscode  3005 May  6 17:34 embeddings.d.mts
+-rwxrwxrwx 1 vscode vscode  1247 May  6 17:34 embeddings.d.mts.map
+-rwxrwxrwx 1 vscode vscode  3001 May  6 17:34 embeddings.d.ts
+-rwxrwxrwx 1 vscode vscode  1246 May  6 17:34 embeddings.d.ts.map
+-rwxrwxrwx 1 vscode vscode   812 May  6 17:34 embeddings.js
+-rwxrwxrwx 1 vscode vscode   351 May  6 17:34 embeddings.js.map
+-rwxrwxrwx 1 vscode vscode   671 May  6 17:34 embeddings.mjs
+-rwxrwxrwx 1 vscode vscode   348 May  6 17:34 embeddings.mjs.map
+-rwxrwxrwx 1 vscode vscode  4277 May  6 17:34 files.d.mts
+-rwxrwxrwx 1 vscode vscode  2138 May  6 17:34 files.d.mts.map
+-rwxrwxrwx 1 vscode vscode  4272 May  6 17:34 files.d.ts
+-rwxrwxrwx 1 vscode vscode  2137 May  6 17:34 files.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1832 May  6 17:34 files.js
+-rwxrwxrwx 1 vscode vscode  1101 May  6 17:34 files.js.map
+-rwxrwxrwx 1 vscode vscode  1659 May  6 17:34 files.mjs
+-rwxrwxrwx 1 vscode vscode  1096 May  6 17:34 files.mjs.map
+-rwxrwxrwx 1 vscode vscode   763 May  6 17:34 index.d.mts
+-rwxrwxrwx 1 vscode vscode   549 May  6 17:34 index.d.mts.map
+-rwxrwxrwx 1 vscode vscode   754 May  6 17:34 index.d.ts
+-rwxrwxrwx 1 vscode vscode   548 May  6 17:34 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1518 May  6 17:34 index.js
+-rwxrwxrwx 1 vscode vscode   379 May  6 17:34 index.js.map
+-rwxrwxrwx 1 vscode vscode   450 May  6 17:34 index.mjs
+-rwxrwxrwx 1 vscode vscode   269 May  6 17:34 index.mjs.map
+-rwxrwxrwx 1 vscode vscode  1423 May  6 17:34 models.d.mts
+-rwxrwxrwx 1 vscode vscode   992 May  6 17:34 models.d.mts.map
+-rwxrwxrwx 1 vscode vscode  1419 May  6 17:34 models.d.ts
+-rwxrwxrwx 1 vscode vscode   991 May  6 17:34 models.d.ts.map
+-rwxrwxrwx 1 vscode vscode   872 May  6 17:34 models.js
+-rwxrwxrwx 1 vscode vscode   603 May  6 17:34 models.js.map
+-rwxrwxrwx 1 vscode vscode   717 May  6 17:34 models.mjs
+-rwxrwxrwx 1 vscode vscode   596 May  6 17:34 models.mjs.map
+-rwxrwxrwx 1 vscode vscode  2308 May  6 17:34 shared.d.mts
+-rwxrwxrwx 1 vscode vscode  1131 May  6 17:34 shared.d.mts.map
+-rwxrwxrwx 1 vscode vscode  2307 May  6 17:34 shared.d.ts
+-rwxrwxrwx 1 vscode vscode  1130 May  6 17:34 shared.d.ts.map
+-rwxrwxrwx 1 vscode vscode   198 May  6 17:34 shared.js
+-rwxrwxrwx 1 vscode vscode   126 May  6 17:34 shared.js.map
+-rwxrwxrwx 1 vscode vscode   133 May  6 17:34 shared.mjs
+-rwxrwxrwx 1 vscode vscode   126 May  6 17:34 shared.mjs.map
+
+./backend/node_modules/groq-sdk/resources/audio:
+total 96
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1075 May  6 17:34 audio.d.mts
+-rwxrwxrwx 1 vscode vscode  761 May  6 17:34 audio.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1067 May  6 17:34 audio.d.ts
+-rwxrwxrwx 1 vscode vscode  760 May  6 17:34 audio.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1177 May  6 17:34 audio.js
+-rwxrwxrwx 1 vscode vscode  601 May  6 17:34 audio.js.map
+-rwxrwxrwx 1 vscode vscode  889 May  6 17:34 audio.mjs
+-rwxrwxrwx 1 vscode vscode  633 May  6 17:34 audio.mjs.map
+-rwxrwxrwx 1 vscode vscode  343 May  6 17:34 index.d.mts
+-rwxrwxrwx 1 vscode vscode  286 May  6 17:34 index.d.mts.map
+-rwxrwxrwx 1 vscode vscode  338 May  6 17:34 index.d.ts
+-rwxrwxrwx 1 vscode vscode  285 May  6 17:34 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode  947 May  6 17:34 index.js
+-rwxrwxrwx 1 vscode vscode  273 May  6 17:34 index.js.map
+-rwxrwxrwx 1 vscode vscode  303 May  6 17:34 index.mjs
+-rwxrwxrwx 1 vscode vscode  219 May  6 17:34 index.mjs.map
+-rwxrwxrwx 1 vscode vscode 1632 May  6 17:34 speech.d.mts
+-rwxrwxrwx 1 vscode vscode  822 May  6 17:34 speech.d.mts.map
+-rwxrwxrwx 1 vscode vscode 1628 May  6 17:34 speech.d.ts
+-rwxrwxrwx 1 vscode vscode  821 May  6 17:34 speech.d.ts.map
+-rwxrwxrwx 1 vscode vscode 1068 May  6 17:34 speech.js
+-rwxrwxrwx 1 vscode vscode  483 May  6 17:34 speech.js.map
+-rwxrwxrwx 1 vscode vscode  927 May  6 17:34 speech.mjs
+-rwxrwxrwx 1 vscode vscode  481 May  6 17:34 speech.mjs.map
+-rwxrwxrwx 1 vscode vscode 4019 May  6 17:34 transcriptions.d.mts
+-rwxrwxrwx 1 vscode vscode 2037 May  6 17:34 transcriptions.d.mts.map
+-rwxrwxrwx 1 vscode vscode 4014 May  6 17:34 transcriptions.d.ts
+-rwxrwxrwx 1 vscode vscode 2036 May  6 17:34 transcriptions.d.ts.map
+-rwxrwxrwx 1 vscode vscode  880 May  6 17:34 transcriptions.js
+-rwxrwxrwx 1 vscode vscode  424 May  6 17:34 transcriptions.js.map
+-rwxrwxrwx 1 vscode vscode  730 May  6 17:34 transcriptions.mjs
+-rwxrwxrwx 1 vscode vscode  425 May  6 17:34 transcriptions.mjs.map
+-rwxrwxrwx 1 vscode vscode 2292 May  6 17:34 translations.d.mts
+-rwxrwxrwx 1 vscode vscode  872 May  6 17:34 translations.d.mts.map
+-rwxrwxrwx 1 vscode vscode 2287 May  6 17:34 translations.d.ts
+-rwxrwxrwx 1 vscode vscode  871 May  6 17:34 translations.d.ts.map
+-rwxrwxrwx 1 vscode vscode  839 May  6 17:34 translations.js
+-rwxrwxrwx 1 vscode vscode  419 May  6 17:34 translations.js.map
+-rwxrwxrwx 1 vscode vscode  695 May  6 17:34 translations.mjs
+-rwxrwxrwx 1 vscode vscode  420 May  6 17:34 translations.mjs.map
+
+./backend/node_modules/groq-sdk/resources/chat:
+total 216
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  2212 May  6 17:34 chat.d.mts
+-rwxrwxrwx 1 vscode vscode  1180 May  6 17:34 chat.d.mts.map
+-rwxrwxrwx 1 vscode vscode  2208 May  6 17:34 chat.d.ts
+-rwxrwxrwx 1 vscode vscode  1179 May  6 17:34 chat.d.ts.map
+-rwxrwxrwx 1 vscode vscode   691 May  6 17:34 chat.js
+-rwxrwxrwx 1 vscode vscode   337 May  6 17:34 chat.js.map
+-rwxrwxrwx 1 vscode vscode   480 May  6 17:34 chat.mjs
+-rwxrwxrwx 1 vscode vscode   343 May  6 17:34 chat.mjs.map
+-rwxrwxrwx 1 vscode vscode 73286 May  6 17:34 completions.d.mts
+-rwxrwxrwx 1 vscode vscode 23918 May  6 17:34 completions.d.mts.map
+-rwxrwxrwx 1 vscode vscode 73278 May  6 17:34 completions.d.ts
+-rwxrwxrwx 1 vscode vscode 23917 May  6 17:34 completions.d.ts.map
+-rwxrwxrwx 1 vscode vscode   571 May  6 17:34 completions.js
+-rwxrwxrwx 1 vscode vscode   386 May  6 17:34 completions.js.map
+-rwxrwxrwx 1 vscode vscode   427 May  6 17:34 completions.mjs
+-rwxrwxrwx 1 vscode vscode   383 May  6 17:34 completions.mjs.map
+-rwxrwxrwx 1 vscode vscode   790 May  6 17:34 index.d.mts
+-rwxrwxrwx 1 vscode vscode   520 May  6 17:34 index.d.mts.map
+-rwxrwxrwx 1 vscode vscode   787 May  6 17:34 index.d.ts
+-rwxrwxrwx 1 vscode vscode   519 May  6 17:34 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode   555 May  6 17:34 index.js
+-rwxrwxrwx 1 vscode vscode   205 May  6 17:34 index.js.map
+-rwxrwxrwx 1 vscode vscode   206 May  6 17:34 index.mjs
+-rwxrwxrwx 1 vscode vscode   174 May  6 17:34 index.mjs.map
+
+./backend/node_modules/groq-sdk/src:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode    94 May  6 17:34 api-promise.ts
+-rwxrwxrwx 1 vscode vscode 28945 May  6 17:34 client.ts
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 core
+-rwxrwxrwx 1 vscode vscode    82 May  6 17:34 error.ts
+-rwxrwxrwx 1 vscode vscode   592 May  6 17:34 index.ts
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 internal
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 lib
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 resources
+-rwxrwxrwx 1 vscode vscode    35 May  6 17:34 resources.ts
+-rwxrwxrwx 1 vscode vscode    88 May  6 17:34 resource.ts
+-rwxrwxrwx 1 vscode vscode   348 May  6 17:34 tsconfig.json
+-rwxrwxrwx 1 vscode vscode    86 May  6 17:34 uploads.ts
+-rwxrwxrwx 1 vscode vscode    60 May  6 17:34 version.ts
+
+./backend/node_modules/groq-sdk/src/core:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3143 May  6 17:34 api-promise.ts
+-rwxrwxrwx 1 vscode vscode 3996 May  6 17:34 error.ts
+-rwxrwxrwx 1 vscode vscode  100 May  6 17:34 README.md
+-rwxrwxrwx 1 vscode vscode  255 May  6 17:34 resource.ts
+-rwxrwxrwx 1 vscode vscode 9620 May  6 17:34 streaming.ts
+-rwxrwxrwx 1 vscode vscode  119 May  6 17:34 uploads.ts
+
+./backend/node_modules/groq-sdk/src/internal:
+total 60
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2910 May  6 17:34 builtin-types.ts
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 decoders
+-rwxrwxrwx 1 vscode vscode 6428 May  6 17:34 detect-platform.ts
+-rwxrwxrwx 1 vscode vscode 1179 May  6 17:34 errors.ts
+-rwxrwxrwx 1 vscode vscode 3027 May  6 17:34 headers.ts
+-rwxrwxrwx 1 vscode vscode 1911 May  6 17:34 parse.ts
+-rwxrwxrwx 1 vscode vscode  118 May  6 17:34 README.md
+-rwxrwxrwx 1 vscode vscode 2400 May  6 17:34 request-options.ts
+-rwxrwxrwx 1 vscode vscode 3535 May  6 17:34 shims.ts
+-rwxrwxrwx 1 vscode vscode  931 May  6 17:34 shim-types.ts
+-rwxrwxrwx 1 vscode vscode 5189 May  6 17:34 to-file.ts
+-rwxrwxrwx 1 vscode vscode 6406 May  6 17:34 types.ts
+-rwxrwxrwx 1 vscode vscode 6726 May  6 17:34 uploads.ts
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 utils
+-rwxrwxrwx 1 vscode vscode  302 May  6 17:34 utils.ts
+
+./backend/node_modules/groq-sdk/src/internal/decoders:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3888 May  6 17:34 line.ts
+
+./backend/node_modules/groq-sdk/src/internal/utils:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1263 May  6 17:34 base64.ts
+-rwxrwxrwx 1 vscode vscode  831 May  6 17:34 bytes.ts
+-rwxrwxrwx 1 vscode vscode  612 May  6 17:34 env.ts
+-rwxrwxrwx 1 vscode vscode 3267 May  6 17:34 log.ts
+-rwxrwxrwx 1 vscode vscode 3203 May  6 17:34 path.ts
+-rwxrwxrwx 1 vscode vscode 1030 May  6 17:34 query.ts
+-rwxrwxrwx 1 vscode vscode  182 May  6 17:34 sleep.ts
+-rwxrwxrwx 1 vscode vscode  594 May  6 17:34 uuid.ts
+-rwxrwxrwx 1 vscode vscode 3116 May  6 17:34 values.ts
+
+./backend/node_modules/groq-sdk/src/lib:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  225 May  6 17:34 .keep
+-rwxrwxrwx 1 vscode vscode   91 May  6 17:34 streaming.ts
+
+./backend/node_modules/groq-sdk/src/resources:
+total 44
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 audio
+-rwxrwxrwx 1 vscode vscode   119 May  6 17:34 audio.ts
+-rwxrwxrwx 1 vscode vscode 15897 May  6 17:34 batches.ts
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 chat
+-rwxrwxrwx 1 vscode vscode   118 May  6 17:34 chat.ts
+-rwxrwxrwx 1 vscode vscode  1668 May  6 17:34 completions.ts
+-rwxrwxrwx 1 vscode vscode  2974 May  6 17:34 embeddings.ts
+-rwxrwxrwx 1 vscode vscode  4814 May  6 17:34 files.ts
+-rwxrwxrwx 1 vscode vscode   815 May  6 17:34 index.ts
+-rwxrwxrwx 1 vscode vscode  1681 May  6 17:34 models.ts
+-rwxrwxrwx 1 vscode vscode  2219 May  6 17:34 shared.ts
+
+./backend/node_modules/groq-sdk/src/resources/audio:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1348 May  6 17:34 audio.ts
+-rwxrwxrwx 1 vscode vscode  379 May  6 17:34 index.ts
+-rwxrwxrwx 1 vscode vscode 1845 May  6 17:34 speech.ts
+-rwxrwxrwx 1 vscode vscode 4547 May  6 17:34 transcriptions.ts
+-rwxrwxrwx 1 vscode vscode 2450 May  6 17:34 translations.ts
+
+./backend/node_modules/groq-sdk/src/resources/chat:
+total 72
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  2452 May  6 17:34 chat.ts
+-rwxrwxrwx 1 vscode vscode 64066 May  6 17:34 completions.ts
+-rwxrwxrwx 1 vscode vscode   876 May  6 17:34 index.ts
+
+./backend/node_modules/has-flag:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  320 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1109 Apr 30 22:56 license
+-rwxrwxrwx 1 vscode vscode  710 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  986 Apr 30 22:56 readme.md
+
+./backend/node_modules/hasown:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3661 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  136 Apr 30 22:56 eslint.config.mjs
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode  198 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  206 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1083 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  216 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2283 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1613 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/hasown/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  552 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/has-symbols:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 9431 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  164 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  447 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  139 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2974 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2044 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   69 Apr 30 22:56 shams.d.ts
+-rwxrwxrwx 1 vscode vscode 1922 Apr 30 22:56 shams.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode  143 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/has-symbols/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  582 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/has-symbols/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  654 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 shams
+-rwxrwxrwx 1 vscode vscode 2139 Apr 30 22:56 tests.js
+
+./backend/node_modules/has-symbols/test/shams:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  797 Apr 30 22:56 core-js.js
+-rwxrwxrwx 1 vscode vscode  760 Apr 30 22:56 get-own-property-symbols.js
+
+./backend/node_modules/has-tostringtag:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3543 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   43 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   70 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  196 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1067 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  216 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode 2838 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2190 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   80 Apr 30 22:56 shams.d.ts
+-rwxrwxrwx 1 vscode vscode  189 Apr 30 22:56 shams.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode 3611 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/has-tostringtag/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  586 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/has-tostringtag/test:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  679 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 shams
+-rwxrwxrwx 1 vscode vscode  532 Apr 30 22:56 tests.js
+
+./backend/node_modules/has-tostringtag/test/shams:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  935 Apr 30 22:56 core-js.js
+-rwxrwxrwx 1 vscode vscode  828 Apr 30 22:56 get-own-property-symbols.js
+
+./backend/node_modules/http-errors:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4094 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 6430 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1168 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1410 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 5962 Apr 30 22:56 README.md
+
+./backend/node_modules/iconv-lite:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 4342 Apr 30 22:56 Changelog.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 encodings
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1064 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1227 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 6534 Apr 30 22:56 README.md
+
+./backend/node_modules/iconv-lite/encodings:
+total 108
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 21415 Apr 30 22:56 dbcs-codec.js
+-rwxrwxrwx 1 vscode vscode  8291 Apr 30 22:56 dbcs-data.js
+-rwxrwxrwx 1 vscode vscode   710 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  6115 Apr 30 22:56 internal.js
+-rwxrwxrwx 1 vscode vscode  2191 Apr 30 22:56 sbcs-codec.js
+-rwxrwxrwx 1 vscode vscode 32034 Apr 30 22:56 sbcs-data-generated.js
+-rwxrwxrwx 1 vscode vscode  4686 Apr 30 22:56 sbcs-data.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 tables
+-rwxrwxrwx 1 vscode vscode  5011 Apr 30 22:56 utf16.js
+-rwxrwxrwx 1 vscode vscode  9215 Apr 30 22:56 utf7.js
+
+./backend/node_modules/iconv-lite/encodings/tables:
+total 228
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 17717 Apr 30 22:56 big5-added.json
+-rwxrwxrwx 1 vscode vscode 47320 Apr 30 22:56 cp936.json
+-rwxrwxrwx 1 vscode vscode 38122 Apr 30 22:56 cp949.json
+-rwxrwxrwx 1 vscode vscode 42356 Apr 30 22:56 cp950.json
+-rwxrwxrwx 1 vscode vscode 41064 Apr 30 22:56 eucjp.json
+-rwxrwxrwx 1 vscode vscode  2216 Apr 30 22:56 gb18030-ranges.json
+-rwxrwxrwx 1 vscode vscode  1227 Apr 30 22:56 gbk-added.json
+-rwxrwxrwx 1 vscode vscode 23782 Apr 30 22:56 shiftjis.json
+
+./backend/node_modules/iconv-lite/lib:
+total 32
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1109 Apr 30 22:56 bom-handling.js
+-rwxrwxrwx 1 vscode vscode 8701 Apr 30 22:56 extend-node.js
+-rwxrwxrwx 1 vscode vscode  982 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode 5123 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 3387 Apr 30 22:56 streams.js
+
+./backend/node_modules/idb-keyval:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 dist
+-rwxrwxrwx 1 vscode vscode  555 May  1 00:22 LICENCE
+-rwxrwxrwx 1 vscode vscode 2102 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode 6133 May  1 00:22 README.md
+
+./backend/node_modules/idb-keyval/dist:
+total 60
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 9805 May  1 00:22 compat.cjs
+-rwxrwxrwx 1 vscode vscode   19 May  1 00:22 compat.d.ts
+-rwxrwxrwx 1 vscode vscode 9573 May  1 00:22 compat.js
+-rwxrwxrwx 1 vscode vscode 7103 May  1 00:22 index.cjs
+-rwxrwxrwx 1 vscode vscode 3365 May  1 00:22 index.d.ts
+-rwxrwxrwx 1 vscode vscode 6871 May  1 00:22 index.js
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 src
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 test
+-rwxrwxrwx 1 vscode vscode 4805 May  1 00:22 umd.cjs
+-rwxrwxrwx 1 vscode vscode   19 May  1 00:22 umd.d.ts
+-rwxrwxrwx 1 vscode vscode 4805 May  1 00:22 umd.js
+
+./backend/node_modules/idb-keyval/dist/src:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 3365 May  1 00:22 index.d.ts
+
+./backend/node_modules/idb-keyval/dist/test:
+total 848
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode    140 May  1 00:22 index.html
+-rwxrwxrwx 1 vscode vscode 865669 May  1 00:22 index.js
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 src
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 test
+
+./backend/node_modules/idb-keyval/dist/test/src:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 3365 May  1 00:22 index.d.ts
+
+./backend/node_modules/idb-keyval/dist/test/test:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode   22 May  1 00:22 index.d.ts
+
+./backend/node_modules/ignore-by-default:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  614 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  748 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  775 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  680 Apr 30 22:56 README.md
+
+./backend/node_modules/@img:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 colour
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 sharp-libvips-linuxmusl-x64
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 sharp-libvips-linux-x64
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 sharp-linuxmusl-x64
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 sharp-linux-x64
+
+./backend/node_modules/@img/colour:
+total 84
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 45136 Apr 30 22:56 color.cjs
+-rwxrwxrwx 1 vscode vscode    49 Apr 30 22:56 index.cjs
+-rwxrwxrwx 1 vscode vscode 21569 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  4433 Apr 30 22:56 LICENSE.md
+-rwxrwxrwx 1 vscode vscode  1515 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   562 Apr 30 22:56 README.md
+
+./backend/node_modules/@img/sharp-libvips-linuxmusl-x64:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 lib
+-rwxrwxrwx 1 vscode vscode  894 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode 4334 May  1 00:22 README.md
+-rwxrwxrwx 1 vscode vscode  594 May  1 00:22 versions.json
+
+./backend/node_modules/@img/sharp-libvips-linuxmusl-x64/lib:
+total 16576
+drwxrwxrwx 1 vscode vscode     4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode     4096 May  1 00:22 ..
+drwxrwxrwx 1 vscode vscode     4096 May  1 00:22 glib-2.0
+-rwxrwxrwx 1 vscode vscode       28 May  1 00:22 index.js
+-rwxrwxrwx 1 vscode vscode 16972992 May  1 00:22 libvips-cpp.so.8.17.3
+
+./backend/node_modules/@img/sharp-libvips-linuxmusl-x64/lib/glib-2.0:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 include
+
+./backend/node_modules/@img/sharp-libvips-linuxmusl-x64/lib/glib-2.0/include:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 5986 May  1 00:22 glibconfig.h
+
+./backend/node_modules/@img/sharp-libvips-linux-x64:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  888 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4331 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  594 Apr 30 22:56 versions.json
+
+./backend/node_modules/@img/sharp-libvips-linux-x64/lib:
+total 16256
+drwxrwxrwx 1 vscode vscode     4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode     4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode     4096 Apr 30 22:56 glib-2.0
+-rwxrwxrwx 1 vscode vscode       28 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 16645008 Apr 30 22:56 libvips-cpp.so.8.17.3
+
+./backend/node_modules/@img/sharp-libvips-linux-x64/lib/glib-2.0:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 include
+
+./backend/node_modules/@img/sharp-libvips-linux-x64/lib/glib-2.0/include:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 5986 Apr 30 22:56 glibconfig.h
+
+./backend/node_modules/@img/sharp-linuxmusl-x64:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 lib
+-rwxrwxrwx 1 vscode vscode 10273 May  1 00:22 LICENSE
+-rwxrwxrwx 1 vscode vscode   956 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode   700 May  1 00:22 README.md
+
+./backend/node_modules/@img/sharp-linuxmusl-x64/lib:
+total 272
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode   4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 276672 May  1 00:22 sharp-linuxmusl-x64.node
+
+./backend/node_modules/@img/sharp-linux-x64:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 10273 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   942 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   697 Apr 30 22:56 README.md
+
+./backend/node_modules/@img/sharp-linux-x64/lib:
+total 404
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 410952 Apr 30 22:56 sharp-linux-x64.node
+
+./backend/node_modules/inherits:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  753 Apr 30 22:56 inherits_browser.js
+-rwxrwxrwx 1 vscode vscode  250 Apr 30 22:56 inherits.js
+-rwxrwxrwx 1 vscode vscode  749 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  581 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1625 Apr 30 22:56 README.md
+
+./backend/node_modules/ipaddr.js:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 9738 Apr 30 22:56 ipaddr.min.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1087 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  719 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 8309 Apr 30 22:56 README.md
+
+./backend/node_modules/ipaddr.js/lib:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 19333 Apr 30 22:56 ipaddr.js
+-rwxrwxrwx 1 vscode vscode  2959 Apr 30 22:56 ipaddr.js.d.ts
+
+./backend/node_modules/is-binary-path:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  290 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  239 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1159 Apr 30 22:56 license
+-rwxrwxrwx 1 vscode vscode  657 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  733 Apr 30 22:56 readme.md
+
+./backend/node_modules/is-extglob:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  441 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1087 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1220 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3469 Apr 30 22:56 README.md
+
+./backend/node_modules/is-glob:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3628 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1088 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1748 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 7145 Apr 30 22:56 README.md
+
+./backend/node_modules/is-number:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  411 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1091 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1599 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 6514 Apr 30 22:56 README.md
+
+./backend/node_modules/is-url:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  503 May  1 00:22 History.md
+-rwxrwxrwx 1 vscode vscode  856 May  1 00:22 index.js
+-rwxrwxrwx 1 vscode vscode 1036 May  1 00:22 LICENSE-MIT
+-rwxrwxrwx 1 vscode vscode  274 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode  193 May  1 00:22 Readme.md
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 test
+-rwxrwxrwx 1 vscode vscode   32 May  1 00:22 .travis.yml
+
+./backend/node_modules/is-url/test:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 3688 May  1 00:22 index.js
+
+./backend/node_modules/jsonwebtoken:
+total 56
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   767 Apr 30 22:56 decode.js
+-rwxrwxrwx 1 vscode vscode   276 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1121 Apr 30 22:56 LICENSE
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 node_modules
+-rwxrwxrwx 1 vscode vscode  1428 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 17709 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode  9350 Apr 30 22:56 sign.js
+-rwxrwxrwx 1 vscode vscode  8612 Apr 30 22:56 verify.js
+
+./backend/node_modules/jsonwebtoken/lib:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   99 Apr 30 22:56 asymmetricKeyDetailsSupported.js
+-rwxrwxrwx 1 vscode vscode  428 Apr 30 22:56 JsonWebTokenError.js
+-rwxrwxrwx 1 vscode vscode  362 Apr 30 22:56 NotBeforeError.js
+-rwxrwxrwx 1 vscode vscode  107 Apr 30 22:56 psSupported.js
+-rwxrwxrwx 1 vscode vscode   99 Apr 30 22:56 rsaPssKeyDetailsSupported.js
+-rwxrwxrwx 1 vscode vscode  412 Apr 30 22:56 timespan.js
+-rwxrwxrwx 1 vscode vscode  395 Apr 30 22:56 TokenExpiredError.js
+-rwxrwxrwx 1 vscode vscode 2238 Apr 30 22:56 validateAsymmetricKey.js
+
+./backend/node_modules/jsonwebtoken/node_modules:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ms
+
+./backend/node_modules/jsonwebtoken/node_modules/ms:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3024 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1079 Apr 30 22:56 license.md
+-rwxrwxrwx 1 vscode vscode  732 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1886 Apr 30 22:56 readme.md
+
+./backend/node_modules/jwa:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 6800 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1068 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   66 Apr 30 22:56 opslevel.yml
+-rwxrwxrwx 1 vscode vscode  749 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 5369 Apr 30 22:56 README.md
+
+./backend/node_modules/jws:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2076 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  609 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1068 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   66 Apr 30 22:56 opslevel.yml
+-rwxrwxrwx 1 vscode vscode  671 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 6933 Apr 30 22:56 readme.md
+
+./backend/node_modules/jws/lib:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1242 Apr 30 22:56 data-stream.js
+-rwxrwxrwx 1 vscode vscode 2416 Apr 30 22:56 sign-stream.js
+-rwxrwxrwx 1 vscode vscode  262 Apr 30 22:56 tostring.js
+-rwxrwxrwx 1 vscode vscode 3479 Apr 30 22:56 verify-stream.js
+
+./backend/node_modules/lodash.includes:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 18716 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1951 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   749 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   467 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.isboolean:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1819 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1233 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  746 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  474 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.isinteger:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 6036 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1951 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  752 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  474 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.isnumber:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2025 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1233 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  743 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  467 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.isplainobject:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3673 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1951 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  764 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  502 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.isstring:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2302 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1233 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  743 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  467 Apr 30 22:56 README.md
+
+./backend/node_modules/lodash.once:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 7094 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1951 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  737 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  439 Apr 30 22:56 README.md
+
+./backend/node_modules/math-intrinsics:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   18 Apr 30 22:56 abs.d.ts
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 abs.js
+-rwxrwxrwx 1 vscode vscode 1466 Apr 30 22:56 CHANGELOG.md
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 constants
+-rwxrwxrwx 1 vscode vscode  229 Apr 30 22:56 .eslintrc
+-rwxrwxrwx 1 vscode vscode   20 Apr 30 22:56 floor.d.ts
+-rwxrwxrwx 1 vscode vscode   77 Apr 30 22:56 floor.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode   80 Apr 30 22:56 isFinite.d.ts
+-rwxrwxrwx 1 vscode vscode  262 Apr 30 22:56 isFinite.js
+-rwxrwxrwx 1 vscode vscode   87 Apr 30 22:56 isInteger.d.ts
+-rwxrwxrwx 1 vscode vscode  410 Apr 30 22:56 isInteger.js
+-rwxrwxrwx 1 vscode vscode   22 Apr 30 22:56 isNaN.d.ts
+-rwxrwxrwx 1 vscode vscode  121 Apr 30 22:56 isNaN.js
+-rwxrwxrwx 1 vscode vscode   79 Apr 30 22:56 isNegativeZero.d.ts
+-rwxrwxrwx 1 vscode vscode  143 Apr 30 22:56 isNegativeZero.js
+-rwxrwxrwx 1 vscode vscode 1073 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   18 Apr 30 22:56 max.d.ts
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 max.js
+-rwxrwxrwx 1 vscode vscode   18 Apr 30 22:56 min.d.ts
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 min.js
+-rwxrwxrwx 1 vscode vscode   76 Apr 30 22:56 mod.d.ts
+-rwxrwxrwx 1 vscode vscode  218 Apr 30 22:56 mod.js
+-rwxrwxrwx 1 vscode vscode 2670 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   18 Apr 30 22:56 pow.d.ts
+-rwxrwxrwx 1 vscode vscode   73 Apr 30 22:56 pow.js
+-rwxrwxrwx 1 vscode vscode 1884 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   20 Apr 30 22:56 round.d.ts
+-rwxrwxrwx 1 vscode vscode   77 Apr 30 22:56 round.js
+-rwxrwxrwx 1 vscode vscode   57 Apr 30 22:56 sign.d.ts
+-rwxrwxrwx 1 vscode vscode  214 Apr 30 22:56 sign.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode   36 Apr 30 22:56 tsconfig.json
+
+./backend/node_modules/math-intrinsics/constants:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   71 Apr 30 22:56 maxArrayLength.d.ts
+-rwxrwxrwx 1 vscode vscode  110 Apr 30 22:56 maxArrayLength.js
+-rwxrwxrwx 1 vscode vscode   77 Apr 30 22:56 maxSafeInteger.d.ts
+-rwxrwxrwx 1 vscode vscode  231 Apr 30 22:56 maxSafeInteger.js
+-rwxrwxrwx 1 vscode vscode   71 Apr 30 22:56 maxValue.d.ts
+-rwxrwxrwx 1 vscode vscode  197 Apr 30 22:56 maxValue.js
+
+./backend/node_modules/math-intrinsics/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  561 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/math-intrinsics/test:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6320 Apr 30 22:56 index.js
+
+./backend/node_modules/media-typer:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  461 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 6375 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1089 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  759 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 2371 Apr 30 22:56 README.md
+
+./backend/node_modules/merge-descriptors:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  363 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 1218 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1167 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1028 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1305 Apr 30 22:56 README.md
+
+./backend/node_modules/methods:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  427 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 1040 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1180 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  947 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1694 Apr 30 22:56 README.md
+
+./backend/node_modules/mime:
+total 60
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  9473 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode   149 Apr 30 22:56 cli.js
+-rwxrwxrwx 1 vscode vscode  1098 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  2726 Apr 30 22:56 mime.js
+-rwxrwxrwx 1 vscode vscode     0 Apr 30 22:56 .npmignore
+-rwxrwxrwx 1 vscode vscode   933 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode  2119 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 src
+-rwxrwxrwx 1 vscode vscode 31555 Apr 30 22:56 types.json
+
+./backend/node_modules/mime/src:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1351 Apr 30 22:56 build.js
+-rwxrwxrwx 1 vscode vscode 2334 Apr 30 22:56 test.js
+
+./backend/node_modules/mime-db:
+total 212
+drwxrwxrwx 1 vscode vscode   4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode   4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 185882 Apr 30 22:56 db.json
+-rwxrwxrwx 1 vscode vscode  12581 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode    189 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode   1172 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   1624 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   4091 Apr 30 22:56 README.md
+
+./backend/node_modules/mime-types:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 8812 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 3663 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1167 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1149 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 3481 Apr 30 22:56 README.md
+
+./backend/node_modules/minimatch:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode  1550 Apr 30 22:56 LICENSE.md
+-rwxrwxrwx 1 vscode vscode  1810 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 19865 Apr 30 22:56 README.md
+
+./backend/node_modules/minimatch/dist:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 commonjs
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 esm
+
+./backend/node_modules/minimatch/dist/commonjs:
+total 288
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   119 Apr 30 22:56 assert-valid-pattern.d.ts
+-rwxrwxrwx 1 vscode vscode   199 Apr 30 22:56 assert-valid-pattern.d.ts.map
+-rwxrwxrwx 1 vscode vscode   492 Apr 30 22:56 assert-valid-pattern.js
+-rwxrwxrwx 1 vscode vscode   832 Apr 30 22:56 assert-valid-pattern.js.map
+-rwxrwxrwx 1 vscode vscode   845 Apr 30 22:56 ast.d.ts
+-rwxrwxrwx 1 vscode vscode   919 Apr 30 22:56 ast.d.ts.map
+-rwxrwxrwx 1 vscode vscode 30650 Apr 30 22:56 ast.js
+-rwxrwxrwx 1 vscode vscode 56074 Apr 30 22:56 ast.js.map
+-rwxrwxrwx 1 vscode vscode   251 Apr 30 22:56 brace-expressions.d.ts
+-rwxrwxrwx 1 vscode vscode   319 Apr 30 22:56 brace-expressions.d.ts.map
+-rwxrwxrwx 1 vscode vscode  5743 Apr 30 22:56 brace-expressions.js
+-rwxrwxrwx 1 vscode vscode 10568 Apr 30 22:56 brace-expressions.js.map
+-rwxrwxrwx 1 vscode vscode   781 Apr 30 22:56 escape.d.ts
+-rwxrwxrwx 1 vscode vscode   278 Apr 30 22:56 escape.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1253 Apr 30 22:56 escape.js
+-rwxrwxrwx 1 vscode vscode  1890 Apr 30 22:56 escape.js.map
+-rwxrwxrwx 1 vscode vscode  7360 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  3722 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode 45140 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 85329 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode    25 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   956 Apr 30 22:56 unescape.d.ts
+-rwxrwxrwx 1 vscode vscode   290 Apr 30 22:56 unescape.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1390 Apr 30 22:56 unescape.js
+-rwxrwxrwx 1 vscode vscode  2080 Apr 30 22:56 unescape.js.map
+
+./backend/node_modules/minimatch/dist/esm:
+total 284
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   119 Apr 30 22:56 assert-valid-pattern.d.ts
+-rwxrwxrwx 1 vscode vscode   199 Apr 30 22:56 assert-valid-pattern.d.ts.map
+-rwxrwxrwx 1 vscode vscode   336 Apr 30 22:56 assert-valid-pattern.js
+-rwxrwxrwx 1 vscode vscode   815 Apr 30 22:56 assert-valid-pattern.js.map
+-rwxrwxrwx 1 vscode vscode   845 Apr 30 22:56 ast.d.ts
+-rwxrwxrwx 1 vscode vscode   919 Apr 30 22:56 ast.d.ts.map
+-rwxrwxrwx 1 vscode vscode 30416 Apr 30 22:56 ast.js
+-rwxrwxrwx 1 vscode vscode 56089 Apr 30 22:56 ast.js.map
+-rwxrwxrwx 1 vscode vscode   251 Apr 30 22:56 brace-expressions.d.ts
+-rwxrwxrwx 1 vscode vscode   319 Apr 30 22:56 brace-expressions.d.ts.map
+-rwxrwxrwx 1 vscode vscode  5611 Apr 30 22:56 brace-expressions.js
+-rwxrwxrwx 1 vscode vscode 10552 Apr 30 22:56 brace-expressions.js.map
+-rwxrwxrwx 1 vscode vscode   781 Apr 30 22:56 escape.d.ts
+-rwxrwxrwx 1 vscode vscode   278 Apr 30 22:56 escape.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1133 Apr 30 22:56 escape.js
+-rwxrwxrwx 1 vscode vscode  1874 Apr 30 22:56 escape.js.map
+-rwxrwxrwx 1 vscode vscode  7360 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  3722 Apr 30 22:56 index.d.ts.map
+-rwxrwxrwx 1 vscode vscode 43810 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 85364 Apr 30 22:56 index.js.map
+-rwxrwxrwx 1 vscode vscode    23 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   956 Apr 30 22:56 unescape.d.ts
+-rwxrwxrwx 1 vscode vscode   290 Apr 30 22:56 unescape.d.ts.map
+-rwxrwxrwx 1 vscode vscode  1264 Apr 30 22:56 unescape.js
+-rwxrwxrwx 1 vscode vscode  2064 Apr 30 22:56 unescape.js.map
+
+./backend/node_modules/ms:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2764 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1077 Apr 30 22:56 license.md
+-rwxrwxrwx 1 vscode vscode  704 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1721 Apr 30 22:56 readme.md
+
+./backend/node_modules/multer:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  2745 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1113 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1380 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 13578 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 storage
+
+./backend/node_modules/multer/lib:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  570 Apr 30 22:56 counter.js
+-rwxrwxrwx 1 vscode vscode 1622 Apr 30 22:56 file-appender.js
+-rwxrwxrwx 1 vscode vscode 7195 Apr 30 22:56 make-middleware.js
+-rwxrwxrwx 1 vscode vscode  659 Apr 30 22:56 multer-error.js
+-rwxrwxrwx 1 vscode vscode  572 Apr 30 22:56 remove-uploaded-files.js
+
+./backend/node_modules/multer/storage:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1606 Apr 30 22:56 disk.js
+-rwxrwxrwx 1 vscode vscode  475 Apr 30 22:56 memory.js
+
+./backend/node_modules/@napi-rs:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:32 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+
+./backend/node_modules/negotiator:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2499 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 2451 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode 1177 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  993 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4901 Apr 30 22:56 README.md
+
+./backend/node_modules/negotiator/lib:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3081 Apr 30 22:56 charset.js
+-rwxrwxrwx 1 vscode vscode 3506 Apr 30 22:56 encoding.js
+-rwxrwxrwx 1 vscode vscode 3409 Apr 30 22:56 language.js
+-rwxrwxrwx 1 vscode vscode 5358 Apr 30 22:56 mediaType.js
+
+./backend/node_modules/node-ensure:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  215 May  1 00:35 browser.js
+-rwxrwxrwx 1 vscode vscode  208 May  1 00:35 index.js
+-rwxrwxrwx 1 vscode vscode   20 May  1 00:35 .npmignore
+-rwxrwxrwx 1 vscode vscode  724 May  1 00:35 package.json
+-rwxrwxrwx 1 vscode vscode 2460 May  1 00:35 README.md
+
+./backend/node_modules/node-fetch:
+total 36
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode   781 May  1 00:22 browser.js
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 lib
+-rwxrwxrwx 1 vscode vscode  1079 May  1 00:22 LICENSE.md
+-rwxrwxrwx 1 vscode vscode  2668 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode 21332 May  1 00:22 README.md
+
+./backend/node_modules/node-fetch/lib:
+total 144
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:22 ..
+-rwxrwxrwx 1 vscode vscode 45346 May  1 00:22 index.es.js
+-rwxrwxrwx 1 vscode vscode 45775 May  1 00:22 index.js
+-rwxrwxrwx 1 vscode vscode 45272 May  1 00:22 index.mjs
+
+./backend/node_modules/nodemailer:
+total 76
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 40405 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  5059 Apr 30 22:56 CLAUDE.md
+-rwxrwxrwx 1 vscode vscode  3354 Apr 30 22:56 CODE_OF_CONDUCT.md
+-rwxrwxrwx 1 vscode vscode  2952 Apr 30 22:56 eslint.config.js
+-rwxrwxrwx 1 vscode vscode    95 Apr 30 22:56 .gitattributes
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode   935 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   136 Apr 30 22:56 .ncurc.js
+-rwxrwxrwx 1 vscode vscode  1598 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode    85 Apr 30 22:56 .prettierignore
+-rwxrwxrwx 1 vscode vscode   249 Apr 30 22:56 .prettierrc
+-rwxrwxrwx 1 vscode vscode   171 Apr 30 22:56 .prettierrc.js
+-rwxrwxrwx 1 vscode vscode  5232 Apr 30 22:56 README.md
+-rwxrwxrwx 1 vscode vscode   219 Apr 30 22:56 .release-please-config.json
+-rwxrwxrwx 1 vscode vscode  1044 Apr 30 22:56 SECURITY.txt
+
+./backend/node_modules/nodemailer/lib:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 addressparser
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 base64
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 dkim
+-rwxrwxrwx 1 vscode vscode 1765 Apr 30 22:56 errors.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 fetch
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 json-transport
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 mail-composer
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 mailer
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 mime-funcs
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 mime-node
+-rwxrwxrwx 1 vscode vscode 4873 Apr 30 22:56 nodemailer.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 punycode
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 qp
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 sendmail-transport
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ses-transport
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 shared
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 smtp-connection
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 smtp-pool
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 smtp-transport
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 stream-transport
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 well-known
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 xoauth2
+
+./backend/node_modules/nodemailer/lib/addressparser:
+total 12
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 12260 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/base64:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3800 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/dkim:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 7073 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 4778 Apr 30 22:56 message-parser.js
+-rwxrwxrwx 1 vscode vscode 5741 Apr 30 22:56 relaxed-body.js
+-rwxrwxrwx 1 vscode vscode 3721 Apr 30 22:56 sign.js
+
+./backend/node_modules/nodemailer/lib/fetch:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 8032 Apr 30 22:56 cookies.js
+-rwxrwxrwx 1 vscode vscode 8238 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/json-transport:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2367 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/mail-composer:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 21891 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/mailer:
+total 28
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 15147 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 11468 Apr 30 22:56 mail-message.js
+
+./backend/node_modules/nodemailer/lib/mime-funcs:
+total 112
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 23155 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 90097 Apr 30 22:56 mime-types.js
+
+./backend/node_modules/nodemailer/lib/mime-node:
+total 56
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 45551 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode   664 Apr 30 22:56 last-newline.js
+-rwxrwxrwx 1 vscode vscode   862 Apr 30 22:56 le-unix.js
+-rwxrwxrwx 1 vscode vscode  1202 Apr 30 22:56 le-windows.js
+
+./backend/node_modules/nodemailer/lib/punycode:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 15311 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/qp:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6519 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/sendmail-transport:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6324 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/ses-transport:
+total 8
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 7372 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/shared:
+total 24
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 21081 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/smtp-connection:
+total 80
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  2905 Apr 30 22:56 data-stream.js
+-rwxrwxrwx 1 vscode vscode  4375 Apr 30 22:56 http-proxy-client.js
+-rwxrwxrwx 1 vscode vscode 67318 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/smtp-pool:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 19502 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  8488 Apr 30 22:56 pool-resource.js
+
+./backend/node_modules/nodemailer/lib/smtp-transport:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 13174 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/stream-transport:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3987 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemailer/lib/well-known:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  1242 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 15152 Apr 30 22:56 services.json
+
+./backend/node_modules/nodemailer/lib/xoauth2:
+total 16
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 15991 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemon:
+total 52
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 bin
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 doc
+-rwxrwxrwx 1 vscode vscode  3396 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode   142 Apr 30 22:56 jsconfig.json
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 lib
+-rwxrwxrwx 1 vscode vscode  1122 Apr 30 22:56 LICENSE
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 node_modules
+-rwxrwxrwx 1 vscode vscode  2122 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode    26 Apr 30 22:56 .prettierrc.json
+-rwxrwxrwx 1 vscode vscode 40947 Apr 30 22:56 README.md
+
+./backend/node_modules/nodemon/bin:
+total 80
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode   436 Apr 30 22:56 nodemon.js
+-rwxrwxrwx 1 vscode vscode 80384 Apr 30 22:56 windows-kill.exe
+
+./backend/node_modules/nodemon/doc:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 cli
+
+./backend/node_modules/nodemon/doc/cli:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  236 Apr 30 22:56 authors.txt
+-rwxrwxrwx 1 vscode vscode 1158 Apr 30 22:56 config.txt
+-rwxrwxrwx 1 vscode vscode 1268 Apr 30 22:56 help.txt
+-rwxrwxrwx 1 vscode vscode  799 Apr 30 22:56 logo.txt
+-rwxrwxrwx 1 vscode vscode 1869 Apr 30 22:56 options.txt
+-rwxrwxrwx 1 vscode vscode  325 Apr 30 22:56 topics.txt
+-rwxrwxrwx 1 vscode vscode   88 Apr 30 22:56 usage.txt
+-rwxrwxrwx 1 vscode vscode 1223 Apr 30 22:56 whoami.txt
+
+./backend/node_modules/nodemon/lib:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 cli
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 config
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 help
+-rwxrwxrwx 1 vscode vscode   38 Apr 30 22:56 index.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 monitor
+-rwxrwxrwx 1 vscode vscode 8978 Apr 30 22:56 nodemon.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 rules
+-rwxrwxrwx 1 vscode vscode 1930 Apr 30 22:56 spawn.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 utils
+-rwxrwxrwx 1 vscode vscode 2465 Apr 30 22:56 version.js
+
+./backend/node_modules/nodemon/lib/cli:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1089 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 6105 Apr 30 22:56 parse.js
+
+./backend/node_modules/nodemon/lib/config:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 1249 Apr 30 22:56 command.js
+-rwxrwxrwx 1 vscode vscode  979 Apr 30 22:56 defaults.js
+-rwxrwxrwx 1 vscode vscode 7124 Apr 30 22:56 exec.js
+-rwxrwxrwx 1 vscode vscode 2511 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 6660 Apr 30 22:56 load.js
+
+./backend/node_modules/nodemon/lib/help:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  733 Apr 30 22:56 index.js
+
+./backend/node_modules/nodemon/lib/monitor:
+total 36
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode    82 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  7018 Apr 30 22:56 match.js
+-rwxrwxrwx 1 vscode vscode 16951 Apr 30 22:56 run.js
+-rwxrwxrwx 1 vscode vscode   488 Apr 30 22:56 signals.js
+-rwxrwxrwx 1 vscode vscode  6567 Apr 30 22:56 watch.js
+
+./backend/node_modules/nodemon/lib/rules:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2667 Apr 30 22:56 add.js
+-rwxrwxrwx 1 vscode vscode 1260 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  804 Apr 30 22:56 parse.js
+
+./backend/node_modules/nodemon/lib/utils:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  946 Apr 30 22:56 bus.js
+-rwxrwxrwx 1 vscode vscode  829 Apr 30 22:56 clone.js
+-rwxrwxrwx 1 vscode vscode  690 Apr 30 22:56 colour.js
+-rwxrwxrwx 1 vscode vscode 2624 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1738 Apr 30 22:56 log.js
+-rwxrwxrwx 1 vscode vscode 1186 Apr 30 22:56 merge.js
+
+./backend/node_modules/nodemon/node_modules:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 debug
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ms
+
+./backend/node_modules/nodemon/node_modules/debug:
+total 32
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  1139 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1479 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 22115 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 src
+
+./backend/node_modules/nodemon/node_modules/debug/src:
+total 24
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 6103 Apr 30 22:56 browser.js
+-rwxrwxrwx 1 vscode vscode 6915 Apr 30 22:56 common.js
+-rwxrwxrwx 1 vscode vscode  314 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 4728 Apr 30 22:56 node.js
+
+./backend/node_modules/nodemon/node_modules/ms:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 3024 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1079 Apr 30 22:56 license.md
+-rwxrwxrwx 1 vscode vscode  732 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1886 Apr 30 22:56 readme.md
+
+./backend/node_modules/normalize-path:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1024 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1088 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1666 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 5441 Apr 30 22:56 README.md
+
+./backend/node_modules/object-assign:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 2108 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1119 Apr 30 22:56 license
+-rwxrwxrwx 1 vscode vscode  764 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1502 Apr 30 22:56 readme.md
+
+./backend/node_modules/object-inspect:
+total 72
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 36562 Apr 30 22:56 CHANGELOG.md
+-rwxrwxrwx 1 vscode vscode  1298 Apr 30 22:56 .eslintrc
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 example
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .github
+-rwxrwxrwx 1 vscode vscode 19059 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode  1071 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode   236 Apr 30 22:56 .nycrc
+-rwxrwxrwx 1 vscode vscode  2841 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode   365 Apr 30 22:56 package-support.json
+-rwxrwxrwx 1 vscode vscode  2988 Apr 30 22:56 readme.markdown
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 test
+-rwxrwxrwx 1 vscode vscode   534 Apr 30 22:56 test-core-js.js
+-rwxrwxrwx 1 vscode vscode    42 Apr 30 22:56 util.inspect.js
+
+./backend/node_modules/object-inspect/example:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  391 Apr 30 22:56 all.js
+-rwxrwxrwx 1 vscode vscode  116 Apr 30 22:56 circular.js
+-rwxrwxrwx 1 vscode vscode  126 Apr 30 22:56 fn.js
+-rwxrwxrwx 1 vscode vscode  251 Apr 30 22:56 inspect.js
+
+./backend/node_modules/object-inspect/.github:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  585 Apr 30 22:56 FUNDING.yml
+
+./backend/node_modules/object-inspect/test:
+total 56
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 2082 Apr 30 22:56 bigint.js
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 browser
+-rwxrwxrwx 1 vscode vscode  451 Apr 30 22:56 circular.js
+-rwxrwxrwx 1 vscode vscode  400 Apr 30 22:56 deep.js
+-rwxrwxrwx 1 vscode vscode 1575 Apr 30 22:56 element.js
+-rwxrwxrwx 1 vscode vscode 1536 Apr 30 22:56 err.js
+-rwxrwxrwx 1 vscode vscode  683 Apr 30 22:56 fakes.js
+-rwxrwxrwx 1 vscode vscode 2227 Apr 30 22:56 fn.js
+-rwxrwxrwx 1 vscode vscode  372 Apr 30 22:56 global.js
+-rwxrwxrwx 1 vscode vscode  514 Apr 30 22:56 has.js
+-rwxrwxrwx 1 vscode vscode  255 Apr 30 22:56 holes.js
+-rwxrwxrwx 1 vscode vscode 6633 Apr 30 22:56 indent-option.js
+-rwxrwxrwx 1 vscode vscode 4946 Apr 30 22:56 inspect.js
+-rwxrwxrwx 1 vscode vscode  268 Apr 30 22:56 lowbyte.js
+-rwxrwxrwx 1 vscode vscode 2312 Apr 30 22:56 number.js
+-rwxrwxrwx 1 vscode vscode 1530 Apr 30 22:56 quoteStyle.js
+-rwxrwxrwx 1 vscode vscode 1546 Apr 30 22:56 toStringTag.js
+-rwxrwxrwx 1 vscode vscode  302 Apr 30 22:56 undef.js
+-rwxrwxrwx 1 vscode vscode 8407 Apr 30 22:56 values.js
+
+./backend/node_modules/object-inspect/test/browser:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode  416 Apr 30 22:56 dom.js
+
+./backend/node_modules/ollama:
+total 20
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 May  6 17:34 ..
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 dist
+-rwxrwxrwx 1 vscode vscode  1061 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  1222 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 11452 Apr 30 22:56 README.md
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 src
+
+./backend/node_modules/ollama/dist:
+total 72
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 17383 Apr 30 22:56 browser.cjs
+-rwxrwxrwx 1 vscode vscode   745 Apr 30 22:56 browser.d.cts
+-rwxrwxrwx 1 vscode vscode   745 Apr 30 22:56 browser.d.mts
+-rwxrwxrwx 1 vscode vscode   744 Apr 30 22:56 browser.d.ts
+-rwxrwxrwx 1 vscode vscode 17299 Apr 30 22:56 browser.mjs
+-rwxrwxrwx 1 vscode vscode  1518 Apr 30 22:56 index.cjs
+-rwxrwxrwx 1 vscode vscode  1485 Apr 30 22:56 index.d.cts
+-rwxrwxrwx 1 vscode vscode  1485 Apr 30 22:56 index.d.mts
+-rwxrwxrwx 1 vscode vscode  1483 Apr 30 22:56 index.d.ts
+-rwxrwxrwx 1 vscode vscode  1229 Apr 30 22:56 index.mjs
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 shared
+
+./backend/node_modules/ollama/dist/shared:
+total 48
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 12556 Apr 30 22:56 ollama.1bfa89da.d.cts
+-rwxrwxrwx 1 vscode vscode 12556 Apr 30 22:56 ollama.1bfa89da.d.mts
+-rwxrwxrwx 1 vscode vscode 12556 Apr 30 22:56 ollama.1bfa89da.d.ts
+
+./backend/node_modules/ollama/src:
+total 40
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode  4096 Apr 30 22:56 ..
+-rwxrwxrwx 1 vscode vscode 13195 Apr 30 22:56 browser.ts
+-rwxrwxrwx 1 vscode vscode    98 Apr 30 22:56 constant.ts
+-rwxrwxrwx 1 vscode vscode  2214 Apr 30 22:56 index.ts
+-rwxrwxrwx 1 vscode vscode  5982 Apr 30 22:56 interfaces.ts
+-rwxrwxrwx 1 vscode vscode 11219 Apr 30 22:56 utils.ts
+-rwxrwxrwx 1 vscode vscode    32 Apr 30 22:56 version.ts
+
+./backend/node_modules/on-finished:
+total 28
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1865 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 4430 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1167 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1057 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 5160 Apr 30 22:56 README.md
+
+./backend/node_modules/opencollective-postinstall:
+total 16
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:22 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  793 May  1 00:22 index.js
+-rwxrwxrwx 1 vscode vscode 1072 May  1 00:22 LICENSE
+-rwxrwxrwx 1 vscode vscode  787 May  1 00:22 package.json
+-rwxrwxrwx 1 vscode vscode 1035 May  1 00:22 README.md
+
+./backend/node_modules/parseurl:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 1043 Apr 30 22:56 HISTORY.md
+-rwxrwxrwx 1 vscode vscode 2809 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1173 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode 1180 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 4094 Apr 30 22:56 README.md
+
+./backend/node_modules/path-to-regexp:
+total 12
+drwxrwxrwx 1 vscode vscode 4096 Apr 30 22:56 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode 3885 Apr 30 22:56 index.js
+-rwxrwxrwx 1 vscode vscode 1103 Apr 30 22:56 LICENSE
+-rwxrwxrwx 1 vscode vscode  554 Apr 30 22:56 package.json
+-rwxrwxrwx 1 vscode vscode 1102 Apr 30 22:56 Readme.md
+
+./backend/node_modules/pdf-parse:
+total 20
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  6 17:34 ..
+-rwxrwxrwx 1 vscode vscode  700 May  1 00:35 CHANGELOG
+-rwxrwxrwx 1 vscode vscode  612 May  1 00:35 CONTRIBUTING.md
+-rwxrwxrwx 1 vscode vscode  175 May  1 00:35 .editorconfig
+-rwxrwxrwx 1 vscode vscode 2825 May  1 00:35 .gitlab-ci.yml
+-rwxrwxrwx 1 vscode vscode  546 May  1 00:35 index.js
+-rwxrwxrwx 1 vscode vscode  354 May  1 00:35 .jsbeautifyrc
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 lib
+-rwxrwxrwx 1 vscode vscode 1078 May  1 00:35 LICENSE
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 node_modules
+-rwxrwxrwx 1 vscode vscode    8 May  1 00:35 NOTES.md
+-rwxrwxrwx 1 vscode vscode 1248 May  1 00:35 package.json
+-rwxrwxrwx 1 vscode vscode  359 May  1 00:35 QUICKSTART.js
+-rwxrwxrwx 1 vscode vscode 5160 May  1 00:35 README.md
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 test
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .vscode
+
+./backend/node_modules/pdf-parse/lib:
+total 4
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 pdf.js
+-rwxrwxrwx 1 vscode vscode 3387 May  1 00:35 pdf-parse.js
+
+./backend/node_modules/pdf-parse/lib/pdf.js:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 ..
+-rwxrwxrwx 1 vscode vscode  124 May  1 00:35 README.md
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 v1.10.100
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 v1.10.88
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 v1.9.426
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 v2.0.550
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.100:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 build
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.100/build:
+total 6268
+drwxrwxrwx 1 vscode vscode    4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode    4096 May  1 00:35 ..
+-rwxrwxrwx 1 vscode vscode  651771 May  1 00:35 pdf.js
+-rwxrwxrwx 1 vscode vscode 1175505 May  1 00:35 pdf.js.map
+-rwxrwxrwx 1 vscode vscode 1537117 May  1 00:35 pdf.worker.js
+-rwxrwxrwx 1 vscode vscode 3043731 May  1 00:35 pdf.worker.js.map
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.88:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 build
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 web
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.88/build:
+total 5936
+drwxrwxrwx 1 vscode vscode    4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode    4096 May  1 00:35 ..
+-rwxrwxrwx 1 vscode vscode  640497 May  1 00:35 pdf.js
+-rwxrwxrwx 1 vscode vscode 1061723 May  1 00:35 pdf.js.map
+-rwxrwxrwx 1 vscode vscode 1536586 May  1 00:35 pdf.worker.js
+-rwxrwxrwx 1 vscode vscode 2829717 May  1 00:35 pdf.worker.js.map
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.88/web:
+total 0
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 ..
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 cmaps
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 images
+drwxrwxrwx 1 vscode vscode 4096 May  1 00:35 locale
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.88/web/cmaps:
+total 1240
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 ..
+-rwxrwxrwx 1 vscode vscode  2404 May  1 00:35 78-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   173 May  1 00:35 78-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2379 May  1 00:35 78-H.bcmap
+-rwxrwxrwx 1 vscode vscode  2651 May  1 00:35 78ms-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   290 May  1 00:35 78ms-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2398 May  1 00:35 78-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   173 May  1 00:35 78-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode   169 May  1 00:35 78-V.bcmap
+-rwxrwxrwx 1 vscode vscode   905 May  1 00:35 83pv-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   715 May  1 00:35 90msp-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   291 May  1 00:35 90msp-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode   721 May  1 00:35 90ms-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   290 May  1 00:35 90ms-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode   982 May  1 00:35 90pv-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   260 May  1 00:35 90pv-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2419 May  1 00:35 Add-H.bcmap
+-rwxrwxrwx 1 vscode vscode  2413 May  1 00:35 Add-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   287 May  1 00:35 Add-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode   282 May  1 00:35 Add-V.bcmap
+-rwxrwxrwx 1 vscode vscode   317 May  1 00:35 Adobe-CNS1-0.bcmap
+-rwxrwxrwx 1 vscode vscode   371 May  1 00:35 Adobe-CNS1-1.bcmap
+-rwxrwxrwx 1 vscode vscode   376 May  1 00:35 Adobe-CNS1-2.bcmap
+-rwxrwxrwx 1 vscode vscode   401 May  1 00:35 Adobe-CNS1-3.bcmap
+-rwxrwxrwx 1 vscode vscode   405 May  1 00:35 Adobe-CNS1-4.bcmap
+-rwxrwxrwx 1 vscode vscode   406 May  1 00:35 Adobe-CNS1-5.bcmap
+-rwxrwxrwx 1 vscode vscode   406 May  1 00:35 Adobe-CNS1-6.bcmap
+-rwxrwxrwx 1 vscode vscode 41193 May  1 00:35 Adobe-CNS1-UCS2.bcmap
+-rwxrwxrwx 1 vscode vscode   217 May  1 00:35 Adobe-GB1-0.bcmap
+-rwxrwxrwx 1 vscode vscode   250 May  1 00:35 Adobe-GB1-1.bcmap
+-rwxrwxrwx 1 vscode vscode   465 May  1 00:35 Adobe-GB1-2.bcmap
+-rwxrwxrwx 1 vscode vscode   470 May  1 00:35 Adobe-GB1-3.bcmap
+-rwxrwxrwx 1 vscode vscode   601 May  1 00:35 Adobe-GB1-4.bcmap
+-rwxrwxrwx 1 vscode vscode   625 May  1 00:35 Adobe-GB1-5.bcmap
+-rwxrwxrwx 1 vscode vscode 33974 May  1 00:35 Adobe-GB1-UCS2.bcmap
+-rwxrwxrwx 1 vscode vscode   225 May  1 00:35 Adobe-Japan1-0.bcmap
+-rwxrwxrwx 1 vscode vscode   226 May  1 00:35 Adobe-Japan1-1.bcmap
+-rwxrwxrwx 1 vscode vscode   233 May  1 00:35 Adobe-Japan1-2.bcmap
+-rwxrwxrwx 1 vscode vscode   242 May  1 00:35 Adobe-Japan1-3.bcmap
+-rwxrwxrwx 1 vscode vscode   337 May  1 00:35 Adobe-Japan1-4.bcmap
+-rwxrwxrwx 1 vscode vscode   430 May  1 00:35 Adobe-Japan1-5.bcmap
+-rwxrwxrwx 1 vscode vscode   485 May  1 00:35 Adobe-Japan1-6.bcmap
+-rwxrwxrwx 1 vscode vscode 40951 May  1 00:35 Adobe-Japan1-UCS2.bcmap
+-rwxrwxrwx 1 vscode vscode   241 May  1 00:35 Adobe-Korea1-0.bcmap
+-rwxrwxrwx 1 vscode vscode   386 May  1 00:35 Adobe-Korea1-1.bcmap
+-rwxrwxrwx 1 vscode vscode   391 May  1 00:35 Adobe-Korea1-2.bcmap
+-rwxrwxrwx 1 vscode vscode 23293 May  1 00:35 Adobe-Korea1-UCS2.bcmap
+-rwxrwxrwx 1 vscode vscode  1086 May  1 00:35 B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode  1099 May  1 00:35 B5pc-H.bcmap
+-rwxrwxrwx 1 vscode vscode   144 May  1 00:35 B5pc-V.bcmap
+-rwxrwxrwx 1 vscode vscode   142 May  1 00:35 B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode   706 May  1 00:35 CNS1-H.bcmap
+-rwxrwxrwx 1 vscode vscode   143 May  1 00:35 CNS1-V.bcmap
+-rwxrwxrwx 1 vscode vscode   504 May  1 00:35 CNS2-H.bcmap
+-rwxrwxrwx 1 vscode vscode    93 May  1 00:35 CNS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode  1780 May  1 00:35 CNS-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode  1920 May  1 00:35 CNS-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  1125 May  1 00:35 ETen-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   158 May  1 00:35 ETen-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode   101 May  1 00:35 ETenms-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   172 May  1 00:35 ETenms-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  4426 May  1 00:35 ETHK-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   158 May  1 00:35 ETHK-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode   578 May  1 00:35 EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   170 May  1 00:35 EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2536 May  1 00:35 Ext-H.bcmap
+-rwxrwxrwx 1 vscode vscode  2542 May  1 00:35 Ext-RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   218 May  1 00:35 Ext-RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode   215 May  1 00:35 Ext-V.bcmap
+-rwxrwxrwx 1 vscode vscode   549 May  1 00:35 GB-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   179 May  1 00:35 GB-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode   528 May  1 00:35 GB-H.bcmap
+-rwxrwxrwx 1 vscode vscode 19662 May  1 00:35 GBK2K-H.bcmap
+-rwxrwxrwx 1 vscode vscode   219 May  1 00:35 GBK2K-V.bcmap
+-rwxrwxrwx 1 vscode vscode 14692 May  1 00:35 GBK-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   180 May  1 00:35 GBK-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode 14686 May  1 00:35 GBKp-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   181 May  1 00:35 GBKp-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode   557 May  1 00:35 GBpc-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   181 May  1 00:35 GBpc-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  7290 May  1 00:35 GBT-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   180 May  1 00:35 GBT-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  7269 May  1 00:35 GBT-H.bcmap
+-rwxrwxrwx 1 vscode vscode  7298 May  1 00:35 GBTpc-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   182 May  1 00:35 GBTpc-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode   176 May  1 00:35 GBT-V.bcmap
+-rwxrwxrwx 1 vscode vscode   175 May  1 00:35 GB-V.bcmap
+-rwxrwxrwx 1 vscode vscode   132 May  1 00:35 Hankaku.bcmap
+-rwxrwxrwx 1 vscode vscode   553 May  1 00:35 H.bcmap
+-rwxrwxrwx 1 vscode vscode   124 May  1 00:35 Hiragana.bcmap
+-rwxrwxrwx 1 vscode vscode  2654 May  1 00:35 HKdla-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   148 May  1 00:35 HKdla-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2414 May  1 00:35 HKdlb-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   148 May  1 00:35 HKdlb-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2292 May  1 00:35 HKgccs-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   149 May  1 00:35 HKgccs-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  1772 May  1 00:35 HKm314-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   149 May  1 00:35 HKm314-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2171 May  1 00:35 HKm471-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   149 May  1 00:35 HKm471-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode  4437 May  1 00:35 HKscs-B5-H.bcmap
+-rwxrwxrwx 1 vscode vscode   159 May  1 00:35 HKscs-B5-V.bcmap
+-rwxrwxrwx 1 vscode vscode   100 May  1 00:35 Katakana.bcmap
+-rwxrwxrwx 1 vscode vscode  1848 May  1 00:35 KSC-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   164 May  1 00:35 KSC-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  1831 May  1 00:35 KSC-H.bcmap
+-rwxrwxrwx 1 vscode vscode 16791 May  1 00:35 KSC-Johab-H.bcmap
+-rwxrwxrwx 1 vscode vscode   166 May  1 00:35 KSC-Johab-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2787 May  1 00:35 KSCms-UHC-H.bcmap
+-rwxrwxrwx 1 vscode vscode  2789 May  1 00:35 KSCms-UHC-HW-H.bcmap
+-rwxrwxrwx 1 vscode vscode   169 May  1 00:35 KSCms-UHC-HW-V.bcmap
+-rwxrwxrwx 1 vscode vscode   166 May  1 00:35 KSCms-UHC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2024 May  1 00:35 KSCpc-EUC-H.bcmap
+-rwxrwxrwx 1 vscode vscode   166 May  1 00:35 KSCpc-EUC-V.bcmap
+-rwxrwxrwx 1 vscode vscode   160 May  1 00:35 KSC-V.bcmap
+-rwxrwxrwx 1 vscode vscode  2080 May  1 00:35 LICENSE
+-rwxrwxrwx 1 vscode vscode  2765 May  1 00:35 NWP-H.bcmap
+-rwxrwxrwx 1 vscode vscode   252 May  1 00:35 NWP-V.bcmap
+-rwxrwxrwx 1 vscode vscode   534 May  1 00:35 RKSJ-H.bcmap
+-rwxrwxrwx 1 vscode vscode   170 May  1 00:35 RKSJ-V.bcmap
+-rwxrwxrwx 1 vscode vscode    96 May  1 00:35 Roman.bcmap
+-rwxrwxrwx 1 vscode vscode 48280 May  1 00:35 UniCNS-UCS2-H.bcmap
+-rwxrwxrwx 1 vscode vscode   156 May  1 00:35 UniCNS-UCS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode 50419 May  1 00:35 UniCNS-UTF16-H.bcmap
+-rwxrwxrwx 1 vscode vscode   156 May  1 00:35 UniCNS-UTF16-V.bcmap
+-rwxrwxrwx 1 vscode vscode 52679 May  1 00:35 UniCNS-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   160 May  1 00:35 UniCNS-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 53629 May  1 00:35 UniCNS-UTF8-H.bcmap
+-rwxrwxrwx 1 vscode vscode   157 May  1 00:35 UniCNS-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode 43366 May  1 00:35 UniGB-UCS2-H.bcmap
+-rwxrwxrwx 1 vscode vscode   193 May  1 00:35 UniGB-UCS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode 44086 May  1 00:35 UniGB-UTF16-H.bcmap
+-rwxrwxrwx 1 vscode vscode   178 May  1 00:35 UniGB-UTF16-V.bcmap
+-rwxrwxrwx 1 vscode vscode 45738 May  1 00:35 UniGB-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   182 May  1 00:35 UniGB-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 46837 May  1 00:35 UniGB-UTF8-H.bcmap
+-rwxrwxrwx 1 vscode vscode   181 May  1 00:35 UniGB-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode 39534 May  1 00:35 UniJIS2004-UTF16-H.bcmap
+-rwxrwxrwx 1 vscode vscode   647 May  1 00:35 UniJIS2004-UTF16-V.bcmap
+-rwxrwxrwx 1 vscode vscode 40630 May  1 00:35 UniJIS2004-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   681 May  1 00:35 UniJIS2004-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 41779 May  1 00:35 UniJIS2004-UTF8-H.bcmap
+-rwxrwxrwx 1 vscode vscode   682 May  1 00:35 UniJIS2004-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode   705 May  1 00:35 UniJISPro-UCS2-HW-V.bcmap
+-rwxrwxrwx 1 vscode vscode   689 May  1 00:35 UniJISPro-UCS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode   726 May  1 00:35 UniJISPro-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode 25439 May  1 00:35 UniJIS-UCS2-H.bcmap
+-rwxrwxrwx 1 vscode vscode   119 May  1 00:35 UniJIS-UCS2-HW-H.bcmap
+-rwxrwxrwx 1 vscode vscode   680 May  1 00:35 UniJIS-UCS2-HW-V.bcmap
+-rwxrwxrwx 1 vscode vscode   664 May  1 00:35 UniJIS-UCS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode 39443 May  1 00:35 UniJIS-UTF16-H.bcmap
+-rwxrwxrwx 1 vscode vscode   643 May  1 00:35 UniJIS-UTF16-V.bcmap
+-rwxrwxrwx 1 vscode vscode 40539 May  1 00:35 UniJIS-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   677 May  1 00:35 UniJIS-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 41695 May  1 00:35 UniJIS-UTF8-H.bcmap
+-rwxrwxrwx 1 vscode vscode   678 May  1 00:35 UniJIS-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode 40608 May  1 00:35 UniJISX02132004-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   688 May  1 00:35 UniJISX02132004-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 40517 May  1 00:35 UniJISX0213-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   684 May  1 00:35 UniJISX0213-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 25783 May  1 00:35 UniKS-UCS2-H.bcmap
+-rwxrwxrwx 1 vscode vscode   178 May  1 00:35 UniKS-UCS2-V.bcmap
+-rwxrwxrwx 1 vscode vscode 26327 May  1 00:35 UniKS-UTF16-H.bcmap
+-rwxrwxrwx 1 vscode vscode   164 May  1 00:35 UniKS-UTF16-V.bcmap
+-rwxrwxrwx 1 vscode vscode 26451 May  1 00:35 UniKS-UTF32-H.bcmap
+-rwxrwxrwx 1 vscode vscode   168 May  1 00:35 UniKS-UTF32-V.bcmap
+-rwxrwxrwx 1 vscode vscode 27790 May  1 00:35 UniKS-UTF8-H.bcmap
+-rwxrwxrwx 1 vscode vscode   169 May  1 00:35 UniKS-UTF8-V.bcmap
+-rwxrwxrwx 1 vscode vscode   166 May  1 00:35 V.bcmap
+-rwxrwxrwx 1 vscode vscode   179 May  1 00:35 WP-Symbol.bcmap
+
+./backend/node_modules/pdf-parse/lib/pdf.js/v1.10.88/web/images:
+total 72
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 .
+drwxrwxrwx 1 vscode vscode  4096 May  1 00:35 ..
+-rwxrwxrwx 1 vscode vscode   415 May  1 00:35 annotation-check.svg
+-rwxrwxrwx 1 vscode vscode   883 May  1 00:35 annotation-comment.svg
+-rwxrwxrwx 1 vscode vscode  2168 May  1 00:35 annotation-help.svg
+-rwxrwxrwx 1 vscode vscode   408 May  1 00:35 annotation-insert.svg
+-rwxrwxrwx 1 vscode vscode  1452 May  1 00:35 annotation-key.svg
+-rwxrwxrwx 1 vscode vscode   426 May  1 00:35 annotation-newparagraph.svg
+-rwxrwxrwx 1 vscode vscode   158 May  1 00:35 annotation-noicon.svg
+-rwxrwxrwx 1 vscode vscode  1041 May  1 00:35 annotation-note.svg
+-rwxrwxrwx 1 vscode vscode  1143 May  1 00:35 annotation-paragraph.svg
+-rwxrwxrwx 1 vscode vscode   296 May  1 00:35 findbarButton-next@2x.png
+-rwxrwxrwx 1 vscode vscode   193 May  1 00:35 findbarButton-next.png
+-rwxrwxrwx 1 vscode vscode   304 May  1 00:35 findbarButton-next-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   199 May  1 00:35 findbarButton-next-rtl.png
+-rwxrwxrwx 1 vscode vscode   304 May  1 00:35 findbarButton-previous@2x.png
+-rwxrwxrwx 1 vscode vscode   199 May  1 00:35 findbarButton-previous.png
+-rwxrwxrwx 1 vscode vscode   296 May  1 00:35 findbarButton-previous-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   193 May  1 00:35 findbarButton-previous-rtl.png
+-rwxrwxrwx 1 vscode vscode   326 May  1 00:35 grabbing.cur
+-rwxrwxrwx 1 vscode vscode   326 May  1 00:35 grab.cur
+-rwxrwxrwx 1 vscode vscode  2545 May  1 00:35 loading-icon.gif
+-rwxrwxrwx 1 vscode vscode 16131 May  1 00:35 loading-small@2x.png
+-rwxrwxrwx 1 vscode vscode  7402 May  1 00:35 loading-small.png
+-rwxrwxrwx 1 vscode vscode   933 May  1 00:35 secondaryToolbarButton-documentProperties@2x.png
+-rwxrwxrwx 1 vscode vscode   403 May  1 00:35 secondaryToolbarButton-documentProperties.png
+-rwxrwxrwx 1 vscode vscode   266 May  1 00:35 secondaryToolbarButton-firstPage@2x.png
+-rwxrwxrwx 1 vscode vscode   179 May  1 00:35 secondaryToolbarButton-firstPage.png
+-rwxrwxrwx 1 vscode vscode   583 May  1 00:35 secondaryToolbarButton-handTool@2x.png
+-rwxrwxrwx 1 vscode vscode   301 May  1 00:35 secondaryToolbarButton-handTool.png
+-rwxrwxrwx 1 vscode vscode   276 May  1 00:35 secondaryToolbarButton-lastPage@2x.png
+-rwxrwxrwx 1 vscode vscode   175 May  1 00:35 secondaryToolbarButton-lastPage.png
+-rwxrwxrwx 1 vscode vscode   731 May  1 00:35 secondaryToolbarButton-rotateCcw@2x.png
+-rwxrwxrwx 1 vscode vscode   360 May  1 00:35 secondaryToolbarButton-rotateCcw.png
+-rwxrwxrwx 1 vscode vscode   714 May  1 00:35 secondaryToolbarButton-rotateCw@2x.png
+-rwxrwxrwx 1 vscode vscode   359 May  1 00:35 secondaryToolbarButton-rotateCw.png
+-rwxrwxrwx 1 vscode vscode  1067 May  1 00:35 secondaryToolbarButton-selectTool@2x.png
+-rwxrwxrwx 1 vscode vscode   461 May  1 00:35 secondaryToolbarButton-selectTool.png
+-rwxrwxrwx 1 vscode vscode   290 May  1 00:35 shadow.png
+-rwxrwxrwx 1 vscode vscode  2417 May  1 00:35 texture.png
+-rwxrwxrwx 1 vscode vscode   260 May  1 00:35 toolbarButton-bookmark@2x.png
+-rwxrwxrwx 1 vscode vscode   174 May  1 00:35 toolbarButton-bookmark.png
+-rwxrwxrwx 1 vscode vscode   425 May  1 00:35 toolbarButton-download@2x.png
+-rwxrwxrwx 1 vscode vscode   259 May  1 00:35 toolbarButton-download.png
+-rwxrwxrwx 1 vscode vscode   152 May  1 00:35 toolbarButton-menuArrows@2x.png
+-rwxrwxrwx 1 vscode vscode   107 May  1 00:35 toolbarButton-menuArrows.png
+-rwxrwxrwx 1 vscode vscode   550 May  1 00:35 toolbarButton-openFile@2x.png
+-rwxrwxrwx 1 vscode vscode   295 May  1 00:35 toolbarButton-openFile.png
+-rwxrwxrwx 1 vscode vscode   396 May  1 00:35 toolbarButton-pageDown@2x.png
+-rwxrwxrwx 1 vscode vscode   238 May  1 00:35 toolbarButton-pageDown.png
+-rwxrwxrwx 1 vscode vscode   398 May  1 00:35 toolbarButton-pageDown-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   242 May  1 00:35 toolbarButton-pageDown-rtl.png
+-rwxrwxrwx 1 vscode vscode   403 May  1 00:35 toolbarButton-pageUp@2x.png
+-rwxrwxrwx 1 vscode vscode   246 May  1 00:35 toolbarButton-pageUp.png
+-rwxrwxrwx 1 vscode vscode   405 May  1 00:35 toolbarButton-pageUp-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   245 May  1 00:35 toolbarButton-pageUp-rtl.png
+-rwxrwxrwx 1 vscode vscode   586 May  1 00:35 toolbarButton-presentationMode@2x.png
+-rwxrwxrwx 1 vscode vscode   321 May  1 00:35 toolbarButton-presentationMode.png
+-rwxrwxrwx 1 vscode vscode   464 May  1 00:35 toolbarButton-print@2x.png
+-rwxrwxrwx 1 vscode vscode   257 May  1 00:35 toolbarButton-print.png
+-rwxrwxrwx 1 vscode vscode   653 May  1 00:35 toolbarButton-search@2x.png
+-rwxrwxrwx 1 vscode vscode   309 May  1 00:35 toolbarButton-search.png
+-rwxrwxrwx 1 vscode vscode   458 May  1 00:35 toolbarButton-secondaryToolbarToggle@2x.png
+-rwxrwxrwx 1 vscode vscode   243 May  1 00:35 toolbarButton-secondaryToolbarToggle.png
+-rwxrwxrwx 1 vscode vscode   456 May  1 00:35 toolbarButton-secondaryToolbarToggle-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   246 May  1 00:35 toolbarButton-secondaryToolbarToggle-rtl.png
+-rwxrwxrwx 1 vscode vscode   331 May  1 00:35 toolbarButton-sidebarToggle@2x.png
+-rwxrwxrwx 1 vscode vscode   225 May  1 00:35 toolbarButton-sidebarToggle.png
+-rwxrwxrwx 1 vscode vscode   344 May  1 00:35 toolbarButton-sidebarToggle-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   225 May  1 00:35 toolbarButton-sidebarToggle-rtl.png
+-rwxrwxrwx 1 vscode vscode   859 May  1 00:35 toolbarButton-viewAttachments@2x.png
+-rwxrwxrwx 1 vscode vscode   384 May  1 00:35 toolbarButton-viewAttachments.png
+-rwxrwxrwx 1 vscode vscode   331 May  1 00:35 toolbarButton-viewOutline@2x.png
+-rwxrwxrwx 1 vscode vscode   178 May  1 00:35 toolbarButton-viewOutline.png
+-rwxrwxrwx 1 vscode vscode   394 May  1 00:35 toolbarButton-viewOutline-rtl@2x.png
+-rwxrwxrwx 1 vscode vscode   177 May  1 00:35 toolbarButton-viewOutline-rtl.png
+-rwxrwxrwx 1 vscode vscode   219 May  1 00:35 toolbarButton-viewThumbnail@2x.png
+-rwxrwxrwx 1 vscode vscode   185 May  1 00:35 toolbarButton-viewThumbnail.png
+-rwxrwxrwx 1 vscode vscode   160 May  1 00:35 toolbarButton-zoomIn@2x.png
+-rwxrwxrwx 1 vscode vscode   136 May  1 00:35 toolbarButton-zoomIn.png
+-rwxr

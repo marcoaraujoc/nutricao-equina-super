@@ -14,10 +14,10 @@ import VetDashboard from './VetDashboard';
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
-const OB_KEY   = 's2vet_ob';
-const getOB    = () => localStorage.getItem(OB_KEY);
-const setOB    = (v: string) => localStorage.setItem(OB_KEY, v);
-const clearOB  = () => localStorage.removeItem(OB_KEY);
+const OB_KEY  = 's2vet_ob';
+const getOB   = () => localStorage.getItem(OB_KEY);
+const setOB   = (v: string) => localStorage.setItem(OB_KEY, v);
+const clearOB = () => localStorage.removeItem(OB_KEY);
 
 type OBPhase = 'greeting' | 'need_animal' | 'need_personal' | 'welcome' | null;
 
@@ -83,10 +83,10 @@ const formatarDataBR = (data: string | Date | null | undefined): string => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const AnimalDashboard = ({ animal, onNavigate, onBack }: { animal: any; onNavigate: (p: string) => void; onBack?: () => void }) => {
   const atalhos = [
-    { label: 'Dieta',      icon: Utensils,     path: `/dieta/${animal.id}`                  },
-    { label: 'Exames',     icon: FlaskConical,  path: `/exames/${animal.id}`                 },
-    { label: 'Relatório',  icon: FileText,      path: `/relatorio-nutricional/${animal.id}`  },
-    { label: 'Prontuário', icon: ClipboardList, path: `/animal/${animal.id}`                 },
+    { label: 'Dieta',      icon: Utensils,     path: `/dieta/${animal.id}`                 },
+    { label: 'Exames',     icon: FlaskConical,  path: `/exames/${animal.id}`                },
+    { label: 'Relatório',  icon: FileText,      path: `/relatorio-nutricional/${animal.id}` },
+    { label: 'Prontuário', icon: ClipboardList, path: `/animal/${animal.id}`                },
   ];
 
   return (
@@ -204,7 +204,7 @@ const NeedPersonalScreen = ({ animalNome, onGo }: { animalNome: string; onGo: ()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const WelcomeScreen = ({ user, onEnter }: { user: any; onEnter: () => void }) => {
   const { text, Icon, color } = getSaudacao();
-  const features = getRoleFeatures(user?.role);
+  const features  = getRoleFeatures(user?.role);
   const firstName = user?.fullName?.split(' ')[0] ?? 'você';
   return (
     <div className="flex items-center justify-center min-h-[70vh] px-4">
@@ -236,36 +236,36 @@ const Dashboard = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate                              = useNavigate();
 
-  const isVet = user?.role?.toUpperCase() === 'VETERINARIO';
+  // ── FIX: checar role E userType — JWT pode ter role='USER' para vets ─────
+  const role          = (user?.role      ?? '').toUpperCase();
+  const userTypeUpper = (user?.userType  ?? '').toUpperCase();
+  const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [animais,          setAnimais]          = useState<any[]>([]);
-  const [loading,          setLoading]          = useState(true);
-  const [obPhase,          setObPhase]          = useState<OBPhase>(null);
+  const [animais,           setAnimais]           = useState<any[]>([]);
+  const [loading,           setLoading]           = useState(true);
+  const [obPhase,           setObPhase]           = useState<OBPhase>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [animalSelecionado,setAnimalSelecionado]= useState<any | null>(null);
+  const [animalSelecionado, setAnimalSelecionado] = useState<any | null>(null);
 
   const loadAnimais = useCallback(async () => {
     try {
       const res   = await api.get('/animais');
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimais(lista);
-const ob = getOB();
-if (!ob) {
-  // Verifica se é usuário existente com perfil já completo
-  try {
-    const perfilRes = await api.get('/users/me');
-    const perfil    = perfilRes.data;
-    const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
 
-    if (perfilCompleto && lista.length > 0) {
-      // Usuário existente — pula onboarding direto para dashboard
-      setObPhase(null);
+      const ob = getOB();
+      if (!ob) {
+        try {
+          const perfilRes      = await api.get('/users/me');
+          const perfil         = perfilRes.data;
+          const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
+
+          if (perfilCompleto && lista.length > 0) {
+            setObPhase(null);
           } else if (perfilCompleto && perfil?.userType === 'VETERINARIO') {
-            // Vet com perfil completo — pula onboarding
             setObPhase(null);
           } else {
-            // Usuário novo — inicia onboarding
             setObPhase('greeting');
           }
         } catch {
@@ -278,13 +278,20 @@ if (!ob) {
       } else {
         setObPhase(null);
       }
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+    } catch (err) {
+      console.error('[Dashboard.loadAnimais]', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { if (!isVet) loadAnimais(); else setLoading(false); }, [isVet, loadAnimais]);
+  useEffect(() => {
+    // Vets vão direto ao VetDashboard — não carregam aqui
+    if (!isVet) loadAnimais();
+    else        setLoading(false);
+  }, [isVet, loadAnimais]);
 
-  // ── Veterinário: delegar totalmente ao VetDashboard ──────────────────────
+  // ── Veterinário → delega totalmente ao VetDashboard ──────────────────────
   if (isVet) return <VetDashboard />;
 
   // ── Loading ───────────────────────────────────────────────────────────────
@@ -310,7 +317,7 @@ if (!ob) {
     <WelcomeScreen user={user} onEnter={() => { clearOB(); setObPhase(null); }} />
   );
 
-  // ── Dashboard normal ──────────────────────────────────────────────────────
+  // ── Estado vazio ──────────────────────────────────────────────────────────
   if (animais.length === 0) return (
     <div className="max-w-2xl mx-auto text-center py-20">
       <div className="w-20 h-20 bg-gray-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
@@ -325,8 +332,10 @@ if (!ob) {
     </div>
   );
 
+  // ── Animal único → mostra direto ──────────────────────────────────────────
   if (animais.length === 1) return <AnimalDashboard animal={animais[0]} onNavigate={navigate} />;
 
+  // ── Animal selecionado na lista ───────────────────────────────────────────
   if (animalSelecionado) return (
     <AnimalDashboard
       animal={animalSelecionado}
@@ -334,13 +343,17 @@ if (!ob) {
       onBack={() => setAnimalSelecionado(null)} />
   );
 
+  // ── Lista de animais ──────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Meus Animais</h1>
       <div className="space-y-4">
         {animais.map(animal => (
           <button key={animal.id}
-            onClick={() => { setSelectedAnimal({ ...animal, photoUrl: animal.photoUrl ?? undefined }); setAnimalSelecionado(animal); }}
+            onClick={() => {
+              setSelectedAnimal({ ...animal, photoUrl: animal.photoUrl ?? undefined });
+              setAnimalSelecionado(animal);
+            }}
             className={`w-full flex items-center bg-white rounded-3xl shadow-sm border transition-all p-4 sm:p-6 text-left ${
               selectedAnimal?.id === animal.id ? 'border-emerald-500 shadow-md' : 'border-gray-100 hover:shadow-md'
             }`}>
@@ -356,10 +369,10 @@ if (!ob) {
             </div>
             <div className="hidden sm:grid grid-cols-4 gap-8 text-center flex-shrink-0 ml-6">
               {[
-                { l: 'Espécie',    v: animal.especie?.nome || '-' },
-                { l: 'Sexo',       v: animal.sexo || '-'          },
+                { l: 'Espécie',    v: animal.especie?.nome || '-'   },
+                { l: 'Sexo',       v: animal.sexo || '-'            },
                 { l: 'Nascimento', v: formatarDataBR(animal.dataNascimento) },
-                { l: 'Idade',      v: idadeDisplay(animal)         },
+                { l: 'Idade',      v: idadeDisplay(animal)          },
               ].map(({ l, v }) => (
                 <div key={l}>
                   <span className="block text-xs uppercase text-gray-500 tracking-widest">{l}</span>

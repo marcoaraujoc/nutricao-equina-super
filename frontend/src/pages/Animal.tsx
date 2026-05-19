@@ -5,7 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Calendar, Camera, UserCheck, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Calendar, Camera, UserCheck, AlertCircle, RefreshCw } from 'lucide-react';
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
 const NRC_CATEGORIAS: Record<string, string[]> = {
@@ -21,8 +21,6 @@ const NRC_CATEGORIAS: Record<string, string[]> = {
     '24 Meses Exercício Pesado','24 Meses Exercício Muito Pesado',
   ],
 };
-
-const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FormData {
@@ -41,6 +39,13 @@ interface FormProprietario {
 interface Vet {
   vetUserId: number; nome: string; crmv: string | null;
   email: string; especies: { id: number; nome: string }[];
+}
+
+// Solicitação retornada pelo ANIMAL_INCLUDE (inclui ACEITO e PENDENTE)
+interface Solicitacao {
+  status:    string;
+  vetUserId: number;
+  veterinario?: { id: number; fullName: string; email: string } | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -83,15 +88,20 @@ const Animal = () => {
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
   const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
 
-  const [loading,       setLoading]       = useState(true);
-  const [submitting,    setSubmitting]    = useState(false);
-  const [photoPreview,  setPhotoPreview]  = useState<string | null>(null);
-  const [photoFile,     setPhotoFile]     = useState<File | null>(null);
-  const [especies,      setEspecies]      = useState<{ id: number; nome: string }[]>([]);
-  const [todasRacas,    setTodasRacas]    = useState<{ id: number; nome: string; especieId: number }[]>([]);
-  const [racasFiltradas,setRacasFiltradas]= useState<{ id: number; nome: string }[]>([]);
-  const [vets,          setVets]          = useState<Vet[]>([]);
-  const [vetsFiltrados, setVetsFiltrados] = useState<Vet[]>([]);
+  const [loading,        setLoading]        = useState(true);
+  const [submitting,     setSubmitting]     = useState(false);
+  const [photoPreview,   setPhotoPreview]   = useState<string | null>(null);
+  const [photoFile,      setPhotoFile]      = useState<File | null>(null);
+  const [especies,       setEspecies]       = useState<{ id: number; nome: string }[]>([]);
+  const [todasRacas,     setTodasRacas]     = useState<{ id: number; nome: string; especieId: number }[]>([]);
+  const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
+  const [vets,           setVets]           = useState<Vet[]>([]);
+  const [vetsFiltrados,  setVetsFiltrados]  = useState<Vet[]>([]);
+
+  // Vet original carregado no edit mode — detecta se houve mudança
+  const [vetOriginalId, setVetOriginalId] = useState<number | null>(null);
+  // Status da solicitação carregada (PENDENTE ou ACEITO) — exibe badge correto
+  const [vetStatusAtual, setVetStatusAtual] = useState<string | null>(null);
 
   // Formulário principal
   const [formData, setFormData] = useState<FormData>({
@@ -124,6 +134,11 @@ const Animal = () => {
     [formData.categoriaAnimal, formData.dataNascimento, formData.idadeAnos],
   );
   const temIdadeOuData = !!formData.dataNascimento || !!formData.idadeAnos;
+
+  // Detecta se o vet foi alterado no edit mode (para exibir aviso)
+  const vetFoiAlterado = isEditMode
+    && formData.veterinarioUserId !== null
+    && formData.veterinarioUserId !== vetOriginalId;
 
   // ─── Efeitos de limpeza ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -180,21 +195,33 @@ const Animal = () => {
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const a = animalRes.data?.dados ?? animalRes.data;
-          const solRes = await api.get(`/veterinarios/solicitacoes?animalId=${id}&status=ACEITO`).catch(() => null);
-          const vetAceito = solRes?.data?.dados?.[0];
+
+          // ANIMAL_INCLUDE agora retorna ACEITO e PENDENTE — usar diretamente
+          // sem a segunda chamada separada a /veterinarios/solicitacoes
+          const solicitacoes: Solicitacao[] = a.solicitacoes ?? [];
+          const solAceita   = solicitacoes.find(s => s.status === 'ACEITO');
+          const solPendente = solicitacoes.find(s => s.status === 'PENDENTE');
+          const solAtual    = solAceita ?? solPendente ?? null;
+
+          const vetCarregadoId = solAtual?.vetUserId ?? null;
+
+          setVetOriginalId(vetCarregadoId);
+          setVetStatusAtual(solAtual?.status ?? null);
 
           setFormData({
-            nome: a.nome ?? '', especieId: a.especieId ?? 0, racaId: a.racaId ?? null,
-            peso: a.peso?.toString() ?? '',
-            dataNascimento: a.dataNascimento ? a.dataNascimento.split('T')[0] : '',
-            idadeAnos: a.idadeAnos ? String(a.idadeAnos) : '',
-            sexo: a.sexo ?? '', categoriaAnimal: a.categoriaAnimal ?? '',
-            tipoExercicio: a.tipoExercicio ?? '',
-            veterinarioUserId: vetAceito?.vetUserId ?? null,
+            nome:            a.nome            ?? '',
+            especieId:       a.especieId        ?? 0,
+            racaId:          a.racaId           ?? null,
+            peso:            a.peso?.toString() ?? '',
+            dataNascimento:  a.dataNascimento   ? a.dataNascimento.split('T')[0] : '',
+            idadeAnos:       a.idadeAnos        ? String(a.idadeAnos) : '',
+            sexo:            a.sexo             ?? '',
+            categoriaAnimal: a.categoriaAnimal  ?? '',
+            tipoExercicio:   a.tipoExercicio    ?? '',
+            veterinarioUserId: vetCarregadoId,
           });
           if (a.photoUrl) setPhotoPreview(a.photoUrl);
 
-          // Preenche dados do proprietário no modo edição
           if (a.user) {
             setFormProp({
               nomeCompleto: a.user.fullName ?? '',
@@ -236,7 +263,7 @@ const Animal = () => {
       if (obj.getFullYear() !== y || obj.getMonth() !== m - 1 || obj.getDate() !== d) {
         toast.error('Data inválida.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
       }
-      const hoje = new Date(); hoje.setHours(0,0,0,0);
+      const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
       if (obj > hoje) {
         toast.error('A data de nascimento não pode ser futura.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
       }
@@ -247,113 +274,136 @@ const Animal = () => {
   };
 
   // ─── Submit ───────────────────────────────────────────────────────────────────
-const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setSubmitting(true);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
 
-  // Validações do animal
-  if (!formData.nome?.trim())                          { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
-  if (!formData.racaId)                                { toast.error('Raça é obrigatória');            setSubmitting(false); return; }
-  if (!formData.dataNascimento && !formData.idadeAnos) { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
-  if (formData.peso && Number(formData.peso) <= 0)     { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
-  if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { toast.error('A idade deve ser positiva'); setSubmitting(false); return; }
-  if (isEquino && (!formData.categoriaAnimal || !formData.tipoExercicio)) {
-    toast.error('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
-  }
+    // Validações do animal
+    if (!formData.nome?.trim())                           { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.racaId)                                 { toast.error('Raça é obrigatória');           setSubmitting(false); return; }
+    if (!formData.dataNascimento && !formData.idadeAnos)  { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
+    if (formData.peso && Number(formData.peso) <= 0)      { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
+    if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { toast.error('A idade deve ser positiva'); setSubmitting(false); return; }
+    if (isEquino && (!formData.categoriaAnimal || !formData.tipoExercicio)) {
+      toast.error('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
+    }
 
-  // Validações do proprietário (apenas vet, novo cadastro)
-  if (isVet && !isEditMode) {
-    if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
-    if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
-  }
+    // Validações do proprietário (apenas vet, novo cadastro)
+    if (isVet && !isEditMode) {
+      if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
+      if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
+    }
 
-  try {
-    const vetSelecionado = formData.veterinarioUserId
-      ? vets.find(v => v.vetUserId === formData.veterinarioUserId)
-      : null;
+    try {
+      const vetSelecionado = formData.veterinarioUserId
+        ? vets.find(v => v.vetUserId === formData.veterinarioUserId)
+        : null;
 
-    // Payload único — backend resolve a criação do proprietário internamente
-    const payload: Record<string, unknown> = {
-      nome:               formData.nome.trim(),
-      especieId:          formData.especieId,
-      racaId:             formData.racaId,
-      peso:               parseFloat(formData.peso) || 0,
-      dataNascimento:     formData.dataNascimento || null,
-      idadeAnos:          formData.dataNascimento ? null : (Number(formData.idadeAnos) || null),
-      sexo:               formData.sexo,
-      categoriaAnimal:    isEquino ? formData.categoriaAnimal : null,
-      tipoExercicio:      isEquino ? formData.tipoExercicio   : null,
-      veterinarioNome:    vetSelecionado?.nome ?? null,
-      veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
-      // Vet envia dados do proprietário — backend cria/busca o usuário
-      ...(isVet && !isEditMode && {
-        proprietario: {
-          fullName: formProp.nomeCompleto.trim(),
-          email:    formProp.email.trim(),
-          phone:    formProp.telefone.trim() || null,
-        },
-      }),
-    };
+      // ── Payload base ────────────────────────────────────────────────────────
+      // veterinarioUserId é enviado sempre — backend detecta mudança internamente
+      // e cria a solicitação PENDENTE + dispara email quando necessário
+      const payload: Record<string, unknown> = {
+        nome:               formData.nome.trim(),
+        especieId:          formData.especieId,
+        racaId:             formData.racaId,
+        peso:               parseFloat(formData.peso) || 0,
+        dataNascimento:     formData.dataNascimento || null,
+        idadeAnos:          formData.dataNascimento ? null : (Number(formData.idadeAnos) || null),
+        sexo:               formData.sexo,
+        categoriaAnimal:    isEquino ? formData.categoriaAnimal : null,
+        tipoExercicio:      isEquino ? formData.tipoExercicio   : null,
+        veterinarioNome:    vetSelecionado?.nome ?? null,
+        veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
+        // ↓ CAMPO CRÍTICO: enviado em criação E edição — backend processa a mudança
+        veterinarioUserId:  formData.veterinarioUserId ?? null,
+        // Vet envia dados do proprietário apenas na criação
+        ...(isVet && !isEditMode && {
+          proprietario: {
+            fullName: formProp.nomeCompleto.trim(),
+            email:    formProp.email.trim(),
+            phone:    formProp.telefone.trim() || null,
+          },
+        }),
+      };
 
-    let animalId: number;
+      let animalId: number;
 
-    if (photoFile) {
-      const fd = new FormData();
-      Object.entries(payload).forEach(([k, v]) => {
-        if (v != null && typeof v !== 'object') fd.append(k, String(v));
-      });
-      // Proprietário vai como JSON separado quando há foto
-      if (isVet && !isEditMode) {
-        fd.append('proprietario', JSON.stringify({
-          fullName: formProp.nomeCompleto.trim(),
-          email:    formProp.email.trim(),
-          phone:    formProp.telefone.trim() || null,
-        }));
+      // ── Com foto (multipart) ─────────────────────────────────────────────
+      if (photoFile) {
+        const fd = new FormData();
+
+        // Campos primitivos
+        Object.entries(payload).forEach(([k, v]) => {
+          if (v != null && typeof v !== 'object') fd.append(k, String(v));
+        });
+
+        // veterinarioUserId — garantir que vai mesmo sendo número
+        if (formData.veterinarioUserId != null) {
+          fd.append('veterinarioUserId', String(formData.veterinarioUserId));
+        }
+
+        // Proprietário como JSON separado (multipart não aceita objetos aninhados)
+        if (isVet && !isEditMode) {
+          fd.append('proprietario', JSON.stringify({
+            fullName: formProp.nomeCompleto.trim(),
+            email:    formProp.email.trim(),
+            phone:    formProp.telefone.trim() || null,
+          }));
+        }
+
+        fd.append('foto', photoFile);
+        const cfg = { headers: { 'Content-Type': 'multipart/form-data' } };
+
+        if (isEditMode) {
+          await api.put(`/animais/${id}`, fd, cfg);
+          animalId = Number(id);
+        } else {
+          const r  = await api.post('/animais', fd, cfg);
+          animalId = r.data.dados.id;
+        }
+
+      // ── Sem foto (JSON) ──────────────────────────────────────────────────
+      } else {
+        if (isEditMode) {
+          await api.put(`/animais/${id}`, payload);
+          animalId = Number(id);
+        } else {
+          const r  = await api.post('/animais', payload);
+          animalId = r.data.dados.id;
+        }
       }
-      fd.append('foto', photoFile);
-      const cfg = { headers: { 'Content-Type': 'multipart/form-data' } };
-      if (isEditMode) { await api.put(`/animais/${id}`, fd, cfg); animalId = Number(id); }
-      else            { const r = await api.post('/animais', fd, cfg); animalId = r.data.dados.id; }
-    } else {
-      if (isEditMode) { await api.put(`/animais/${id}`, payload); animalId = Number(id); }
-      else            { const r = await api.post('/animais', payload); animalId = r.data.dados.id; }
-    }
 
-    // Vincular vet ao animal automaticamente (status ACEITO)
-    if (isVet && !isEditMode && animalId) {
-      await api.post('/animais/vincular-vet', {
-        animalId,
-        vetUserId: user?.id,
-      }).catch(err => console.warn('Vínculo vet-animal:', err));
-    }
+      // Vet criando animal novo → vínculo direto ACEITO (backend também faz, mas
+      // mantemos como upsert de segurança para garantir o registro imediato)
+      if (isVet && !isEditMode && animalId) {
+        await api.post('/animais/vincular-vet', {
+          animalId,
+          vetUserId: user?.id,
+        }).catch(err => console.warn('[vincularVet]', err));
+      }
 
-    // Proprietário selecionou vet por combo → solicitação normal
-    if (!isVet && formData.veterinarioUserId && !isEditMode) {
-      await api.post('/veterinarios/solicitacoes', {
-        animalId,
-        vetUserId: formData.veterinarioUserId,
-        mensagem:  `Solicitação de vínculo para ${formData.nome}.`,
-      }).catch(() => toast.error('Animal salvo, mas houve erro ao solicitar vínculo'));
-    }
+      // Nota: a solicitação de vínculo (PENDENTE + email) é criada pelo BACKEND
+      // dentro de criar() e atualizar() — não é mais responsabilidade do frontend.
 
-    toast.success(isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!');
-    await refreshSelectedAnimal();
+      toast.success(isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!');
+      await refreshSelectedAnimal();
 
-    if (!isEditMode && localStorage.getItem('s2vet_ob') === 'a') {
-      localStorage.setItem('s2vet_ob', 'd');
-      navigate('/');
-    } else if (isVet) {
-      navigate('/animais-vet');
-    } else {
-      navigate('/meus-animais');
+      if (!isEditMode && localStorage.getItem('s2vet_ob') === 'a') {
+        localStorage.setItem('s2vet_ob', 'd');
+        navigate('/');
+      } else if (isVet) {
+        navigate('/animais-vet');
+      } else {
+        navigate('/meus-animais');
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })
+        .response?.data?.mensagem ?? 'Erro ao salvar animal';
+      toast.error(msg);
+    } finally {
+      setSubmitting(false);
     }
-  } catch (err: unknown) {
-    const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao salvar animal';
-    toast.error(msg);
-  } finally {
-    setSubmitting(false);
-  }
-};
+  };
 
   // ─── Render ───────────────────────────────────────────────────────────────────
   if (loading) return (
@@ -411,12 +461,13 @@ const handleSubmit = async (e: React.FormEvent) => {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Nome Completo <span className="text-red-500">*</span>
+                      Nome Completo {!isEditMode && <span className="text-red-500">*</span>}
                     </label>
                     <input type="text" value={formProp.nomeCompleto}
                       onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
                       placeholder="Nome do proprietário"
-                      className={inputClass} />
+                      disabled={isEditMode}
+                      className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -424,22 +475,26 @@ const handleSubmit = async (e: React.FormEvent) => {
                       <input type="tel" value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: e.target.value }))}
                         placeholder="(00) 00000-0000"
-                        className={inputClass} />
+                        disabled={isEditMode}
+                        className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        E-mail <span className="text-red-500">*</span>
+                        E-mail {!isEditMode && <span className="text-red-500">*</span>}
                       </label>
                       <input type="email" value={formProp.email}
                         onChange={e => setFormProp(p => ({ ...p, email: e.target.value }))}
                         placeholder="email@exemplo.com"
-                        className={inputClass} />
+                        disabled={isEditMode}
+                        className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
                     </div>
                   </div>
-                  <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
-                    <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                    <span>Senha inicial: <strong>Inicial#001</strong>. Se o e-mail já estiver cadastrado, o animal será vinculado ao usuário existente.</span>
-                  </div>
+                  {!isEditMode && (
+                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
+                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>Senha inicial: <strong>Inicial#001</strong>. Se o e-mail já estiver cadastrado, o animal será vinculado ao usuário existente.</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -484,7 +539,8 @@ const handleSubmit = async (e: React.FormEvent) => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Raça <span className="text-red-500">*</span>
                 </label>
-                <select value={formData.racaId || ''} onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
+                <select value={formData.racaId || ''}
+                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
                   className={inputClass}>
                   <option value="">Selecione</option>
                   {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
@@ -528,7 +584,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                       onChange={e => {
                         if (!e.target.value) return;
                         const d = new Date(e.target.value + 'T00:00');
-                        const h = new Date(); h.setHours(0,0,0,0);
+                        const h = new Date(); h.setHours(0, 0, 0, 0);
                         if (d > h) { toast.error('Data futura não permitida.'); return; }
                         setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
                       }}
@@ -579,12 +635,12 @@ const handleSubmit = async (e: React.FormEvent) => {
               </>
             )}
 
-            {/* Veterinário — apenas para proprietários */}
+            {/* Veterinário — apenas para proprietários (não vets) */}
             {!isVet && (
               <div className="pt-2 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-600 mb-3">Veterinário Responsável</p>
                 <div className="mb-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <label className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                     <UserCheck size={14} className="text-emerald-600" />
                     Veterinário cadastrado no S2Vet
                   </label>
@@ -603,12 +659,36 @@ const handleSubmit = async (e: React.FormEvent) => {
                       </option>
                     ))}
                   </select>
+
+                  {/* Aviso: novo cadastro — solicitação será enviada */}
                   {formData.veterinarioUserId && !isEditMode && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                       <span>
-                        Após salvar, uma <strong>solicitação de vínculo</strong> será enviada ao veterinário.
+                        Após salvar, uma <strong>solicitação de vínculo</strong> será enviada ao veterinário por e-mail.
                         O animal ficará vinculado somente após o aceite.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Aviso: edição — vet foi trocado */}
+                  {vetFoiAlterado && (
+                    <div className="mt-2 flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
+                      <RefreshCw size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        O veterinário será alterado. Uma nova <strong>solicitação de vínculo</strong> será enviada
+                        por e-mail ao veterinário selecionado. O vínculo atual será cancelado.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Info: vet com solicitação PENDENTE carregada */}
+                  {isEditMode && !vetFoiAlterado && vetStatusAtual === 'PENDENTE' && (
+                    <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        Este veterinário ainda não aceitou a solicitação de vínculo.
+                        Um e-mail de aprovação já foi enviado.
                       </span>
                     </div>
                   )}
@@ -625,7 +705,7 @@ const handleSubmit = async (e: React.FormEvent) => {
             </button>
 
           </form>
-        </div>
+        </div>  
       </div>
     </div>
   );

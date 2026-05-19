@@ -1,4 +1,6 @@
-// frontend/src/pages/EvolucaoClinica.tsx
+// src/pages/Atendimento.tsx
+// Renomeado de EvolucaoClinica.tsx
+// Rota: /clinica e /clinica/evolucao/:animalId
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -7,19 +9,20 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  ArrowLeft, Plus, Pencil, Trash2, Printer, Mic, MicOff,
+  Plus, Pencil, Trash2, Printer, Mic, MicOff,
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
   Stethoscope, Pill, Syringe, FlaskConical, Share2,
-  FileText, ReceiptText, CheckCircle2,
+  FileText, ReceiptText, CheckCircle2, Search,
 } from 'lucide-react';
-import AnimalCard from '../components/AnimalCard';
+import AnimalCard  from '../components/AnimalCard';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
 
 interface ISpeechRecognition extends EventTarget {
-  continuous: boolean;
+  continuous:     boolean;
   interimResults: boolean;
-  lang: string;
+  lang:           string;
   onresult: ((event: ISpeechRecognitionEvent) => void) | null;
   onend:    (() => void) | null;
   onerror:  ((event: ISpeechRecognitionErrorEvent) => void) | null;
@@ -29,7 +32,7 @@ interface ISpeechRecognition extends EventTarget {
 }
 interface ISpeechRecognitionEvent extends Event {
   resultIndex: number;
-  results: SpeechRecognitionResultList;
+  results:     SpeechRecognitionResultList;
 }
 interface ISpeechRecognitionErrorEvent extends Event {
   error: string;
@@ -43,14 +46,13 @@ declare global {
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
-type AuthUser       = NonNullable<ReturnType<typeof useAuth>['user']>;
 type SelectedAnimal = NonNullable<ReturnType<typeof useSelectedAnimal>['selectedAnimal']>;
 
 type AnimalExtended = SelectedAnimal & {
   dataNascimento?: string | Date | null;
-  idadeAnos?: number | null;
-  raca?: { nome: string } | null;
-  user?: { fullName: string; email: string } | null;
+  idadeAnos?:      number | null;
+  raca?:           { nome: string } | null;
+  user?:           { fullName: string; email: string } | null;
 };
 
 type EvolucaoStatus = 'EM_ANDAMENTO' | 'FINALIZADA' | 'CANCELADA';
@@ -59,55 +61,55 @@ type SubModulo      = 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encamin
 
 interface Vet { id: number; fullName: string }
 
-interface EvolucaoClinica {
-  id: number;
-  animalId: number;
-  veterinarioId: number;
-  veterinario: Vet;
+interface EvolucaoItem {
+  id:              number;
+  animalId:        number;
+  veterinarioId:   number;
+  veterinario:     Vet;
   modificadoPorId?: number | null;
   modificadoPor?:   Vet | null;
-  especialidade: string;
-  status: EvolucaoStatus;
-  texto: string;
-  dataInicio: string;
-  dataFim?: string | null;
+  especialidade:   string;
+  status:          EvolucaoStatus;
+  texto:           string;
+  dataInicio:      string;
+  dataFim?:        string | null;
   dataModificacao?: string | null;
-  ativo: boolean;
-  aprovado: boolean;
+  ativo:           boolean;
+  aprovado:        boolean;
 }
 
 interface FaturaItem {
-  id: number;
-  faturaId: number;
-  tipo: TipoFatura;
-  descricao: string;
-  valor: number;
-  quantidade: number;
+  id:          number;
+  faturaId:    number;
+  tipo:        TipoFatura;
+  descricao:   string;
+  valor:       number;
+  quantidade:  number;
   veterinario: { fullName: string };
-  criadoEm: string;
+  criadoEm:   string;
 }
 
 interface Fatura {
-  id: number;
+  id:      number;
   animalId: number;
-  total: number;
-  status: string;
-  itens: FaturaItem[];
+  total:   number;
+  status:  string;
+  itens:   FaturaItem[];
 }
 
 interface AcaoLLM {
-  tipo: TipoFatura;
-  descricao: string;
-  valorEstimado: number;
-  quantidade: number;
+  tipo:           TipoFatura;
+  descricao:      string;
+  valorEstimado:  number;
+  quantidade:     number;
 }
 
 interface AcaoSelecionavel extends AcaoLLM { selecionada: boolean }
 
 interface FormEvolucao {
   especialidade: string;
-  texto: string;
-  status: EvolucaoStatus;
+  texto:         string;
+  status:        EvolucaoStatus;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -125,11 +127,11 @@ const STATUS_OPTIONS: { value: EvolucaoStatus; label: string }[] = [
 ];
 
 const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = [
-  { key: 'evolucao',       label: 'Evolução',       icon: <FileText size={13} />     },
-  { key: 'prescricao',     label: 'Prescrição',     icon: <Pill size={13} />         },
-  { key: 'vacina',         label: 'Vacina',         icon: <Syringe size={13} />      },
+  { key: 'evolucao',       label: 'Evolução',       icon: <FileText    size={13} /> },
+  { key: 'prescricao',     label: 'Prescrição',     icon: <Pill        size={13} /> },
+  { key: 'vacina',         label: 'Vacina',         icon: <Syringe     size={13} /> },
   { key: 'exames',         label: 'Exames',         icon: <FlaskConical size={13} /> },
-  { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2 size={13} />       },
+  { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2      size={13} /> },
 ];
 
 const TIPO_COLORS: Record<TipoFatura, string> = {
@@ -141,30 +143,23 @@ const TIPO_COLORS: Record<TipoFatura, string> = {
 };
 
 const TIPO_ICONS: Record<TipoFatura, React.ReactNode> = {
-  PROCEDIMENTO:   <Stethoscope size={11} />,
-  MEDICAMENTO:    <Pill size={11} />,
+  PROCEDIMENTO:   <Stethoscope  size={11} />,
+  MEDICAMENTO:    <Pill         size={11} />,
   EXAME:          <FlaskConical size={11} />,
-  ENCAMINHAMENTO: <Share2 size={11} />,
-  VACINA:         <Syringe size={11} />,
+  ENCAMINHAMENTO: <Share2       size={11} />,
+  VACINA:         <Syringe      size={11} />,
 };
 
 const STATUS_CONFIG: Record<EvolucaoStatus, { label: string; cls: string }> = {
-  EM_ANDAMENTO: { label: 'Em Andamento', cls: 'bg-blue-100 text-blue-700'        },
-  FINALIZADA:   { label: 'Finalizada',   cls: 'bg-emerald-100 text-emerald-700'  },
-  CANCELADA:    { label: 'Cancelada',    cls: 'bg-red-100 text-red-700'          },
+  EM_ANDAMENTO: { label: 'Em Andamento', cls: 'bg-blue-100 text-blue-700'       },
+  FINALIZADA:   { label: 'Finalizada',   cls: 'bg-emerald-100 text-emerald-700' },
+  CANCELADA:    { label: 'Cancelada',    cls: 'bg-red-100 text-red-700'         },
 };
 
 const FORM_INICIAL: FormEvolucao = { especialidade: 'Clínico', texto: '', status: 'EM_ANDAMENTO' };
 const LIMIT_OPTIONS = [10, 20, 50];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const formatarDataBR = (data: string | Date | null | undefined): string => {
-  if (!data) return '-';
-  const d = new Date(data instanceof Date ? data.toISOString() : data);
-  if (isNaN(d.getTime())) return '-';
-  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
-};
 
 const formatarDataHora = (data: string | null | undefined): string => {
   if (!data) return '-';
@@ -174,21 +169,6 @@ const formatarDataHora = (data: string | null | undefined): string => {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
-};
-
-const calcularIdade = (dataNascimento: string): string => {
-  const [ano, mes, dia] = dataNascimento.split('T')[0].split('-').map(Number);
-  const hoje = new Date();
-  const nasc = new Date(ano, mes - 1, dia);
-  const diffMs   = hoje.getTime() - nasc.getTime();
-  const diffDias = Math.floor(diffMs / 86400000);
-  let meses = (hoje.getFullYear() - ano) * 12 + (hoje.getMonth() - (mes - 1));
-  if (hoje.getDate() < dia) meses--;
-  let anos = hoje.getFullYear() - ano;
-  if (hoje.getMonth() < mes - 1 || (hoje.getMonth() === mes - 1 && hoje.getDate() < dia)) anos--;
-  if (diffDias < 30) return `${diffDias} dia${diffDias !== 1 ? 's' : ''}`;
-  if (meses < 12)    return `${meses} mês${meses !== 1 ? 'es' : ''}`;
-  return `${anos} ano${anos !== 1 ? 's' : ''}`;
 };
 
 const getIniciais = (nome: string): string => {
@@ -201,7 +181,7 @@ const getIniciais = (nome: string): string => {
 const formatCurrency = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-const printEvolucao = (ev: EvolucaoClinica, animal: AnimalExtended | null) => {
+const printEvolucao = (ev: EvolucaoItem, animal: AnimalExtended | null) => {
   const pw = window.open('', '_blank', 'width=800,height=600');
   if (!pw) { toast.error('Popup bloqueado. Permita popups para imprimir.'); return; }
   pw.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
@@ -242,12 +222,9 @@ ${animal ? `<div class="card"><div class="grid">
 
 // ─── SubMenuClinico ───────────────────────────────────────────────────────────
 
-function SubMenuClinico({
-  activeTab,
-  onChange,
-}: {
+function SubMenuClinico({ activeTab, onChange }: {
   activeTab: SubModulo;
-  onChange: (t: SubModulo) => void;
+  onChange:  (t: SubModulo) => void;
 }) {
   return (
     <div className="flex overflow-x-auto gap-1 flex-shrink-0" style={{ scrollbarWidth: 'none' }}>
@@ -271,33 +248,25 @@ function SubMenuClinico({
 
 // ─── FaturaPanel ─────────────────────────────────────────────────────────────
 
-function FaturaPanel({
-  fatura,
-  onRemover,
-  loading,
-}: {
-  fatura: Fatura | null;
+function FaturaPanel({ fatura, onRemover, loading }: {
+  fatura:   Fatura | null;
   onRemover: (id: number) => void;
-  loading: boolean;
+  loading:  boolean;
 }) {
   const itens = fatura?.itens ?? [];
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 flex-shrink-0">
         <ReceiptText size={15} className="text-emerald-600" />
         <span className="font-semibold text-sm text-gray-900">Fatura</span>
         {fatura && (
           <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${
             fatura.status === 'ABERTA' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
-          }`}>
-            {fatura.status}
-          </span>
+          }`}>{fatura.status}</span>
         )}
       </div>
 
-      {/* Itens */}
       <div className="flex-1 overflow-y-auto py-2">
         {loading ? (
           <div className="flex justify-center py-10">
@@ -334,7 +303,6 @@ function FaturaPanel({
         )}
       </div>
 
-      {/* Total */}
       <div className="border-t border-gray-100 px-4 py-3 flex-shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Total</span>
@@ -347,15 +315,13 @@ function FaturaPanel({
 
 // ─── EvolucaoCard ─────────────────────────────────────────────────────────────
 
-function EvolucaoCard({
-  ev, userId, role, onEdit, onDelete, onPrint, onAprovar,
-}: {
-  ev: EvolucaoClinica;
-  userId: number;
-  role: string;
-  onEdit:    (e: EvolucaoClinica) => void;
-  onDelete:  (e: EvolucaoClinica) => void;
-  onPrint:   (e: EvolucaoClinica) => void;
+function EvolucaoCard({ ev, userId, role, onEdit, onDelete, onPrint, onAprovar }: {
+  ev:        EvolucaoItem;
+  userId:    number;
+  role:      string;
+  onEdit:    (e: EvolucaoItem) => void;
+  onDelete:  (e: EvolucaoItem) => void;
+  onPrint:   (e: EvolucaoItem) => void;
   onAprovar: (id: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -366,16 +332,13 @@ function EvolucaoCard({
 
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden mb-3 ${!ev.aprovado ? 'border-amber-200' : 'border-gray-100'}`}>
-      {/* Banner pendente */}
       {!ev.aprovado && (
         <div className="px-4 py-1.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
           <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" />
           <span className="text-xs text-amber-700 font-medium">Pendente de aprovação</span>
           {podeAprovar && (
-            <button
-              onClick={() => onAprovar(ev.id)}
-              className="ml-auto flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
-            >
+            <button onClick={() => onAprovar(ev.id)}
+              className="ml-auto flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800">
               <CheckCircle2 size={13} /> Aprovar
             </button>
           )}
@@ -383,7 +346,6 @@ function EvolucaoCard({
       )}
 
       <div className="p-4">
-        {/* Topo: badges + ações */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_CONFIG[ev.status].cls}`}>
@@ -410,7 +372,6 @@ function EvolucaoCard({
           </div>
         </div>
 
-        {/* Meta */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mb-3">
           <div>
             <span className="block text-[11px] text-gray-400">Responsável</span>
@@ -440,7 +401,6 @@ function EvolucaoCard({
           )}
         </div>
 
-        {/* Texto */}
         <div
           className={`text-sm text-gray-700 leading-relaxed whitespace-pre-wrap cursor-pointer ${!expanded && longo ? 'line-clamp-3' : ''}`}
           onClick={() => longo && setExpanded((v) => !v)}
@@ -459,9 +419,7 @@ function EvolucaoCard({
 
 // ─── ConfirmacaoLLMModal ──────────────────────────────────────────────────────
 
-function ConfirmacaoLLMModal({
-  acoes, onConfirmar, onCancelar, saving,
-}: {
+function ConfirmacaoLLMModal({ acoes, onConfirmar, onCancelar, saving }: {
   acoes:       AcaoSelecionavel[];
   onConfirmar: (sel: AcaoSelecionavel[]) => void;
   onCancelar:  () => void;
@@ -478,16 +436,12 @@ function ConfirmacaoLLMModal({
           <h3 className="font-bold text-gray-900">Itens detectados pela IA</h3>
           <p className="text-xs text-gray-500 mt-0.5">Selecione os itens que deseja adicionar à fatura</p>
         </div>
-
         <div className="p-4 space-y-2 max-h-72 overflow-y-auto">
           {items.map((a, i) => (
-            <div
-              key={i}
-              onClick={() => toggle(i)}
+            <div key={i} onClick={() => toggle(i)}
               className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
                 a.selecionada ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'
-              }`}
-            >
+              }`}>
               <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 mt-0.5 border transition-colors ${
                 a.selecionada ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300 bg-white'
               }`}>
@@ -503,7 +457,6 @@ function ConfirmacaoLLMModal({
             </div>
           ))}
         </div>
-
         <div className="flex gap-3 p-4 border-t border-gray-100">
           <button onClick={onCancelar} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Cancelar
@@ -523,10 +476,8 @@ function ConfirmacaoLLMModal({
 
 // ─── ExclusaoModal ────────────────────────────────────────────────────────────
 
-function ExclusaoModal({
-  ev, onConfirmar, onCancelar, saving,
-}: {
-  ev:          EvolucaoClinica;
+function ExclusaoModal({ ev, onConfirmar, onCancelar, saving }: {
+  ev:          EvolucaoItem;
   onConfirmar: (j: string) => void;
   onCancelar:  () => void;
   saving:      boolean;
@@ -549,8 +500,7 @@ function ExclusaoModal({
           A evolução ficará oculta mas permanece auditável no banco de dados.
         </p>
         <textarea
-          autoFocus
-          value={justificativa}
+          autoFocus value={justificativa}
           onChange={(e) => setJustificativa(e.target.value)}
           placeholder="Justificativa (obrigatório) *"
           rows={3}
@@ -578,9 +528,7 @@ function ExclusaoModal({
 
 // ─── NovaEvolucaoModal ────────────────────────────────────────────────────────
 
-function NovaEvolucaoModal({
-  form, editingId, saving, interpretando, onFormChange, onSave, onClose,
-}: {
+function NovaEvolucaoModal({ form, editingId, saving, interpretando, onFormChange, onSave, onClose }: {
   form:          FormEvolucao;
   editingId:     number | null;
   saving:        boolean;
@@ -589,206 +537,172 @@ function NovaEvolucaoModal({
   onSave:        () => void;
   onClose:       () => void;
 }) {
-  const [isListening,    setIsListening]    = useState(false);
-  const [showRecordAgain, setShowRecordAgain] = useState(false);
-  const recognitionRef  = useRef<ISpeechRecognition | null>(null);
-  const shouldRestartRef = useRef(false); // true = usuário NÃO parou, reiniciar no onend
+  const [isListening,     setIsListening]     = useState(false);
+  const [showRecordAgain, setShowRecordAgain]  = useState(false);
+  const recognitionRef   = useRef<ISpeechRecognition | null>(null);
+  const shouldRestartRef = useRef(false);
 
   const iniciarReconhecimento = () => {
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRec) { toast.error('Seu navegador não suporta reconhecimento de voz'); return; }
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) { toast.error('Seu navegador não suporta reconhecimento de voz'); return; }
 
-  const rec = new SpeechRec();
-  rec.lang           = 'pt-BR';
-  rec.continuous     = true;
-  rec.interimResults = false;
+    const rec        = new SpeechRec();
+    rec.lang         = 'pt-BR';
+    rec.continuous   = true;
+    rec.interimResults = false;
 
-  rec.onresult = (e: ISpeechRecognitionEvent) => {
-    const transcript = Array.from(e.results)
-      .slice(e.resultIndex)
-      .map((r) => r[0].transcript)
-      .join('');
-    // usa função de atualização para sempre ter o valor mais recente
-    onFormChange('texto', form.texto + (form.texto.trim() ? ' ' : '') + transcript);
+    rec.onresult = (e: ISpeechRecognitionEvent) => {
+      const transcript = Array.from(e.results)
+        .slice(e.resultIndex)
+        .map((r) => r[0].transcript)
+        .join('');
+      onFormChange('texto', form.texto + (form.texto.trim() ? ' ' : '') + transcript);
+    };
+
+    rec.onend = () => {
+      if (shouldRestartRef.current) {
+        try { rec.start(); } catch { /* ignora */ }
+      } else {
+        setIsListening(false);
+      }
+    };
+
+    rec.onerror = (e: ISpeechRecognitionErrorEvent) => {
+      if (e.error === 'no-speech') return;
+      if (e.error === 'network') {
+        shouldRestartRef.current = false;
+        recognitionRef.current   = null;
+        setIsListening(false);
+        setShowRecordAgain(false);
+        toast.error('Erro de rede no reconhecimento de voz. Verifique sua conexão.', { duration: 6000 });
+        return;
+      }
+      if (e.error === 'not-allowed') {
+        shouldRestartRef.current = false;
+        setIsListening(false);
+        toast.error('Permissão de microfone negada.');
+        return;
+      }
+      console.error('Speech error:', e.error);
+      if (shouldRestartRef.current) {
+        try { rec.start(); } catch { setIsListening(false); }
+      } else {
+        setIsListening(false);
+      }
+    };
+
+    rec.start();
+    recognitionRef.current = rec;
   };
 
-  rec.onend = () => {
-    // Se o usuário não parou manualmente, reinicia automaticamente
-    // (browser encerra em ~2s de silêncio — isso evita o corte)
-    if (shouldRestartRef.current) {
-      try { rec.start(); } catch { /* ignora erro de restart */ }
-    } else {
-      setIsListening(false);
-    }
+  const startListening = () => {
+    shouldRestartRef.current = true;
+    setShowRecordAgain(false);
+    setIsListening(true);
+    iniciarReconhecimento();
   };
 
-  rec.onerror = (e: ISpeechRecognitionErrorEvent) => {
-  if (e.error === 'no-speech') return; // silêncio normal, ignora
-
-  if (e.error === 'network') {
+  const stopListening = () => {
     shouldRestartRef.current = false;
+    recognitionRef.current?.stop();
     recognitionRef.current = null;
     setIsListening(false);
-    setShowRecordAgain(false);
-    toast.error(
-      'Erro de rede no reconhecimento de voz. O Chrome precisa de acesso à internet para processar o áudio. Verifique sua conexão ou tente em outra rede.',
-      { duration: 6000 },
-    );
-    return;
-  }
+    setShowRecordAgain(true);
+  };
 
-  if (e.error === 'not-allowed') {
-    shouldRestartRef.current = false;
-    setIsListening(false);
-    toast.error('Permissão de microfone negada. Libere o microfone nas configurações do navegador.');
-    return;
-  }
-
-  console.error('Speech error:', e.error);
-  if (shouldRestartRef.current) {
-    try { rec.start(); } catch { setIsListening(false); }
-  } else {
-    setIsListening(false);
-  }
-};
-  rec.start();
-  recognitionRef.current = rec;
-};
-
-const startListening = () => {
-  shouldRestartRef.current = true;
-  setShowRecordAgain(false);
-  setIsListening(true);
-  iniciarReconhecimento();
-};
-
-const stopListening = () => {
-  shouldRestartRef.current = false; // sinaliza que o próximo onend é intencional
-  recognitionRef.current?.stop();
-  recognitionRef.current = null;
-  setIsListening(false);
-  setShowRecordAgain(true); // pergunta se quer gravar mais
-};
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg max-h-[92vh] flex flex-col border border-gray-100">
-
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <h3 className="font-bold text-gray-900">{editingId ? 'Editar Evolução' : 'Nova Evolução'}</h3>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
-              <select
-                value={form.especialidade}
-                onChange={(e) => onFormChange('especialidade', e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-              >
+              <select value={form.especialidade} onChange={(e) => onFormChange('especialidade', e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
                 {ESPECIALIDADES.map((esp) => <option key={esp}>{esp}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Status</label>
-              <select
-                value={form.status}
-                onChange={(e) => onFormChange('status', e.target.value as EvolucaoStatus)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-              >
+              <select value={form.status} onChange={(e) => onFormChange('status', e.target.value as EvolucaoStatus)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
                 {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
           </div>
 
-            <div>
+          <div>
             <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-gray-500">Evolução clínica *</label>
-                <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">Evolução clínica *</label>
+              <div className="flex items-center gap-2">
                 {form.texto && !isListening && (
-                    <button onClick={() => onFormChange('texto', '')} className="text-xs text-gray-400 hover:text-gray-600">
-                    Limpar
-                    </button>
+                  <button onClick={() => onFormChange('texto', '')} className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
                 {!showRecordAgain && (
-                    <button
+                  <button
                     onClick={isListening ? stopListening : startListening}
                     className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
-                        isListening
-                        ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                        : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                      isListening ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
                     }`}
-                    >
+                  >
                     {isListening ? <><MicOff size={11} /> Encerrar gravação</> : <><Mic size={11} /> Iniciar fala</>}
-                    </button>
+                  </button>
                 )}
-                </div>
+              </div>
             </div>
 
             <textarea
-                value={form.texto}
-                onChange={(e) => onFormChange('texto', e.target.value)}
-                placeholder={isListening ? '🎤 Ouvindo... fale agora' : 'Descreva a evolução clínica do paciente...'}
-                rows={9}
-                className={`w-full border rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none resize-none transition-colors ${
+              value={form.texto}
+              onChange={(e) => onFormChange('texto', e.target.value)}
+              placeholder={isListening ? '🎤 Ouvindo... fale agora' : 'Descreva a evolução clínica do paciente...'}
+              rows={9}
+              className={`w-full border rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none resize-none transition-colors ${
                 isListening ? 'border-red-300 bg-red-50/50' : 'border-gray-200 focus:border-emerald-500'
-                }`}
+              }`}
             />
 
-            {/* Indicador de gravação ativa */}
             {isListening && (
-                <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
+              <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0" />
                 <span className="text-xs text-red-700 font-medium flex-1">Gravando... fale normalmente. A gravação continua mesmo em pausas.</span>
-                <button
-                    onClick={stopListening}
-                    className="flex items-center gap-1 px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors flex-shrink-0"
-                >
-                    <MicOff size={11} /> Encerrar
+                <button onClick={stopListening}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-colors flex-shrink-0">
+                  <MicOff size={11} /> Encerrar
                 </button>
-                </div>
+              </div>
             )}
 
-            {/* Pergunta após encerrar gravação */}
             {showRecordAgain && !isListening && (
-                <div className="mt-2 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <div className="mt-2 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
                 <p className="text-xs font-semibold text-emerald-800 mb-2">
-                    ✅ Áudio adicionado. Deseja gravar outro áudio para esta evolução?
+                  ✅ Áudio adicionado. Deseja gravar outro áudio para esta evolução?
                 </p>
                 <div className="flex gap-2">
-                    <button
-                    onClick={startListening}
-                    className="flex-1 flex items-center justify-center gap-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold transition-colors"
-                    >
+                  <button onClick={startListening}
+                    className="flex-1 flex items-center justify-center gap-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold transition-colors">
                     <Mic size={12} /> Sim, gravar mais
-                    </button>
-                    <button
-                    onClick={() => setShowRecordAgain(false)}
-                    className="flex-1 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs font-medium transition-colors"
-                    >
+                  </button>
+                  <button onClick={() => setShowRecordAgain(false)}
+                    className="flex-1 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs font-medium transition-colors">
                     Não, usar este texto
-                    </button>
+                  </button>
                 </div>
-                </div>
+              </div>
             )}
-            </div>
+          </div>
         </div>
 
-        {/* Footer */}
         <div className="flex gap-3 px-5 pb-5 pt-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Cancelar
           </button>
-          <button
-            onClick={onSave}
-            disabled={saving || interpretando}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2"
-          >
+          <button onClick={onSave} disabled={saving || interpretando}
+            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
             {(saving || interpretando) && (
               <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             )}
@@ -800,7 +714,7 @@ const stopListening = () => {
   );
 }
 
-// ─── Placeholder para sub-módulos futuros ────────────────────────────────────
+// ─── SubModuloEmConstrucao ────────────────────────────────────────────────────
 
 function SubModuloEmConstrucao({ label }: { label: string }) {
   return (
@@ -812,9 +726,136 @@ function SubModuloEmConstrucao({ label }: { label: string }) {
   );
 }
 
+// ─── SeletorAnimalInteligente ─────────────────────────────────────────────────
+// Dropdown de animais com detecção de nomes duplicados.
+// Quando o animal atual tem nome duplicado, exibe um segundo campo
+// de busca por proprietário para desambiguação.
+
+function SeletorAnimalInteligente({ animais, animalAtual, onSelecionar }: {
+  animais:      AnimalExtended[];
+  animalAtual:  AnimalExtended | null;
+  onSelecionar: (a: AnimalExtended) => void;
+}) {
+  const [filtroDono,    setFiltroDono]    = useState('');
+  const [dropdownAberto, setDropdownAberto] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Fechar dropdown ao clicar fora
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownAberto(false);
+        setFiltroDono('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  if (animais.length <= 1) return null;
+
+  // Contagem de nomes duplicados
+  const nomesCount = animais.reduce<Record<string, number>>((acc, a) => {
+    acc[a.nome] = (acc[a.nome] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const animalTemDuplicata = animalAtual
+    ? (nomesCount[animalAtual.nome] ?? 0) > 1
+    : false;
+
+  // Animais duplicados (mesmo nome do atual)
+  const duplicatas = animalAtual
+    ? animais.filter(a => a.nome === animalAtual.nome)
+    : [];
+
+  // Filtrados pelo dono (para o segundo campo)
+  const duplicatasFiltradas = filtroDono.trim()
+    ? duplicatas.filter(a =>
+        (a.user?.fullName ?? '').toLowerCase().includes(filtroDono.toLowerCase())
+      )
+    : duplicatas;
+
+  return (
+    <div className="space-y-2 mb-4">
+      {/* Seletor principal */}
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Paciente</label>
+        <select
+          value={animalAtual?.id ?? ''}
+          onChange={e => {
+            const selecionado = animais.find(a => a.id === Number(e.target.value));
+            if (selecionado) { onSelecionar(selecionado); setFiltroDono(''); }
+          }}
+          className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 shadow-sm"
+        >
+          {animais.map(a => (
+            <option key={a.id} value={a.id}>
+              {a.nome}{(nomesCount[a.nome] ?? 0) > 1 ? ` — ${a.user?.fullName ?? '?'}` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Campo secundário de busca por dono — só aparece quando há nomes duplicados */}
+      {animalTemDuplicata && (
+        <div className="relative" ref={dropdownRef}>
+          <label className="block text-xs font-medium text-amber-700 mb-1">
+            ⚠️ Existem {duplicatas.length} animais com o nome "{animalAtual?.nome}" — filtre pelo proprietário:
+          </label>
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={filtroDono}
+              onChange={e => { setFiltroDono(e.target.value); setDropdownAberto(true); }}
+              onFocus={() => setDropdownAberto(true)}
+              placeholder="Nome do proprietário..."
+              className="w-full pl-9 pr-4 py-2.5 border border-amber-300 rounded-2xl text-sm text-gray-900 focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100 bg-amber-50"
+            />
+          </div>
+
+          {dropdownAberto && duplicatasFiltradas.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl z-20 overflow-hidden max-h-56 overflow-y-auto">
+              {duplicatasFiltradas.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => { onSelecionar(a); setFiltroDono(''); setDropdownAberto(false); }}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
+                    a.id === animalAtual?.id ? 'bg-emerald-50' : ''
+                  }`}
+                >
+                  <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                    {a.photoUrl
+                      ? <img src={a.photoUrl as string} alt="" className="w-full h-full object-cover" />
+                      : <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">🐾</div>
+                    }
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{a.nome}</p>
+                    <p className="text-xs text-gray-400 truncate">
+                      Proprietário: {a.user?.fullName ?? '—'}
+                    </p>
+                  </div>
+                  {a.id === animalAtual?.id && (
+                    <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" />
+                  )}
+                </button>
+              ))}
+              {duplicatasFiltradas.length === 0 && filtroDono && (
+                <p className="px-4 py-3 text-xs text-gray-400">Nenhum proprietário encontrado para "{filtroDono}"</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const EvolucaoClinica = () => {
+const Atendimento = () => {
   const { user }                              = useAuth();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate                              = useNavigate();
@@ -823,7 +864,8 @@ const EvolucaoClinica = () => {
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
 
   const [animal,         setAnimal]         = useState<AnimalExtended | null>(null);
-  const [evolucoes,      setEvolucoes]      = useState<EvolucaoClinica[]>([]);
+  const [todosAnimais,   setTodosAnimais]   = useState<AnimalExtended[]>([]);
+  const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
   const [loading,        setLoading]        = useState(true);
   const [total,          setTotal]          = useState(0);
   const [page,           setPage]           = useState(1);
@@ -834,8 +876,8 @@ const EvolucaoClinica = () => {
   const [loadingFatura,  setLoadingFatura]  = useState(true);
   const [activeTab,      setActiveTab]      = useState<SubModulo>('evolucao');
   const [showModal,      setShowModal]      = useState(false);
-  const [editingEv,      setEditingEv]      = useState<EvolucaoClinica | null>(null);
-  const [deletingEv,     setDeletingEv]     = useState<EvolucaoClinica | null>(null);
+  const [editingEv,      setEditingEv]      = useState<EvolucaoItem | null>(null);
+  const [deletingEv,     setDeletingEv]     = useState<EvolucaoItem | null>(null);
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
   const [savingEv,       setSavingEv]       = useState(false);
   const [savingExclusao, setSavingExclusao] = useState(false);
@@ -890,26 +932,35 @@ const EvolucaoClinica = () => {
   useEffect(() => {
     carregarAnimal();
     carregarFatura();
+    api.get('/animais')
+      .then(res => setTodosAnimais(res.data?.dados ?? []))
+      .catch(() => {});
   }, [effectiveAnimalId]);
 
   useEffect(() => {
     if (activeTab === 'evolucao') carregarEvolucoes();
   }, [activeTab, page, limit, search, filterStatus]);
 
+  // ── Seletor de animal ─────────────────────────────────────────────────────
+
+  const handleSelecionarAnimal = (a: AnimalExtended) => {
+    setSelectedAnimal(a);
+    navigate(`/clinica/evolucao/${a.id}`);
+  };
+
   // ── Form ──────────────────────────────────────────────────────────────────
 
   const handleFormChange = (field: keyof FormEvolucao, value: string) =>
     setForm((prev) => ({ ...prev, [field]: value }));
 
-  const abrirNova = () => { setForm(FORM_INICIAL); setEditingEv(null); setShowModal(true); };
+  const abrirNova   = () => { setForm(FORM_INICIAL); setEditingEv(null); setShowModal(true); };
+  const fecharModal = () => { setShowModal(false); setEditingEv(null); setForm(FORM_INICIAL); };
 
-  const abrirEdicao = (ev: EvolucaoClinica) => {
+  const abrirEdicao = (ev: EvolucaoItem) => {
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
     setShowModal(true);
   };
-
-  const fecharModal = () => { setShowModal(false); setEditingEv(null); setForm(FORM_INICIAL); };
 
   // ── Salvar ────────────────────────────────────────────────────────────────
 
@@ -942,7 +993,6 @@ const EvolucaoClinica = () => {
         setSavingEv(false);
         carregarEvolucoes();
 
-        // Interpretação LLM — não bloqueia a UX
         setInterpretando(true);
         try {
           const llmRes = await api.post('/clinica/evolucoes/interpretar', { texto: textoParaLLM });
@@ -997,10 +1047,10 @@ const EvolucaoClinica = () => {
       await Promise.all(
         selecionadas.map((a) =>
           api.post(`/clinica/faturas/${fatura.id}/itens`, {
-            tipo:        a.tipo,
-            descricao:   a.descricao,
-            valor:       a.valorEstimado,
-            quantidade:  a.quantidade,
+            tipo:       a.tipo,
+            descricao:  a.descricao,
+            valor:      a.valorEstimado,
+            quantidade: a.quantidade,
           })
         )
       );
@@ -1026,11 +1076,7 @@ const EvolucaoClinica = () => {
 
   const renderContent = () => {
     if (activeTab !== 'evolucao') {
-      return (
-        <SubModuloEmConstrucao
-          label={SUB_MODULOS.find((m) => m.key === activeTab)?.label ?? ''}
-        />
-      );
+      return <SubModuloEmConstrucao label={SUB_MODULOS.find((m) => m.key === activeTab)?.label ?? ''} />;
     }
 
     if (loading) {
@@ -1046,10 +1092,8 @@ const EvolucaoClinica = () => {
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <FileText size={40} className="mb-3" />
           <p className="text-sm">Nenhuma evolução registrada</p>
-          <button
-            onClick={abrirNova}
-            className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 transition-colors"
-          >
+          <button onClick={abrirNova}
+            className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 transition-colors">
             <Plus size={14} /> Nova Evolução
           </button>
         </div>
@@ -1060,8 +1104,7 @@ const EvolucaoClinica = () => {
       <div className="p-4">
         {evolucoes.map((ev) => (
           <EvolucaoCard
-            key={ev.id}
-            ev={ev}
+            key={ev.id} ev={ev}
             userId={user?.id ?? 0}
             role={user?.role ?? 'USER'}
             onEdit={abrirEdicao}
@@ -1073,19 +1116,13 @@ const EvolucaoClinica = () => {
 
         {totalPaginas > 1 && (
           <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              disabled={page === 1}
-              onClick={() => setPage((p) => p - 1)}
-              className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50"
-            >
+            <button disabled={page === 1} onClick={() => setPage((p) => p - 1)}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
               <ChevronLeft size={14} />
             </button>
             <span className="text-xs text-gray-500">{page} / {totalPaginas}</span>
-            <button
-              disabled={page >= totalPaginas}
-              onClick={() => setPage((p) => p + 1)}
-              className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50"
-            >
+            <button disabled={page >= totalPaginas} onClick={() => setPage((p) => p + 1)}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
               <ChevronRight size={14} />
             </button>
           </div>
@@ -1110,47 +1147,40 @@ const EvolucaoClinica = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-7xl mx-auto px-4">
 
-        <button
-          onClick={() => navigate('/clinica')}
-          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-4 mt-6 text-sm"
-        >
-          <ArrowLeft size={18} /> Módulo Clínico
-        </button>
+        {/* Voltar */}
+        <BotaoVoltar className="mb-4 mt-6" />
 
+        {/* Seletor inteligente de animal */}
+        <SeletorAnimalInteligente
+          animais={todosAnimais}
+          animalAtual={animal}
+          onSelecionar={handleSelecionarAnimal}
+        />
+
+        {/* Card do animal */}
         {animal && <AnimalCard animal={animal} />}
 
         {/* Action bar */}
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          <button
-            onClick={abrirNova}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors"
-          >
+        <div className="flex flex-wrap items-center gap-2 mb-3 mt-4">
+          <button onClick={abrirNova}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
             <Plus size={15} /> Nova {SUB_MODULOS.find((m) => m.key === activeTab)?.label}
           </button>
 
-          <select
-            value={limit}
-            onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
-            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500"
-          >
+          <select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500">
             {LIMIT_OPTIONS.map((l) => <option key={l} value={l}>{l} por página</option>)}
           </select>
 
           <div className="flex-1 min-w-48">
-            <input
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder={`Buscar ${SUB_MODULOS.find((m) => m.key === activeTab)?.label ?? ''}...`}
-              className="w-full border border-gray-200 rounded-2xl pl-4 pr-4 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 shadow-sm"
-            />
+              className="w-full border border-gray-200 rounded-2xl pl-4 pr-4 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 shadow-sm" />
           </div>
 
           {activeTab === 'evolucao' && (
-            <select
-              value={filterStatus}
-              onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500"
-            >
+            <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
+              className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500">
               <option value="">Todos os status</option>
               {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
@@ -1159,7 +1189,6 @@ const EvolucaoClinica = () => {
 
         {/* ── Desktop ── */}
         <div className="hidden md:flex gap-4 items-start">
-          {/* Coluna principal */}
           <div className="flex-1 min-w-0">
             <SubMenuClinico activeTab={activeTab} onChange={(t) => { setActiveTab(t); setPage(1); }} />
             <div className="bg-white rounded-b-2xl rounded-tr-2xl border border-gray-100 shadow-sm min-h-96 overflow-hidden">
@@ -1167,12 +1196,9 @@ const EvolucaoClinica = () => {
             </div>
           </div>
 
-          {/* Fatura */}
           <div className="w-72 flex-shrink-0 sticky top-4">
-            <div
-              className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
-              style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}
-            >
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
+              style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
               <FaturaPanel fatura={fatura} onRemover={handleRemoverItemFatura} loading={loadingFatura} />
             </div>
           </div>
@@ -1185,11 +1211,8 @@ const EvolucaoClinica = () => {
             {renderContent()}
           </div>
 
-          {/* FAB Fatura */}
-          <button
-            onClick={() => setShowFaturaM(true)}
-            className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40"
-          >
+          <button onClick={() => setShowFaturaM(true)}
+            className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">
             <ReceiptText size={16} />
             {interpretando
               ? <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1197,21 +1220,12 @@ const EvolucaoClinica = () => {
             }
           </button>
 
-          {/* Bottom sheet fatura */}
           {showFaturaM && (
-            <div
-              className="fixed inset-0 bg-black/50 z-50 flex items-end"
-              onClick={() => setShowFaturaM(false)}
-            >
-              <div
-                className="bg-white rounded-t-2xl w-full max-h-[75vh] flex flex-col"
-                onClick={(e) => e.stopPropagation()}
-              >
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowFaturaM(false)}>
+              <div className="bg-white rounded-t-2xl w-full max-h-[75vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
                   <span className="font-bold text-gray-900 text-sm">Fatura</span>
-                  <button onClick={() => setShowFaturaM(false)} className="p-1 text-gray-400">
-                    <X size={18} />
-                  </button>
+                  <button onClick={() => setShowFaturaM(false)} className="p-1 text-gray-400"><X size={18} /></button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   <FaturaPanel fatura={fatura} onRemover={handleRemoverItemFatura} loading={loadingFatura} />
@@ -1226,29 +1240,22 @@ const EvolucaoClinica = () => {
       {/* ── Modais ── */}
       {showModal && (
         <NovaEvolucaoModal
-          form={form}
-          editingId={editingEv?.id ?? null}
-          saving={savingEv}
-          interpretando={interpretando}
-          onFormChange={handleFormChange}
-          onSave={handleSalvar}
-          onClose={fecharModal}
+          form={form} editingId={editingEv?.id ?? null}
+          saving={savingEv} interpretando={interpretando}
+          onFormChange={handleFormChange} onSave={handleSalvar} onClose={fecharModal}
         />
       )}
 
       {deletingEv && (
         <ExclusaoModal
-          ev={deletingEv}
-          onConfirmar={handleExcluir}
-          onCancelar={() => setDeletingEv(null)}
-          saving={savingExclusao}
+          ev={deletingEv} onConfirmar={handleExcluir}
+          onCancelar={() => setDeletingEv(null)} saving={savingExclusao}
         />
       )}
 
       {showLLM && (
         <ConfirmacaoLLMModal
-          acoes={acoesLLM}
-          onConfirmar={handleConfirmarLLM}
+          acoes={acoesLLM} onConfirmar={handleConfirmarLLM}
           onCancelar={() => { setShowLLM(false); setAcoesLLM([]); }}
           saving={savingFatura}
         />
@@ -1257,4 +1264,4 @@ const EvolucaoClinica = () => {
   );
 };
 
-export default EvolucaoClinica;
+export default Atendimento;

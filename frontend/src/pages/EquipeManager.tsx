@@ -2,13 +2,13 @@
 // Gerenciamento de empresas, equipes e convites
 
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  ArrowLeft, Plus, Mail, Trash2, Building2,
+  Plus, Mail, Trash2, Building2,
   Users, ChevronDown, ChevronUp, Check, X,
 } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -166,8 +166,6 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function EquipeManager() {
-  const navigate = useNavigate();
-
   const [empresas,      setEmpresas]      = useState<Empresa[]>([]);
   const [loading,       setLoading]       = useState(true);
 
@@ -244,10 +242,7 @@ export default function EquipeManager() {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-3xl mx-auto px-4">
 
-        <button onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-4 mt-6 text-sm">
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4 mt-6" />
 
         <div className="flex items-center justify-between mb-6">
           <div>

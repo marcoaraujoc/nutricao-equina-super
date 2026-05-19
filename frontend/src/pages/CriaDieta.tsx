@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import { ArrowLeft, Trash2 } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -377,13 +378,7 @@ const CriaDieta = () => {
         <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
 
           {/* Voltar */}
-          <button
-            onClick={() => navigate(rotaVoltar)}
-            className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-5"
-          >
-            <ArrowLeft size={22} />
-            <span className="text-base">Voltar</span>
-          </button>
+          <BotaoVoltar para={rotaVoltar} className="mb-5" />
 
           <h1 className="text-xl font-bold text-gray-900 mb-5 text-center">
             {isEditMode

@@ -4,6 +4,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { ArrowLeft, Upload, FileText, AlertCircle, Edit, Trash2, Check, X, Pencil } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // =====================================================================
 // CONSTANTES
@@ -524,13 +525,7 @@ const CriaComposicaoAlimentar = () => {
           <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
 
             <div className="flex items-center gap-3 mb-5">
-              <button
-                onClick={() => navigate('/composicao-alimentar')}
-                className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
-              >
-                <ArrowLeft size={22} />
-                <span className="text-base">Voltar</span>
-              </button>
+              <BotaoVoltar />
             </div>
 
             <h1 className="text-xl font-bold text-gray-900 mb-5 text-center">

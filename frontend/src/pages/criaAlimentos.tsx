@@ -5,7 +5,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
-import { ArrowLeft } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
+
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -118,10 +119,7 @@ const CriaAlimentos = () => {
       <div className="w-full max-w-lg">
 
         {/* Voltar */}
-        <button onClick={() => navigate('/alimentos')}
-          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-6 text-sm">
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-6" />
 
         <div className="bg-white shadow-xl rounded-3xl p-6 border border-gray-100">
 

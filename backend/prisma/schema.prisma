@@ -435,6 +435,7 @@ model VetPerfil {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
+  subespecialidades VetSubespecialidade[]
   // Garante que dois vets não tenham o mesmo CRMV
   @@unique([crmv])
   @@map("tb_vet_perfil")
@@ -454,19 +455,21 @@ model VetEspecie {
 
 // ─── Solicitação de vínculo animal ↔ veterinário ──────────────────
 model VetAnimalSolicitacao {
-  id        Int      @id @default(autoincrement())
-  animalId  Int
-  vetUserId Int
-  status    String   @default("PENDENTE") // PENDENTE | ACEITO | RECUSADO
-  mensagem  String?  @db.Text
-  // Relação nomeada para o Animal
+  id             Int       @id @default(autoincrement())
+  animalId       Int
+  vetUserId      Int
+  status         String    @default("PENDENTE")
+  mensagem       String?   @db.Text
+  approvalToken  String?   @unique @db.VarChar(64)
+  expiresAt      DateTime?
+  solicitanteId  Int?
   animal      Animal @relation("AnimalSolicitacoes", fields: [animalId],  references: [id], onDelete: Cascade)
-  // Relação nomeada para o Veterinário (User)
   veterinario User   @relation("VetSolicitacoes",    fields: [vetUserId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([animalId, vetUserId])
+  @@index([approvalToken])
   @@map("tb_vet_animal_solicitacoes")
 }
 
@@ -526,4 +529,14 @@ model ConviteEquipe {
   createdAt DateTime @default(now())
 
   @@map("tb_convites_equipe")
+}
+
+model VetSubespecialidade {
+  id          Int       @id @default(autoincrement())
+  vetPerfilId Int
+  nome        String    @db.VarChar(100)
+  vetPerfil   VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@map("tb_vet_subespecialidades")
 }

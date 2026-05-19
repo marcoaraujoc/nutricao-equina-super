@@ -3,8 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Plus, Eye, Download, Calendar, Edit, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
+import BotaoVoltar from '../components/BotaoVoltar';
+import SeletorAnimal from '../components/SeletorAnimal';
 
 
 const Exames = () => {
@@ -22,38 +24,6 @@ const Exames = () => {
   const [nutrientes, setNutrientes] = useState<any[]>([]);
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
-
-  // ==================== FUNÇÃO FORMATAR DATA (mesma lógica do Dieta) ====================
-  const formatarDataBR = (data: string | Date | null | undefined): string => {
-    if (!data) return '-';
-
-    const dataObj = new Date(data instanceof Date ? data.toISOString() : data);
-
-    if (isNaN(dataObj.getTime())) return '-';
-
-    const dia = String(dataObj.getUTCDate()).padStart(2, '0');
-    const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
-    const ano = dataObj.getUTCFullYear();
-
-    return `${dia}/${mes}/${ano}`;
-  };
-
-  const calcularIdade = (dataNascimento: string): string => {
-    const partes = dataNascimento.split('T')[0].split('-');
-    const anoNasc = parseInt(partes[0]);
-    const mesNasc = parseInt(partes[1]) - 1;
-    const diaNasc = parseInt(partes[2]);
-    const hoje = new Date();
-    const diffMs = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
-    const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
-    if (hoje.getDate() < diaNasc) diffMeses--;
-    let diffAnos = hoje.getFullYear() - anoNasc;
-    if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
-    if (diffDias < 30) return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
-    if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
-    return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
-  };
 
   // Carrega lista de nutrientes
   useEffect(() => {
@@ -105,18 +75,6 @@ const Exames = () => {
     setLoading(true);
     Promise.all([loadAnimais(), loadExamesAndAnimal()]).finally(() => setLoading(false));
   }, [effectiveAnimalId, user?.id]);
-
-  const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = animaisDoProprietario.find((a: any) => a.id === Number(e.target.value));
-    if (selected) {
-      setSelectedAnimal({
-        ...selected,
-        photoUrl:       selected.photoUrl       ?? undefined,
-        dataNascimento: selected.dataNascimento ?? undefined,
-      });
-      navigate(`/exames/${selected.id}`);
-    }
-  };
 
   const handleNovoExame = () => {
     if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo`);
@@ -172,8 +130,6 @@ const Exames = () => {
     return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
   };
 
-  const hasMultipleAnimals = animaisDoProprietario.length > 1;
-
   if (loading) return <div className="p-8 text-center">Carregando...</div>;
   if (!effectiveAnimalId) return <div className="p-6 text-center text-gray-900">Selecione um animal.</div>;
 
@@ -181,27 +137,14 @@ const Exames = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-5xl mx-auto px-4">
 
-        <button 
-          onClick={() => navigate('/')} 
-          className="flex items-center gap-2 text-emerald-700 mb-4 hover:text-emerald-800"
-        >
-          <ArrowLeft size={20} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4" />
 
-        {hasMultipleAnimals && (
-          <div className="mb-6 pt-2">
-            <label className="block text-sm font-medium text-gray-500 mb-1">Escolha o Animal</label>
-            <select 
-              value={effectiveAnimalId || ''} 
-              onChange={handleAnimalChange} 
-              className="w-full rounded-3xl border border-gray-300 p-3 focus:outline-none focus:border-emerald-600 bg-white text-gray-900"
-            >
-              {animaisDoProprietario.map((a: any) => (
-                <option key={a.id} value={a.id}>{a.nome}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <SeletorAnimal
+          animais={animaisDoProprietario}
+          animalIdAtual={effectiveAnimalId}
+          rotaBase="/exames"
+          className="mb-6 pt-2"
+        />
 
         {currentAnimal && <AnimalCard animal={currentAnimal} />}
 

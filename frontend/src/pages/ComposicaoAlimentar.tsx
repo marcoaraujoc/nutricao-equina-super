@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Plus, Edit, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, Edit, Trash2 } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // =====================================================================
 // INTERFACES
@@ -171,12 +172,7 @@ const ComposicaoAlimentar = () => {
       <div className="max-w-6xl mx-auto px-4">
 
         {/* Voltar */}
-        <button
-          onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-emerald-700 mb-4 mt-6 hover:text-emerald-800"
-        >
-          <ArrowLeft size={20} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4 mt-6" />
 
         {/* Título */}
         <h1 className="text-3xl font-bold text-gray-900 text-center mb-6">

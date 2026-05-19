@@ -7,12 +7,27 @@ import toast from 'react-hot-toast';
 
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
+const SUBESPECIALIDADES = [
+  'Quiroprata',
+  'Fisioterapeuta',
+  'Oftalmologista',
+  'Dermatologista',
+  'Cardiologista',
+  'Ortopedista',
+  'Neurologista',
+  'Oncologista',
+  'Nutricionista',
+  'Anestesiologista',
+  'Radiologista',
+  'Reprodução Animal',
+];
+
 export default function CadastroPessoal() {
-  const { user } = useAuth();
+  const { user }                  = useAuth();
   const { refreshSelectedAnimal } = useSelectedAnimal();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState(false);
+  const navigate                  = useNavigate();
+  const [loading, setLoading]     = useState(true);
+  const [saving,  setSaving]      = useState(false);
 
   // ── Espécies ──────────────────────────────────────────────────────────────
   const [especies, setEspecies] = useState<{ id: number; nome: string }[]>([]);
@@ -37,6 +52,7 @@ export default function CadastroPessoal() {
     tipoUsuario:       'PROPRIETARIO',
     crmv:              '',
     especiesAtendidas: [] as number[],
+    subespecialidades: [] as string[],
   });
 
   // ── Carregar dados do usuário ─────────────────────────────────────────────
@@ -46,7 +62,7 @@ export default function CadastroPessoal() {
       if (!token || !user?.email) { setLoading(false); return; }
       try {
         const res = await fetch('/api/users/me', {
-          method: 'GET',
+          method:  'GET',
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
@@ -64,6 +80,7 @@ export default function CadastroPessoal() {
             tipoUsuario:       data.userType          || 'PROPRIETARIO',
             crmv:              data.crmv              || '',
             especiesAtendidas: data.especiesAtendidas || [],
+            subespecialidades: data.subespecialidades || [],
           });
         }
       } catch (err) {
@@ -96,13 +113,12 @@ export default function CadastroPessoal() {
   };
 
   const maskCRMV = (value: string): string => {
-    // Remove tudo que não é dígito ou letra
     let v = value.replace(/[^0-9a-zA-Z]/g, '');
-    // Insere a barra após os dígitos (máx 6)
     if (v.length > 6) v = v.slice(0, 6) + '/' + v.slice(6, 8).toUpperCase();
     else v = v.toUpperCase();
     return v;
   };
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -118,12 +134,20 @@ export default function CadastroPessoal() {
     }));
   };
 
+  const toggleSubespecialidade = (nome: string) => {
+    setForm(prev => ({
+      ...prev,
+      subespecialidades: prev.subespecialidades.includes(nome)
+        ? prev.subespecialidades.filter(s => s !== nome)
+        : [...prev.subespecialidades, nome],
+    }));
+  };
+
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
 
-    // Validação CRMV — apenas formato, sem consulta externa
     if (form.tipoUsuario === 'VETERINARIO') {
       if (!form.crmv.trim()) {
         toast.error('CRMV é obrigatório para Médicos Veterinários');
@@ -153,6 +177,7 @@ export default function CadastroPessoal() {
       ...(form.tipoUsuario === 'VETERINARIO' && {
         crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
+        subespecialidades: form.subespecialidades,
       }),
     };
 
@@ -168,11 +193,9 @@ export default function CadastroPessoal() {
         await refreshSelectedAnimal();
 
         if (form.tipoUsuario === 'VETERINARIO') {
-          // Veterinário não precisa cadastrar animal
           localStorage.setItem('s2vet_ob', 'd');
           navigate('/clinica');
         } else {
-          // Proprietário precisa cadastrar um animal
           const ob = localStorage.getItem('s2vet_ob');
           if (ob === 'p' || ob === null || ob === '') {
             localStorage.setItem('s2vet_ob', 'a');
@@ -196,6 +219,8 @@ export default function CadastroPessoal() {
   // ── Render ────────────────────────────────────────────────────────────────
   if (loading) return <div className="p-8 text-center text-gray-500">Carregando dados...</div>;
 
+  const inputClass = 'w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900';
+
   return (
     <div className="max-w-2xl mx-auto px-2 sm:px-0">
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
@@ -209,17 +234,16 @@ export default function CadastroPessoal() {
           {/* Nome */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
-            <input type="text" name="nomeCompleto" value={form.nomeCompleto} onChange={handleChange}
-              className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-              required />
+            <input type="text" name="nomeCompleto" value={form.nomeCompleto}
+              onChange={handleChange} className={inputClass} required />
           </div>
 
           {/* Telefone + Email */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-              <input type="tel" name="telefone" value={form.telefone} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" />
+              <input type="tel" name="telefone" value={form.telefone}
+                onChange={handleChange} className={inputClass} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
@@ -237,8 +261,7 @@ export default function CadastroPessoal() {
                 setForm(prev => ({ ...prev, cep: e.target.value }));
                 if (e.target.value.length === 8) buscarCep(e.target.value);
               }}
-              className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-              required
+              className={inputClass} required
             />
           </div>
 
@@ -246,14 +269,13 @@ export default function CadastroPessoal() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Endereço</label>
-              <input type="text" name="endereco" value={form.endereco} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-                required />
+              <input type="text" name="endereco" value={form.endereco}
+                onChange={handleChange} className={inputClass} required />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Complemento</label>
-              <input type="text" name="complemento" value={form.complemento} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900" />
+              <input type="text" name="complemento" value={form.complemento}
+                onChange={handleChange} className={inputClass} />
             </div>
           </div>
 
@@ -261,21 +283,18 @@ export default function CadastroPessoal() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Bairro</label>
-              <input type="text" name="bairro" value={form.bairro} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-                required />
+              <input type="text" name="bairro" value={form.bairro}
+                onChange={handleChange} className={inputClass} required />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
-              <input type="text" name="cidade" value={form.cidade} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-                required />
+              <input type="text" name="cidade" value={form.cidade}
+                onChange={handleChange} className={inputClass} required />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-              <input type="text" name="estado" maxLength={2} value={form.estado} onChange={handleChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
-                required />
+              <input type="text" name="estado" maxLength={2} value={form.estado}
+                onChange={handleChange} className={inputClass} required />
             </div>
           </div>
 
@@ -283,7 +302,7 @@ export default function CadastroPessoal() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Usuário</label>
             <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange}
-              className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900">
+              className={inputClass}>
               <option value="PROPRIETARIO">Proprietário</option>
               <option value="VETERINARIO">Médico Veterinário</option>
             </select>
@@ -291,9 +310,10 @@ export default function CadastroPessoal() {
 
           {/* Dados profissionais — só para veterinários */}
           {form.tipoUsuario === 'VETERINARIO' && (
-            <div className="pt-2 border-t border-gray-100 space-y-4">
+            <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 
+              {/* CRMV */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   CRMV <span className="text-red-500">*</span>
@@ -301,13 +321,13 @@ export default function CadastroPessoal() {
                 <input
                   type="text" name="crmv" value={form.crmv}
                   onChange={e => setForm(prev => ({ ...prev, crmv: maskCRMV(e.target.value) }))}
-                  placeholder="Ex: 12345/SP"
-                  maxLength={9}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900"
+                  placeholder="Ex: 12345/SP" maxLength={9}
+                  className={inputClass}
                 />
-                <p className="text-xs text-gray-400 mt-1">Informe o número e o estado. Ex: 12345/SP</p>
+                <p className="text-xs text-gray-400 mt-1">Ex: 12345/SP</p>
               </div>
 
+              {/* Espécies atendidas */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Espécies atendidas{' '}
@@ -326,12 +346,8 @@ export default function CadastroPessoal() {
                               ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                               : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
                           }`}>
-                          <input
-                            type="checkbox"
-                            className="accent-emerald-600 flex-shrink-0"
-                            checked={selecionada}
-                            onChange={() => toggleEspecie(esp.id)}
-                          />
+                          <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
+                            checked={selecionada} onChange={() => toggleEspecie(esp.id)} />
                           <span className="text-sm font-medium">{esp.nome}</span>
                         </label>
                       );
@@ -339,6 +355,32 @@ export default function CadastroPessoal() {
                   </div>
                 )}
               </div>
+
+              {/* Subespecialidades */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Subespecialidades{' '}
+                  <span className="text-gray-400 text-xs font-normal">(opcional)</span>
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {SUBESPECIALIDADES.map(sub => {
+                    const selecionada = form.subespecialidades.includes(sub);
+                    return (
+                      <label key={sub}
+                        className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
+                          selecionada
+                            ? 'border-blue-500 bg-blue-50 text-blue-800'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'
+                        }`}>
+                        <input type="checkbox" className="accent-blue-600 flex-shrink-0"
+                          checked={selecionada} onChange={() => toggleSubespecialidade(sub)} />
+                        <span className="text-sm font-medium">{sub}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
             </div>
           )}
 

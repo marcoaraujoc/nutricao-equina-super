@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Edit, Trash2, Plus, ArrowLeft } from 'lucide-react';
+import { Edit, Trash2, Plus } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 const Nutrientes = () => {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [nutrientes, setNutrientes] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -46,9 +45,7 @@ const Nutrientes = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-6xl mx-auto px-3 sm:px-4">
 
-        <button onClick={() => navigate('/')} className="flex items-center gap-2 text-emerald-700 mb-4 hover:text-emerald-800">
-          <ArrowLeft size={20} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4" />
 
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 text-center mb-5">Nutrientes</h1>

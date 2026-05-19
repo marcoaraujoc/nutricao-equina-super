@@ -3,6 +3,14 @@
 
 import { useAuth } from '../contexts/AuthContext';
 
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
+interface Solicitacao {
+  vetUserId:   number;
+  status:      string; // 'ACEITO' | 'PENDENTE' | 'RECUSADO' | 'CANCELADO'
+  veterinario?: { fullName: string; email: string } | null;
+}
+
 interface AnimalCardAnimal {
   nome:             string;
   photoUrl?:        string | null;
@@ -12,12 +20,12 @@ interface AnimalCardAnimal {
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
   veterinarioNome?: string | null;
-  // Relação via VetAnimalSolicitacao (incluída pelo AnimalController quando necessário)
-  solicitacoes?: { vetUserId: number; veterinario?: { fullName: string; email: string } | null }[];
+  // Relação via VetAnimalSolicitacao — agora inclui PENDENTE além de ACEITO
+  solicitacoes?:    Solicitacao[];
 }
 
 interface AnimalCardProps {
-  animal:    AnimalCardAnimal;
+  animal:     AnimalCardAnimal;
   planoNome?: string | null;
 }
 
@@ -31,17 +39,23 @@ function formatarDataBR(data: string | Date | null | undefined): string {
 }
 
 function calcularIdade(dataNascimento: string): string {
-  const partes  = dataNascimento.split('T')[0].split('-');
-  const anoNasc = parseInt(partes[0]);
-  const mesNasc = parseInt(partes[1]) - 1;
-  const diaNasc = parseInt(partes[2]);
-  const hoje    = new Date();
-  const diffMs  = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
+  const partes   = dataNascimento.split('T')[0].split('-');
+  const anoNasc  = parseInt(partes[0]);
+  const mesNasc  = parseInt(partes[1]) - 1;
+  const diaNasc  = parseInt(partes[2]);
+  const hoje     = new Date();
+  const diffMs   = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
   const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  let diffMeses  = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
+
+  let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
   if (hoje.getDate() < diaNasc) diffMeses--;
+
   let diffAnos = hoje.getFullYear() - anoNasc;
-  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
+  if (
+    hoje.getMonth() < mesNasc ||
+    (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)
+  ) diffAnos--;
+
   if (diffDias < 30)  return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
   if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
   return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
@@ -52,15 +66,16 @@ function calcularIdade(dataNascimento: string): string {
 export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
   const { user } = useAuth();
 
-  // Veterinário responsável: prioriza solicitação aceita, fallback para texto livre
-  const vetNome =
-    animal.solicitacoes?.[0]?.veterinario?.fullName ??
-    animal.veterinarioNome ??
-    '-';
+  // Resolve vet responsável — prioridade: ACEITO > fallback texto livre
+  // PENDENTE exibe badge de "aguardando aceite" separado
+  const solicitacaoAceita   = animal.solicitacoes?.find(s => s.status === 'ACEITO');
+  const solicitacaoPendente = animal.solicitacoes?.find(s => s.status === 'PENDENTE');
+  const vetNome             = solicitacaoAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
+  const vetPendente         = solicitacaoPendente?.veterinario?.fullName ?? null;
 
   // Proprietário: prioriza dados do animal (join), fallback para usuário logado
-  const proprietarioNome  = animal.user?.fullName  ?? user?.fullName  ?? '-';
-  const proprietarioEmail = animal.user?.email     ?? user?.email     ?? '-';
+  const proprietarioNome  = animal.user?.fullName ?? user?.fullName ?? '-';
+  const proprietarioEmail = animal.user?.email    ?? user?.email    ?? '-';
 
   const idade = animal.dataNascimento
     ? calcularIdade(String(animal.dataNascimento))
@@ -124,9 +139,30 @@ export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
             <span className="text-base font-semibold text-gray-900 truncate block">{proprietarioEmail}</span>
           </div>
 
+          {/* Veterinário Responsável — exibe badge PENDENTE quando não há ACEITO */}
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Veterinário Responsável</span>
-            <span className="text-base font-semibold text-gray-900 truncate block">{vetNome}</span>
+            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">
+              Veterinário Responsável
+            </span>
+
+            {vetNome ? (
+              // Vet com vínculo ACEITO
+              <span className="text-base font-semibold text-gray-900 truncate block">
+                {vetNome}
+              </span>
+            ) : vetPendente ? (
+              // Vet indicado mas ainda PENDENTE de aceite
+              <span className="inline-flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700
+                               border border-amber-200 px-2 py-1 rounded-full font-medium mt-0.5">
+                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse flex-shrink-0" />
+                Aguardando: {vetPendente}
+              </span>
+            ) : (
+              // Sem vet atribuído
+              <span className="text-base font-semibold text-gray-400 italic block">
+                Não atribuído
+              </span>
+            )}
           </div>
 
         </div>

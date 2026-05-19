@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -80,10 +81,7 @@ const Alimentos = () => {
       <div className="max-w-6xl mx-auto px-4">
 
         {/* Voltar */}
-        <button onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-emerald-700 mb-4 mt-6 hover:text-emerald-800 font-medium text-sm">
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4 mt-6" />
 
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">

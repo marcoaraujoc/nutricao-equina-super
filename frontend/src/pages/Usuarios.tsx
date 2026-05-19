@@ -1,14 +1,14 @@
 // src/pages/Usuarios.tsx
 
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import {
-  ArrowLeft, Plus, Pencil, Trash2,
+  Plus, Pencil, Trash2,
   ToggleLeft, ToggleRight, X, AlertCircle,
 } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -82,8 +82,6 @@ const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 const Usuarios = () => {
-  const navigate = useNavigate();
-
   const [usuarios,    setUsuarios]    = useState<Usuario[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [search,      setSearch]      = useState('');
@@ -264,10 +262,7 @@ const Usuarios = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-6xl mx-auto px-4">
 
-        <button onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-emerald-700 mb-4 mt-6 hover:text-emerald-800 font-medium text-sm">
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4 mt-6" />
 
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">

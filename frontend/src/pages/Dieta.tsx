@@ -1,7 +1,7 @@
 // src/pages/Dieta.tsx
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
@@ -12,7 +12,8 @@ import {
 } from 'lucide-react';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
 import AnimalCard from '../components/AnimalCard';
-
+import BotaoVoltar from '../components/BotaoVoltar';
+import SeletorAnimal from '../components/SeletorAnimal';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -102,30 +103,6 @@ const salvarSnapshot = (planId: string, itens: DietaItem[]) => {
 };
 
 // ─── Helpers de data e frequência ────────────────────────────────────────────
-
-const formatarDataBR = (data: string | Date | null | undefined): string => {
-  if (!data) return '-';
-  const d = new Date(data instanceof Date ? data.toISOString() : data);
-  if (isNaN(d.getTime())) return '-';
-  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
-};
-
-const calcularIdade = (dataNascimento: string): string => {
-  const partes   = dataNascimento.split('T')[0].split('-');
-  const anoNasc  = parseInt(partes[0]);
-  const mesNasc  = parseInt(partes[1]) - 1;
-  const diaNasc  = parseInt(partes[2]);
-  const hoje     = new Date();
-  const diffMs   = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
-  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  let diffMeses  = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
-  if (hoje.getDate() < diaNasc) diffMeses--;
-  let diffAnos = hoje.getFullYear() - anoNasc;
-  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
-  if (diffDias < 30)  return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
-  if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
-  return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
-};
 
 const GRUPOS_FREQ: Record<string, string> = {
   '1x ao dia': 'diario', '2x ao dia': 'diario', '3x ao dia': 'diario',
@@ -481,7 +458,6 @@ function BottomAddBar({
 const Dieta = () => {
   const { user } = useAuth();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
-  const navigate  = useNavigate();
   const location  = useLocation();
   const { animalId } = useParams<{ animalId?: string }>();
 
@@ -818,25 +794,16 @@ const Dieta = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-5xl mx-auto px-4">
 
-        <button onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium mb-4 mt-6 text-sm">
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4 mt-6" />
 
         {animal && <AnimalCard animal={animal} planoNome={planoSelecionado?.nome} />}
 
-        {animaisDoProprietario.length > 1 && (
-          <div className="mb-4">
-            <select value={effectiveAnimalId}
-              onChange={e => {
-                const sel = animaisDoProprietario.find(a => a.id === Number(e.target.value));
-                if (sel) { setSelectedAnimal(sel); setPlanoSelecionado(null); setItens([]); navigate(`/dieta/${sel.id}`); }
-              }}
-              className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500">
-              {animaisDoProprietario.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
-            </select>
-          </div>
-        )}
+        <SeletorAnimal
+          animais={animaisDoProprietario}
+          animalIdAtual={effectiveAnimalId}
+          rotaBase="/dieta"
+          className="mb-4"
+        />
 
         {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
         <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>

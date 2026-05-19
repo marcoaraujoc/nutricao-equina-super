@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { ArrowLeft, Upload, Edit, Trash2, AlertCircle, X, Plus, FileText } from 'lucide-react';
+import { Upload, Edit, Trash2, AlertCircle, X, Plus, FileText } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 const CriaExameNutricional = () => {
   const { user } = useAuth();
@@ -189,9 +190,7 @@ const CriaExameNutricional = () => {
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-4xl mx-auto px-4">
 
-        <button onClick={() => navigate(`/exames/${animalId || selectedAnimal?.id || ''}`)} className="flex items-center gap-2 text-emerald-700 mb-4">
-          <ArrowLeft size={20} /> Voltar
-        </button>
+        <BotaoVoltar className="mb-4" />
 
         {selectedAnimal ? (
           <div className="bg-white rounded-3xl shadow p-4 flex gap-4 mb-6">

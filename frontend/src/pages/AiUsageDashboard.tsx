@@ -401,7 +401,9 @@ export default function AiUsageDashboard() {
                           <td className="px-5 py-3 text-center">
                             {log.sucesso
                               ? <CheckCircle size={14} className="text-emerald-500 mx-auto" />
-                              : <XCircle    size={14} className="text-red-400 mx-auto" title={log.erroMensagem ?? ''} />
+                              : <span title={log.erroMensagem ?? ''}>
+                                  <XCircle size={14} className="text-red-400 mx-auto" />
+                                </span>
                             }
                           </td>
                         </tr>

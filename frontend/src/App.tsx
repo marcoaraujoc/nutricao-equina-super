@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
 import Usuarios from './pages/Usuarios';
 import AnimaisVet from './pages/AnimaisVet';
+import AprovarVinculo from './pages/AprovarVinculo';
 
 
 // Pages — Gerais
@@ -49,8 +50,7 @@ import Equipe from './pages/Equipe';
 import RelatorioNutricional from './pages/RelatorioNutricional';
 
 // Pages — Módulo Clínico
-import ClinicaDashboard from './pages/ClinicaDashboard';
-import EvolucaoClinica  from './pages/EvolucaoClinica';
+import Atendimento from './pages/Atendimento';
 
 // Pages — Análise / Debug
 import Analise    from './pages/Analise';
@@ -142,22 +142,17 @@ function App() {
                           <Route path="/animais-vet" element={<AnimaisVet />} />
 
                           {/* ── Módulo Clínico ────────────────────────────── */}
-                          <Route path="/clinica"                                element={<ClinicaDashboard />} />
-
-                          <Route path="/clinica/evolucao"                       element={<EvolucaoClinica />} />
-                          <Route path="/clinica/evolucao/:animalId"             element={<EvolucaoClinica />} />
-
-                          <Route path="/clinica/prescricao"                     element={<EvolucaoClinica />} />
-                          <Route path="/clinica/prescricao/:animalId"           element={<EvolucaoClinica />} />
-
-                          <Route path="/clinica/vacina"                         element={<EvolucaoClinica />} />
-                          <Route path="/clinica/vacina/:animalId"               element={<EvolucaoClinica />} />
-
-                          <Route path="/clinica/exames"                         element={<EvolucaoClinica />} />
-                          <Route path="/clinica/exames/:animalId"               element={<EvolucaoClinica />} />
-
-                          <Route path="/clinica/encaminhamento"                 element={<EvolucaoClinica />} />
-                          <Route path="/clinica/encaminhamento/:animalId"       element={<EvolucaoClinica />} />
+                          <Route path="/clinica"                                element={<Atendimento />} />
+                          <Route path="/clinica/evolucao"                       element={<Atendimento />} />
+                          <Route path="/clinica/evolucao/:animalId"             element={<Atendimento />} />
+                          <Route path="/clinica/prescricao"                     element={<Atendimento />} />
+                          <Route path="/clinica/prescricao/:animalId"           element={<Atendimento />} />
+                          <Route path="/clinica/vacina"                         element={<Atendimento />} />
+                          <Route path="/clinica/vacina/:animalId"               element={<Atendimento />} />
+                          <Route path="/clinica/exames"                         element={<Atendimento />} />
+                          <Route path="/clinica/exames/:animalId"               element={<Atendimento />} />
+                          <Route path="/clinica/encaminhamento"                 element={<Atendimento />} />
+                          <Route path="/clinica/encaminhamento/:animalId"       element={<Atendimento />} />
                           {/* ─────────────────────────────────────────────── */}
                           
                           {/* Rota Veterinário */}
@@ -166,6 +161,9 @@ function App() {
                           {/* Temporárias / Debug */}
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />
                           <Route path="/analise"     element={<Analise />} />
+
+                          <Route path="/veterinarios/solicitacoes/aprovar" element={<AprovarVinculo />} />
+                          
                         </Routes>
                       </div>
                     </div>

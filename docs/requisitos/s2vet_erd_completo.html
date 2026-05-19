@@ -1,0 +1,308 @@
+
+<style>
+#erd { overflow-x: auto; }
+#erd svg { min-width: 900px; }
+</style>
+<div id="erd"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '11px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+
+const diagram = `erDiagram
+    users {
+        int id PK
+        string email
+        string role
+        string userType
+        boolean ativo
+    }
+    tb_animais {
+        int id PK
+        int userId FK
+        int especieId FK
+        int racaId FK
+        string nome
+        float peso
+    }
+    tb_especies {
+        int id PK
+        string nome
+    }
+    tb_racas {
+        int id PK
+        int especieId FK
+        string nome
+    }
+    tb_alimentos {
+        int id PK
+        string nome
+        string categoria
+        boolean ativo
+    }
+    tb_nutrientes {
+        int id PK
+        string nome
+        string categoria
+        string unidadePadrao
+    }
+    tb_dieta {
+        int id PK
+        int animalId FK
+        int alimentoId FK
+        int planoDietaId FK
+        int criadopor FK
+        float qtdGramasDia
+    }
+    tb_planos_dieta {
+        int id PK
+        int animalId FK
+        string nome
+        boolean ativo
+    }
+    tb_composicao_alimento {
+        int id PK
+        int alimentoId FK
+        int nutrienteId FK
+        int especieId FK
+        float valorPorKg
+    }
+    tb_exames_nutricionais {
+        int id PK
+        int animalId FK
+        int nutrienteId FK
+        datetime dataExame
+        float valorEncontrado
+    }
+    tb_exigencias_nrc {
+        int id PK
+        int nutrienteId FK
+        int especieId FK
+        int peso
+        float valorExigido
+    }
+    tb_ocorrencias_saude {
+        int id PK
+        int animalId FK
+        string problema
+        datetime dataInicio
+    }
+    tb_relatorios_salvos {
+        int id PK
+        int animalId FK
+        string fonteCalculo
+        datetime geradoEm
+    }
+    tb_evolucoes_clinicas {
+        int id PK
+        int animalId FK
+        int veterinarioId FK
+        string especialidade
+        string status
+        boolean aprovado
+    }
+    tb_prescricoes {
+        int id PK
+        int animalId FK
+        int veterinarioId FK
+        string medicamento
+        boolean ativo
+    }
+    tb_vacinas_clinicas {
+        int id PK
+        int animalId FK
+        int veterinarioId FK
+        string nome
+        datetime dataAplicacao
+    }
+    tb_encaminhamentos_clinicos {
+        int id PK
+        int animalId FK
+        int veterinarioId FK
+        string especialidade
+        string status
+    }
+    tb_exames_clinicos {
+        int id PK
+        int animalId FK
+        int veterinarioId FK
+        string tipo
+        string status
+    }
+    tb_faturas {
+        int id PK
+        int animalId FK
+        float total
+        string status
+    }
+    tb_fatura_itens {
+        int id PK
+        int faturaId FK
+        int veterinarioId FK
+        string tipo
+        float valor
+        int quantidade
+    }
+    tb_audit_logs {
+        int id PK
+        int userId FK
+        string action
+        datetime timestamp
+    }
+    tb_ai_usage_logs {
+        int id PK
+        int userId FK
+        string operacao
+        string modelo
+        int tokensTotal
+        float custoUsd
+    }
+    tb_vet_perfil {
+        int id PK
+        int userId FK
+        string crmv
+        string bio
+    }
+    tb_vet_especies {
+        int id PK
+        int vetPerfilId FK
+        int especieId FK
+    }
+    tb_vet_subespecialidades {
+        int id PK
+        int vetPerfilId FK
+        string nome
+    }
+    tb_vet_animal_solicitacoes {
+        int id PK
+        int animalId FK
+        int vetUserId FK
+        string status
+        string approvalToken
+    }
+    tb_empresas {
+        int id PK
+        int ownerId FK
+        string nome
+        string cnpj
+    }
+    tb_equipes {
+        int id PK
+        int empresaId FK
+        string nome
+    }
+    tb_membros_equipe {
+        int id PK
+        int equipeId FK
+        int userId FK
+        string cargo
+    }
+    tb_convites_equipe {
+        int id PK
+        int equipeId FK
+        string email
+        string cargo
+        string token
+        string status
+    }
+
+    users ||--o{ tb_animais : "possui"
+    users ||--o| tb_vet_perfil : "tem perfil"
+    users ||--o{ tb_audit_logs : "gera"
+    users ||--o{ tb_ai_usage_logs : "usa IA"
+    users ||--o{ tb_empresas : "eh dono"
+    users ||--o{ tb_membros_equipe : "integra"
+    users ||--o{ tb_vet_animal_solicitacoes : "vet"
+    users ||--o{ tb_evolucoes_clinicas : "registra"
+    users ||--o{ tb_prescricoes : "prescreve"
+    users ||--o{ tb_vacinas_clinicas : "aplica"
+    users ||--o{ tb_encaminhamentos_clinicos : "encaminha"
+    users ||--o{ tb_exames_clinicos : "solicita"
+    users ||--o{ tb_fatura_itens : "gera item"
+    users ||--o{ tb_dieta : "cria dieta"
+
+    tb_animais }o--|| tb_especies : "especie"
+    tb_animais }o--o| tb_racas : "raca"
+    tb_animais ||--o{ tb_dieta : "tem"
+    tb_animais ||--o{ tb_exames_nutricionais : "exames"
+    tb_animais ||--o{ tb_ocorrencias_saude : "ocorrencias"
+    tb_animais ||--o{ tb_planos_dieta : "planos"
+    tb_animais ||--o{ tb_relatorios_salvos : "relatorios"
+    tb_animais ||--o{ tb_evolucoes_clinicas : "evolucoes"
+    tb_animais ||--o{ tb_prescricoes : "prescricoes"
+    tb_animais ||--o{ tb_vacinas_clinicas : "vacinas"
+    tb_animais ||--o{ tb_encaminhamentos_clinicos : "encaminhamentos"
+    tb_animais ||--o{ tb_exames_clinicos : "exames clinicos"
+    tb_animais ||--o{ tb_faturas : "faturas"
+    tb_animais ||--o{ tb_vet_animal_solicitacoes : "vinculos"
+
+    tb_especies ||--o{ tb_racas : "racas"
+    tb_especies ||--o{ tb_composicao_alimento : "composicao"
+    tb_especies ||--o{ tb_exigencias_nrc : "NRC"
+    tb_especies ||--o{ tb_vet_especies : "atendida"
+
+    tb_alimentos ||--o{ tb_dieta : "em dietas"
+    tb_alimentos ||--o{ tb_composicao_alimento : "composicao"
+
+    tb_nutrientes ||--o{ tb_composicao_alimento : "compoe"
+    tb_nutrientes ||--o{ tb_exames_nutricionais : "medido"
+    tb_nutrientes ||--o{ tb_exigencias_nrc : "exigencia"
+
+    tb_planos_dieta ||--o{ tb_dieta : "agrupa"
+
+    tb_faturas ||--o{ tb_fatura_itens : "itens"
+
+    tb_vet_perfil ||--o{ tb_vet_especies : "atende"
+    tb_vet_perfil ||--o{ tb_vet_subespecialidades : "subespecialidades"
+
+    tb_vet_especies }o--|| tb_especies : "referencia"
+
+    tb_empresas ||--o{ tb_equipes : "tem equipes"
+
+    tb_equipes ||--o{ tb_membros_equipe : "membros"
+    tb_equipes ||--o{ tb_convites_equipe : "convites"
+`;
+
+try {
+  const { svg } = await mermaid.render('erd-svg', diagram);
+  document.getElementById('erd').innerHTML = svg;
+
+  document.querySelectorAll('#erd svg .node').forEach(node => {
+    const firstPath = node.querySelector('path[d]');
+    if (!firstPath) return;
+    const d = firstPath.getAttribute('d');
+    const nums = d.match(/-?[\d.]+/g)?.map(Number);
+    if (!nums || nums.length < 8) return;
+    const xs = [nums[0], nums[2], nums[4], nums[6]];
+    const ys = [nums[1], nums[3], nums[5], nums[7]];
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', '8');
+    for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+      if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+    }
+    firstPath.replaceWith(rect);
+  });
+
+  document.querySelectorAll('#erd svg .row-rect-odd path, #erd svg .row-rect-even path').forEach(p => {
+    p.setAttribute('stroke', 'none');
+  });
+} catch(e) {
+  document.getElementById('erd').innerHTML = '<p style="color:var(--color-text-secondary);padding:1rem;font-size:13px;">Erro ao renderizar o diagrama: ' + e.message + '</p>';
+}
+</script>

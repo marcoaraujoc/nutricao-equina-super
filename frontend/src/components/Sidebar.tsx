@@ -8,16 +8,14 @@ import {
   LayoutDashboard, User, Zap, ClipboardList,
   Wheat, TestTube, ChartBar, Carrot, Stethoscope,
   DollarSign, ChevronDown, LogOut, Menu, X,
-  Users, Users2, ShieldCheck, FileText, Pill,
-  Syringe, FlaskConical, Share2,
+  Users, Users2, ShieldCheck,
 } from 'lucide-react';
+import { useVetPendentes } from '../hooks/useVetPendentes';
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 const CLS_MODULE_ACTIVE  = 'bg-emerald-50 text-emerald-600';
-const CLS_SUBITEM_ACTIVE = 'bg-emerald-100 text-emerald-700 font-medium';
 const CLS_ITEM_ACTIVE    = 'bg-emerald-100 text-emerald-700 font-medium';
 const CLS_ITEM_INACTIVE  = 'text-gray-700 hover:bg-gray-100';
-const CLS_SUB_INACTIVE   = 'text-gray-600 hover:bg-gray-100';
 const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
@@ -26,9 +24,9 @@ const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
 type ActiveSection = 'geral' | 'clinica' | 'nutricional' | 'admin';
 
 function detectSection(pathname: string): ActiveSection {
-  if (pathname.startsWith('/clinica'))              return 'clinica';
-  if (pathname.startsWith('/animais-vet'))          return 'geral';
-  if (pathname.startsWith('/dieta'))                return 'nutricional';
+  if (pathname.startsWith('/clinica'))               return 'clinica';
+  if (pathname.startsWith('/animais-vet'))           return 'geral';
+  if (pathname.startsWith('/dieta'))                 return 'nutricional';
   if (pathname.startsWith('/relatorio-nutricional')) return 'nutricional';
   if (
     pathname.startsWith('/alimentos') ||
@@ -45,9 +43,10 @@ export default function Sidebar() {
   const { user, logout }              = useAuth();
   const { isNewUser, selectedAnimal } = useSelectedAnimal();
   const location                      = useLocation();
+  const pendentesCount                = useVetPendentes();
 
-  const role          = (user?.role ?? user?.userType ?? '').toUpperCase();
-  const userTypeUpper = (user?.userType ?? '').toUpperCase();
+  const role          = (user?.role      ?? user?.userType ?? '').toUpperCase();
+  const userTypeUpper = (user?.userType  ?? '').toUpperCase();
   const isAdmin          = role === 'ADMIN';
   const isVet            = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
   const temAcessoClinico = ROLES_CLINICAS.includes(role) || ROLES_CLINICAS.includes(userTypeUpper);
@@ -62,24 +61,13 @@ export default function Sidebar() {
     if (path === '/') return p === '/';
     return p.startsWith(path);
   };
-  const isModuleActive       = (mod: ActiveSection) => activeSection === mod;
-  const isClinicaSubActive   = (path: string, exact = false) => {
-    if (activeSection !== 'clinica') return false;
-    return exact ? p === path : p.startsWith(path);
-  };
-  const isNutricionalSubActive = (path: string) => {
-    if (activeSection !== 'nutricional') return false;
-    return p.startsWith(path);
-  };
-  const isAdminActive = (path: string) => {
-    if (activeSection !== 'admin') return false;
-    return p.startsWith(path);
-  };
+  const isModuleActive         = (mod: ActiveSection) => activeSection === mod;
+  const isNutricionalSubActive = (path: string) => activeSection === 'nutricional' && p.startsWith(path);
+  const isAdminActive          = (path: string) => activeSection === 'admin' && p.startsWith(path);
 
   // ── Estados dos menus ─────────────────────────────────────────────────────
   const [openGeral,         setOpenGeral]        = useState(true);
   const [openModulos,       setOpenModulos]       = useState(true);
-  const [openClinica,       setOpenClinica]       = useState(() => p.startsWith('/clinica'));
   const [openNutricional,   setOpenNutricional]   = useState(() =>
     p.startsWith('/dieta') || p.startsWith('/relatorio-nutricional'),
   );
@@ -87,7 +75,7 @@ export default function Sidebar() {
   const [openFinanceiro,    setOpenFinanceiro]    = useState(false);
   const [isMobileMenuOpen,  setIsMobileMenuOpen]  = useState(false);
 
-  const toggle    = (s: React.Dispatch<React.SetStateAction<boolean>>) => s(v => !v);
+  const toggle      = (s: React.Dispatch<React.SetStateAction<boolean>>) => s(v => !v);
   const closeMobile = () => setIsMobileMenuOpen(false);
 
   // ── Renderizadores ────────────────────────────────────────────────────────
@@ -98,7 +86,24 @@ export default function Sidebar() {
     </Link>
   );
 
-  const moduleButton = (label: string, icon: React.ReactNode, mod: ActiveSection, open: boolean, onToggle: () => void) => (
+  const navLinkBadge = (
+    to: string, icon: React.ReactNode, label: string, active: boolean, badge: number,
+  ) => (
+    <Link to={to} onClick={closeMobile}
+      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base transition-colors ${active ? CLS_ITEM_ACTIVE : CLS_ITEM_INACTIVE}`}>
+      {icon}
+      <span className="flex-1">{label}</span>
+      {badge > 0 && (
+        <span className="bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none flex-shrink-0">
+          {badge > 9 ? '9+' : badge}
+        </span>
+      )}
+    </Link>
+  );
+
+  const moduleButton = (
+    label: string, icon: React.ReactNode, mod: ActiveSection, open: boolean, onToggle: () => void,
+  ) => (
     <button onClick={onToggle}
       className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${isModuleActive(mod) ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       <span className="flex items-center gap-3">{icon} {label}</span>
@@ -108,7 +113,7 @@ export default function Sidebar() {
 
   const subLink = (to: string, icon: React.ReactNode, label: string, active: boolean) => (
     <Link key={to} to={to} onClick={closeMobile}
-      className={`flex items-center gap-3 px-5 py-2.5 rounded-2xl text-sm transition-colors ${active ? CLS_SUBITEM_ACTIVE : CLS_SUB_INACTIVE}`}>
+      className={`flex items-center gap-3 px-5 py-2.5 rounded-2xl text-sm transition-colors ${active ? 'bg-emerald-100 text-emerald-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
       {icon && <span className="flex-shrink-0">{icon}</span>}
       {label}
     </Link>
@@ -143,7 +148,7 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* Nav — flex-1 + min-h-0 garante scroll sem vazar */}
+        {/* Nav */}
         <nav className="flex-1 min-h-0 px-3 py-4 space-y-4 overflow-y-auto">
 
           {/* ═══ GERAL ═══════════════════════════════════════════════════════ */}
@@ -153,17 +158,18 @@ export default function Sidebar() {
               Geral
               <ChevronDown className={`w-4 h-4 transition-transform ${openGeral ? 'rotate-180' : ''}`} />
             </button>
+
             {openGeral && (
               <div className="mt-1 space-y-0.5 pl-4">
-                {navLink('/',                 <LayoutDashboard size={20} />, 'Dashboard',        isGeralActive('/'))}
-                {navLink('/cadastro-pessoal', <User size={20} />,           'Cadastro Pessoal', isGeralActive('/cadastro-pessoal'))}
-                {navLink(
-                    isVet ? '/animais-vet' : '/meus-animais',
-                    <Zap size={20} />,
-                    isVet ? 'Pacientes' : 'Animais',
-                    isVet ? isGeralActive('/animais-vet') : isGeralActive('/meus-animais'),
-                  )}
-                {navLink('/exames',           <ClipboardList size={20} />,  'Exames',           isGeralActive('/exames'))}
+                {navLink('/', <LayoutDashboard size={20} />, 'Dashboard', isGeralActive('/'))}
+                {navLink('/cadastro-pessoal', <User size={20} />, 'Cadastro Pessoal', isGeralActive('/cadastro-pessoal'))}
+
+                {isVet
+                  ? navLinkBadge('/animais-vet', <Zap size={20} />, 'Pacientes', isGeralActive('/animais-vet'), pendentesCount)
+                  : navLink('/meus-animais', <Zap size={20} />, 'Animais', isGeralActive('/meus-animais'))
+                }
+
+                {navLink('/exames', <ClipboardList size={20} />, 'Exames', isGeralActive('/exames'))}
               </div>
             )}
           </div>
@@ -180,21 +186,18 @@ export default function Sidebar() {
               {openModulos && (
                 <div className="mt-1 pl-4 space-y-0.5">
 
-                  {/* ── Clínica ─────────────────────────────────────────── */}
+                  {/* ── Clínica — agora um único link "Atendimento" ──────── */}
                   {temAcessoClinico && (
-                    <div>
-                      {moduleButton('Clínica', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
-                      {openClinica && (
-                        <div className="mt-1 pl-6 space-y-0.5">
-                          {subLink('/clinica',                                              <LayoutDashboard size={16} />, 'Dashboard Clínico', isClinicaSubActive('/clinica', true))}
-                          {subLink(animalId ? `/clinica/evolucao/${animalId}`       : '/clinica/evolucao',       <FileText size={16} />,    'Evolução',       isClinicaSubActive('/clinica/evolucao'))}
-                          {subLink(animalId ? `/clinica/prescricao/${animalId}`     : '/clinica/prescricao',     <Pill size={16} />,         'Prescrição',     isClinicaSubActive('/clinica/prescricao'))}
-                          {subLink(animalId ? `/clinica/vacina/${animalId}`         : '/clinica/vacina',         <Syringe size={16} />,      'Vacinas',        isClinicaSubActive('/clinica/vacina'))}
-                          {subLink(animalId ? `/clinica/exames/${animalId}`         : '/clinica/exames',         <FlaskConical size={16} />, 'Exames',         isClinicaSubActive('/clinica/exames'))}
-                          {subLink(animalId ? `/clinica/encaminhamento/${animalId}` : '/clinica/encaminhamento', <Share2 size={16} />,       'Encaminhamento', isClinicaSubActive('/clinica/encaminhamento'))}
-                        </div>
-                      )}
-                    </div>
+                    <Link
+                      to="/clinica"
+                      onClick={closeMobile}
+                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
+                        isModuleActive('clinica') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <Stethoscope size={20} />
+                      Atendimento
+                    </Link>
                   )}
 
                   {/* ── Nutricional ──────────────────────────────────────── */}
@@ -202,8 +205,16 @@ export default function Sidebar() {
                     {moduleButton('Nutricional', <Carrot size={20} />, 'nutricional', openNutricional, () => toggle(setOpenNutricional))}
                     {openNutricional && (
                       <div className="mt-1 pl-6 space-y-0.5">
-                        {subLink(animalId ? `/dieta/${animalId}` : '/dieta',                                         null, 'Dieta',               isNutricionalSubActive('/dieta'))}
-                        {subLink(animalId ? `/relatorio-nutricional/${animalId}` : '/relatorio-nutricional',          null, 'Relatório Nutricional', isNutricionalSubActive('/relatorio-nutricional'))}
+                        {subLink(
+                          animalId ? `/dieta/${animalId}` : '/dieta',
+                          null, 'Dieta',
+                          isNutricionalSubActive('/dieta'),
+                        )}
+                        {subLink(
+                          animalId ? `/relatorio-nutricional/${animalId}` : '/relatorio-nutricional',
+                          null, 'Relatório Nutricional',
+                          isNutricionalSubActive('/relatorio-nutricional'),
+                        )}
                       </div>
                     )}
                   </div>
@@ -241,7 +252,6 @@ export default function Sidebar() {
 
               {openAdministracao && (
                 <div className="mt-1 space-y-0.5 pl-4">
-                  {/* Itens exclusivos do ADMIN */}
                   {isAdmin && (
                     <>
                       {navLink('/alimentos',           <Wheat size={20} />,    'Alimentos',            isAdminActive('/alimentos'))}
@@ -251,7 +261,6 @@ export default function Sidebar() {
                       {navLink('/ai-usage',             <Users size={20} />,    'Monitoramento IA',     isAdminActive('/ai-usage'))}
                     </>
                   )}
-                  {/* Minha Equipe — disponível para ADMIN e VETERINARIO */}
                   {navLink('/equipe', <Users2 size={20} />, 'Minha Equipe', isAdminActive('/equipe'))}
                 </div>
               )}

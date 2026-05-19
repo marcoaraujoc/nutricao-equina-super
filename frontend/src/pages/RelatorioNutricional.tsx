@@ -4,7 +4,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import BotaoVoltar from '../components/BotaoVoltar';
+import SeletorAnimal from '../components/SeletorAnimal';
+import { RefreshCw } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -194,14 +196,6 @@ const RelatorioNutricional = () => {
     if (effectiveAnimalId) gerarRelatorio();
   }, [effectiveAnimalId, gerarRelatorio]);
 
-  const handleAnimalChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = animaisDoProprietario.find(a => a.id === Number(e.target.value));
-    if (selected) {
-      setSelectedAnimal({ ...selected, photoUrl: selected.photoUrl ?? undefined, idadeAnos: selected.idadeAnos ?? undefined });
-      navigate(`/relatorio-nutricional/${selected.id}`);
-    }
-  };
-
   // ── Lógica de filtros (multi-select) ─────────────────────────────────────
 
   const handleFiltroClick = (valor: FiltroStatus) => {
@@ -243,28 +237,15 @@ const RelatorioNutricional = () => {
       <div className="max-w-7xl mx-auto px-4">
 
         {/* Voltar */}
-        <button
-          onClick={() => navigate('/')}
-          className="flex items-center gap-2 pt-6 mb-4 text-emerald-700 hover:text-emerald-800 font-medium"
-        >
-          <ArrowLeft size={18} /> Voltar
-        </button>
+        <BotaoVoltar className="pt-6 mb-4" />
 
         {/* Seletor de animal */}
-        {animaisDoProprietario.length > 1 && (
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-500 mb-1">Animal</label>
-            <select
-              value={effectiveAnimalId || ''}
-              onChange={handleAnimalChange}
-              className="w-full rounded-2xl border border-gray-300 p-3 text-sm bg-white text-gray-900 focus:outline-none focus:border-emerald-600"
-            >
-              {animaisDoProprietario.map(a => (
-                <option key={a.id} value={a.id}>{a.nome}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <SeletorAnimal
+          animais={animaisDoProprietario}
+          animalIdAtual={effectiveAnimalId}
+          rotaBase="/relatorio-nutricional"
+          className="mb-4"
+        />
 
         {/* Card do animal */}
         {currentAnimal && (

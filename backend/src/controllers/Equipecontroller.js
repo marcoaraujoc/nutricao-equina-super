@@ -2,8 +2,10 @@
 'use strict';
 
 const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs');
-const prisma  = new PrismaClient();
+const bcrypt           = require('bcryptjs');
+const emailService     = require('../services/emailService');
+
+const prisma = new PrismaClient();
 
 // ─── Helper: garante empresa + equipe padrão do vet ──────────────────────────
 async function garantirEquipePadrao(vetUserId) {
@@ -29,7 +31,6 @@ const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
 
-  // POST /api/equipes/empresas
   criarEmpresa: async (req, res) => {
     try {
       const { nome, cnpj, telefone, endereco } = req.body;
@@ -46,7 +47,6 @@ const EquipeController = {
     }
   },
 
-  // GET /api/equipes/empresas
   listarEmpresas: async (req, res) => {
     try {
       const empresas = await prisma.empresa.findMany({
@@ -63,7 +63,6 @@ const EquipeController = {
 
   // ── Equipes ─────────────────────────────────────────────────────────────────
 
-  // POST /api/equipes
   criarEquipe: async (req, res) => {
     try {
       const { nome, empresaId } = req.body;
@@ -86,7 +85,6 @@ const EquipeController = {
 
   // ── Membros ─────────────────────────────────────────────────────────────────
 
-  // GET /api/equipes/membros  — lista membros da equipe padrão do vet logado
   listarMembros: async (req, res) => {
     try {
       const vetUserId = req.user.id;
@@ -111,7 +109,6 @@ const EquipeController = {
     }
   },
 
-  // GET /api/equipes/:equipeId/membros
   listarMembrosPorEquipe: async (req, res) => {
     try {
       const { equipeId } = req.params;
@@ -127,10 +124,9 @@ const EquipeController = {
     }
   },
 
-  // POST /api/equipes/membros
   adicionarMembro: async (req, res) => {
     try {
-      const vetUserId = req.user.id;
+      const vetUserId                  = req.user.id;
       const { fullName, email, phone, cargo, senha } = req.body;
 
       if (!fullName || !email || !cargo) {
@@ -144,8 +140,7 @@ const EquipeController = {
         const senhaHash = await bcrypt.hash(senha || 'Inicial#001', 10);
         usuario = await prisma.user.create({
           data: {
-            fullName,
-            email,
+            fullName, email,
             phone:        phone || null,
             passwordHash: senhaHash,
             role:         'USER',
@@ -171,7 +166,6 @@ const EquipeController = {
     }
   },
 
-  // PUT /api/equipes/membros/:id
   atualizarMembro: async (req, res) => {
     try {
       const { id }              = req.params;
@@ -196,7 +190,6 @@ const EquipeController = {
     }
   },
 
-  // PATCH /api/equipes/membros/:id/toggle
   toggleMembro: async (req, res) => {
     try {
       const { id }  = req.params;
@@ -211,7 +204,6 @@ const EquipeController = {
     }
   },
 
-  // DELETE /api/equipes/membros/:membroId
   removerMembro: async (req, res) => {
     try {
       const { membroId } = req.params;
@@ -226,13 +218,14 @@ const EquipeController = {
 
   // ── Convites ────────────────────────────────────────────────────────────────
 
-  // POST /api/equipes/convites
   convidarMembro: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
       const { email, cargo } = req.body;
 
-      if (!email || !cargo) return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
+      if (!email || !cargo) {
+        return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
+      }
 
       const { equipe } = await garantirEquipePadrao(vetUserId);
 
@@ -242,17 +235,32 @@ const EquipeController = {
         data: { equipeId: equipe.id, email, cargo, expiresAt },
       });
 
-      // TODO: enviar e-mail com link de convite usando process.env.APP_URL + /convite/:token
-      console.log(`Convite criado para ${email}: token=${convite.token}`);
+      // Buscar dados do vet para o email
+      const vetUser = await prisma.user.findUnique({
+        where:  { id: vetUserId },
+        select: { fullName: true },
+      });
 
-      res.status(201).json({ sucesso: true, dados: convite, mensagem: 'Convite enviado por e-mail' });
+      // Enviar email com link de convite
+      emailService.enviarConviteEquipe({
+        email,
+        cargo,
+        token:      convite.token,
+        vetNome:    vetUser?.fullName || 'Veterinário',
+        equipeNome: equipe.nome,
+      }).catch(err => console.error('[emailService] Falha ao enviar convite de equipe:', err));
+
+      res.status(201).json({
+        sucesso:  true,
+        dados:    convite,
+        mensagem: 'Convite enviado por e-mail',
+      });
     } catch (err) {
       console.error('Erro ao convidar membro:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
 
-  // GET /api/equipes/convite/:token  (pública)
   verificarConvite: async (req, res) => {
     try {
       const { token } = req.params;
@@ -261,9 +269,9 @@ const EquipeController = {
         include: { equipe: { include: { empresa: { select: { nome: true } } } } },
       });
 
-      if (!convite)                          return res.status(404).json({ sucesso: false, mensagem: 'Convite não encontrado' });
-      if (convite.status !== 'PENDENTE')     return res.status(410).json({ sucesso: false, mensagem: 'Convite já utilizado ou cancelado' });
-      if (new Date() > convite.expiresAt)    return res.status(410).json({ sucesso: false, mensagem: 'Convite expirado' });
+      if (!convite)                       return res.status(404).json({ sucesso: false, mensagem: 'Convite não encontrado' });
+      if (convite.status !== 'PENDENTE')  return res.status(410).json({ sucesso: false, mensagem: 'Convite já utilizado ou cancelado' });
+      if (new Date() > convite.expiresAt) return res.status(410).json({ sucesso: false, mensagem: 'Convite expirado' });
 
       res.json({ sucesso: true, dados: { email: convite.email, cargo: convite.cargo, equipe: convite.equipe } });
     } catch (err) {
@@ -272,7 +280,6 @@ const EquipeController = {
     }
   },
 
-  // POST /api/equipes/convite/:token/aceitar
   aceitarConvite: async (req, res) => {
     try {
       const { token } = req.params;
