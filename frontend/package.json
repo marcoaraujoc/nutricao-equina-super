@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@react-oauth/google": "^0.13.5",
     "axios": "^1.15.0",
     "chart.js": "^4.5.1",

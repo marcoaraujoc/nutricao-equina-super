@@ -5,7 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard } from 'lucide-react';
+import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
 
 interface Animal {
   id:               number;
@@ -44,6 +45,75 @@ const idadeDisplay = (animal: Animal): string => {
   return '—';
 };
 
+// ─── Card mobile ──────────────────────────────────────────────────────────────
+function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, onExcluir }: {
+  animal:        Animal;
+  onDashboard:   () => void;
+  onEditar:      () => void;
+  onDesvincular: () => void;
+  onExcluir:     () => void;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+      <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+        {animal.photoUrl
+          ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+          : <div className="w-full h-full flex items-center justify-center text-2xl">🐴</div>
+        }
+      </div>
+
+      <div className="flex-1 min-w-0" onClick={onDashboard}>
+        <p className="font-semibold text-gray-900 truncate">{animal.nome}</p>
+        <p className="text-xs text-gray-500 truncate">
+          {animal.raca?.nome || animal.especie?.nome || '—'}
+        </p>
+        {animal.user?.fullName && (
+          <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+        )}
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+            {idadeDisplay(animal)}
+          </span>
+          {animal.sexo && (
+            <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+              {animal.sexo}
+            </span>
+          )}
+          {animal.categoriaAnimal && (
+            <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 truncate max-w-[120px]">
+              {animal.categoriaAnimal}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1 flex-shrink-0">
+        <button onClick={onDashboard}
+          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+          title="Ver detalhes">
+          <LayoutDashboard size={15} />
+        </button>
+        <button onClick={onEditar}
+          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+          title="Editar">
+          <Pencil size={15} />
+        </button>
+        <button onClick={onDesvincular}
+          className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+          title="Desvincular">
+          <Unlink size={15} />
+        </button>
+        <button onClick={onExcluir}
+          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+          title="Excluir">
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
@@ -70,7 +140,6 @@ const AnimaisVet = () => {
 
   useEffect(() => { if (user?.id) loadAnimais(); }, [user?.id]);
 
-  // ── Filtro por tipo (item 1) ─────────────────────────────────────────────
   const animaisFiltrados = animais.filter(a => {
     const termo = busca.toLowerCase().trim();
     if (!termo) return true;
@@ -79,7 +148,6 @@ const AnimaisVet = () => {
       : (a.user?.fullName ?? '').toLowerCase().includes(termo);
   });
 
-  // Navegar para o detalhe do animal (linha clicável)
   const irParaAnimal = (animal: Animal) => {
     setSelectedAnimal({
       ...animal,
@@ -140,159 +208,164 @@ const AnimaisVet = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="7xl">
+      <div className="space-y-5">
 
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <button onClick={() => navigate('/')} className="text-sm text-emerald-700 hover:text-emerald-800 flex items-center gap-1 font-medium">
-            ← Voltar
+        {/* ── Header ────────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate('/')}
+              className="flex items-center gap-1.5 text-sm text-emerald-700 hover:text-emerald-800 font-medium">
+              <ArrowLeft size={16} /> Voltar
+            </button>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
+          </div>
+          <button
+            onClick={() => navigate('/animais')}
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
+                       px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+          >
+            <Plus size={15} />
+            <span className="hidden sm:inline">Novo Paciente</span>
+            <span className="sm:hidden">Novo</span>
           </button>
         </div>
-        <button
-          onClick={() => navigate('/animais')}
-          className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors"
-        >
-          <Plus size={16} /> Novo Paciente
-        </button>
-      </div>
 
-      <h1 className="text-2xl font-bold text-gray-900 -mt-2">Meus Pacientes</h1>
-
-      {/* Busca com seletor de campo */}
-      <div className="flex gap-2">
-        <select
-          value={filtroCampo}
-          onChange={e => { setFiltroCampo(e.target.value as FiltroCampo); setBusca(''); }}
-          className="border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:border-emerald-600 bg-white min-w-[160px]"
-        >
-          <option value="animal">Buscar por animal</option>
-          <option value="proprietario">Buscar por proprietário</option>
-        </select>
-        <div className="relative flex-1 max-w-md">
-          <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder={filtroCampo === 'animal' ? 'Nome do animal...' : 'Nome do proprietário...'}
-            value={busca}
-            onChange={e => setBusca(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 transition-colors"
-          />
-        </div>
-      </div>
-
-      {/* Tabela */}
-      {loading ? (
-        <div className="text-center py-16 text-gray-400 text-sm">Carregando pacientes...</div>
-      ) : animaisFiltrados.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-3xl mb-3">🔍</p>
-          <p className="text-gray-400 text-sm">
-            {busca ? `Nenhum resultado para "${busca}"` : 'Nenhum paciente cadastrado'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-
-          {/* Cabeçalho */}
-          <div className="grid grid-cols-[40px_1fr_160px_120px_80px_60px_120px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
-            <span />
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide hidden sm:block">Categoria NRC</span>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
+        {/* ── Busca ──────────────────────────────────────────────────────── */}
+        <div className="flex gap-2">
+          <select
+            value={filtroCampo}
+            onChange={e => { setFiltroCampo(e.target.value as FiltroCampo); setBusca(''); }}
+            className="border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-700
+                       focus:outline-none focus:border-emerald-600 bg-white flex-shrink-0"
+          >
+            <option value="animal">Por animal</option>
+            <option value="proprietario">Por proprietário</option>
+          </select>
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder={filtroCampo === 'animal' ? 'Nome do animal...' : 'Nome do proprietário...'}
+              value={busca}
+              onChange={e => setBusca(e.target.value)}
+              className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm
+                         text-gray-900 focus:outline-none focus:border-emerald-600
+                         focus:ring-2 focus:ring-emerald-100 transition-colors"
+            />
           </div>
+        </div>
 
-          {/* Linhas */}
-          <div className="divide-y divide-gray-50">
-            {animaisFiltrados.map(animal => (
-              <div
-                key={animal.id}
-                onClick={() => irParaAnimal(animal)}
-                className="grid grid-cols-[40px_1fr_160px_120px_80px_60px_120px] items-center gap-4 px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
-              >
-                {/* Foto */}
-                <div className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                  {animal.photoUrl
-                    ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
-                  }
-                </div>
-
-                {/* Nome + proprietário */}
-                <div className="min-w-0">
-                  <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
-                    {animal.nome}
-                  </p>
-                  {animal.user?.fullName && (
-                    <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
-                  )}
-                </div>
-
-                {/* Raça */}
-                <p className="text-sm text-gray-600 truncate">
-                  {animal.raca?.nome || animal.especie?.nome || '—'}
-                </p>
-
-                {/* Categoria NRC */}
-                <p className="text-sm text-gray-600 truncate hidden sm:block">
-                  {animal.categoriaAnimal || '—'}
-                </p>
-
-                {/* Idade */}
-                <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
-
-                {/* Sexo */}
-                <p className="text-sm text-gray-600">{animal.sexo || '—'}</p>
-
-                {/* Ações */}
-                <div
-                  className="flex items-center justify-end gap-1"
-                  onClick={e => e.stopPropagation()} // impede navegar ao clicar nos botões
-                >
-                  <button
-                    onClick={() => irParaAnimal(animal)}
-                    className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                    title="Ver detalhes"
-                  >
-                    <LayoutDashboard size={15} />
-                  </button>
-                  <button
-                    onClick={() => irParaEditar(animal)}
-                    className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                    title="Editar"
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    onClick={() => setAnimalToUnlink(animal)}
-                    className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                    title="Desvincular"
-                  >
-                    <Unlink size={15} />
-                  </button>
-                  <button
-                    onClick={() => setAnimalToDelete(animal)}
-                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                    title="Excluir"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </div>
-            ))}
+        {/* ── Conteúdo ───────────────────────────────────────────────────── */}
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
           </div>
-
-          {/* Rodapé */}
-          <div className="px-5 py-3 border-t border-gray-50 text-center">
-            <p className="text-xs text-gray-400">
-              {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
+        ) : animaisFiltrados.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-3xl mb-3">🔍</p>
+            <p className="text-gray-400 text-sm">
+              {busca ? `Nenhum resultado para "${busca}"` : 'Nenhum paciente cadastrado'}
             </p>
           </div>
-        </div>
-      )}
+        ) : (
+          <>
+            {/* MOBILE — cards */}
+            <div className="space-y-3 md:hidden">
+              {animaisFiltrados.map(animal => (
+                <AnimalCardMobile
+                  key={animal.id}
+                  animal={animal}
+                  onDashboard={() => irParaAnimal(animal)}
+                  onEditar={() => irParaEditar(animal)}
+                  onDesvincular={() => setAnimalToUnlink(animal)}
+                  onExcluir={() => setAnimalToDelete(animal)}
+                />
+              ))}
+            </div>
+
+            {/* DESKTOP — tabela */}
+            <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="grid grid-cols-[44px_1fr_160px_130px_90px_70px_130px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <span />
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Categoria NRC</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
+              </div>
+
+              <div className="divide-y divide-gray-50">
+                {animaisFiltrados.map(animal => (
+                  <div
+                    key={animal.id}
+                    onClick={() => irParaAnimal(animal)}
+                    className="grid grid-cols-[44px_1fr_160px_130px_90px_70px_130px] items-center gap-4
+                               px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
+                  >
+                    <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                      {animal.photoUrl
+                        ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+                        : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
+                      }
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
+                        {animal.nome}
+                      </p>
+                      {animal.user?.fullName && (
+                        <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-600 truncate">
+                      {animal.raca?.nome || animal.especie?.nome || '—'}
+                    </p>
+                    <p className="text-sm text-gray-600 truncate">
+                      {animal.categoriaAnimal || '—'}
+                    </p>
+                    <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
+                    <p className="text-sm text-gray-600">{animal.sexo || '—'}</p>
+                    <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => irParaAnimal(animal)}
+                        className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        title="Ver detalhes">
+                        <LayoutDashboard size={15} />
+                      </button>
+                      <button onClick={() => irParaEditar(animal)}
+                        className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        title="Editar">
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => setAnimalToUnlink(animal)}
+                        className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                        title="Desvincular">
+                        <Unlink size={15} />
+                      </button>
+                      <button onClick={() => setAnimalToDelete(animal)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Excluir">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="px-5 py-3 border-t border-gray-50 text-center">
+                <p className="text-xs text-gray-400">
+                  {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </div>
+
+            {/* Rodapé mobile */}
+            <p className="md:hidden text-xs text-gray-400 text-center">
+              {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
+            </p>
+          </>
+        )}
+      </div>
 
       {/* Modal — Desvincular */}
       {animalToUnlink && (
@@ -328,7 +401,8 @@ const AnimaisVet = () => {
             <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">⚠️</div>
             <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir paciente?</h2>
             <p className="text-gray-500 text-sm mb-6">
-              Isso removerá permanentemente <strong>{animalToDelete.nome}</strong> do sistema.
+              Isso removerá permanentemente{' '}
+              <strong className="text-gray-700">{animalToDelete.nome}</strong> do sistema.
               Esta ação não pode ser desfeita.
             </p>
             <div className="flex gap-3">
@@ -344,7 +418,7 @@ const AnimaisVet = () => {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 };
 

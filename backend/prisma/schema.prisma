@@ -1,90 +1,114 @@
+// =============================================================================
+// S2Vet — Prisma Schema
+// Provider : PostgreSQL
+// Schema   : schs2vet
+// =============================================================================
+
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["schs2vet"]
 }
 
+// =============================================================================
+// USUÁRIOS
+// =============================================================================
+
 model User {
-  id                   Int        @id @default(autoincrement())
-  fullName             String     @db.VarChar(255)
-  email                String     @unique @db.VarChar(255)
-  passwordHash         String     @db.VarChar(255)
-  phone                String?    @db.VarChar(30)
-  role                 String     @default("USER") @db.VarChar(50)
-  userType             String     @default("PROPRIETARIO") @db.VarChar(50)
-  cep                  String?    @db.VarChar(10)
-  endereco             String?    @db.VarChar(255)
-  complemento          String?    @db.VarChar(100)
-  bairro               String?    @db.VarChar(100)
-  cidade               String?    @db.VarChar(100)
-  estado               String?    @db.VarChar(2)
-  createdAt            DateTime   @default(now()) @db.DateTime(0)
-  ativo                Boolean    @default(true)
-  resetPasswordToken   String?    @unique @db.VarChar(255)
-  resetPasswordExpires DateTime?  @db.DateTime(0)
+  id                   Int       @id @default(autoincrement())
+  fullName             String    @db.VarChar(255)
+  email                String    @unique @db.VarChar(255)
+  passwordHash         String    @db.VarChar(255)
+  phone                String?   @db.VarChar(30)
+  role                 String    @default("USER") @db.VarChar(50)
+  userType             String    @default("PROPRIETARIO") @db.VarChar(50)
+  cep                  String?   @db.VarChar(10)
+  endereco             String?   @db.VarChar(255)
+  complemento          String?   @db.VarChar(100)
+  bairro               String?   @db.VarChar(100)
+  cidade               String?   @db.VarChar(100)
+  estado               String?   @db.VarChar(2)
+  createdAt            DateTime  @default(now())
+  ativo                Boolean   @default(true)
+  resetPasswordToken   String?   @unique @db.VarChar(255)
+  resetPasswordExpires DateTime?
+  mustChangePassword  Boolean  @default(false)
+
   animais              Animal[]
   auditLogs            AuditLog[]
-  dietasCriadas        Dieta[]    @relation("CriadorDieta")
-  dietasModificadas    Dieta[]    @relation("ModificadorDieta")
-  evolucoesCriadas     EvolucaoClinica[]       @relation("EvolucaoVeterinario")
-  evolucoesModificadas EvolucaoClinica[]       @relation("EvolucaoModificadoPor")
-  prescricoes          Prescricao[]            @relation("PrescricaoVeterinario")
-  vacinas              VacinaClinica[]         @relation("VacinaVeterinario")
+  dietasCriadas        Dieta[]                @relation("CriadorDieta")
+  dietasModificadas    Dieta[]                @relation("ModificadorDieta")
+  evolucoesCriadas     EvolucaoClinica[]      @relation("EvolucaoVeterinario")
+  evolucoesModificadas EvolucaoClinica[]      @relation("EvolucaoModificadoPor")
+  prescricoes          Prescricao[]           @relation("PrescricaoVeterinario")
+  vacinas              VacinaClinica[]        @relation("VacinaVeterinario")
   encaminhamentos      EncaminhamentoClinico[] @relation("EncaminhamentoVeterinario")
-  examesClinicos       ExameClinico[]          @relation("ExameClinicoVeterinario")
-  faturaItens          FaturaItem[]            @relation("FaturaItemVet")
+  examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
+  faturaItens          FaturaItem[]           @relation("FaturaItemVet")
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
-  // Relação: solicitações onde este usuário é o veterinário
-  vetSolicitacoes      VetAnimalSolicitacao[]  @relation("VetSolicitacoes")
-  empresasOwner        Empresa[]               @relation("EmpresaOwner")
+  vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
+  empresasOwner        Empresa[]              @relation("EmpresaOwner")
   membrosEquipe        MembroEquipe[]
 
   @@map("users")
+  @@schema("schs2vet")
 }
 
+// =============================================================================
+// ANIMAIS
+// =============================================================================
+
 model Animal {
-  id                 Int                  @id @default(autoincrement())
-  nome               String               @db.Text
+  id                 Int      @id @default(autoincrement())
+  nome               String   @db.Text
   peso               Float
-  dataNascimento     DateTime?            @db.DateTime(0)
-  sexo               String               @db.Text
-  photoUrl           String?              @db.Text
-  dataCadastro       DateTime             @default(now()) @db.DateTime(0)
-  ativo              Boolean              @default(true)
+  dataNascimento     DateTime?
+  sexo               String   @db.Text
+  photoUrl           String?  @db.Text
+  dataCadastro       DateTime @default(now())
+  ativo              Boolean  @default(true)
   especieId          Int
   racaId             Int?
   userId             Int
-  categoriaAnimal    String?              @db.VarChar(100)
-  tipoExercicio      String?              @db.VarChar(100)
-  veterinarioNome    String?              @db.VarChar(255)
-  veterinarioClinica String?              @db.VarChar(255)
+  categoriaAnimal    String?  @db.VarChar(100)
+  tipoExercicio      String?  @db.VarChar(100)
+  veterinarioNome    String?  @db.VarChar(255)
+  veterinarioClinica String?  @db.VarChar(255)
+  local              String?  @db.VarChar(255)
   idadeAnos          Int?
-  especie            Especie              @relation(fields: [especieId], references: [id])
-  raca               Raca?                @relation(fields: [racaId], references: [id])
-  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  dietas             Dieta[]
-  exames             ExameNutricional[]
-  ocorrencias        OcorrenciaSaude[]
-  planosDieta        PlanoDieta[]
-  relatorios         RelatorioSalvo[]
-  evolucoes          EvolucaoClinica[]       @relation("AnimalEvolucoes")
-  prescricoes        Prescricao[]            @relation("AnimalPrescricoes")
-  vacinas            VacinaClinica[]         @relation("AnimalVacinas")
-  encaminhamentos    EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
-  examesClinicos     ExameClinico[]          @relation("AnimalExamesClinicos")
-  faturas            Fatura[]                @relation("AnimalFaturas")
-  // Solicitações de vínculo com veterinários
-  solicitacoes       VetAnimalSolicitacao[]  @relation("AnimalSolicitacoes")
 
-  @@index([especieId], map: "tb_animais_especieId_fkey")
-  @@index([racaId],    map: "tb_animais_racaId_fkey")
-  @@index([userId],    map: "tb_animais_userId_fkey")
+  especie         Especie              @relation(fields: [especieId], references: [id])
+  raca            Raca?                @relation(fields: [racaId],    references: [id])
+  user            User                 @relation(fields: [userId],    references: [id], onDelete: Cascade)
+  dietas          Dieta[]
+  exames          ExameNutricional[]
+  ocorrencias     OcorrenciaSaude[]
+  planosDieta     PlanoDieta[]
+  relatorios      RelatorioSalvo[]
+  evolucoes       EvolucaoClinica[]      @relation("AnimalEvolucoes")
+  prescricoes     Prescricao[]           @relation("AnimalPrescricoes")
+  vacinas         VacinaClinica[]        @relation("AnimalVacinas")
+  encaminhamentos EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
+  examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
+  faturas         Fatura[]               @relation("AnimalFaturas")
+  solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
+
+  @@index([especieId])
+  @@index([racaId])
+  @@index([userId])
   @@map("tb_animais")
+  @@schema("schs2vet")
 }
+
+// =============================================================================
+// ESPÉCIES E RAÇAS
+// =============================================================================
 
 model Especie {
   id            Int                  @id @default(autoincrement())
@@ -96,6 +120,7 @@ model Especie {
   vetEspecies   VetEspecie[]
 
   @@map("tb_especies")
+  @@schema("schs2vet")
 }
 
 model Raca {
@@ -105,64 +130,14 @@ model Raca {
   animais   Animal[]
   especie   Especie  @relation(fields: [especieId], references: [id])
 
-  @@index([especieId], map: "tb_racas_especieId_fkey")
+  @@index([especieId])
   @@map("tb_racas")
+  @@schema("schs2vet")
 }
 
-model Dieta {
-  id            Int       @id @default(autoincrement())
-  animalId      Int
-  alimentoId    Int
-  qtdGramasDia  Float
-  periodicidade String?   @db.Text
-  unidade       String?   @db.Text
-  dataInicio    DateTime  @default(now()) @db.DateTime(0)
-  dataFim       DateTime? @db.DateTime(0)
-  horario       String?   @db.Text
-  observacao    String?   @db.Text
-  dataCriacao   DateTime  @default(now()) @db.DateTime(0)
-  dataAlteracao DateTime  @updatedAt @db.DateTime(0)
-  criadopor     Int
-  modificadopor Int
-  planoDietaId  Int?
-
-  plano           PlanoDieta? @relation(fields: [planoDietaId], references: [id])
-  alimento        Alimento    @relation(fields: [alimentoId], references: [id])
-  animal          Animal      @relation(fields: [animalId], references: [id])
-  userCriador     User        @relation("CriadorDieta",     fields: [criadopor],     references: [id])
-  userModificador User        @relation("ModificadorDieta", fields: [modificadopor], references: [id])
-
-  @@index([alimentoId],    map: "tb_dieta_alimentoId_fkey")
-  @@index([animalId],      map: "tb_dieta_animalId_fkey")
-  @@index([criadopor],     map: "tb_dieta_criadopor_fkey")
-  @@index([modificadopor], map: "tb_dieta_modificadopor_fkey")
-  @@map("tb_dieta")
-}
-
-model Alimento {
-  id          Int                  @id @default(autoincrement())
-  nome        String               @db.Text
-  categoria   String               @db.Text
-  fabricante  String?              @db.Text
-  forma       String?              @db.Text
-  ativo       Boolean              @default(true)
-  composicoes ComposicaoAlimento[]
-  dietas      Dieta[]
-
-  @@map("tb_alimentos")
-}
-
-model Nutriente {
-  id            Int                  @id @default(autoincrement())
-  nome          String               @db.Text
-  categoria     String               @db.Text
-  unidadePadrao String               @db.Text
-  composicoes   ComposicaoAlimento[]
-  exames        ExameNutricional[]
-  exigenciasNRC ExigenciasNRC[]
-
-  @@map("tb_nutrientes")
-}
+// =============================================================================
+// DIETAS E PLANOS
+// =============================================================================
 
 model PlanoDieta {
   id          Int      @id @default(autoincrement())
@@ -175,6 +150,69 @@ model PlanoDieta {
   itens  Dieta[]
 
   @@map("tb_planos_dieta")
+  @@schema("schs2vet")
+}
+
+model Dieta {
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  alimentoId    Int
+  qtdGramasDia  Float
+  periodicidade String?   @db.Text
+  unidade       String?   @db.Text
+  dataInicio    DateTime  @default(now())
+  dataFim       DateTime?
+  horario       String?   @db.Text
+  observacao    String?   @db.Text
+  dataCriacao   DateTime  @default(now())
+  dataAlteracao DateTime  @updatedAt
+  criadopor     Int
+  modificadopor Int
+  planoDietaId  Int?
+
+  plano           PlanoDieta? @relation(fields: [planoDietaId],  references: [id])
+  alimento        Alimento    @relation(fields: [alimentoId],    references: [id])
+  animal          Animal      @relation(fields: [animalId],      references: [id])
+  userCriador     User        @relation("CriadorDieta",     fields: [criadopor],     references: [id])
+  userModificador User        @relation("ModificadorDieta", fields: [modificadopor], references: [id])
+
+  @@index([alimentoId])
+  @@index([animalId])
+  @@index([criadopor])
+  @@index([modificadopor])
+  @@map("tb_dieta")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// ALIMENTOS E NUTRIENTES
+// =============================================================================
+
+model Alimento {
+  id          Int                  @id @default(autoincrement())
+  nome        String               @db.Text
+  categoria   String               @db.Text
+  fabricante  String?              @db.Text
+  forma       String?              @db.Text
+  ativo       Boolean              @default(true)
+  composicoes ComposicaoAlimento[]
+  dietas      Dieta[]
+
+  @@map("tb_alimentos")
+  @@schema("schs2vet")
+}
+
+model Nutriente {
+  id            Int                  @id @default(autoincrement())
+  nome          String               @db.Text
+  categoria     String               @db.Text
+  unidadePadrao String               @db.Text
+  composicoes   ComposicaoAlimento[]
+  exames        ExameNutricional[]
+  exigenciasNRC ExigenciasNRC[]
+
+  @@map("tb_nutrientes")
+  @@schema("schs2vet")
 }
 
 model ComposicaoAlimento {
@@ -184,60 +222,16 @@ model ComposicaoAlimento {
   especieId   Int?
   valorPorKg  Float
   base        String    @default("Seca") @db.VarChar(50)
-  alimento    Alimento  @relation(fields: [alimentoId], references: [id])
-  nutriente   Nutriente @relation(fields: [nutrienteId], references: [id])
-  especie     Especie?  @relation(fields: [especieId], references: [id])
+
+  alimento  Alimento  @relation(fields: [alimentoId],  references: [id])
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie   Especie?  @relation(fields: [especieId],   references: [id])
 
   @@unique([alimentoId, nutrienteId])
-  @@index([nutrienteId], map: "tb_composicao_alimento_nutrienteId_fkey")
+  @@index([nutrienteId])
   @@index([especieId])
   @@map("tb_composicao_alimento")
-}
-
-model ExameNutricional {
-  id              Int       @id @default(autoincrement())
-  animalId        Int
-  nutrienteId     Int
-  dataExame       DateTime  @db.DateTime(0)
-  valorEncontrado Float
-  unidade         String    @db.Text
-  valorMinRef     Float?
-  valorMaxRef     Float?
-  observacao      String?   @db.Text
-  arquivoUrl      String?   @db.Text
-  animal          Animal    @relation(fields: [animalId], references: [id])
-  nutriente       Nutriente @relation(fields: [nutrienteId], references: [id])
-
-  @@index([animalId],    map: "tb_exames_nutricionais_animalId_fkey")
-  @@index([nutrienteId], map: "tb_exames_nutricionais_nutrienteId_fkey")
-  @@map("tb_exames_nutricionais")
-}
-
-model OcorrenciaSaude {
-  id          Int       @id @default(autoincrement())
-  animalId    Int
-  dataInicio  DateTime  @db.DateTime(0)
-  dataFim     DateTime? @db.DateTime(0)
-  problema    String    @db.Text
-  tratamento  String?   @db.Text
-  responsavel String?   @db.Text
-  animal      Animal    @relation(fields: [animalId], references: [id])
-
-  @@index([animalId], map: "tb_ocorrencias_saude_animalId_fkey")
-  @@map("tb_ocorrencias_saude")
-}
-
-model AuditLog {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  userName  String   @db.Text
-  email     String   @db.Text
-  action    String   @db.Text
-  timestamp DateTime @default(now()) @db.DateTime(0)
-  user      User     @relation(fields: [userId], references: [id])
-
-  @@index([userId], map: "tb_audit_logs_userId_fkey")
-  @@map("tb_audit_logs")
+  @@schema("schs2vet")
 }
 
 model ExigenciasNRC {
@@ -246,65 +240,120 @@ model ExigenciasNRC {
   peso            Int
   categoriaAnimal String?   @db.VarChar(100)
   tipoExercicio   String    @db.VarChar(100)
-  valorExigido    Float     @db.Float
+  valorExigido    Float
   unidade         String?   @db.VarChar(20)
   fonte           String?   @db.VarChar(100)
   especieId       Int?
-  createdAt       DateTime  @default(now()) @db.DateTime(0)
-  updatedAt       DateTime  @updatedAt @db.DateTime(0)
-  nutriente       Nutriente @relation(fields: [nutrienteId], references: [id])
-  especie         Especie?  @relation(fields: [especieId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  @@unique([nutrienteId, peso, categoriaAnimal, tipoExercicio], map: "tb_exigencias_nrc_unique")
-  @@index([nutrienteId], map: "tb_exigencias_nrc_nutrienteId_fkey")
-  @@index([especieId],   map: "tb_exigencias_nrc_especieId_fkey")
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie   Especie?  @relation(fields: [especieId],   references: [id])
+
+  @@unique([nutrienteId, peso, categoriaAnimal, tipoExercicio])
+  @@index([nutrienteId])
+  @@index([especieId])
   @@map("tb_exigencias_nrc")
+  @@schema("schs2vet")
 }
 
-model RelatorioSalvo {
-  id             Int      @id @default(autoincrement())
-  animalId       Int
-  planoDietaId   Int?
-  payload        String   @db.LongText
-  fonteCalculo   String   @db.VarChar(50)
-  pesoCalculado  Float?
-  categoriaUsada String?  @db.VarChar(100)
-  especieNome    String?  @db.VarChar(100)
-  geradoEm       DateTime @default(now())
-  animal         Animal   @relation(fields: [animalId], references: [id])
+// =============================================================================
+// EXAMES
+// =============================================================================
+
+model ExameNutricional {
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  nutrienteId     Int
+  dataExame       DateTime
+  valorEncontrado Float
+  unidade         String    @db.Text
+  valorMinRef     Float?
+  valorMaxRef     Float?
+  observacao      String?   @db.Text
+  arquivoUrl      String?   @db.Text
+
+  animal    Animal    @relation(fields: [animalId],    references: [id])
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
 
   @@index([animalId])
-  @@index([geradoEm])
-  @@map("tb_relatorios_salvos")
+  @@index([nutrienteId])
+  @@map("tb_exames_nutricionais")
+  @@schema("schs2vet")
 }
+
+model ExameClinico {
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  veterinarioId   Int
+  tipo            String
+  descricao       String
+  status          String    @default("SOLICITADO")
+  resultado       String?   @db.Text
+  dataSolicitacao DateTime  @default(now())
+  dataResultado   DateTime?
+  arquivoUrl      String?
+  observacao      String?   @db.Text
+  ativo           Boolean   @default(true)
+
+  animal      Animal @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id])
+  veterinario User   @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id])
+
+  @@map("tb_exames_clinicos")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// OCORRÊNCIAS DE SAÚDE
+// =============================================================================
+
+model OcorrenciaSaude {
+  id          Int       @id @default(autoincrement())
+  animalId    Int
+  dataInicio  DateTime
+  dataFim     DateTime?
+  problema    String    @db.Text
+  tratamento  String?   @db.Text
+  responsavel String?   @db.Text
+
+  animal Animal @relation(fields: [animalId], references: [id])
+
+  @@index([animalId])
+  @@map("tb_ocorrencias_saude")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// CLÍNICA — EVOLUÇÕES, PRESCRIÇÕES, VACINAS, ENCAMINHAMENTOS
+// =============================================================================
 
 model EvolucaoClinica {
   id                    Int       @id @default(autoincrement())
   animalId              Int
-  animal                Animal    @relation("AnimalEvolucoes",     fields: [animalId],        references: [id])
   veterinarioId         Int
-  veterinario           User      @relation("EvolucaoVeterinario", fields: [veterinarioId],   references: [id])
   modificadoPorId       Int?
-  modificadoPor         User?     @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id])
   especialidade         String
   status                String    @default("EM_ANDAMENTO")
-  texto                 String    @db.LongText
+  texto                 String    @db.Text
   dataInicio            DateTime  @default(now())
   dataFim               DateTime?
   dataModificacao       DateTime?
   ativo                 Boolean   @default(true)
-  justificativaExclusao String?   @db.LongText
+  justificativaExclusao String?   @db.Text
   aprovado              Boolean   @default(true)
 
+  animal        Animal @relation("AnimalEvolucoes",      fields: [animalId],        references: [id])
+  veterinario   User   @relation("EvolucaoVeterinario",  fields: [veterinarioId],   references: [id])
+  modificadoPor User?  @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id])
+
   @@map("tb_evolucoes_clinicas")
+  @@schema("schs2vet")
 }
 
 model Prescricao {
   id            Int       @id @default(autoincrement())
   animalId      Int
-  animal        Animal    @relation("AnimalPrescricoes",      fields: [animalId],      references: [id])
   veterinarioId Int
-  veterinario   User      @relation("PrescricaoVeterinario",  fields: [veterinarioId], references: [id])
   medicamento   String
   dose          String
   frequencia    String
@@ -316,15 +365,17 @@ model Prescricao {
   ativo         Boolean   @default(true)
   aprovado      Boolean   @default(true)
 
+  animal      Animal @relation("AnimalPrescricoes",     fields: [animalId],      references: [id])
+  veterinario User   @relation("PrescricaoVeterinario", fields: [veterinarioId], references: [id])
+
   @@map("tb_prescricoes")
+  @@schema("schs2vet")
 }
 
 model VacinaClinica {
   id            Int       @id @default(autoincrement())
   animalId      Int
-  animal        Animal    @relation("AnimalVacinas",        fields: [animalId],        references: [id])
   veterinarioId Int
-  veterinario   User      @relation("VacinaVeterinario",   fields: [veterinarioId],   references: [id])
   nome          String
   lote          String?
   fabricante    String?
@@ -333,15 +384,17 @@ model VacinaClinica {
   observacao    String?   @db.Text
   ativo         Boolean   @default(true)
 
+  animal      Animal @relation("AnimalVacinas",      fields: [animalId],        references: [id])
+  veterinario User   @relation("VacinaVeterinario",  fields: [veterinarioId],   references: [id])
+
   @@map("tb_vacinas_clinicas")
+  @@schema("schs2vet")
 }
 
 model EncaminhamentoClinico {
   id                 Int      @id @default(autoincrement())
   animalId           Int
-  animal             Animal   @relation("AnimalEncaminhamentos",       fields: [animalId],      references: [id])
   veterinarioId      Int
-  veterinario        User     @relation("EncaminhamentoVeterinario",   fields: [veterinarioId], references: [id])
   especialidade      String
   motivo             String   @db.Text
   veterinarioDestino String?
@@ -352,128 +405,185 @@ model EncaminhamentoClinico {
   observacao         String?  @db.Text
   ativo              Boolean  @default(true)
 
+  animal      Animal @relation("AnimalEncaminhamentos",      fields: [animalId],      references: [id])
+  veterinario User   @relation("EncaminhamentoVeterinario",  fields: [veterinarioId], references: [id])
+
   @@map("tb_encaminhamentos_clinicos")
+  @@schema("schs2vet")
 }
 
-model ExameClinico {
-  id              Int       @id @default(autoincrement())
-  animalId        Int
-  animal          Animal    @relation("AnimalExamesClinicos",      fields: [animalId],      references: [id])
-  veterinarioId   Int
-  veterinario     User      @relation("ExameClinicoVeterinario",   fields: [veterinarioId], references: [id])
-  tipo            String
-  descricao       String
-  status          String    @default("SOLICITADO")
-  resultado       String?   @db.Text
-  dataSolicitacao DateTime  @default(now())
-  dataResultado   DateTime?
-  arquivoUrl      String?
-  observacao      String?   @db.Text
-  ativo           Boolean   @default(true)
-
-  @@map("tb_exames_clinicos")
-}
+// =============================================================================
+// FINANCEIRO
+// =============================================================================
 
 model Fatura {
-  id        Int          @id @default(autoincrement())
-  animalId  Int
-  animal    Animal       @relation("AnimalFaturas", fields: [animalId], references: [id])
-  total     Float        @default(0)
-  status    String       @default("ABERTA")
-  criadoEm  DateTime     @default(now())
-  itens     FaturaItem[]
+  id       Int          @id @default(autoincrement())
+  animalId Int
+  total    Float        @default(0)
+  status   String       @default("ABERTA")
+  criadoEm DateTime     @default(now())
+  itens    FaturaItem[]
+
+  animal Animal @relation("AnimalFaturas", fields: [animalId], references: [id])
 
   @@map("tb_faturas")
+  @@schema("schs2vet")
 }
 
 model FaturaItem {
   id            Int      @id @default(autoincrement())
   faturaId      Int
-  fatura        Fatura   @relation(fields: [faturaId],      references: [id])
   tipo          String
   descricao     String
   valor         Float    @default(0)
   quantidade    Int      @default(1)
   veterinarioId Int
-  veterinario   User     @relation("FaturaItemVet", fields: [veterinarioId], references: [id])
   criadoEm      DateTime @default(now())
 
+  fatura      Fatura @relation(fields: [faturaId],      references: [id])
+  veterinario User   @relation("FaturaItemVet", fields: [veterinarioId], references: [id])
+
   @@map("tb_fatura_itens")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// RELATÓRIOS
+// =============================================================================
+
+model RelatorioSalvo {
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  planoDietaId   Int?
+  payload        String   @db.Text
+  fonteCalculo   String   @db.VarChar(50)
+  pesoCalculado  Float?
+  categoriaUsada String?  @db.VarChar(100)
+  especieNome    String?  @db.VarChar(100)
+  geradoEm       DateTime @default(now())
+
+  animal Animal @relation(fields: [animalId], references: [id])
+
+  @@index([animalId])
+  @@index([geradoEm])
+  @@map("tb_relatorios_salvos")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// AUDITORIA E IA
+// =============================================================================
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  userName  String   @db.Text
+  email     String   @db.Text
+  action    String   @db.Text
+  timestamp DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("tb_audit_logs")
+  @@schema("schs2vet")
 }
 
 model AiUsageLog {
-  id            Int      @id @default(autoincrement())
-  createdAt     DateTime @default(now())
-  operacao      String
-  modelo        String
-  provedor      String   @default("groq")
+  id           Int      @id @default(autoincrement())
+  createdAt    DateTime @default(now())
+  operacao     String
+  modelo       String
+  provedor     String   @default("groq")
   tokensEntrada Int
-  tokensSaida   Int
-  tokensTotal   Int
-  custoUsd      Float
-  latenciaMs    Int
-  userId        Int?
-  animalId      Int?
-  sucesso       Boolean  @default(true)
-  erroMensagem  String?
-  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tokensSaida  Int
+  tokensTotal  Int
+  custoUsd     Float
+  latenciaMs   Int
+  userId       Int?
+  animalId     Int?
+  sucesso      Boolean  @default(true)
+  erroMensagem String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([userId])
   @@index([operacao])
   @@map("tb_ai_usage_logs")
+  @@schema("schs2vet")
 }
 
-// ─── Perfil do veterinário ────────────────────────────────────────
+// =============================================================================
+// VETERINÁRIO — PERFIL, ESPÉCIES, SUBESPECIALIDADES
+// =============================================================================
+
 model VetPerfil {
-  id        Int          @id @default(autoincrement())
-  userId    Int          @unique
-  crmv      String?      @db.VarChar(20)
-  bio       String?      @db.Text
-  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  especies  VetEspecie[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  crmv      String?  @unique @db.VarChar(20)
+  bio       String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  especies          VetEspecie[]
   subespecialidades VetSubespecialidade[]
-  // Garante que dois vets não tenham o mesmo CRMV
-  @@unique([crmv])
+
   @@map("tb_vet_perfil")
+  @@schema("schs2vet")
 }
 
-// ─── Espécies atendidas pelo veterinário ──────────────────────────
 model VetEspecie {
-  id          Int       @id @default(autoincrement())
+  id          Int @id @default(autoincrement())
   vetPerfilId Int
   especieId   Int
-  vetPerfil   VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
-  especie     Especie   @relation(fields: [especieId],   references: [id], onDelete: Cascade)
+
+  vetPerfil VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
+  especie   Especie   @relation(fields: [especieId],   references: [id], onDelete: Cascade)
 
   @@unique([vetPerfilId, especieId])
   @@map("tb_vet_especies")
+  @@schema("schs2vet")
 }
 
-// ─── Solicitação de vínculo animal ↔ veterinário ──────────────────
+model VetSubespecialidade {
+  id          Int      @id @default(autoincrement())
+  vetPerfilId Int
+  nome        String   @db.VarChar(100)
+  createdAt   DateTime @default(now())
+
+  vetPerfil VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
+
+  @@map("tb_vet_subespecialidades")
+  @@schema("schs2vet")
+}
+
 model VetAnimalSolicitacao {
-  id             Int       @id @default(autoincrement())
-  animalId       Int
-  vetUserId      Int
-  status         String    @default("PENDENTE")
-  mensagem       String?   @db.Text
-  approvalToken  String?   @unique @db.VarChar(64)
-  expiresAt      DateTime?
-  solicitanteId  Int?
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  vetUserId     Int
+  status        String    @default("PENDENTE")
+  mensagem      String?   @db.Text
+  approvalToken String?   @unique @db.VarChar(64)
+  expiresAt     DateTime?
+  solicitanteId Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
   animal      Animal @relation("AnimalSolicitacoes", fields: [animalId],  references: [id], onDelete: Cascade)
   veterinario User   @relation("VetSolicitacoes",    fields: [vetUserId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   @@unique([animalId, vetUserId])
   @@index([approvalToken])
   @@map("tb_vet_animal_solicitacoes")
+  @@schema("schs2vet")
 }
 
-// ─── Empresa (agrupa equipes) ─────────────────────────────────────
+// =============================================================================
+// EMPRESA E EQUIPES
+// =============================================================================
+
 model Empresa {
   id        Int      @id @default(autoincrement())
   nome      String
@@ -481,62 +591,57 @@ model Empresa {
   telefone  String?
   endereco  String?
   ownerId   Int
-  owner     User     @relation("EmpresaOwner", fields: [ownerId], references: [id])
-  equipes   Equipe[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  owner   User     @relation("EmpresaOwner", fields: [ownerId], references: [id])
+  equipes Equipe[]
+
   @@map("tb_empresas")
+  @@schema("schs2vet")
 }
 
-// ─── Equipe ───────────────────────────────────────────────────────
 model Equipe {
   id        Int             @id @default(autoincrement())
   nome      String
   empresaId Int
-  empresa   Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  membros   MembroEquipe[]
-  convites  ConviteEquipe[]
   createdAt DateTime        @default(now())
 
+  empresa  Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  membros  MembroEquipe[]
+  convites ConviteEquipe[]
+
   @@map("tb_equipes")
+  @@schema("schs2vet")
 }
 
-// ─── Membros de equipe ────────────────────────────────────────────
 model MembroEquipe {
   id        Int      @id @default(autoincrement())
   equipeId  Int
   userId    Int
   cargo     String
-  equipe    Equipe   @relation(fields: [equipeId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId],   references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+
+  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
 
   @@unique([equipeId, userId])
   @@map("tb_membros_equipe")
+  @@schema("schs2vet")
 }
 
-// ─── Convite de equipe ────────────────────────────────────────────
 model ConviteEquipe {
   id        Int      @id @default(autoincrement())
   equipeId  Int
   email     String
   cargo     String
   token     String   @unique @default(uuid())
-  status    String   @default("PENDENTE") // PENDENTE | ACEITO | EXPIRADO | CANCELADO
+  status    String   @default("PENDENTE")
   expiresAt DateTime
-  equipe    Equipe   @relation(fields: [equipeId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
+  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+
   @@map("tb_convites_equipe")
-}
-
-model VetSubespecialidade {
-  id          Int       @id @default(autoincrement())
-  vetPerfilId Int
-  nome        String    @db.VarChar(100)
-  vetPerfil   VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-
-  @@map("tb_vet_subespecialidades")
+  @@schema("schs2vet")
 }

@@ -7,7 +7,8 @@ interface User {
   email: string;
   fullName: string;
   role: string;
-  userType?: string; 
+  userType?: string;
+  mustChangePassword?: boolean; // ← NOVO
 }
 
 interface AuditLog {
@@ -22,6 +23,7 @@ interface AuthContextType {
   user: User | null;
   login: (token: string) => void;
   logout: () => void;
+  refreshUser: () => Promise<void>; // ← NOVO
   loading: boolean;
   auditLogs: AuditLog[];
 }
@@ -32,10 +34,10 @@ function decodeToken(token: string): User | null {
   try {
     const decoded: any = jwtDecode(token);
     return {
-      id: Number(decoded.sub) || Number(decoded.id) || 0,
-      email: decoded.email,
+      id:       Number(decoded.sub) || Number(decoded.id) || 0,
+      email:    decoded.email,
       fullName: decoded.fullName || decoded.name || '',
-      role: decoded.role || 'USER',
+      role:     decoded.role || 'USER',
     };
   } catch (e) {
     console.error('❌ Erro ao decodificar token:', e);
@@ -53,18 +55,19 @@ async function enriquecerComPerfil(userData: User): Promise<User> {
     const perfil = await res.json();
     return {
       ...userData,
-      userType: perfil.userType ?? userData.role,
-      // Se o userType for VETERINARIO, eleva o role para que o Sidebar reconheça
+      fullName:           perfil.fullName || userData.fullName, // ← adicione isso
+      userType:           perfil.userType ?? userData.role,
+      mustChangePassword: perfil.mustChangePassword ?? false,
       role: perfil.userType === 'VETERINARIO' ? 'VETERINARIO' : userData.role,
     };
   } catch {
-    return userData; // falha silenciosa — não quebra o login
+    return userData;
   }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser]           = useState<User | null>(null);
+  const [loading, setLoading]     = useState(true);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   useEffect(() => {
@@ -73,36 +76,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (token) {
         const userData = decodeToken(token);
         if (userData) {
-          // Enriquece com userType do backend antes de liberar a UI
           const enriquecido = await enriquecerComPerfil(userData);
           setUser(enriquecido);
         }
       }
-
       const savedLogs = localStorage.getItem('auditLogs');
       if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
-
       setLoading(false);
     };
     init();
   }, []);
 
-  // Função para registrar auditoria (não bloqueia o login)
   const registrarAuditoria = async (action: 'LOGIN' | 'LOGOUT') => {
     if (!user) return;
-
     try {
       const res = await fetch('/api/audit/log', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: user.id,
+          userId:   user.id,
           userName: user.fullName,
-          email: user.email,
+          email:    user.email,
           action,
         }),
       });
-
       if (res.ok) {
         console.log(`✅ Auditoria registrada: ${action}`);
       } else {
@@ -113,14 +110,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // ── Recarrega perfil do usuário logado sem fazer logout ────────────────────
+  const refreshUser = async (): Promise<void> => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    const base = decodeToken(token);
+    if (!base) return;
+    const enriquecido = await enriquecerComPerfil(base);
+    setUser(enriquecido);
+  };
+
   const login = async (token: string) => {
     localStorage.setItem('token', token);
     const userData = decodeToken(token);
-
     if (userData) {
-      // Seta o user básico imediatamente para não travar a UI
       setUser(userData);
-      // Enriquece com userType em paralelo
       enriquecerComPerfil(userData).then(enriquecido => setUser(enriquecido));
       registrarAuditoria('LOGIN');
     }
@@ -133,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, auditLogs }}>
+    <AuthContext.Provider value={{ user, login, logout, refreshUser, loading, auditLogs }}>
       {children}
     </AuthContext.Provider>
   );

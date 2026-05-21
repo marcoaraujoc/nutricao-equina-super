@@ -7,6 +7,7 @@ import api from '../services/api';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import { RefreshCw } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -227,18 +228,29 @@ const RelatorioNutricional = () => {
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
-  if (loading) return <div className="p-8 text-center text-gray-500">Carregando...</div>;
-  if (!effectiveAnimalId) return <div className="p-6 text-center text-gray-900">Selecione um animal.</div>;
-
+  if (loading) return (
+    <PageContainer maxWidth="7xl">
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+      </div>
+    </PageContainer>
+  );
+ 
+  if (!effectiveAnimalId) return (
+    <PageContainer maxWidth="7xl">
+      <p className="text-center py-10 text-gray-500">Selecione um animal.</p>
+    </PageContainer>
+  );
+ 
   // ── Render ────────────────────────────────────────────────────────────────
-
+ 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10 text-gray-900">
-      <div className="max-w-7xl mx-auto px-4">
-
+    <PageContainer maxWidth="7xl">
+      <div className="space-y-4 text-gray-900">
+ 
         {/* Voltar */}
-        <BotaoVoltar className="pt-6 mb-4" />
-
+        <BotaoVoltar className="mb-4" />
+ 
         {/* Seletor de animal */}
         <SeletorAnimal
           animais={animaisDoProprietario}
@@ -246,7 +258,7 @@ const RelatorioNutricional = () => {
           rotaBase="/relatorio-nutricional"
           className="mb-4"
         />
-
+ 
         {/* Card do animal */}
         {currentAnimal && (
           <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-4">
@@ -288,9 +300,9 @@ const RelatorioNutricional = () => {
             </div>
           </div>
         )}
-
+ 
         {/* Header + botão atualizar */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-900">Relatório Nutricional</h2>
             <div className="flex items-center gap-3 mt-0.5">
@@ -299,7 +311,6 @@ const RelatorioNutricional = () => {
                   Gerado em {new Date(snapshot.geradoEm).toLocaleString('pt-BR')}
                 </p>
               )}
-              {/* Badge da fonte de cálculo */}
               {snapshot?.fonteCalculo && (
                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                   snapshot.fonteCalculo === 'NRC_2007_CALCULADO'
@@ -320,9 +331,9 @@ const RelatorioNutricional = () => {
             {generating ? 'Gerando...' : 'Atualizar'}
           </button>
         </div>
-
+ 
         {/* Filtros multi-select */}
-        <div className="flex gap-2 mb-4 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
           {FILTROS.map(f => {
             const count = f.value === 'todos'
               ? relatorio.length
@@ -348,14 +359,14 @@ const RelatorioNutricional = () => {
             );
           })}
         </div>
-
+ 
         {/* Aviso sem plano */}
         {snapshot && !snapshot.linhas.length && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 mb-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
             Nenhum dado nutricional encontrado. Verifique se o animal possui um plano de dieta ativo com alimentos cadastrados.
           </div>
         )}
-
+ 
         {/* Tabela */}
         <div className="bg-white rounded-xl shadow overflow-hidden">
           <div className="overflow-auto" style={{ maxHeight: '60vh' }}>
@@ -380,43 +391,29 @@ const RelatorioNutricional = () => {
               <tbody>
                 {relatorioFiltrado.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={6 + colunasDinamicas.length}
-                      className="px-4 py-10 text-center text-gray-400"
-                    >
-                      {/* ERRO 2 CORRIGIDO: usa função mensagemVazia() que trata filtroStatus como array */}
+                    <td colSpan={6 + colunasDinamicas.length} className="px-4 py-10 text-center text-gray-400">
                       {mensagemVazia()}
                     </td>
                   </tr>
                 ) : relatorioFiltrado.map((item, idx) => (
                   <tr key={idx} className="border-t hover:bg-gray-50">
-
-                    {/* Nutriente */}
                     <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-gray-100 whitespace-nowrap">
                       <span className="font-medium text-gray-900">{formatarNome(item.nutriente)}</span>
                       {item.unidade && (
                         <span className="text-[10px] text-gray-400 ml-1">({item.unidade})</span>
                       )}
                     </td>
-
-                    {/* Colunas dinâmicas por alimento */}
                     {colunasDinamicas.map(col => (
                       <td key={col} className="px-4 py-2 text-right text-gray-700">
                         {formatarValor(item[col] as number | null)}
                       </td>
                     ))}
-
-                    {/* Total */}
                     <td className="px-4 py-2 text-right font-semibold text-gray-900">
                       {formatarValor(item.Total_Dieta)}
                     </td>
-
-                    {/* Exigido NRC */}
                     <td className="px-4 py-2 text-right text-gray-700">
                       {formatarValor(item.Exigido_NRC)}
                     </td>
-
-                    {/* Saldo */}
                     <td
                       className="px-4 py-2 text-right font-semibold"
                       style={{ color: item.Saldo === null ? '#9ca3af' : (item.Saldo as number) < 0 ? '#dc2626' : '#16a34a' }}
@@ -425,13 +422,9 @@ const RelatorioNutricional = () => {
                         ? '—'
                         : `${(item.Saldo as number) >= 0 ? '+' : ''}${formatarValor(item.Saldo)}`}
                     </td>
-
-                    {/* Percentual */}
                     <td className="px-4 py-2 text-right text-gray-700">
                       {item.Percentual_Atendido !== null ? `${item.Percentual_Atendido}%` : '—'}
                     </td>
-
-                    {/* Status */}
                     <td className="px-4 py-2 text-center">
                       <span className={`px-2 py-1 rounded-full text-[11px] font-medium ${
                         COR_STATUS[item.status_nutricional] ?? 'bg-gray-100 text-gray-500'
@@ -439,24 +432,23 @@ const RelatorioNutricional = () => {
                         {LABEL_STATUS[item.status_nutricional] ?? item.status_nutricional}
                       </span>
                     </td>
-
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </div>
-
+ 
         {/* Contagem */}
         {!generating && relatorio.length > 0 && (
-          <p className="text-center text-xs text-gray-400 mt-3">
+          <p className="text-center text-xs text-gray-400">
             {relatorioFiltrado.length} de {relatorio.length} nutrientes
           </p>
         )}
-
+ 
       </div>
-    </div>
+    </PageContainer>
   );
 };
-
+ 
 export default RelatorioNutricional;

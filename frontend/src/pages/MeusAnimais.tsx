@@ -1,71 +1,64 @@
+// src/pages/MeusAnimais.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Pencil, Trash2, Plus } from 'lucide-react';
+import { Pencil, Trash2, Plus, Clock, MapPin, Search } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
 
 interface Animal {
-  id: number;
-  nome: string;
-  sexo: string;
-  peso: number;
-  photoUrl?: string | null;
-  dataNascimento?: string | null;
-  idadeAnos?: number | null;
+  id:               number;
+  nome:             string;
+  sexo:             string;
+  peso:             number;
+  local?:           string | null;
+  photoUrl?:        string | null;
+  dataNascimento?:  string | null;
+  idadeAnos?:       number | null;
   categoriaAnimal?: string | null;
-  tipoExercicio?: string | null;
-  raca?: { nome: string } | null;
+  tipoExercicio?:   string | null;
+  raca?:            { nome: string } | null;
+  solicitacoes?:    { status: string }[];
 }
 
 const calcularIdade = (dataNascimento: string): string => {
-  const partes = dataNascimento.split('T')[0].split('-');
+  const partes  = dataNascimento.split('T')[0].split('-');
   const anoNasc = parseInt(partes[0]);
   const mesNasc = parseInt(partes[1]) - 1;
   const diaNasc = parseInt(partes[2]);
-
-  const hoje = new Date();
-  const anoHoje = hoje.getFullYear();
-  const mesHoje = hoje.getMonth();
-  const diaHoje = hoje.getDate();
-
-  const nascimento = new Date(anoNasc, mesNasc, diaNasc);
-  const diffMs = hoje.getTime() - nascimento.getTime();
-  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  let diffMeses = (anoHoje - anoNasc) * 12 + (mesHoje - mesNasc);
-  if (diaHoje < diaNasc) diffMeses--;
-
-  let diffAnos = anoHoje - anoNasc;
-  if (mesHoje < mesNasc || (mesHoje === mesNasc && diaHoje < diaNasc)) diffAnos--;
-
-  if (diffDias < 30) return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
-  if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
-  return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
+  const hoje    = new Date();
+  const nasc    = new Date(anoNasc, mesNasc, diaNasc);
+  const dias    = Math.floor((hoje.getTime() - nasc.getTime()) / 86400000);
+  let meses     = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
+  if (hoje.getDate() < diaNasc) meses--;
+  let anos = hoje.getFullYear() - anoNasc;
+  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) anos--;
+  if (dias < 30)  return `${dias} ${dias === 1 ? 'dia' : 'dias'}`;
+  if (meses < 12) return `${meses} ${meses === 1 ? 'mês' : 'meses'}`;
+  return `${anos} ${anos === 1 ? 'ano' : 'anos'}`;
 };
 
 const idadeDisplay = (animal: Animal): string => {
   if (animal.dataNascimento) return calcularIdade(animal.dataNascimento);
-  if (animal.idadeAnos) return `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}`;
+  if (animal.idadeAnos)      return `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}`;
   return '-';
 };
 
 const MeusAnimais = () => {
-  const { user } = useAuth();
+  const { user }                                     = useAuth();
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
-  const navigate = useNavigate();
+  const navigate                                     = useNavigate();
 
-  const [animais, setAnimais] = useState<Animal[]>([]);
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [animais,        setAnimais]        = useState<Animal[]>([]);
+  const [search,         setSearch]         = useState('');
+  const [loading,        setLoading]        = useState(true);
   const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
 
   const loadAnimais = async () => {
     try {
       const res = await api.get('/animais');
-      // Suporta tanto { sucesso, dados } quanto array direto (retrocompatível)
-      const lista: Animal[] = res.data?.dados ?? res.data ?? [];
-      setAnimais(lista);
+      setAnimais(res.data?.dados ?? res.data ?? []);
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
     } finally {
@@ -73,27 +66,28 @@ const MeusAnimais = () => {
     }
   };
 
-  useEffect(() => {
-    if (user?.id) loadAnimais();
-  }, [user?.id]);
+  useEffect(() => { if (user?.id) loadAnimais(); }, [user?.id]);
 
-  const filteredAnimais = animais.filter((a) =>
-    a.nome.toLowerCase().includes(search.toLowerCase()),
+  const filteredAnimais = animais.filter(a =>
+    a.nome.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleEdit = (animal: Animal) => 
-    {
-      setSelectedAnimal({
-        ...animal,
-        photoUrl:        animal.photoUrl        ?? undefined,
-        dataNascimento:  animal.dataNascimento  ?? undefined,
-        idadeAnos:       animal.idadeAnos       ?? undefined,
-        categoriaAnimal: animal.categoriaAnimal ?? undefined,
-        tipoExercicio:   animal.tipoExercicio   ?? undefined,
-        raca:            animal.raca            ?? undefined,
-      });
-      navigate(`/animais/${animal.id}`);
-    };
+  const isPendente = (animal: Animal): boolean =>
+    !!animal.solicitacoes?.some(s => s.status === 'PENDENTE') &&
+    !animal.solicitacoes?.some(s => s.status === 'ACEITO');
+
+  const handleEdit = (animal: Animal) => {
+    setSelectedAnimal({
+      ...animal,
+      photoUrl:        animal.photoUrl        ?? undefined,
+      dataNascimento:  animal.dataNascimento  ?? undefined,
+      idadeAnos:       animal.idadeAnos       ?? undefined,
+      categoriaAnimal: animal.categoriaAnimal ?? undefined,
+      tipoExercicio:   animal.tipoExercicio   ?? undefined,
+      raca:            animal.raca            ?? undefined,
+    });
+    navigate(`/animais/${animal.id}`);
+  };
 
   const confirmDelete = async () => {
     if (!animalToDelete) return;
@@ -108,152 +102,213 @@ const MeusAnimais = () => {
   };
 
   return (
-    <div className="space-y-5 md:space-y-8">
+    <PageContainer>
+      <div className="space-y-5">
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Meus Animais</h1>
-        <button
-          onClick={() => navigate('/animais')}
-          className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-3xl font-semibold transition-colors w-full sm:w-auto"
-        >
-          <Plus size={20} />
-          Novo Animal
-        </button>
-      </div>
-
-      <div>
-        <input
-          type="text"
-          placeholder="Buscar por nome..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md border border-gray-300 rounded-3xl px-6 py-3 md:py-4 text-gray-900 focus:outline-none focus:border-emerald-600"
-        />
-      </div>
-
-      {loading ? (
-        <p className="text-center text-gray-500 py-12">Carregando animais...</p>
-      ) : filteredAnimais.length === 0 ? (
-        <p className="text-center text-gray-400 py-12">Nenhum animal encontrado.</p>
-      ) : (
-        <div className="space-y-4">
-          {filteredAnimais.map((animal) => (
-            <div
-              key={animal.id}
-              className="bg-white rounded-3xl shadow-md border border-gray-100 hover:shadow-xl transition-all overflow-hidden w-full cursor-pointer"
-              onClick={() => handleEdit(animal)}
-            >
-              <div className="flex">
-                {/* Foto */}
-                <div className="w-24 h-24 sm:w-28 sm:h-28 flex-shrink-0 bg-gray-200">
-                  {animal.photoUrl ? (
-                    <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-4xl sm:text-6xl">🐴</div>
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 p-3 sm:p-6 min-w-0">
-                  <h3 className="text-lg sm:text-2xl font-bold text-gray-900 truncate">{animal.nome}</h3>
-                  <p className="text-emerald-700 font-medium text-sm sm:text-lg truncate">
-                    {animal.raca?.nome || 'Raça não informada'}
-                  </p>
-                  <p className="text-gray-500 text-xs sm:text-sm mt-1 truncate">
-                    {animal.categoriaAnimal
-                      ? `${animal.categoriaAnimal} · ${animal.tipoExercicio}`
-                      : 'Categoria NRC não informada'}
-                  </p>
-
-                  {/* Idade + Sexo — mobile */}
-                  <div className="flex gap-4 mt-2 sm:hidden">
-                    <span className="text-xs text-gray-500">{idadeDisplay(animal)}</span>
-                    <span className="text-xs text-gray-500">{animal.sexo}</span>
-                  </div>
-                </div>
-
-                {/* Idade + Sexo — desktop */}
-                <div className="hidden sm:flex items-center gap-8 px-4 flex-shrink-0">
-                  <div className="text-right">
-                    <span className="block text-xs uppercase text-gray-500 tracking-widest">IDADE</span>
-                    <span className="font-semibold text-gray-800">{idadeDisplay(animal)}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="block text-xs uppercase text-gray-500 tracking-widest">SEXO</span>
-                    <span className="font-semibold text-gray-800">{animal.sexo}</span>
-                  </div>
-                </div>
-
-                {/* Botões */}
-                <div className="flex flex-col sm:flex-row items-center justify-center p-3 sm:p-6 gap-2 border-l border-gray-100">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleEdit(animal); }}
-                    className="flex items-center gap-1 sm:gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-3xl text-xs sm:text-sm font-medium transition-colors"
-                  >
-                    <Pencil size={15} />
-                    <span className="hidden sm:inline">Editar</span>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setAnimalToDelete(animal); }}
-                    className="flex items-center gap-1 sm:gap-2 bg-red-600 hover:bg-red-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-3xl text-xs sm:text-sm font-medium transition-colors"
-                  >
-                    <Trash2 size={15} />
-                    <span className="hidden sm:inline">Excluir</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+        {/* ── Header ────────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Animais</h1>
+          <button
+            onClick={() => navigate('/animais')}
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
+                       px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+          >
+            <Plus size={15} />
+            <span className="hidden sm:inline">Novo Animal</span>
+            <span className="sm:hidden">Novo</span>
+          </button>
         </div>
-      )}
 
-      {/* Modal de exclusão */}
+        {/* ── Busca ──────────────────────────────────────────────────────── */}
+        <div className="relative">
+          <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Buscar por nome..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm
+                       text-gray-900 focus:outline-none focus:border-emerald-600
+                       focus:ring-2 focus:ring-emerald-100 transition-colors"
+          />
+        </div>
+
+        {/* ── Conteúdo ───────────────────────────────────────────────────── */}
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+          </div>
+        ) : filteredAnimais.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-3xl mb-3">🐴</p>
+            <p className="text-gray-400 text-sm">
+              {search ? `Nenhum resultado para "${search}"` : 'Nenhum animal cadastrado'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredAnimais.map(animal => {
+              const pendente = isPendente(animal);
+              return (
+                <div
+                  key={animal.id}
+                  className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
+                    pendente
+                      ? 'border-amber-200 opacity-80'
+                      : 'border-gray-100 hover:shadow-md cursor-pointer'
+                  }`}
+                  onClick={() => !pendente && handleEdit(animal)}
+                >
+                  {/* Banner pendente */}
+                  {pendente && (
+                    <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-100">
+                      <Clock size={12} className="text-amber-500 flex-shrink-0" />
+                      <span className="text-xs text-amber-700 font-medium">
+                        Aguardando aprovação do veterinário
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-3 p-3 sm:p-4">
+                    {/* Foto */}
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                      {animal.photoUrl ? (
+                        <img
+                          src={animal.photoUrl}
+                          alt={animal.nome}
+                          className={`w-full h-full object-cover ${pendente ? 'grayscale-[40%]' : ''}`}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-3xl">🐴</div>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-base sm:text-lg font-bold text-gray-900 truncate">
+                          {animal.nome}
+                        </h3>
+                        {pendente && (
+                          <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium flex-shrink-0">
+                            <Clock size={9} /> Pendente
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-emerald-700 font-medium text-sm truncate">
+                        {animal.raca?.nome || 'Raça não informada'}
+                      </p>
+
+                      <p className="text-gray-500 text-xs mt-0.5 truncate">
+                        {animal.categoriaAnimal
+                          ? `${animal.categoriaAnimal} · ${animal.tipoExercicio}`
+                          : 'Categoria NRC não informada'}
+                      </p>
+
+                      {animal.local && (
+                        <p className="flex items-center gap-1 text-xs text-gray-400 mt-0.5 truncate">
+                          <MapPin size={10} className="flex-shrink-0" />
+                          {animal.local}
+                        </p>
+                      )}
+
+                      {/* Badges idade + sexo */}
+                      <div className="flex gap-2 mt-1.5">
+                        <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+                          {idadeDisplay(animal)}
+                        </span>
+                        <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+                          {animal.sexo}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Ações */}
+                    <div
+                      className="flex flex-col sm:flex-row gap-2 flex-shrink-0"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <button
+                        onClick={() => handleEdit(animal)}
+                        className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700
+                                   text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                      >
+                        <Pencil size={13} />
+                        <span className="hidden sm:inline">Editar</span>
+                      </button>
+
+                      {!pendente && (
+                        <button
+                          onClick={() => setAnimalToDelete(animal)}
+                          className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600
+                                     text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                        >
+                          <Trash2 size={13} />
+                          <span className="hidden sm:inline">Excluir</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Modal — Excluir */}
       {animalToDelete && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="bg-emerald-700 text-white p-6 text-center">
-              <div className="mx-auto w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4 text-3xl">
-                ⚠️
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold">Excluir animal?</h2>
-              <p className="text-emerald-100 mt-2 text-sm sm:text-base">
-                Tem certeza que deseja excluir <strong>{animalToDelete.nome}</strong> permanentemente?
-              </p>
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
+            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">
+              ⚠️
             </div>
-            <div className="p-4 sm:p-6">
-              <div className="flex gap-4 items-center bg-gray-50 rounded-2xl p-4">
-                <div className="w-14 h-14 rounded-2xl overflow-hidden bg-gray-200 flex-shrink-0">
-                  {animalToDelete.photoUrl ? (
-                    <img src={animalToDelete.photoUrl} alt={animalToDelete.nome} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-3xl">🐴</div>
-                  )}
-                </div>
-                <div>
-                  <h3 className="font-semibold text-lg text-gray-900">{animalToDelete.nome}</h3>
-                  <p className="text-gray-600 text-sm">{animalToDelete.raca?.nome || ''}</p>
-                </div>
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir animal?</h2>
+            <p className="text-gray-500 text-sm mb-6">
+              Isso removerá permanentemente{' '}
+              <strong className="text-gray-700">{animalToDelete.nome}</strong> do sistema.
+              Esta ação não pode ser desfeita.
+            </p>
+
+            {/* Preview do animal */}
+            <div className="flex gap-3 items-center bg-gray-50 rounded-2xl p-3 mb-6 text-left">
+              <div className="w-12 h-12 rounded-xl overflow-hidden bg-gray-200 flex-shrink-0">
+                {animalToDelete.photoUrl ? (
+                  <img src={animalToDelete.photoUrl} alt={animalToDelete.nome} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-2xl">🐴</div>
+                )}
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{animalToDelete.nome}</p>
+                <p className="text-xs text-gray-500 truncate">{animalToDelete.raca?.nome || ''}</p>
+                {animalToDelete.local && (
+                  <p className="flex items-center gap-1 text-xs text-gray-400 mt-0.5 truncate">
+                    <MapPin size={10} /> {animalToDelete.local}
+                  </p>
+                )}
               </div>
             </div>
-            <div className="border-t flex">
+
+            <div className="flex gap-3">
               <button
                 onClick={() => setAnimalToDelete(null)}
-                className="flex-1 py-4 sm:py-6 text-base sm:text-lg font-semibold text-gray-700 hover:bg-gray-100"
+                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50"
               >
                 Cancelar
               </button>
               <button
                 onClick={confirmDelete}
-                className="flex-1 py-4 sm:py-6 text-base sm:text-lg font-semibold text-red-600 hover:bg-red-50 border-l"
+                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-2xl text-sm font-semibold"
               >
-                Sim, Excluir
+                Excluir
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 };
 

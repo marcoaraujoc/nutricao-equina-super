@@ -21,7 +21,7 @@ router.post('/interpretar', authenticate, async (req, res) => {
   }
 });
 
-router.get('/animal/:animalId', authenticate, EvolucaoController.listar);
+router.get('/animal/:animalId', authenticate, EvolucaoController.listarPorAnimal);
 router.get('/:id',             authenticate, EvolucaoController.obterPorId);
 router.post('/',               authenticate, EvolucaoController.criar);
 router.put('/:id',             authenticate, EvolucaoController.atualizar);

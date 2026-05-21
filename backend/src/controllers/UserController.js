@@ -26,11 +26,12 @@ const UserController = {
       const user = await prisma.user.findUnique({
         where: { email },
         select: {
-          id:          true,
-          fullName:    true,
-          email:       true,
-          phone:       true,
-          userType:    true,
+          id:                 true,
+          fullName:           true,
+          email:              true,
+          phone:              true,
+          userType:           true,
+          mustChangePassword: true, // ← NOVO
           cep:         true,
           endereco:    true,
           complemento: true,
@@ -40,7 +41,7 @@ const UserController = {
           createdAt:   true,
           ativo:       true,
           vetPerfil: {
-            select: {
+                    select: {
               crmv:    true,
               especies: {
                 select: { especieId: true },
@@ -135,10 +136,24 @@ const UserController = {
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
 
+      const jwt = require('jsonwebtoken');
+      const novoToken = jwt.sign(
+        {
+          id:       updatedUser.id,
+          email:    updatedUser.email,
+          fullName: updatedUser.fullName,
+          role:     updatedUser.role,
+          userType: updatedUser.userType, // ← agora correto
+        },
+        process.env.JWT_SECRET || 'fallback-dev-only',
+        { expiresIn: '7d' }
+      );
+
       return res.status(200).json({
         success: true,
         message: 'Cadastro pessoal salvo com sucesso!',
         user:    updatedUser,
+        token:   novoToken, // ← novo token com userType atualizado
       });
 
     } catch (error) {
@@ -156,6 +171,50 @@ const UserController = {
         success: false,
         error: 'Erro interno ao salvar cadastro pessoal',
       });
+    }
+  },
+
+alterarSenha: async (req, res) => {
+    const { senhaAtual, novaSenha } = req.body;
+
+    if (!novaSenha || novaSenha.length < 8) {
+      return res.status(400).json({ sucesso: false, mensagem: 'A nova senha deve ter ao menos 8 caracteres' });
+    }
+
+    try {
+      const user = await prisma.user.findUnique({
+        where:  { id: Number(req.user.id) },
+        select: { passwordHash: true, mustChangePassword: true },
+      });
+
+      if (!user) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
+      }
+
+      // Troca voluntária exige senha atual; troca obrigatória (primeiro login) não
+      if (!user.mustChangePassword) {
+        if (!senhaAtual) {
+          return res.status(400).json({ sucesso: false, mensagem: 'Senha atual é obrigatória' });
+        }
+        const bcrypt = require('bcryptjs');
+        const valida = await bcrypt.compare(senhaAtual, user.passwordHash);
+        if (!valida) {
+          return res.status(401).json({ sucesso: false, mensagem: 'Senha atual incorreta' });
+        }
+      }
+
+      const bcrypt = require('bcryptjs');
+      const hash   = await bcrypt.hash(novaSenha, 10);
+
+      await prisma.user.update({
+        where: { id: Number(req.user.id) },
+        data:  { passwordHash: hash, mustChangePassword: false },
+      });
+
+      return res.json({ sucesso: true, mensagem: 'Senha alterada com sucesso' });
+    } catch (error) {
+      console.error('Erro em alterarSenha:', error);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
 

@@ -3,12 +3,16 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    exclude: ['@xenova/transformers'],
+  },
 
   server: {
-    host: true,           // ← ESSENCIAL: libera acesso pela rede (celular, tablet, etc.)
+    host: true,
     port: 5173,
-    strictPort: true,     // Não muda de porta automaticamente se 5173 estiver ocupada
-    open: false,          // Não abre automaticamente o navegador
+    strictPort: true,
+    open: false,
+    allowedHosts: true,
 
     proxy: {
       '/api': {

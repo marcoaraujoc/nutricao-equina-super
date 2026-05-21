@@ -9,35 +9,36 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Usuarios from './pages/Usuarios';
 import AnimaisVet from './pages/AnimaisVet';
 import AprovarVinculo from './pages/AprovarVinculo';
-
+import AprovarVinculoProprietario from './pages/AprovarVinculoProprietario';
+import AlterarSenhaObrigatoria from './pages/AlterarSenhaObrigatoria';
 
 // Pages — Gerais
-import Login          from './pages/Login';
-import Register       from './pages/Register';
-import Dashboard      from './pages/Dashboard';
+import Login           from './pages/Login';
+import Register        from './pages/Register';
+import Dashboard       from './pages/Dashboard';
 import CadastroPessoal from './pages/CadastroPessoal';
-import ResetPassword  from './pages/ResetPassword';
+import ResetPassword   from './pages/ResetPassword';
 
 // Pages — Animais
-import Animal         from './pages/Animal';
-import MeusAnimais    from './pages/MeusAnimais';
-import AnimalDetail   from './pages/AnimalDetail';
+import Animal      from './pages/Animal';
+import MeusAnimais from './pages/MeusAnimais';
+import AnimalDetail from './pages/AnimalDetail';
 
 // Pages — Alimentos
-import Alimentos      from './pages/Alimentos';
-import CriaAlimentos  from './pages/criaAlimentos';
+import Alimentos     from './pages/Alimentos';
+import CriaAlimentos from './pages/criaAlimentos';
 
 // Pages — Nutrientes
 import Nutrientes     from './pages/Nutrientes';
 import CriaNutrientes from './pages/CriaNutrientes';
 
 // Pages — Composição Alimentar
-import ComposicaoAlimentar      from './pages/ComposicaoAlimentar';
-import CriaComposicaoAlimentar  from './pages/CriaComposicaoAlimentar';
-import NovoNutrienteComposicao  from './pages/Novonutrientecomposicao';
+import ComposicaoAlimentar     from './pages/ComposicaoAlimentar';
+import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
+import NovoNutrienteComposicao from './pages/Novonutrientecomposicao';
 
 // Pages — Dieta
-import Dieta    from './pages/Dieta';
+import Dieta     from './pages/Dieta';
 import CriaDieta from './pages/CriaDieta';
 
 // Pages — Exames
@@ -76,20 +77,36 @@ function App() {
             }}
           />
           <Routes>
-            {/* Rotas públicas */}
+
+            {/* ── Rotas públicas — scroll livre, sem sidebar ──────────────── */}
             <Route path="/login"          element={<Login />} />
             <Route path="/register"       element={<Register />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/proprietario/aprovar-vinculo" element={<AprovarVinculoProprietario />} />
 
-            {/* Rotas protegidas */}
+            {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
             <Route
               path="/*"
               element={
                 <ProtectedRoute>
                   <ErrorBoundary>
-                    <div className="flex min-h-screen bg-white">
+                    {/*
+                      Shell principal:
+                      - h-full overflow-hidden → trava na viewport, sem scroll externo
+                      - bg-gray-50            → fundo padrão da aplicação
+                    */}
+                    <div className="flex h-full overflow-hidden bg-gray-50">
+
                       <Sidebar />
-                      <div className="flex-1 p-8 bg-white overflow-auto">
+
+                      {/*
+                        Área de conteúdo:
+                        - flex-1 min-w-0     → ocupa o espaço restante sem overflow horizontal
+                        - overflow-y-auto    → scroll apenas aqui, não na página inteira
+                        - pt-16 md:pt-0      → espaço para o botão hamburguer fixo no mobile
+                        As páginas usam <PageContainer> para centralizar e adicionar padding interno.
+                      */}
+                      <main className="flex-1 min-w-0 overflow-y-auto bg-gray-50 pt-16 md:pt-0">
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
@@ -114,23 +131,23 @@ function App() {
                           <Route path="/nutrientes/:id"   element={<CriaNutrientes />} />
 
                           {/* Composição Alimentar */}
-                          <Route path="/composicao-alimentar"              element={<ComposicaoAlimentar />} />
-                          <Route path="/composicao-alimentar/novo"         element={<CriaComposicaoAlimentar />} />
-                          <Route path="/composicao-alimentar/:id"          element={<CriaComposicaoAlimentar />} />
+                          <Route path="/composicao-alimentar"                element={<ComposicaoAlimentar />} />
+                          <Route path="/composicao-alimentar/novo"           element={<CriaComposicaoAlimentar />} />
+                          <Route path="/composicao-alimentar/:id"            element={<CriaComposicaoAlimentar />} />
                           <Route path="/composicao-alimentar/nutriente/novo" element={<NovoNutrienteComposicao />} />
 
                           {/* Dieta */}
-                          <Route path="/dieta"                                          element={<Dieta />} />
-                          <Route path="/dieta/:animalId"                               element={<Dieta />} />
-                          <Route path="/dieta/:animalId/plano/:planoDietaId"           element={<Dieta />} />
-                          <Route path="/dieta/:animalId/plano/:planoDietaId/novo"      element={<CriaDieta />} />
+                          <Route path="/dieta"                                           element={<Dieta />} />
+                          <Route path="/dieta/:animalId"                                element={<Dieta />} />
+                          <Route path="/dieta/:animalId/plano/:planoDietaId"            element={<Dieta />} />
+                          <Route path="/dieta/:animalId/plano/:planoDietaId/novo"       element={<CriaDieta />} />
                           <Route path="/dieta/:animalId/plano/:planoDietaId/editar/:id" element={<CriaDieta />} />
 
                           {/* Exames */}
-                          <Route path="/exames"                        element={<Exames />} />
-                          <Route path="/exames/:animalId"              element={<Exames />} />
-                          <Route path="/exames/:animalId/novo"         element={<CriaExameNutricional />} />
-                          <Route path="/exames/:animalId/editar/:id"   element={<CriaExameNutricional />} />
+                          <Route path="/exames"                      element={<Exames />} />
+                          <Route path="/exames/:animalId"            element={<Exames />} />
+                          <Route path="/exames/:animalId/novo"       element={<CriaExameNutricional />} />
+                          <Route path="/exames/:animalId/editar/:id" element={<CriaExameNutricional />} />
 
                           {/* Relatório Nutricional */}
                           <Route path="/relatorio-nutricional"           element={<RelatorioNutricional />} />
@@ -141,31 +158,33 @@ function App() {
 
                           <Route path="/animais-vet" element={<AnimaisVet />} />
 
-                          {/* ── Módulo Clínico ────────────────────────────── */}
-                          <Route path="/clinica"                                element={<Atendimento />} />
-                          <Route path="/clinica/evolucao"                       element={<Atendimento />} />
-                          <Route path="/clinica/evolucao/:animalId"             element={<Atendimento />} />
-                          <Route path="/clinica/prescricao"                     element={<Atendimento />} />
-                          <Route path="/clinica/prescricao/:animalId"           element={<Atendimento />} />
-                          <Route path="/clinica/vacina"                         element={<Atendimento />} />
-                          <Route path="/clinica/vacina/:animalId"               element={<Atendimento />} />
-                          <Route path="/clinica/exames"                         element={<Atendimento />} />
-                          <Route path="/clinica/exames/:animalId"               element={<Atendimento />} />
-                          <Route path="/clinica/encaminhamento"                 element={<Atendimento />} />
-                          <Route path="/clinica/encaminhamento/:animalId"       element={<Atendimento />} />
-                          {/* ─────────────────────────────────────────────── */}
-                          
-                          {/* Rota Veterinário */}
+                          {/* Módulo Clínico */}
+                          <Route path="/clinica"                          element={<Atendimento />} />
+                          <Route path="/clinica/evolucao"                 element={<Atendimento />} />
+                          <Route path="/clinica/evolucao/:animalId"       element={<Atendimento />} />
+                          <Route path="/clinica/prescricao"               element={<Atendimento />} />
+                          <Route path="/clinica/prescricao/:animalId"     element={<Atendimento />} />
+                          <Route path="/clinica/vacina"                   element={<Atendimento />} />
+                          <Route path="/clinica/vacina/:animalId"         element={<Atendimento />} />
+                          <Route path="/clinica/exames"                   element={<Atendimento />} />
+                          <Route path="/clinica/exames/:animalId"         element={<Atendimento />} />
+                          <Route path="/clinica/encaminhamento"           element={<Atendimento />} />
+                          <Route path="/clinica/encaminhamento/:animalId" element={<Atendimento />} />
+
+                          {/* Equipe */}
                           <Route path="/equipe" element={<Equipe />} />
-                          
-                          {/* Temporárias / Debug */}
+
+                          {/* Troca Senha */}
+                          <Route path="/alterar-senha-obrigatoria" element={<AlterarSenhaObrigatoria />} />
+
+                          {/* Debug */}
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />
                           <Route path="/analise"     element={<Analise />} />
 
                           <Route path="/veterinarios/solicitacoes/aprovar" element={<AprovarVinculo />} />
-                          
                         </Routes>
-                      </div>
+                      </main>
+
                     </div>
                   </ErrorBoundary>
                 </ProtectedRoute>

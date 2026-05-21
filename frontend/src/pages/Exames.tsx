@@ -7,7 +7,7 @@ import { Plus, Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
-
+import PageContainer from '../components/PageContainer';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -25,7 +25,6 @@ const Exames = () => {
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
-  // Carrega lista de nutrientes
   useEffect(() => {
     const loadNutrientes = async () => {
       try {
@@ -44,7 +43,6 @@ const Exames = () => {
       const res = await api.get('/animais');
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimaisDoProprietario(lista);
-
       if (lista.length === 1 && !selectedAnimal) {
         setSelectedAnimal({
           ...lista[0],
@@ -63,7 +61,6 @@ const Exames = () => {
     try {
       const resExames = await api.get(`/exames/animal/${effectiveAnimalId}`);
       setExames(resExames.data?.dados ?? resExames.data ?? []);
-
       const resAnimal = await api.get(`/animais/${effectiveAnimalId}`);
       setCurrentAnimal(resAnimal.data?.dados ?? resAnimal.data);
     } catch (error) {
@@ -80,15 +77,8 @@ const Exames = () => {
     if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo`);
   };
 
-  const startEdit = (ex: any) => {
-    setEditingId(ex.id);
-    setEditValues({ ...ex });
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditValues({});
-  };
+  const startEdit = (ex: any) => { setEditingId(ex.id); setEditValues({ ...ex }); };
+  const cancelEdit = () => { setEditingId(null); setEditValues({}); };
 
   const saveEdit = async (id: number) => {
     try {
@@ -114,9 +104,8 @@ const Exames = () => {
 
   const getStatus = (ex: any) => {
     const valor = parseFloat(ex.valorEncontrado);
-    const min = parseFloat(ex.valorMinRef);
-    const max = parseFloat(ex.valorMaxRef);
-
+    const min   = parseFloat(ex.valorMinRef);
+    const max   = parseFloat(ex.valorMaxRef);
     if ((min === 0 && max === 0) || (isNaN(min) && isNaN(max))) return 'naoCalculado';
     if (isNaN(valor) || isNaN(min) || isNaN(max)) return 'normal';
     if (valor < min) return 'baixo';
@@ -124,35 +113,47 @@ const Exames = () => {
     return 'normal';
   };
 
-  // Função para formatar datas dos exames (mantida)
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
     return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
   };
 
-  if (loading) return <div className="p-8 text-center">Carregando...</div>;
-  if (!effectiveAnimalId) return <div className="p-6 text-center text-gray-900">Selecione um animal.</div>;
+  if (loading) return (
+    <PageContainer>
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+      </div>
+    </PageContainer>
+  );
+
+  if (!effectiveAnimalId) return (
+    <PageContainer>
+      <p className="text-center py-10 text-gray-500">Selecione um animal.</p>
+    </PageContainer>
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="max-w-5xl mx-auto px-4">
+    <PageContainer>
+      <div className="space-y-5">
 
-        <BotaoVoltar className="mb-4" />
+        <BotaoVoltar />
 
         <SeletorAnimal
           animais={animaisDoProprietario}
           animalIdAtual={effectiveAnimalId}
           rotaBase="/exames"
-          className="mb-6 pt-2"
         />
 
         {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
-        <button onClick={handleNovoExame} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-3xl flex items-center justify-center gap-2 mb-6">
+        <button
+          onClick={handleNovoExame}
+          className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-3xl flex items-center justify-center gap-2 transition-colors"
+        >
           <Plus size={20} /> Novo Exame Nutricional
         </button>
 
-        <div className="bg-white rounded-3xl shadow overflow-hidden">
+        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
@@ -166,67 +167,59 @@ const Exames = () => {
             <tbody>
               {exames.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-400">Nenhum exame registrado ainda.</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-400">
+                    Nenhum exame registrado ainda.
+                  </td>
                 </tr>
               ) : (
                 exames.map((ex: any) => {
                   const isEditing = editingId === ex.id;
-                  const status = getStatus(ex);
-
+                  const status    = getStatus(ex);
                   return (
                     <tr key={ex.id} className="border-t hover:bg-gray-50">
                       <td className="px-6 py-4 flex items-center gap-2 text-gray-900">
                         <Calendar size={16} />
                         {isEditing ? (
-                          <input 
-                            type="date" 
-                            value={editValues.dataExame ? editValues.dataExame.split('T')[0] : formatDate(ex.dataExame)} 
-                            onChange={(e) => setEditValues({ ...editValues, dataExame: e.target.value })}
+                          <input
+                            type="date"
+                            value={editValues.dataExame ? editValues.dataExame.split('T')[0] : formatDate(ex.dataExame)}
+                            onChange={e => setEditValues({ ...editValues, dataExame: e.target.value })}
                             className="border rounded p-1 text-sm"
                           />
-                        ) : (
-                          formatDate(ex.dataExame)
-                        )}
+                        ) : formatDate(ex.dataExame)}
                       </td>
                       <td className="px-6 py-4 font-medium text-gray-900">
                         {isEditing ? (
                           <>
-                            <input 
+                            <input
                               list="nutrientes-list"
-                              value={editValues.nutriente?.nome || ex.nutriente?.nome || ''} 
-                              onChange={(e) => {
+                              value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
+                              onChange={e => {
                                 const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
-                                setEditValues({ 
-                                  ...editValues, 
-                                  nutriente: { nome: e.target.value },
-                                  nutrienteId: selected ? selected.id : null
+                                setEditValues({
+                                  ...editValues,
+                                  nutriente:   { nome: e.target.value },
+                                  nutrienteId: selected ? selected.id : null,
                                 });
                               }}
                               className="border rounded p-1 text-sm w-full"
                               placeholder="Digite o nutriente..."
                             />
                             <datalist id="nutrientes-list">
-                              {nutrientes.map(n => (
-                                <option key={n.id} value={n.nome} />
-                              ))}
+                              {nutrientes.map(n => <option key={n.id} value={n.nome} />)}
                             </datalist>
                           </>
-                        ) : (
-                          ex.nutriente?.nome || '—'
-                        )}
+                        ) : ex.nutriente?.nome || '—'}
                       </td>
                       <td className="px-6 py-4 font-semibold text-emerald-700">
                         {isEditing ? (
-                          <input 
-                            type="number" 
-                            step="0.01"
-                            value={editValues.valorEncontrado || ex.valorEncontrado} 
-                            onChange={(e) => setEditValues({ ...editValues, valorEncontrado: e.target.value })}
+                          <input
+                            type="number" step="0.01"
+                            value={editValues.valorEncontrado || ex.valorEncontrado}
+                            onChange={e => setEditValues({ ...editValues, valorEncontrado: e.target.value })}
                             className="border rounded p-1 text-sm w-20"
                           />
-                        ) : (
-                          `${ex.valorEncontrado} ${ex.unidade}`
-                        )}
+                        ) : `${ex.valorEncontrado} ${ex.unidade}`}
                       </td>
                       <td className="px-6 py-4 text-center">
                         {status === 'naoCalculado' ? (
@@ -235,35 +228,38 @@ const Exames = () => {
                           </span>
                         ) : (
                           <span className={`px-4 py-1 rounded-3xl text-xs font-medium ${
-                            status === 'normal' ? 'bg-green-100 text-green-700' : 
-                            status === 'alto' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                            status === 'normal' ? 'bg-green-100 text-green-700'
+                            : status === 'alto'  ? 'bg-red-100 text-red-700'
+                            : 'bg-yellow-100 text-yellow-700'
                           }`}>
                             {status === 'normal' ? 'Normal' : status === 'alto' ? 'Alto' : 'Baixo'}
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right flex justify-end gap-3">
-                        {isEditing ? (
-                          <>
-                            <button onClick={() => saveEdit(ex.id)} className="text-emerald-600 hover:text-emerald-700 font-medium">Salvar</button>
-                            <button onClick={cancelEdit} className="text-gray-500 hover:text-gray-700">Cancelar</button>
-                          </>
-                        ) : (
-                          <>
-                            {ex.arquivoUrl && (
-                              <>
-                                <button onClick={() => window.open(ex.arquivoUrl, '_blank')}><Eye size={18} /></button>
-                                <button><Download size={18} /></button>
-                              </>
-                            )}
-                            <button onClick={() => startEdit(ex)} className="text-emerald-600 hover:text-emerald-700">
-                              <Edit size={18} />
-                            </button>
-                            <button onClick={() => handleDelete(ex.id)} className="text-red-500 hover:text-red-600">
-                              <Trash2 size={18} />
-                            </button>
-                          </>
-                        )}
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex justify-end gap-3">
+                          {isEditing ? (
+                            <>
+                              <button onClick={() => saveEdit(ex.id)} className="text-emerald-600 hover:text-emerald-700 font-medium">Salvar</button>
+                              <button onClick={cancelEdit} className="text-gray-500 hover:text-gray-700">Cancelar</button>
+                            </>
+                          ) : (
+                            <>
+                              {ex.arquivoUrl && (
+                                <>
+                                  <button onClick={() => window.open(ex.arquivoUrl, '_blank')}><Eye size={18} /></button>
+                                  <button><Download size={18} /></button>
+                                </>
+                              )}
+                              <button onClick={() => startEdit(ex)} className="text-emerald-600 hover:text-emerald-700">
+                                <Edit size={18} />
+                              </button>
+                              <button onClick={() => handleDelete(ex.id)} className="text-red-500 hover:text-red-600">
+                                <Trash2 size={18} />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -273,7 +269,7 @@ const Exames = () => {
           </table>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 };
 

@@ -1,3 +1,4 @@
+// src/pages/CadastroPessoal.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,6 +9,7 @@ import toast from 'react-hot-toast';
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
 const SUBESPECIALIDADES = [
+  'Clínico',
   'Quiroprata',
   'Fisioterapeuta',
   'Oftalmologista',
@@ -113,10 +115,11 @@ export default function CadastroPessoal() {
   };
 
   const maskCRMV = (value: string): string => {
-    let v = value.replace(/[^0-9a-zA-Z]/g, '');
-    if (v.length > 6) v = v.slice(0, 6) + '/' + v.slice(6, 8).toUpperCase();
-    else v = v.toUpperCase();
-    return v;
+    const digitos = value.replace(/\D/g, '').slice(0, 6);
+    const letras  = value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 2);
+    if (!digitos) return '';
+    if (!letras)  return digitos;
+    return `${digitos}/${letras}`;
   };
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -131,15 +134,6 @@ export default function CadastroPessoal() {
       especiesAtendidas: prev.especiesAtendidas.includes(id)
         ? prev.especiesAtendidas.filter(eid => eid !== id)
         : [...prev.especiesAtendidas, id],
-    }));
-  };
-
-  const toggleSubespecialidade = (nome: string) => {
-    setForm(prev => ({
-      ...prev,
-      subespecialidades: prev.subespecialidades.includes(nome)
-        ? prev.subespecialidades.filter(s => s !== nome)
-        : [...prev.subespecialidades, nome],
     }));
   };
 
@@ -182,13 +176,18 @@ export default function CadastroPessoal() {
     };
 
     try {
-      const res = await fetch('/api/users/me', {
+      const res      = await fetch('/api/users/me', {
         method:  'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload),
       });
+      const resData  = await res.json();
 
       if (res.ok) {
+        // Atualiza o JWT com o userType correto para refletir imediatamente no app
+        if (resData.token) {
+          localStorage.setItem('token', resData.token);
+        }
         toast.success('Cadastro pessoal salvo com sucesso!');
         await refreshSelectedAnimal();
 
@@ -205,8 +204,7 @@ export default function CadastroPessoal() {
           }
         }
       } else {
-        const errorData = await res.json();
-        toast.error(`Erro ao salvar: ${errorData.error || 'Tente novamente'}`);
+        toast.error(`Erro ao salvar: ${resData.error || 'Tente novamente'}`);
       }
     } catch (err) {
       console.error('Erro ao salvar:', err);
@@ -308,7 +306,7 @@ export default function CadastroPessoal() {
             </select>
           </div>
 
-          {/* Dados profissionais — só para veterinários */}
+          {/* ── Dados profissionais — só para veterinários ── */}
           {form.tipoUsuario === 'VETERINARIO' && (
             <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
@@ -327,7 +325,7 @@ export default function CadastroPessoal() {
                 <p className="text-xs text-gray-400 mt-1">Ex: 12345/SP</p>
               </div>
 
-              {/* Espécies atendidas */}
+              {/* Espécies atendidas — checkboxes */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Espécies atendidas{' '}
@@ -346,8 +344,12 @@ export default function CadastroPessoal() {
                               ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                               : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
                           }`}>
-                          <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
-                            checked={selecionada} onChange={() => toggleEspecie(esp.id)} />
+                          <input
+                            type="checkbox"
+                            className="accent-emerald-600 flex-shrink-0"
+                            checked={selecionada}
+                            onChange={() => toggleEspecie(esp.id)}
+                          />
                           <span className="text-sm font-medium">{esp.nome}</span>
                         </label>
                       );
@@ -356,29 +358,25 @@ export default function CadastroPessoal() {
                 )}
               </div>
 
-              {/* Subespecialidades */}
+              {/* Subespecialidade — select (único valor) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Subespecialidades{' '}
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Subespecialidade{' '}
                   <span className="text-gray-400 text-xs font-normal">(opcional)</span>
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {SUBESPECIALIDADES.map(sub => {
-                    const selecionada = form.subespecialidades.includes(sub);
-                    return (
-                      <label key={sub}
-                        className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
-                          selecionada
-                            ? 'border-blue-500 bg-blue-50 text-blue-800'
-                            : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'
-                        }`}>
-                        <input type="checkbox" className="accent-blue-600 flex-shrink-0"
-                          checked={selecionada} onChange={() => toggleSubespecialidade(sub)} />
-                        <span className="text-sm font-medium">{sub}</span>
-                      </label>
-                    );
-                  })}
-                </div>
+                <select
+                  value={form.subespecialidades[0] ?? ''}
+                  onChange={e => setForm(prev => ({
+                    ...prev,
+                    subespecialidades: e.target.value ? [e.target.value] : [],
+                  }))}
+                  className={inputClass}
+                >
+                  <option value="">Selecione uma subespecialidade</option>
+                  {SUBESPECIALIDADES.map(sub => (
+                    <option key={sub} value={sub}>{sub}</option>
+                  ))}
+                </select>
               </div>
 
             </div>

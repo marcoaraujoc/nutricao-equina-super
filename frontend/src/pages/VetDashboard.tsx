@@ -9,6 +9,9 @@ import {
   CheckCircle2, XCircle, Clock, Plus,
   Unlink, Search, Pencil, LayoutDashboard,
 } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface AnimalResumido {
   id:               number;
@@ -26,14 +29,17 @@ interface AnimalResumido {
 }
 
 interface Solicitacao {
-  id:        number;
-  status:    string;
-  createdAt: string;
-  mensagem?: string | null;
-  animal:    AnimalResumido;
+  id:             number;
+  status:         string;
+  createdAt:      string;
+  solicitanteId?: number | null;
+  mensagem?:      string | null;
+  animal:         AnimalResumido;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const calcularIdade = (dn: string): string => {
   const p    = dn.split('T')[0].split('-').map(Number);
@@ -68,7 +74,8 @@ const nullToUndefined = (a: AnimalResumido) => ({
   user:            a.user            ?? undefined,
 });
 
-// ─── Card de solicitação pendente ─────────────────────────────────────────────
+// ─── SolicitacaoCard ──────────────────────────────────────────────────────────
+
 function SolicitacaoCard({ sol, onResponder }: {
   sol:         Solicitacao;
   onResponder: (id: number, status: 'ACEITO' | 'RECUSADO') => void;
@@ -105,11 +112,73 @@ function SolicitacaoCard({ sol, onResponder }: {
   );
 }
 
+// ─── AnimalCard (mobile) ──────────────────────────────────────────────────────
+
+function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
+  animal:        AnimalResumido;
+  onDashboard:   () => void;
+  onEditar:      () => void;
+  onDesvincular: () => void;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+      {/* Foto */}
+      <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+        {animal.photoUrl
+          ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+          : <div className="w-full h-full flex items-center justify-center text-2xl">🐴</div>
+        }
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0" onClick={onDashboard}>
+        <p className="font-semibold text-gray-900 truncate">{animal.nome}</p>
+        <p className="text-xs text-gray-500 truncate">
+          {animal.raca?.nome || animal.especie?.nome || '—'}
+        </p>
+        {animal.user?.fullName && (
+          <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+        )}
+        <div className="flex items-center gap-2 mt-1">
+          <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+            {idadeDisplay(animal)}
+          </span>
+          {animal.sexo && (
+            <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+              {animal.sexo}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Ações */}
+      <div className="flex flex-col gap-1 flex-shrink-0">
+        <button onClick={onDashboard}
+          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+          title="Ver dashboard">
+          <LayoutDashboard size={16} />
+        </button>
+        <button onClick={onEditar}
+          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+          title="Editar">
+          <Pencil size={16} />
+        </button>
+        <button onClick={onDesvincular}
+          className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+          title="Desvincular">
+          <Unlink size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
+
 export default function VetDashboard() {
-  const { user }                    = useAuth();
-  const { setSelectedAnimal }       = useSelectedAnimal();
-  const navigate                    = useNavigate();
+  const { user }              = useAuth();
+  const { setSelectedAnimal } = useSelectedAnimal();
+  const navigate              = useNavigate();
 
   const [meusAnimais,    setMeusAnimais]    = useState<AnimalResumido[]>([]);
   const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
@@ -126,8 +195,16 @@ export default function VetDashboard() {
         api.get('/animais'),
         api.get('/veterinarios/solicitacoes?status=PENDENTE'),
       ]);
+
+      const todasSolicitacoes: Solicitacao[] = solRes.data?.dados ?? [];
+      const vetId = user?.id ?? 0;
+
+      const solicitacoesFiltradas = todasSolicitacoes.filter(
+        s => s.solicitanteId == null || Number(s.solicitanteId) !== Number(vetId)
+      );
+
       setMeusAnimais(animaisRes.data?.dados ?? []);
-      setSolicitacoes(solRes.data?.dados    ?? []);
+      setSolicitacoes(solicitacoesFiltradas);
     } catch {
       toast.error('Erro ao carregar dados');
     } finally {
@@ -135,7 +212,7 @@ export default function VetDashboard() {
     }
   };
 
-  useEffect(() => { carregar(); }, []);
+  useEffect(() => { carregar(); }, [user?.id]);
 
   const handleResponder = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
     try {
@@ -147,7 +224,6 @@ export default function VetDashboard() {
     }
   };
 
-  // Navegar para o detalhe do animal selecionando-o no contexto
   const irParaAnimal = (animal: AnimalResumido) => {
     setSelectedAnimal(nullToUndefined(animal));
     navigate(`/animal/${animal.id}`);
@@ -168,7 +244,6 @@ export default function VetDashboard() {
     }
   };
 
-  // Filtro por tipo
   const animaisFiltrados = meusAnimais.filter(a => {
     const termo = busca.toLowerCase().trim();
     if (!termo) return true;
@@ -178,182 +253,206 @@ export default function VetDashboard() {
   });
 
   if (loading) return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
-    </div>
+    <PageContainer>
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+      </div>
+    </PageContainer>
   );
 
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="7xl">
+      <div className="space-y-5">
 
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Olá, Dr(a). {user?.fullName?.split(' ')[0]} 👋
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {meusAnimais.length > 0
-              ? `${meusAnimais.length} paciente${meusAnimais.length !== 1 ? 's' : ''} sob sua responsabilidade`
-              : 'Nenhum paciente ainda'}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {solicitacoes.length > 0 && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-3 py-1.5">
-              <Clock size={14} className="text-amber-600" />
-              <span className="text-sm font-semibold text-amber-700">
-                {solicitacoes.length} pendente{solicitacoes.length > 1 ? 's' : ''}
-              </span>
-            </div>
-          )}
-          <button onClick={() => navigate('/animais')}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-            <Plus size={16} /> Novo Paciente
-          </button>
-        </div>
-      </div>
+        {/* ── Header ──────────────────────────────────────────────────────── */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
+              Olá, Dr(a). {user?.fullName?.split(' ')[0]} 👋
+            </h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {meusAnimais.length > 0
+                ? `${meusAnimais.length} paciente${meusAnimais.length !== 1 ? 's' : ''} sob sua responsabilidade`
+                : 'Nenhum paciente ainda'}
+            </p>
+          </div>
 
-      {/* Solicitações pendentes */}
-      {solicitacoes.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Solicitações de vínculo pendentes</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {solicitacoes.map(s => <SolicitacaoCard key={s.id} sol={s} onResponder={handleResponder} />)}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {solicitacoes.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 rounded-2xl px-2.5 py-1.5">
+                <Clock size={13} className="text-amber-600" />
+                <span className="text-xs font-semibold text-amber-700">
+                  {solicitacoes.length} pendente{solicitacoes.length > 1 ? 's' : ''}
+                </span>
+              </div>
+            )}
+            <button onClick={() => navigate('/animais')}
+              className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
+                         px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
+              <Plus size={15} />
+              <span className="hidden xs:inline sm:inline">Novo Paciente</span>
+              <span className="xs:hidden sm:hidden">Novo</span>
+            </button>
           </div>
         </div>
-      )}
 
-      {/* Busca com seletor */}
-      {meusAnimais.length > 0 && (
-        <div className="flex gap-2">
-          <select
-            value={filtroCampo}
-            onChange={e => { setFiltroCampo(e.target.value as FiltroCampo); setBusca(''); }}
-            className="border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:border-emerald-600 bg-white min-w-[170px]"
-          >
-            <option value="animal">Buscar por animal</option>
-            <option value="proprietario">Buscar por proprietário</option>
-          </select>
-          <div className="relative flex-1 max-w-md">
-            <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input
-              type="text"
-              placeholder={filtroCampo === 'animal' ? 'Nome do animal...' : 'Nome do proprietário...'}
-              value={busca}
-              onChange={e => setBusca(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 transition-colors"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Tabela de pacientes */}
-      {meusAnimais.length > 0 ? (
-        animaisFiltrados.length === 0 ? (
-          <p className="text-center text-gray-400 py-8 text-sm">Nenhum resultado para "{busca}"</p>
-        ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-
-            {/* Cabeçalho */}
-            <div className="grid grid-cols-[40px_1fr_150px_80px_60px_110px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
-              <span />
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
-            </div>
-
-            {/* Linhas */}
-            <div className="divide-y divide-gray-50">
-              {animaisFiltrados.map(animal => (
-                <div
-                  key={animal.id}
-                  onClick={() => irParaAnimal(animal)}
-                  className="grid grid-cols-[40px_1fr_150px_80px_60px_110px] items-center gap-4 px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
-                >
-                  {/* Foto */}
-                  <div className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                    {animal.photoUrl
-                      ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                      : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
-                    }
-                  </div>
-
-                  {/* Nome + proprietário */}
-                  <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
-                      {animal.nome}
-                    </p>
-                    {animal.user?.fullName && (
-                      <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
-                    )}
-                  </div>
-
-                  {/* Raça */}
-                  <p className="text-sm text-gray-600 truncate">
-                    {animal.raca?.nome || animal.especie?.nome || '—'}
-                  </p>
-
-                  {/* Idade */}
-                  <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
-
-                  {/* Sexo */}
-                  <p className="text-sm text-gray-600">{animal.sexo ?? '—'}</p>
-
-                  {/* Ações */}
-                  <div
-                    className="flex items-center justify-end gap-1"
-                    onClick={e => e.stopPropagation()}
-                  >
-                    <button
-                      onClick={() => irParaAnimal(animal)}
-                      className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                      title="Ver dashboard"
-                    >
-                      <LayoutDashboard size={15} />
-                    </button>
-                    <button
-                      onClick={() => navigate(`/animais/${animal.id}`)}
-                      className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                      title="Editar"
-                    >
-                      <Pencil size={15} />
-                    </button>
-                    <button
-                      onClick={() => setAnimalToUnlink(animal)}
-                      className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                      title="Desvincular"
-                    >
-                      <Unlink size={15} />
-                    </button>
-                  </div>
-                </div>
+        {/* ── Solicitações pendentes ───────────────────────────────────────── */}
+        {solicitacoes.length > 0 && (
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">
+              Solicitações de vínculo pendentes
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {solicitacoes.map(s => (
+                <SolicitacaoCard key={s.id} sol={s} onResponder={handleResponder} />
               ))}
             </div>
+          </div>
+        )}
 
-            {/* Rodapé */}
-            <div className="px-5 py-3 border-t border-gray-50 text-center">
-              <p className="text-xs text-gray-400">
-                {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
-              </p>
+        {/* ── Busca ────────────────────────────────────────────────────────── */}
+        {meusAnimais.length > 0 && (
+          <div className="flex gap-2">
+            <select
+              value={filtroCampo}
+              onChange={e => { setFiltroCampo(e.target.value as FiltroCampo); setBusca(''); }}
+              className="border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-700
+                         focus:outline-none focus:border-emerald-600 bg-white flex-shrink-0"
+            >
+              <option value="animal">Por animal</option>
+              <option value="proprietario">Por proprietário</option>
+            </select>
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder={filtroCampo === 'animal' ? 'Nome do animal...' : 'Nome do proprietário...'}
+                value={busca}
+                onChange={e => setBusca(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm
+                           text-gray-900 focus:outline-none focus:border-emerald-600
+                           focus:ring-2 focus:ring-emerald-100 transition-colors"
+              />
             </div>
           </div>
-        )
-      ) : solicitacoes.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-4xl mb-4">🩺</p>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Nenhum animal sob sua responsabilidade</h2>
-          <p className="text-gray-500 text-sm mb-6">Cadastre um paciente ou aguarde solicitações de vínculo.</p>
-          <button onClick={() => navigate('/animais')}
-            className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-2xl font-semibold transition-colors">
-            <Plus size={18} /> Cadastrar Paciente
-          </button>
-        </div>
-      ) : null}
+        )}
 
-      {/* Modal — Desvincular */}
+        {/* ── Lista de pacientes ───────────────────────────────────────────── */}
+        {meusAnimais.length > 0 ? (
+          animaisFiltrados.length === 0 ? (
+            <p className="text-center text-gray-400 py-8 text-sm">
+              Nenhum resultado para "{busca}"
+            </p>
+          ) : (
+            <>
+              {/* MOBILE — cards */}
+              <div className="space-y-3 md:hidden">
+                {animaisFiltrados.map(animal => (
+                  <AnimalCardMobile
+                    key={animal.id}
+                    animal={animal}
+                    onDashboard={() => irParaAnimal(animal)}
+                    onEditar={() => navigate(`/animais/${animal.id}`)}
+                    onDesvincular={() => setAnimalToUnlink(animal)}
+                  />
+                ))}
+              </div>
+
+              {/* DESKTOP — tabela */}
+              <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                {/* Cabeçalho */}
+                <div className="grid grid-cols-[44px_1fr_160px_90px_70px_120px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
+                  <span />
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
+                </div>
+
+                {/* Linhas */}
+                <div className="divide-y divide-gray-50">
+                  {animaisFiltrados.map(animal => (
+                    <div
+                      key={animal.id}
+                      onClick={() => irParaAnimal(animal)}
+                      className="grid grid-cols-[44px_1fr_160px_90px_70px_120px] items-center gap-4
+                                 px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
+                    >
+                      <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                        {animal.photoUrl
+                          ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+                          : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
+                        }
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
+                          {animal.nome}
+                        </p>
+                        {animal.user?.fullName && (
+                          <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-600 truncate">
+                        {animal.raca?.nome || animal.especie?.nome || '—'}
+                      </p>
+                      <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
+                      <p className="text-sm text-gray-600">{animal.sexo ?? '—'}</p>
+                      <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => irParaAnimal(animal)}
+                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          title="Ver dashboard">
+                          <LayoutDashboard size={15} />
+                        </button>
+                        <button onClick={() => navigate(`/animais/${animal.id}`)}
+                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          title="Editar">
+                          <Pencil size={15} />
+                        </button>
+                        <button onClick={() => setAnimalToUnlink(animal)}
+                          className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                          title="Desvincular">
+                          <Unlink size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Rodapé */}
+                <div className="px-5 py-3 border-t border-gray-50 text-center">
+                  <p className="text-xs text-gray-400">
+                    {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+
+              {/* Rodapé mobile */}
+              <p className="md:hidden text-xs text-gray-400 text-center">
+                {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
+              </p>
+            </>
+          )
+        ) : solicitacoes.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-4xl mb-4">🩺</p>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">
+              Nenhum animal sob sua responsabilidade
+            </h2>
+            <p className="text-gray-500 text-sm mb-6">
+              Cadastre um paciente ou aguarde solicitações de vínculo.
+            </p>
+            <button onClick={() => navigate('/animais')}
+              className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
+                         text-white px-6 py-3 rounded-2xl font-semibold transition-colors">
+              <Plus size={18} /> Cadastrar Paciente
+            </button>
+          </div>
+        ) : null}
+
+      </div>
+
+      {/* ── Modal — Desvincular ──────────────────────────────────────────────── */}
       {animalToUnlink && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
@@ -379,7 +478,6 @@ export default function VetDashboard() {
           </div>
         </div>
       )}
-
-    </div>
+    </PageContainer>
   );
 }

@@ -14,6 +14,7 @@ import { gerarHtmlDieta } from '../utils/Dietaprint';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
+import PageContainer from '../components/PageContainer';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -791,10 +792,9 @@ const Dieta = () => {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="max-w-5xl mx-auto px-4">
+      <PageContainer>
 
-        <BotaoVoltar className="mb-4 mt-6" />
+        <BotaoVoltar className="mb-4" />
 
         {animal && <AnimalCard animal={animal} planoNome={planoSelecionado?.nome} />}
 
@@ -997,8 +997,6 @@ const Dieta = () => {
           )}
         </div>
 
-      </div>
-
       {/* Modal novo plano */}
       {showModalNovoPlano && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -1053,7 +1051,7 @@ const Dieta = () => {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 };
 

@@ -5,7 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Calendar, Camera, UserCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
 const NRC_CATEGORIAS: Record<string, string[]> = {
@@ -24,10 +24,17 @@ const NRC_CATEGORIAS: Record<string, string[]> = {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FormData {
-  nome: string; especieId: number; racaId: number | null; peso: string;
-  dataNascimento: string; idadeAnos: string; sexo: string;
-  categoriaAnimal: string; tipoExercicio: string;
+  nome:              string;
+  especieId:         number;
+  racaId:            number | null;
+  peso:              string;
+  dataNascimento:    string;
+  idadeAnos:         string;
+  sexo:              string;
+  categoriaAnimal:   string;
+  tipoExercicio:     string;
   veterinarioUserId: number | null;
+  local:             string;
 }
 
 interface FormProprietario {
@@ -37,16 +44,29 @@ interface FormProprietario {
 }
 
 interface Vet {
-  vetUserId: number; nome: string; crmv: string | null;
-  email: string; especies: { id: number; nome: string }[];
+  vetUserId: number;
+  nome:      string;
+  crmv:      string | null;
+  email:     string;
+  especies:  { id: number; nome: string }[];
 }
 
-// Solicitação retornada pelo ANIMAL_INCLUDE (inclui ACEITO e PENDENTE)
 interface Solicitacao {
-  status:    string;
-  vetUserId: number;
+  status:      string;
+  vetUserId:   number;
   veterinario?: { id: number; fullName: string; email: string } | null;
 }
+
+interface AnimalEncontrado {
+  id:               number;
+  nome:             string;
+  temVet:           boolean;
+  vetDaMinhaEquipe?: boolean; // ← novo: animal está com vet da mesma equipe
+  proprietario?:    { id: number; fullName: string; email: string; phone?: string | null } | null;
+}
+
+// ← 'minha_equipe' adicionado
+type StatusBusca = 'idle' | 'com_vet' | 'sem_vet' | 'nao_encontrado' | 'minha_equipe';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const calcularIdadeEmMeses = (dn: string, ia: string): number | null => {
@@ -58,6 +78,43 @@ const calcularIdadeEmMeses = (dn: string, ia: string): number | null => {
   }
   return ia && Number(ia) > 0 ? Number(ia) * 12 : null;
 };
+
+// ─── Utilitário de compressão ─────────────────────────────────────────────────
+const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise<File> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width  = maxWidth;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = width;
+      canvas.height = height;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type:         'image/jpeg',
+            lastModified: Date.now(),
+          }));
+        },
+        'image/jpeg',
+        qualidade,
+      );
+    };
+
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
 
 const getCategoriasDisponiveis = (sexo: string, dn: string, ia: string) => {
   const m = calcularIdadeEmMeses(dn, ia);
@@ -84,10 +141,11 @@ const Animal = () => {
   const { id }                    = useParams<{ id: string }>();
   const isEditMode                = !!id;
 
-  const role          = (user?.role ?? user?.userType ?? '').toUpperCase();
+  const role          = (user?.role     ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
   const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
 
+  // ── Estado base ────────────────────────────────────────────────────────────
   const [loading,        setLoading]        = useState(true);
   const [submitting,     setSubmitting]     = useState(false);
   const [photoPreview,   setPhotoPreview]   = useState<string | null>(null);
@@ -97,26 +155,28 @@ const Animal = () => {
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
   const [vets,           setVets]           = useState<Vet[]>([]);
   const [vetsFiltrados,  setVetsFiltrados]  = useState<Vet[]>([]);
-
-  // Vet original carregado no edit mode — detecta se houve mudança
-  const [vetOriginalId, setVetOriginalId] = useState<number | null>(null);
-  // Status da solicitação carregada (PENDENTE ou ACEITO) — exibe badge correto
+  const [vetOriginalId,  setVetOriginalId]  = useState<number | null>(null);
   const [vetStatusAtual, setVetStatusAtual] = useState<string | null>(null);
 
-  // Formulário principal
+  // ── Busca por nome (vet, novo cadastro) ────────────────────────────────────
+  const [buscandoAnimal,    setBuscandoAnimal]    = useState(false);
+  const [animalEncontrado,  setAnimalEncontrado]  = useState<AnimalEncontrado | null>(null);
+  const [statusBuscaAnimal, setStatusBuscaAnimal] = useState<StatusBusca>('idle');
+
+  // ── Formulário ─────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState<FormData>({
     nome: '', especieId: 0, racaId: null, peso: '',
     dataNascimento: '', idadeAnos: '', sexo: '',
     categoriaAnimal: '', tipoExercicio: '',
     veterinarioUserId: null,
+    local: '',
   });
 
-  // Formulário do proprietário (apenas para vets)
   const [formProp, setFormProp] = useState<FormProprietario>({
     nomeCompleto: '', email: '', telefone: '',
   });
 
-  // ─── Computados ─────────────────────────────────────────────────────────────
+  // ── Computados ─────────────────────────────────────────────────────────────
   const especieAtual = especies.find(e => e.id === formData.especieId);
   const isEquino     = !!especieAtual && (
     especieAtual.nome.toLowerCase().includes('equino') ||
@@ -135,12 +195,11 @@ const Animal = () => {
   );
   const temIdadeOuData = !!formData.dataNascimento || !!formData.idadeAnos;
 
-  // Detecta se o vet foi alterado no edit mode (para exibir aviso)
   const vetFoiAlterado = isEditMode
     && formData.veterinarioUserId !== null
     && formData.veterinarioUserId !== vetOriginalId;
 
-  // ─── Efeitos de limpeza ──────────────────────────────────────────────────────
+  // ── Efeitos de limpeza ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!isEquino && (formData.categoriaAnimal || formData.tipoExercicio))
       setFormData(p => ({ ...p, categoriaAnimal: '', tipoExercicio: '' }));
@@ -174,7 +233,7 @@ const Animal = () => {
     }
   }, [formData.especieId, vets]);
 
-  // ─── Carregamento inicial ─────────────────────────────────────────────────
+  // ── Carregamento inicial ───────────────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
       try {
@@ -183,45 +242,65 @@ const Animal = () => {
           api.get('/racas'),
         ]);
         const vetRes       = await api.get('/veterinarios').catch(() => ({ data: { dados: [] } }));
-        const especiesData = espRes.data?.dados ?? espRes.data ?? [];
-        const racasData    = racRes.data?.dados  ?? racRes.data  ?? [];
-        const vetsData     = vetRes.data?.dados  ?? [];
+        const todasEspecies: { id: number; nome: string }[] = espRes.data?.dados ?? espRes.data ?? [];
+        const racasData    = racRes.data?.dados ?? racRes.data ?? [];
+        const vetsData     = vetRes.data?.dados ?? [];
 
-        setEspecies(especiesData);
         setTodasRacas(racasData);
         setVets(vetsData);
         setVetsFiltrados(vetsData);
+
+        // Filtrar espécies pelo perfil do vet logado
+        if (isVet) {
+          try {
+            const meRes = await fetch('/api/users/me', {
+              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+            });
+            if (meRes.ok) {
+              const meData = await meRes.json();
+              const especiesDoVet: number[] = meData.especiesAtendidas ?? [];
+              setEspecies(
+                especiesDoVet.length > 0
+                  ? todasEspecies.filter(e => especiesDoVet.includes(e.id))
+                  : todasEspecies
+              );
+            } else {
+              setEspecies(todasEspecies);
+            }
+          } catch {
+            setEspecies(todasEspecies);
+          }
+        } else {
+          setEspecies(todasEspecies);
+        }
 
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const a = animalRes.data?.dados ?? animalRes.data;
 
-          // ANIMAL_INCLUDE agora retorna ACEITO e PENDENTE — usar diretamente
-          // sem a segunda chamada separada a /veterinarios/solicitacoes
           const solicitacoes: Solicitacao[] = a.solicitacoes ?? [];
           const solAceita   = solicitacoes.find(s => s.status === 'ACEITO');
           const solPendente = solicitacoes.find(s => s.status === 'PENDENTE');
           const solAtual    = solAceita ?? solPendente ?? null;
-
           const vetCarregadoId = solAtual?.vetUserId ?? null;
 
           setVetOriginalId(vetCarregadoId);
           setVetStatusAtual(solAtual?.status ?? null);
 
           setFormData({
-            nome:            a.nome            ?? '',
-            especieId:       a.especieId        ?? 0,
-            racaId:          a.racaId           ?? null,
-            peso:            a.peso?.toString() ?? '',
-            dataNascimento:  a.dataNascimento   ? a.dataNascimento.split('T')[0] : '',
-            idadeAnos:       a.idadeAnos        ? String(a.idadeAnos) : '',
-            sexo:            a.sexo             ?? '',
-            categoriaAnimal: a.categoriaAnimal  ?? '',
-            tipoExercicio:   a.tipoExercicio    ?? '',
+            nome:              a.nome            ?? '',
+            especieId:         a.especieId       ?? 0,
+            racaId:            a.racaId          ?? null,
+            peso:              a.peso?.toString() ?? '',
+            dataNascimento:    a.dataNascimento   ? a.dataNascimento.split('T')[0] : '',
+            idadeAnos:         a.idadeAnos        ? String(a.idadeAnos) : '',
+            sexo:              a.sexo             ?? '',
+            categoriaAnimal:   a.categoriaAnimal  ?? '',
+            tipoExercicio:     a.tipoExercicio    ?? '',
             veterinarioUserId: vetCarregadoId,
+            local:             a.local            ?? '',
           });
           if (a.photoUrl) setPhotoPreview(a.photoUrl);
-
           if (a.user) {
             setFormProp({
               nomeCompleto: a.user.fullName ?? '',
@@ -238,17 +317,65 @@ const Animal = () => {
       }
     };
     load();
-  }, [id, isEditMode]);
+  }, [id, isEditMode, isVet]);
 
-  // ─── Handlers ────────────────────────────────────────────────────────────────
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setPhotoFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => setPhotoPreview(reader.result as string);
-      reader.readAsDataURL(file);
+  // ── Busca por nome ─────────────────────────────────────────────────────────
+  const buscarAnimalExistente = async (nome: string) => {
+    if (!nome.trim() || !isVet || isEditMode) return;
+    setBuscandoAnimal(true);
+    setAnimalEncontrado(null);
+    setStatusBuscaAnimal('idle');
+    try {
+      const res = await api.get(`/animais/buscar-por-nome?nome=${encodeURIComponent(nome.trim())}`);
+      const animal: AnimalEncontrado | null = res.data?.dados;
+      if (animal) {
+        setAnimalEncontrado(animal);
+
+        if (!animal.temVet) {
+          // Sem vet → pode vincular
+          setStatusBuscaAnimal('sem_vet');
+          if (animal.proprietario) {
+            setFormProp({
+              nomeCompleto: animal.proprietario.fullName ?? '',
+              email:        animal.proprietario.email    ?? '',
+              telefone:     animal.proprietario.phone    ?? '',
+            });
+          }
+        } else if (animal.vetDaMinhaEquipe) {
+          // Tem vet mas é da mesma equipe → informa, bloqueia
+          setStatusBuscaAnimal('minha_equipe');
+        } else {
+          // Tem vet de outra equipe → bloqueia com mensagem original
+          setStatusBuscaAnimal('com_vet');
+        }
+      } else {
+        setStatusBuscaAnimal('nao_encontrado');
+      }
+    } catch {
+      setStatusBuscaAnimal('nao_encontrado');
+    } finally {
+      setBuscandoAnimal(false);
     }
+  };
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Preview imediato antes de comprimir
+    const reader = new FileReader();
+    reader.onloadend = () => setPhotoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+
+    // Comprime em background
+    const comprimido = await comprimirImagem(file);
+    setPhotoFile(comprimido);
+
+    // Atualiza preview com versão comprimida
+    const reader2 = new FileReader();
+    reader2.onloadend = () => setPhotoPreview(reader2.result as string);
+    reader2.readAsDataURL(comprimido);
   };
 
   const handleDateTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -273,23 +400,29 @@ const Animal = () => {
     }
   };
 
-  // ─── Submit ───────────────────────────────────────────────────────────────────
+  // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'minha_equipe') {
+      toast.error(`${formData.nome} já está sob cuidados de um veterinário`);
+      return;
+    }
+
     setSubmitting(true);
 
-    // Validações do animal
-    if (!formData.nome?.trim())                           { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
-    if (!formData.racaId)                                 { toast.error('Raça é obrigatória');           setSubmitting(false); return; }
-    if (!formData.dataNascimento && !formData.idadeAnos)  { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
-    if (formData.peso && Number(formData.peso) <= 0)      { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
+    if (!formData.nome?.trim())  { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.local?.trim()) { toast.error('Local do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.racaId)        { toast.error('Raça é obrigatória'); setSubmitting(false); return; }
+    if (!formData.dataNascimento && !formData.idadeAnos) { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
+    if (formData.peso && Number(formData.peso) <= 0)     { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
     if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { toast.error('A idade deve ser positiva'); setSubmitting(false); return; }
     if (isEquino && (!formData.categoriaAnimal || !formData.tipoExercicio)) {
       toast.error('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
     }
 
-    // Validações do proprietário (apenas vet, novo cadastro)
-    if (isVet && !isEditMode) {
+    // Vet criando animal novo (não encontrado) — valida dados do proprietário
+    if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
       if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
       if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
     }
@@ -299,9 +432,6 @@ const Animal = () => {
         ? vets.find(v => v.vetUserId === formData.veterinarioUserId)
         : null;
 
-      // ── Payload base ────────────────────────────────────────────────────────
-      // veterinarioUserId é enviado sempre — backend detecta mudança internamente
-      // e cria a solicitação PENDENTE + dispara email quando necessário
       const payload: Record<string, unknown> = {
         nome:               formData.nome.trim(),
         especieId:          formData.especieId,
@@ -314,10 +444,14 @@ const Animal = () => {
         tipoExercicio:      isEquino ? formData.tipoExercicio   : null,
         veterinarioNome:    vetSelecionado?.nome ?? null,
         veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
-        // ↓ CAMPO CRÍTICO: enviado em criação E edição — backend processa a mudança
         veterinarioUserId:  formData.veterinarioUserId ?? null,
-        // Vet envia dados do proprietário apenas na criação
-        ...(isVet && !isEditMode && {
+        local:              formData.local.trim(),
+        // Vet vinculando animal existente sem vet
+        ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
+          animalExistenteId: animalEncontrado.id,
+        }),
+        // Vet criando animal novo → envia dados do proprietário
+        ...(isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado' && {
           proprietario: {
             fullName: formProp.nomeCompleto.trim(),
             email:    formProp.email.trim(),
@@ -328,29 +462,22 @@ const Animal = () => {
 
       let animalId: number;
 
-      // ── Com foto (multipart) ─────────────────────────────────────────────
       if (photoFile) {
         const fd = new FormData();
-
-        // Campos primitivos
         Object.entries(payload).forEach(([k, v]) => {
           if (v != null && typeof v !== 'object') fd.append(k, String(v));
         });
-
-        // veterinarioUserId — garantir que vai mesmo sendo número
-        if (formData.veterinarioUserId != null) {
+        if (formData.veterinarioUserId != null)
           fd.append('veterinarioUserId', String(formData.veterinarioUserId));
-        }
-
-        // Proprietário como JSON separado (multipart não aceita objetos aninhados)
-        if (isVet && !isEditMode) {
+        if (animalEncontrado && statusBuscaAnimal === 'sem_vet')
+          fd.append('animalExistenteId', String(animalEncontrado.id));
+        if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
           fd.append('proprietario', JSON.stringify({
             fullName: formProp.nomeCompleto.trim(),
             email:    formProp.email.trim(),
             phone:    formProp.telefone.trim() || null,
           }));
         }
-
         fd.append('foto', photoFile);
         const cfg = { headers: { 'Content-Type': 'multipart/form-data' } };
 
@@ -361,8 +488,6 @@ const Animal = () => {
           const r  = await api.post('/animais', fd, cfg);
           animalId = r.data.dados.id;
         }
-
-      // ── Sem foto (JSON) ──────────────────────────────────────────────────
       } else {
         if (isEditMode) {
           await api.put(`/animais/${id}`, payload);
@@ -373,19 +498,12 @@ const Animal = () => {
         }
       }
 
-      // Vet criando animal novo → vínculo direto ACEITO (backend também faz, mas
-      // mantemos como upsert de segurança para garantir o registro imediato)
-      if (isVet && !isEditMode && animalId) {
-        await api.post('/animais/vincular-vet', {
-          animalId,
-          vetUserId: user?.id,
-        }).catch(err => console.warn('[vincularVet]', err));
-      }
+      // Mensagem de sucesso contextual
+      const msgSucesso = statusBuscaAnimal === 'sem_vet'
+        ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
+        : isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!';
 
-      // Nota: a solicitação de vínculo (PENDENTE + email) é criada pelo BACKEND
-      // dentro de criar() e atualizar() — não é mais responsabilidade do frontend.
-
-      toast.success(isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!');
+      toast.success(msgSucesso);
       await refreshSelectedAnimal();
 
       if (!isEditMode && localStorage.getItem('s2vet_ob') === 'a') {
@@ -405,7 +523,7 @@ const Animal = () => {
     }
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="text-center">
@@ -454,7 +572,95 @@ const Animal = () => {
 
           <form onSubmit={handleSubmit} className="space-y-5">
 
-            {/* ── Seção: Proprietário (apenas vets) ─────────────────────────── */}
+            {/* ── 1. Nome do animal ─────────────────────────────────────────── */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Nome do animal <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={formData.nome}
+                  onChange={e => {
+                    setFormData({ ...formData, nome: e.target.value });
+                    if (statusBuscaAnimal !== 'idle') {
+                      setStatusBuscaAnimal('idle');
+                      setAnimalEncontrado(null);
+                      setFormProp({ nomeCompleto: '', email: '', telefone: '' });
+                    }
+                  }}
+                  onBlur={e => isVet && !isEditMode && buscarAnimalExistente(e.target.value)}
+                  placeholder="Ex: Trovão, Mel, Rex..."
+                  className={inputClass}
+                />
+                {buscandoAnimal && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+              </div>
+
+              {/* Animal com vet de outra equipe — bloqueado */}
+              {statusBuscaAnimal === 'com_vet' && (
+                <div className="mt-2 flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário no S2Vet.
+                    O cadastro não pode ser realizado.
+                  </span>
+                </div>
+              )}
+
+              {/* Animal com vet da mesma equipe — informativo */}
+              {statusBuscaAnimal === 'minha_equipe' && (
+                <div className="mt-2 flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
+                  <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    <strong>{formData.nome}</strong> já está sob responsabilidade de um veterinário
+                    da sua equipe. Nenhuma ação necessária.
+                  </span>
+                </div>
+              )}
+
+              {/* Animal sem vet — pode vincular */}
+              {statusBuscaAnimal === 'sem_vet' && animalEncontrado && (
+                <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    <strong>{formData.nome}</strong> já está cadastrado sem veterinário responsável.
+                    Os dados do proprietário foram preenchidos automaticamente.
+                    Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.
+                  </span>
+                </div>
+              )}
+
+              {/* Animal não encontrado — novo cadastro */}
+              {statusBuscaAnimal === 'nao_encontrado' && isVet && !isEditMode && (
+                <p className="mt-1 text-xs text-emerald-600">
+                  ✓ Animal não encontrado — será criado um novo cadastro.
+                </p>
+              )}
+            </div>
+
+            {/* ── 2. Local (obrigatório) ────────────────────────────────────── */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <span className="flex items-center gap-1">
+                  <MapPin size={14} className="text-emerald-600" />
+                  Local do Animal <span className="text-red-500">*</span>
+                </span>
+              </label>
+              <input
+                type="text"
+                value={formData.local}
+                onChange={e => setFormData({ ...formData, local: e.target.value })}
+                placeholder="Ex: Fazenda Santa Clara, Haras Bela Vista..."
+                className={inputClass}
+                required
+              />
+            </div>
+
+            {/* ── 3. Proprietário (apenas vets) ────────────────────────────── */}
             {isVet && (
               <div className="pb-4 border-b border-gray-100">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Proprietário</p>
@@ -463,69 +669,80 @@ const Animal = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Nome Completo {!isEditMode && <span className="text-red-500">*</span>}
                     </label>
-                    <input type="text" value={formProp.nomeCompleto}
+                    <input
+                      type="text"
+                      value={formProp.nomeCompleto}
                       onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
                       placeholder="Nome do proprietário"
-                      disabled={isEditMode}
-                      className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                      disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
+                      className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-                      <input type="tel" value={formProp.telefone}
+                      <input
+                        type="tel"
+                        value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: e.target.value }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode}
-                        className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         E-mail {!isEditMode && <span className="text-red-500">*</span>}
                       </label>
-                      <input type="email" value={formProp.email}
+                      <input
+                        type="email"
+                        value={formProp.email}
                         onChange={e => setFormProp(p => ({ ...p, email: e.target.value }))}
                         placeholder="email@exemplo.com"
-                        disabled={isEditMode}
-                        className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                      />
                     </div>
                   </div>
-                  {!isEditMode && (
+                  {!isEditMode && statusBuscaAnimal === 'nao_encontrado' && (
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>Senha inicial: <strong>Inicial#001</strong>. Se o e-mail já estiver cadastrado, o animal será vinculado ao usuário existente.</span>
+                      <span>
+                        Senha inicial: <strong>Inicial#001</strong>. Se o e-mail já estiver cadastrado,
+                        o animal será vinculado ao usuário existente.
+                      </span>
+                    </div>
+                  )}
+                  {!isEditMode && statusBuscaAnimal === 'idle' && (
+                    <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-500">
+                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>Digite o nome do animal acima para verificar se já está cadastrado.</span>
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Nome */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Nome do animal <span className="text-red-500">*</span>
-              </label>
-              <input type="text" value={formData.nome}
-                onChange={e => setFormData({ ...formData, nome: e.target.value })}
-                placeholder="Ex: Trovão, Mel, Rex..."
-                className={inputClass} />
-            </div>
-
-            {/* Espécie + Sexo */}
+            {/* ── 4. Espécie + Sexo ─────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
-                <select value={formData.especieId}
+                <select
+                  value={formData.especieId}
                   onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
-                  className={inputClass}>
+                  className={inputClass}
+                >
                   <option value={0} disabled>Selecione a espécie</option>
                   {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
-                <select value={formData.sexo}
+                <select
+                  value={formData.sexo}
                   onChange={e => setFormData({ ...formData, sexo: e.target.value })}
-                  className={inputClass}>
+                  className={inputClass}
+                >
                   <option value="" disabled>Selecione o sexo</option>
                   <option value="Macho">Macho</option>
                   <option value="Fêmea">Fêmea</option>
@@ -533,15 +750,17 @@ const Animal = () => {
               </div>
             </div>
 
-            {/* Raça + Peso */}
+            {/* ── 5. Raça + Peso ────────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Raça <span className="text-red-500">*</span>
                 </label>
-                <select value={formData.racaId || ''}
+                <select
+                  value={formData.racaId || ''}
                   onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
-                  className={inputClass}>
+                  className={inputClass}
+                >
                   <option value="">Selecione</option>
                   {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
                 </select>
@@ -550,22 +769,28 @@ const Animal = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Peso (kg) <span className="text-red-500">*</span>
                 </label>
-                <input type="number" step="0.1" min="0.1" placeholder="Ex: 450" value={formData.peso}
+                <input
+                  type="number" step="0.1" min="0.1" placeholder="Ex: 450"
+                  value={formData.peso}
                   onChange={e => setFormData({ ...formData, peso: e.target.value })}
-                  className={inputClass} />
+                  className={inputClass}
+                />
               </div>
             </div>
 
-            {/* Idade + Data */}
+            {/* ── 6. Idade + Data ───────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
-                <input type="number" min="1" step="1" placeholder="Ex: 5" value={formData.idadeAnos}
+                <input
+                  type="number" min="1" step="1" placeholder="Ex: 5"
+                  value={formData.idadeAnos}
                   disabled={!!formData.dataNascimento}
                   onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
-                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                />
                 {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
               </div>
               <div>
@@ -573,13 +798,16 @@ const Animal = () => {
                   Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 <div className="relative">
-                  <input type="text" placeholder="dd/mm/aaaa" autoComplete="off"
+                  <input
+                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
                     value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
                     onChange={handleDateTextChange}
-                    className={`${inputClass} pr-10`} />
+                    className={`${inputClass} pr-10`}
+                  />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
                     <Calendar size={18} className="text-emerald-600 pointer-events-none" />
-                    <input type="date" max={new Date().toISOString().split('T')[0]}
+                    <input
+                      type="date" max={new Date().toISOString().split('T')[0]}
                       value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
                       onChange={e => {
                         if (!e.target.value) return;
@@ -588,7 +816,8 @@ const Animal = () => {
                         if (d > h) { toast.error('Data futura não permitida.'); return; }
                         setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
                       }}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
                   </div>
                 </div>
                 {formData.dataNascimento && (
@@ -600,7 +829,7 @@ const Animal = () => {
               </div>
             </div>
 
-            {/* NRC — equinos */}
+            {/* ── 7. NRC — equinos ──────────────────────────────────────────── */}
             {isEquino && (
               <>
                 <div className="pt-2 border-t border-gray-100">
@@ -611,10 +840,12 @@ const Animal = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Categoria <span className="text-red-500">*</span>
                   </label>
-                  <select value={formData.categoriaAnimal}
+                  <select
+                    value={formData.categoriaAnimal}
                     onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
                     disabled={!temIdadeOuData}
-                    className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}>
+                    className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                  >
                     <option value="">Selecione a categoria</option>
                     {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -624,9 +855,11 @@ const Animal = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Tipo / Estágio <span className="text-red-500">*</span>
                     </label>
-                    <select value={formData.tipoExercicio}
+                    <select
+                      value={formData.tipoExercicio}
                       onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
-                      className={inputClass}>
+                      className={inputClass}
+                    >
                       <option value="">Selecione o tipo</option>
                       {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
@@ -635,7 +868,7 @@ const Animal = () => {
               </>
             )}
 
-            {/* Veterinário — apenas para proprietários (não vets) */}
+            {/* ── 8. Veterinário (apenas proprietários) ────────────────────── */}
             {!isVet && (
               <div className="pt-2 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-600 mb-3">Veterinário Responsável</p>
@@ -644,11 +877,13 @@ const Animal = () => {
                     <UserCheck size={14} className="text-emerald-600" />
                     Veterinário cadastrado no S2Vet
                   </label>
-                  <select value={formData.veterinarioUserId ?? ''}
+                  <select
+                    value={formData.veterinarioUserId ?? ''}
                     onChange={e => setFormData(p => ({
                       ...p, veterinarioUserId: e.target.value ? Number(e.target.value) : null,
                     }))}
-                    className={inputClass}>
+                    className={inputClass}
+                  >
                     <option value="">Não cadastrado</option>
                     {vetsFiltrados.length === 0 && formData.especieId !== 0 && (
                       <option disabled value="">Nenhum veterinário atende esta espécie</option>
@@ -660,7 +895,6 @@ const Animal = () => {
                     ))}
                   </select>
 
-                  {/* Aviso: novo cadastro — solicitação será enviada */}
                   {formData.veterinarioUserId && !isEditMode && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
@@ -671,7 +905,6 @@ const Animal = () => {
                     </div>
                   )}
 
-                  {/* Aviso: edição — vet foi trocado */}
                   {vetFoiAlterado && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
                       <RefreshCw size={13} className="flex-shrink-0 mt-0.5" />
@@ -682,7 +915,6 @@ const Animal = () => {
                     </div>
                   )}
 
-                  {/* Info: vet com solicitação PENDENTE carregada */}
                   {isEditMode && !vetFoiAlterado && vetStatusAtual === 'PENDENTE' && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
@@ -697,15 +929,24 @@ const Animal = () => {
             )}
 
             {/* Submit */}
-            <button type="submit" disabled={submitting}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors">
+            <button
+              type="submit"
+              disabled={submitting || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'minha_equipe'}
+              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors"
+            >
               {submitting
                 ? (isEditMode ? 'Atualizando...' : 'Cadastrando...')
-                : (isEditMode ? 'Atualizar Animal'  : 'Salvar e Continuar')}
+                : statusBuscaAnimal === 'minha_equipe'
+                  ? 'Animal já com sua equipe'
+                  : statusBuscaAnimal === 'com_vet'
+                    ? 'Cadastro bloqueado — animal com outro vet'
+                    : statusBuscaAnimal === 'sem_vet'
+                      ? 'Solicitar autorização ao proprietário'
+                      : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
             </button>
 
           </form>
-        </div>  
+        </div>
       </div>
     </div>
   );
