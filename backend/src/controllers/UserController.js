@@ -145,7 +145,7 @@ const UserController = {
           role:     updatedUser.role,
           userType: updatedUser.userType, // ← agora correto
         },
-        process.env.JWT_SECRET || 'fallback-dev-only',
+        process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
 

@@ -330,7 +330,7 @@ const VeterinarioController = {
     if (authHeader?.startsWith('Bearer ')) {
       try {
         const jwt     = require('jsonwebtoken');
-        const SECRET  = process.env.JWT_SECRET || 'equine-nutrition-super-2026';
+        const SECRET  = process.env.JWT_SECRET;
         const payload = jwt.verify(authHeader.split(' ')[1], SECRET);
 
         if (Number(payload.id) !== Number(solicitacao.vetUserId)) {

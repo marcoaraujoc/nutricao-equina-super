@@ -5,7 +5,7 @@ const bcrypt           = require('bcryptjs');
 const jwt              = require('jsonwebtoken');
 
 const prisma = new PrismaClient();
-const SECRET = process.env.JWT_SECRET || 'equine-nutrition-super-2026';
+const SECRET = process.env.JWT_SECRET;
 
 class UserController {
 

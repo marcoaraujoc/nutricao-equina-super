@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 dotenv.config();
 
@@ -9,9 +11,30 @@ const PORT = process.env.PORT || 3001;
 const path = require('path');
 
 // ===================== MIDDLEWARES =====================
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting geral: 200 req/min por IP
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { sucesso: false, mensagem: 'Muitas requisições. Tente novamente em instantes.' },
+});
+
+// Rate limiting restrito para rotas de autenticação: 20 req/15min por IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { sucesso: false, mensagem: 'Muitas tentativas de login. Tente novamente em 15 minutos.' },
+});
+
+app.use('/api', limiter);
 
 // ===================== IMPORTAÇÃO DAS ROTAS =====================
 const authRoutes = require('./routes/auth');
@@ -41,21 +64,18 @@ const faturaRoutes   = require('./routes/fatura');
 //Monitoração de Custo IA
 const aiUsageRoutes = require('./routes/aiUsage');
 
-//Rota Temporária
-const testeRoutes = require('./routes/teste');
-const queryRoutes = require('./routes/query');
 
 // === RELATÓRIO NUTRICIONAL ===
 const relatorioRoutes = require('./routes/relatorio.routes');
 
 // ===================== MONTAGEM DAS ROTAS =====================
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/animais', animaisRoutes);
 app.use('/api/alimentos', alimentosRoutes);               // ← ADICIONADO AQUI
 
 app.use('/api/dietas', dietasRoutes);
 app.use('/api/exames', examesRoutes);
-app.use('/analise', analiseRoutes);
+app.use('/api/analise', analiseRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/especies', especiesRoutes);
 app.use('/api/racas', racasRoutes);
@@ -82,9 +102,6 @@ app.use('/api/equipes',      equipesRoutes);
 // === ROTA DO RELATÓRIO ===
 app.use('/api/relatorio', relatorioRoutes);
 
-// Rota Temporaria
-app.use('/teste', testeRoutes);
-app.use('/api', queryRoutes);
 
 // ===================== HEALTH CHECK =====================
 app.get('/', (req, res) => {
@@ -102,6 +119,17 @@ app.get('/health', (req, res) => {
 // ===================== 404 =====================
 app.use((req, res) => {
   res.status(404).json({ sucesso: false, mensagem: 'Rota não encontrada' });
+});
+
+// ===================== GLOBAL ERROR HANDLER =====================
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`[ERROR] ${req.method} ${req.path}:`, err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    sucesso: false,
+    mensagem: status === 500 ? 'Erro interno do servidor' : err.message,
+  });
 });
 
 app.listen(PORT, () => {

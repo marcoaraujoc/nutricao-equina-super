@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const SECRET = 'equine-nutrition-super-2026'; // Troque em produção por variável de ambiente
+const SECRET = process.env.JWT_SECRET;
 
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;

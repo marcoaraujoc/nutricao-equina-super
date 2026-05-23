@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 
 const prisma = new PrismaClient();
-const SECRET = process.env.JWT_SECRET || 'equine-nutrition-super-2026';
+const SECRET = process.env.JWT_SECRET;
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
