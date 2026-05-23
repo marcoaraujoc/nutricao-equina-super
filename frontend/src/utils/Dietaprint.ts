@@ -299,14 +299,6 @@ export function gerarHtmlDieta(
       </div>
       <div class="animal-bottom">
         <div>
-          <div class="f-label">Proprietário</div>
-          <div class="f-val-s">${animal?.user?.fullName ?? user?.fullName ?? '—'}</div>
-        </div>
-        <div>
-          <div class="f-label">E-mail</div>
-          <div class="f-val-s">${animal?.user?.email ?? user?.email ?? '—'}</div>
-        </div>
-        <div>
           <div class="f-label">Veterinário Responsável</div>
           <div class="f-val-s">${user?.fullName ?? '—'}</div>
         </div>
@@ -329,12 +321,6 @@ export function gerarHtmlDieta(
     <span>Total: ${totalItens} ${totalItens === 1 ? 'alimento' : 'alimentos'}</span>
   </div>
 
-  <script>
-    window.onload = function () {
-      window.print();
-      window.onafterprint = function () { window.close(); };
-    };
-  </script>
 </body>
 </html>`;
 }

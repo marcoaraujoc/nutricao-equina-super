@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -22,6 +22,9 @@ const Exames = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<any>({});
   const [nutrientes, setNutrientes] = useState<any[]>([]);
+  const [filtroData,      setFiltroData]      = useState('');
+  const [filtroNutriente, setFiltroNutriente] = useState('');
+  const [filtroStatus,    setFiltroStatus]    = useState('');
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
@@ -118,6 +121,13 @@ const Exames = () => {
     return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
   };
 
+  const examesFiltrados = useMemo(() => exames.filter(ex => {
+    if (filtroData && ex.dataExame?.split('T')[0] !== filtroData) return false;
+    if (filtroNutriente && !(ex.nutriente?.nome ?? '').toLowerCase().includes(filtroNutriente.toLowerCase())) return false;
+    if (filtroStatus && getStatus(ex) !== filtroStatus) return false;
+    return true;
+  }), [exames, filtroData, filtroNutriente, filtroStatus]);
+
   if (loading) return (
     <PageContainer>
       <div className="flex items-center justify-center py-20">
@@ -153,6 +163,56 @@ const Exames = () => {
           <Plus size={20} /> Novo Exame Nutricional
         </button>
 
+        {/* Filtros */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Data</label>
+              <input
+                type="date"
+                value={filtroData}
+                onChange={e => setFiltroData(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Nutriente</label>
+              <input
+                type="text"
+                value={filtroNutriente}
+                onChange={e => setFiltroNutriente(e.target.value)}
+                placeholder="Buscar nutriente..."
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Status</label>
+              <select
+                value={filtroStatus}
+                onChange={e => setFiltroStatus(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="">Todos</option>
+                <option value="normal">Normal</option>
+                <option value="alto">Alto</option>
+                <option value="baixo">Baixo</option>
+                <option value="naoCalculado">Não calculado</option>
+              </select>
+            </div>
+          </div>
+          {(filtroData || filtroNutriente || filtroStatus) && (
+            <div className="mt-3 flex items-center justify-between">
+              <span className="text-xs text-gray-400">{examesFiltrados.length} de {exames.length} exames</span>
+              <button
+                onClick={() => { setFiltroData(''); setFiltroNutriente(''); setFiltroStatus(''); }}
+                className="text-xs text-emerald-600 hover:text-emerald-800 font-medium"
+              >
+                Limpar filtros
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50">
@@ -165,14 +225,14 @@ const Exames = () => {
               </tr>
             </thead>
             <tbody>
-              {exames.length === 0 ? (
+              {examesFiltrados.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center text-gray-400">
-                    Nenhum exame registrado ainda.
+                    {exames.length === 0 ? 'Nenhum exame registrado ainda.' : 'Nenhum exame corresponde aos filtros.'}
                   </td>
                 </tr>
               ) : (
-                exames.map((ex: any) => {
+                examesFiltrados.map((ex: any) => {
                   const isEditing = editingId === ex.id;
                   const status    = getStatus(ex);
                   return (

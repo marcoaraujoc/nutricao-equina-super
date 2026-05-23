@@ -236,7 +236,7 @@ function ModalMultiSlot({
   opcoesSeletor:       string[];
   defaultSeletores:    string[];
   labelSeletor:        string;
-  onConfirm:           (slots: { horario: string; qty: string; unidade: string }[]) => Promise<void>;
+  onConfirm:           (slots: { horario: string; qty: string; unidade: string }[], observacao: string) => Promise<void>;
   onClose:             () => void;
 }) {
   const [slots, setSlots] = useState(() =>
@@ -246,6 +246,7 @@ function ModalMultiSlot({
       unidade: unidadesDisponiveis[0] ?? 'kg',
     }))
   );
+  const [observacao, setObservacao] = useState('');
   const [saving, setSaving] = useState(false);
 
   const updateSlot = (i: number, field: 'horario' | 'qty' | 'unidade', value: string) =>
@@ -257,7 +258,7 @@ function ModalMultiSlot({
       return;
     }
     setSaving(true);
-    try { await onConfirm(slots); }
+    try { await onConfirm(slots, observacao); }
     finally { setSaving(false); }
   };
 
@@ -295,7 +296,17 @@ function ModalMultiSlot({
           ))}
         </div>
 
-        <div className="flex gap-3 mt-6">
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">Observação</label>
+          <input
+            value={observacao}
+            onChange={e => setObservacao(e.target.value)}
+            placeholder="Ex: fornecer picado, antes do exercício..."
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500"
+          />
+        </div>
+
+        <div className="flex gap-3 mt-4">
           <button onClick={onClose} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">Cancelar</button>
           <button onClick={handleConfirm} disabled={saving}
             className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
@@ -313,7 +324,7 @@ function BottomAddBar({
   alimentos, onAdd, mobile = false,
 }: {
   alimentos: Alimento[];
-  onAdd:     (alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string) => Promise<void>;
+  onAdd:     (alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string) => Promise<void>;
   mobile?:   boolean;
 }) {
   const [alimentoId,    setAlimentoId]    = useState('');
@@ -321,6 +332,7 @@ function BottomAddBar({
   const [qty,           setQty]           = useState('');
   const [horario,       setHorario]       = useState('Manhã');
   const [unidade,       setUnidade]       = useState('kg');
+  const [observacao,    setObservacao]    = useState('');
   const [saving,        setSaving]        = useState(false);
   const [showModal,     setShowModal]     = useState(false);
 
@@ -345,22 +357,26 @@ function BottomAddBar({
     if (precisaModal && alimentoId) setShowModal(true);
   }, [periodicidade]);
 
+  const resetForm = () => {
+    setAlimentoId(''); setQty(''); setHorario('Manhã'); setUnidade('kg'); setObservacao('');
+  };
+
   const handleAdd = async () => {
     if (!alimentoId) { toast.error('Selecione um alimento'); return; }
     if (precisaModal) { setShowModal(true); return; }
     if (!qty || Number(qty) <= 0) { toast.error('Informe a quantidade'); return; }
     setSaving(true);
     try {
-      await onAdd(Number(alimentoId), horario, periodicidade, Number(qty), unidade);
-      setAlimentoId(''); setQty('');
+      await onAdd(Number(alimentoId), horario, periodicidade, Number(qty), unidade, observacao);
+      resetForm();
     } finally { setSaving(false); }
   };
 
-  const handleModalConfirm = async (slots: { horario: string; qty: string; unidade: string }[]) => {
+  const handleModalConfirm = async (slots: { horario: string; qty: string; unidade: string }[], obs: string) => {
     for (const slot of slots) {
-      await onAdd(Number(alimentoId), slot.horario, periodicidade, Number(slot.qty), slot.unidade);
+      await onAdd(Number(alimentoId), slot.horario, periodicidade, Number(slot.qty), slot.unidade, obs);
     }
-    setAlimentoId(''); setQty('');
+    resetForm();
     setShowModal(false);
   };
 
@@ -406,6 +422,9 @@ function BottomAddBar({
                   {unidadesDisponiveis.map(u => <option key={u}>{u}</option>)}
                 </select>
               </div>
+              <input value={observacao} onChange={e => setObservacao(e.target.value)}
+                placeholder="Observação (opcional)"
+                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500" />
             </>
           )}
           <button onClick={handleAdd} disabled={saving}
@@ -444,6 +463,11 @@ function BottomAddBar({
           className="text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500 disabled:opacity-40">
           {unidadesDisponiveis.map(u => <option key={u}>{u}</option>)}
         </select>
+        {!precisaModal && (
+          <input value={observacao} onChange={e => setObservacao(e.target.value)}
+            placeholder="Observação"
+            className="w-32 text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500" />
+        )}
         <button onClick={handleAdd} disabled={saving}
           className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors flex-shrink-0">
           <Plus size={14} /> {saving ? 'Salvando...' : 'Adicionar'}
@@ -641,7 +665,7 @@ const Dieta = () => {
   // ── Handlers: itens ───────────────────────────────────────────────────────
 
   const handleAddItem = async (
-    alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string,
+    alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string,
   ) => {
     if (!planoSelecionado) { toast.error('Selecione um plano primeiro'); return; }
     const erro = validarItem(alimentoId, periodicidade, horario, itens, alimentos);
@@ -651,6 +675,7 @@ const Dieta = () => {
         animalId:      Number(effectiveAnimalId),
         planoDietaId:  planoSelecionado.id,
         alimentoId, periodicidade, qtdGramasDia: qty, unidade, horario,
+        observacao: observacao || null,
       });
       toast.success('Alimento adicionado!');
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
@@ -712,10 +737,28 @@ const Dieta = () => {
 
   const dispararImpressao = () => {
     if (!planoSelecionado) return;
-    const pw = window.open('', '_blank', 'width=900,height=700');
-    if (!pw) { toast.error('Popup bloqueado. Permita popups para imprimir.'); return; }
-    pw.document.write(gerarHtmlDieta(animal, planoSelecionado, itens, user));
-    pw.document.close();
+
+    const iframe = document.createElement('iframe');
+    Object.assign(iframe.style, {
+      position: 'fixed', top: '-9999px', left: '-9999px',
+      width: '0', height: '0', border: 'none',
+    });
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+    if (!doc) { document.body.removeChild(iframe); return; }
+
+    doc.open();
+    doc.write(gerarHtmlDieta(animal, planoSelecionado, itens, user));
+    doc.close();
+
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (document.body.contains(iframe)) document.body.removeChild(iframe);
+      }, 500);
+    }, 250);
   };
 
   // ── Derived ───────────────────────────────────────────────────────────────

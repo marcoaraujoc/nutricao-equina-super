@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -15,9 +15,20 @@ const CriaExameNutricional = () => {
   const [resultadoIA, setResultadoIA] = useState<any>(null);
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const cancelar = () => {
+    setResultadoIA(null);
+    setFileName('');
+    setProgress(0);
+    setShowModal(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const [nutrientes, setNutrientes] = useState<any[]>([]);
 
@@ -47,7 +58,8 @@ const CriaExameNutricional = () => {
       try {
         if (animalId) {
           const res = await api.get(`/animais/${animalId}`);
-          setSelectedAnimal(res.data);
+          const animal = res.data?.dados ?? res.data;
+          if (animal?.id) setSelectedAnimal(animal);
           return;
         }
 
@@ -154,10 +166,11 @@ const CriaExameNutricional = () => {
   };
 
   const salvarTodos = async () => {
-    if (!resultadoIA) return;
+    if (!resultadoIA || submitting) return;
     const validos = resultadoIA.exames.filter((e: any) => e.encontrado);
-    if (validos.length === 0) return alert('Nenhum exame válido.');
+    if (validos.length === 0) { alert('Nenhum exame válido.'); return; }
 
+    setSubmitting(true);
     try {
       await Promise.all(
         validos.map((e: any) =>
@@ -177,6 +190,8 @@ const CriaExameNutricional = () => {
       navigate(`/exames/${animalId || selectedAnimal?.id}`);
     } catch (err) {
       alert('Erro ao salvar os exames');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -234,7 +249,7 @@ const CriaExameNutricional = () => {
             <Upload className="mb-3 text-emerald-600" size={32} />
             <p className="font-medium text-gray-900">Enviar Laudo</p>
             <p className="text-xs text-gray-500 mt-1">PDF ou imagem</p>
-            <input type="file" accept=".pdf,image/*" onChange={handleFileChange} className="hidden" id="laudo" />
+            <input ref={fileInputRef} type="file" accept=".pdf,image/*" onChange={handleFileChange} className="hidden" id="laudo" />
             <label htmlFor="laudo" className="mt-6 block bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-3 px-8 rounded-3xl cursor-pointer w-full">
               Escolher Arquivo
             </label>
@@ -261,10 +276,6 @@ const CriaExameNutricional = () => {
             <p className="text-center text-xs text-gray-500 mt-1">{progress}%</p>
           </div>
         )}
-
-        <button onClick={salvarTodos} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-3xl font-medium text-sm mb-8">
-          Salvar (do upload)
-        </button>
 
         {resultadoIA && (
           <div className="bg-white rounded-3xl shadow overflow-hidden">
@@ -300,6 +311,22 @@ const CriaExameNutricional = () => {
                 ))}
               </tbody>
             </table>
+            <div className="px-6 py-4 border-t bg-gray-50 flex gap-3">
+              <button
+                onClick={cancelar}
+                disabled={submitting}
+                className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white py-3 rounded-3xl font-medium text-sm transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={salvarTodos}
+                disabled={submitting}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-3 rounded-3xl font-medium text-sm transition-colors"
+              >
+                {submitting ? 'Salvando...' : 'Salvar exames'}
+              </button>
+            </div>
           </div>
         )}
 

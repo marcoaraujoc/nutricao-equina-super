@@ -62,8 +62,27 @@ exports.analisarLLM = async (req, res) => {
 
     const resultado = await processarExame(req.file.path);
 
+    // Normaliza campos: suporta o formato novo (nome/resultado/referencia_min) e o antigo (nomeNutriente/valorEncontrado/valorMinRef)
+    const examesNormalizados = resultado.exames.map(exame => ({
+      nomeNutriente:  exame.nomeNutriente  ?? exame.nome      ?? '',
+      valorEncontrado: safeParseFloat(exame.valorEncontrado ?? exame.resultado),
+      unidade:        exame.unidade        ?? '',
+      valorMinRef:    safeParseFloat(exame.valorMinRef    ?? exame.referencia_min),
+      valorMaxRef:    safeParseFloat(exame.valorMaxRef    ?? exame.referencia_max),
+      observacao:     exame.observacao     ?? exame.metodo    ?? null,
+    }));
+
+    // Data segura — fallback para hoje se inválida ou ausente
+    const dataExameRaw = resultado.dataExame;
+    const dataExameParsed = dataExameRaw ? new Date(dataExameRaw) : null;
+    const dataExameValida = dataExameParsed && !isNaN(dataExameParsed.getTime())
+      ? dataExameParsed
+      : new Date();
+
     const examesValidados = await Promise.all(
-      resultado.exames.map(async (exame) => {
+      examesNormalizados.map(async (exame) => {
+        if (!exame.nomeNutriente) return null;
+
         // Busca ou cria o nutriente
         let nutriente = await prisma.nutriente.findFirst({
           where: { nome: { contains: exame.nomeNutriente } }
@@ -84,7 +103,7 @@ exports.analisarLLM = async (req, res) => {
           where: {
             animalId: parseInt(animalId),
             nutrienteId: nutriente.id,
-            dataExame: new Date(resultado.dataExame)
+            dataExame: dataExameValida
           }
         });
 
@@ -92,17 +111,17 @@ exports.analisarLLM = async (req, res) => {
           ...exame,
           nutrienteId: nutriente.id,
           nomeOficial: nutriente.nome,
-          encontrado: !jaExiste,        // só mostra o que ainda não existe
+          encontrado: !jaExiste,
           jaExiste: !!jaExiste
         };
       })
     );
 
-    // Filtra apenas os exames que ainda não foram cadastrados
-    const examesNovos = examesValidados.filter(ex => ex.encontrado);
+    // Filtra entradas inválidas e duplicatas
+    const examesNovos = examesValidados.filter(ex => ex && ex.encontrado);
 
     res.json({
-      dataExame: resultado.dataExame || new Date().toISOString().split('T')[0],
+      dataExame: dataExameValida.toISOString().split('T')[0],
       exames: examesNovos
     });
 

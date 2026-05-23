@@ -13,37 +13,160 @@
 const PROMPTS = {
 
   // ── Exames nutricionais: parse de PDF de laudo ──────────────────────────────
+  // v1: prompt inicial — tendia a inventar nutrientes (ex: Cobre) e confundir valores entre linhas
+  // v2: regras estritas linha-a-linha — ainda trocava observação entre linhas (pdf-parse extrai por coluna)
+  // v3: estratégia de listas paralelas — extrai cada coluna independentemente, depois une por posição
+    // v4: adicionado: extração de data, campo dataExame no JSON, nota GENESIMATRIX sobre números concatenados (1 casa decimal)
   'parse_laudo': {
-    version: 'v1',
-    build: (texto) => `Você é um especialista em extração de laudos laboratoriais veterinários.
+    version: 'v4',
+    build: (texto) => `
+Você é um extrator de laudos laboratoriais veterinários em PDF.
 
-Primeiro, encontre a **data do exame** (data real da análise/coleta):
-- Procure por palavras como: "Realizado em", "Data do Exame", "Data da Coleta", "Data de Realização", "Requisição", "Exame realizado", "Coleta".
-- **Ignore completamente** qualquer data próxima de: "Nascimento", "Nasc", "Data de Nasc", "Aniversário", "Niver", "Data de Nascimento".
+IMPORTANTE:
+PDFs podem ter texto extraído fora da ordem visual.
+As colunas podem aparecer separadas.
+NUNCA reconstrua a tabela apenas pela ordem dos números.
 
-Depois, extraia **TODOS** os exames, incluindo:
-- Cobre
-- Relação Sódio/Potássio
-- Qualquer outro nutriente que aparecer na tabela.
+Seu trabalho é fazer EXTRAÇÃO ANCORADA POR EXAME.
 
-Retorne APENAS um JSON válido, sem markdown, sem texto antes ou depois:
+# REGRAS ABSOLUTAS
+
+- NÃO interpretar exames
+- NÃO usar conhecimento médico
+- NÃO inferir valores ausentes
+- NÃO corrigir OCR
+- NÃO inventar linhas
+- NÃO associar valores apenas por posição
+- NÃO assumir que a ordem dos números corresponde à ordem dos exames
+
+# PROCESSO OBRIGATÓRIO
+
+## PASSO 0 — Data do exame
+
+Localize a data de realização. Procure por: "Realizado", "Realizado em", "Data do Exame", "Data da Coleta", "Coletado".
+Ignore datas perto de: "Nascimento", "Nasc".
+Converta para o formato YYYY-MM-DD. Se não encontrar, use null.
+
+## PASSO 1 — Identificar exames
+
+Localize todos os exames laboratoriais válidos.
+
+Um exame normalmente aparece como:
+- "Cálcio - mg/dL"
+- "Ferro (ug/dL)"
+- "Sódio - mEq/L"
+
+Para cada exame identificado:
+- capture o nome
+- capture a unidade original exatamente como aparece
+
+Crie uma lista ordenada de exames.
+
+## PASSO 2 — Extração ancorada
+
+Para CADA exame:
+
+### 2.1 Resultado
+
+⚠️ ATENÇÃO — FORMATO GENESIMATRIX (frequente neste tipo de laudo):
+Neste formato, os três números aparecem JUNTOS antes do nome do exame, sem separador visual.
+Cada número tem EXATAMENTE 1 casa decimal.
+Exemplo: "12,79,013,0" = resultado "12,7" + ref_min "9,0" + ref_max "13,0"
+Outro exemplo: "142,0+73,0140,0" = resultado "142,0" (flag "+") + ref_min "73,0" + ref_max "140,0"
+Regra de divisão: separe o bloco numérico em grupos de "dígitos,1dígito" consecutivos.
+
+Para o resultado:
+- NÃO pode ser o valor mínimo/máximo
+- pode conter símbolos como "+" ou "*" (são flags, não fazem parte do número)
+- Separe o valor numérico da flag
+
+### 2.2 Intervalo de referência
+Busque o intervalo associado ao exame (pode estar no bloco concatenado antes do nome).
+
+Formatos válidos:
+- "(9,0 a 13,0)"
+- "73,0 a 140,0"
+- Dois números consecutivos após o resultado no bloco concatenado
+
+Extrair:
+- min
+- max
+
+### 2.3 Método
+Busque o método associado ao exame.
+Exemplos:
+- Ferrozine
+- Azul de Xilidil
+
+## PASSO 3 — Verificação obrigatória
+
+Antes de responder:
+
+- o número de exames deve ser igual ao número de resultados
+- cada exame deve ter no máximo 1 resultado
+- não reutilizar resultados
+- não reutilizar intervalos
+- não reutilizar métodos
+
+Se houver ambiguidade:
+- retornar campo vazio
+- nunca inferir
+
+# SAÍDA
+
+Retorne SOMENTE JSON válido.
+
+Formato:
 
 {
-  "dataExame": "YYYY-MM-DD",
+  "dataExame": "YYYY-MM-DD ou null",
   "exames": [
     {
-      "nomeNutriente": "Cobre",
-      "valorEncontrado": 72.4,
-      "unidade": "ug/dL",
-      "valorMinRef": 0.0,
-      "valorMaxRef": 0.0,
-      "observacao": "Colorimétrico",
-      "statusClinico": "alto"
+      "nome": "",
+      "resultado": "",
+      "flag": "",
+      "unidade": "",
+      "referencia_min": "",
+      "referencia_max": "",
+      "metodo": ""
     }
   ]
 }
 
-Texto completo do laudo:
+# EXEMPLO
+
+Entrada (formato GENESIMATRIX):
+12,79,013,0
+Colorimétrico Arsenazo III
+Cálcio - mg/dL
+
+Saída:
+{
+  "dataExame": null,
+  "exames": [
+    {
+      "nome": "Cálcio",
+      "resultado": "12,7",
+      "flag": "",
+      "unidade": "mg/dL",
+      "referencia_min": "9,0",
+      "referencia_max": "13,0",
+      "metodo": "Colorimétrico Arsenazo III"
+    }
+  ]
+}
+
+IMPORTANTE:
+- Preserve vírgulas decimais
+- Preserve unidades originais
+- Não converter para ponto decimal
+- Não normalizar texto
+- Não escrever explicações
+- Não usar markdown
+- Responder apenas JSON
+
+## LAUDO A EXTRAIR:
+
 ${texto.slice(0, 22000)}`,
   },
 

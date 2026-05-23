@@ -28,12 +28,17 @@ module.exports = {
   async processarExame(filePath, userId = null, animalId = null) {
     const fileBuffer = fs.readFileSync(filePath);
     const texto      = await extrairTextoPDF(fileBuffer);
+
+    // Log do texto bruto para diagnóstico de extração PDF
+    const logger = require('../lib/logger');
+    logger.debug('[exameParser] Texto extraído do PDF:\n' + texto.slice(0, 3000));
+
     const { operacaoVers, prompt } = buildPrompt('parse_laudo', texto);
 
     const respostaTexto = await callAI({
       operacao:    operacaoVers,
       prompt,
-      maxTokens:   1500,
+      maxTokens:   2000,
       temperature: 0.1,
       userId,
       animalId,

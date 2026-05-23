@@ -94,6 +94,7 @@ const CriaDieta = () => {
   const [feedback, setFeedback]             = useState<FeedbackState>(null);
   const [groupIdCounter, setGroupIdCounter] = useState(0);
   const [itensDoBanco, setItensDoBanco]     = useState<ItemBanco[]>([]);
+  const [formKey, setFormKey]               = useState(0);
 
   const rotaVoltar = `/dieta/${animalId}`;
 
@@ -241,6 +242,7 @@ const CriaDieta = () => {
     setGroupIdCounter(c => c + 1);
     setFormData(FORM_INICIAL);
     setOcorrencias([{ ...OCC_INICIAL }]);
+    setFormKey(k => k + 1);
     exibirFeedback('info', 'Alimento adicionado. Preencha o próximo ou clique em Salvar.');
   };
 
@@ -409,7 +411,10 @@ const CriaDieta = () => {
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Alimento</label>
                 <select
                   value={formData.alimentoId}
-                  onChange={e => setFormData({ ...formData, alimentoId: e.target.value })}
+                  onChange={e => {
+                    setFormData({ ...formData, alimentoId: e.target.value });
+                    setOcorrencias([{ ...OCC_INICIAL }]);
+                  }}
                   className={selectClass}
                 >
                   <option value="">Selecione...</option>
@@ -429,9 +434,9 @@ const CriaDieta = () => {
               </div>
             </div>
 
-            {/* Linhas de ocorrências — aparecem após selecionar periodicidade */}
+            {/* Linhas de ocorrências + observação — aparecem após selecionar periodicidade */}
             {formData.periodicidade && (
-              <div className={slots > 1 ? 'rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3' : ''}>
+              <div key={formKey} className={slots > 1 ? 'rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3' : 'space-y-3'}>
                 {ocorrencias.map((occ, idx) => (
                   <div key={idx} className={slots > 1 && idx > 0 ? 'pt-3 border-t border-gray-200' : ''}>
                     <div className="flex gap-3">
@@ -470,20 +475,20 @@ const CriaDieta = () => {
                     </div>
                   </div>
                 ))}
+
+                {/* Observação — aparece junto com os campos de fornecimento */}
+                <div className={slots > 1 ? 'pt-3 border-t border-gray-200' : ''}>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Observação</label>
+                  <textarea
+                    value={formData.observacao}
+                    onChange={e => setFormData({ ...formData, observacao: e.target.value })}
+                    rows={2}
+                    className={`${inputClass} resize-none`}
+                    placeholder="Ex: fornecer picado, misturado ao feno, antes do exercício..."
+                  />
+                </div>
               </div>
             )}
-
-            {/* Observação */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Observação</label>
-              <textarea
-                value={formData.observacao}
-                onChange={e => setFormData({ ...formData, observacao: e.target.value })}
-                rows={2}
-                className={`${inputClass} resize-none`}
-                placeholder="Observações adicionais..."
-              />
-            </div>
 
             {/* Botões */}
             <div className={`flex gap-3 pt-1 ${isEditMode ? 'justify-end' : ''}`}>

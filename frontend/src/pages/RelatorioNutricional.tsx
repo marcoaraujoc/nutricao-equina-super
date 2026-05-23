@@ -1,12 +1,12 @@
 // frontend/src/pages/RelatorioNutricional.tsx
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -40,7 +40,6 @@ interface Animal {
   user?: { fullName: string; email: string };
 }
 
-// ERRO 1 CORRIGIDO: FiltroStatus era usado como scalar mas o estado é array
 type FiltroStatus =
   | 'todos'
   | 'DEFICIÊNCIA CRÍTICA'
@@ -80,6 +79,87 @@ const LABEL_STATUS: Record<string, string> = {
   'SEM REFERÊNCIA':      'Sem Ref.',
 };
 
+// ─── Agrupamento de nutrientes ────────────────────────────────────────────────
+
+const normalizarChave = (nome: string) =>
+  (nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+
+const GRUPOS_NUTRIENTES: { grupo: string; chaves: string[] }[] = [
+  {
+    grupo: 'Energia',
+    chaves: ['energia digestivel', 'energia digestível', 'de', 'ed', 'digestible energy'],
+  },
+  {
+    grupo: 'Proteínas / Aminoácidos',
+    chaves: [
+      'proteina bruta', 'proteína bruta', 'pb', 'cp', 'crude protein',
+      'lisina', 'leucina', 'isoleucina', 'valina', 'metionina',
+      'triptofano', 'treonina', 'fenilalanina', 'histidina',
+    ],
+  },
+  {
+    grupo: 'Minerais',
+    chaves: [
+      'calcio', 'ferro', 'magnesio', 'zinco', 'potassio', 'sodio', 'fosforo',
+      'selenio', 'iodo', 'cobre', 'manganes', 'cobalto', 'enxofre',
+      'cloro', 'cloreto', 'chloride',
+    ],
+  },
+  {
+    grupo: 'Vitaminas',
+    chaves: [
+      'vitamina a', 'vitamina b1', 'vitamina b2', 'vitamina b3', 'vitamina b5',
+      'vitamina b6', 'vitamina b7', 'vitamina b9', 'vitamina b12',
+      'vitamina c', 'vitamina d', 'vitamina e', 'vitamina k',
+      'tiamina', 'riboflavina', 'niacina', 'piridoxina', 'biotina',
+      'acido folico', 'cobalamina', 'acido ascorbico',
+    ],
+  },
+  {
+    grupo: 'Carboidratos',
+    chaves: ['glicose', 'frutose', 'sacarose', 'lactose', 'maltose', 'amido'],
+  },
+  {
+    grupo: 'Fibras',
+    chaves: ['celulose', 'pectina', 'inulina', 'beta-glucana', 'hemicelulose'],
+  },
+  {
+    grupo: 'Lipídios',
+    chaves: [
+      'omega-3', 'omega-6', 'omega-9', 'gordura saturada',
+      'monoinsaturada', 'poli-insaturada', 'colesterol',
+    ],
+  },
+  {
+    grupo: 'Água',
+    chaves: ['agua'],
+  },
+  {
+    grupo: 'Antioxidantes',
+    chaves: ['licopeno', 'luteina', 'zeaxantina', 'resveratrol', 'flavonoides'],
+  },
+  {
+    grupo: 'Enzimas digestivas',
+    chaves: ['lactase', 'amilase', 'lipase', 'protease'],
+  },
+  {
+    grupo: 'Aminoácidos não essenciais',
+    chaves: ['alanina', 'arginina', 'glutamina', 'glicina', 'tirosina'],
+  },
+];
+
+const GRUPOS_ORDEM = GRUPOS_NUTRIENTES.map(g => g.grupo).concat(['Outros']);
+
+const NUTRIENTE_PARA_GRUPO = new Map<string, string>();
+for (const { grupo, chaves } of GRUPOS_NUTRIENTES) {
+  for (const chave of chaves) {
+    NUTRIENTE_PARA_GRUPO.set(normalizarChave(chave), grupo);
+  }
+}
+
+const resolverGrupo = (nutriente: string): string =>
+  NUTRIENTE_PARA_GRUPO.get(normalizarChave(nutriente)) ?? 'Outros';
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const formatarDataBR = (data: string | null | undefined): string => {
@@ -113,7 +193,7 @@ const formatarValor = (valor: number | string | null): string => {
   if (valor === null || valor === undefined) return '—';
   const num = typeof valor === 'number' ? valor : parseFloat(String(valor));
   if (isNaN(num)) return String(valor);
-  return num % 1 === 0 ? String(num) : num.toFixed(4).replace(/\.?0+$/, '');
+  return num.toFixed(1);
 };
 
 // ─── Componente ───────────────────────────────────────────────────────────────
@@ -124,14 +204,14 @@ const RelatorioNutricional = () => {
   const navigate                              = useNavigate();
   const { animalId: paramAnimalId }           = useParams<{ animalId: string }>();
 
-  const [snapshot,               setSnapshot]               = useState<SnapshotRelatorio | null>(null);
-  const [animaisDoProprietario,  setAnimaisDoProprietario]  = useState<Animal[]>([]);
-  const [currentAnimal,          setCurrentAnimal]          = useState<Animal | null>(null);
-  const [loading,                setLoading]                = useState(true);
-  const [generating,             setGenerating]             = useState(false);
-
-  // ERRO 1 CORRIGIDO: estado tipado como FiltroStatus[] (array)
-  const [filtroStatus, setFiltroStatus] = useState<FiltroStatus[]>(['todos']);
+  const [snapshot,              setSnapshot]              = useState<SnapshotRelatorio | null>(null);
+  const [animaisDoProprietario, setAnimaisDoProprietario] = useState<Animal[]>([]);
+  const [currentAnimal,         setCurrentAnimal]         = useState<Animal | null>(null);
+  const [loading,               setLoading]               = useState(true);
+  const [generating,            setGenerating]            = useState(false);
+  const [filtroStatus,          setFiltroStatus]          = useState<FiltroStatus[]>(['todos']);
+  const [filtroSomenteNRC,      setFiltroSomenteNRC]      = useState(false);
+  const [gruposColapsados,      setGruposColapsados]      = useState<Set<string>>(new Set());
 
   const effectiveAnimalId = paramAnimalId || selectedAnimal?.id?.toString();
 
@@ -143,11 +223,33 @@ const RelatorioNutricional = () => {
       )
     : [];
 
-  const relatorioFiltrado = filtroStatus.includes('todos')
-    ? relatorio
-    : relatorio.filter(item => filtroStatus.includes(item.status_nutricional as FiltroStatus));
+  // ── Filtros ───────────────────────────────────────────────────────────────
 
-  // ── Loaders ──────────────────────────────────────────────────────────────
+  const relatorioFiltrado = useMemo(() => {
+    let base = filtroSomenteNRC
+      ? relatorio.filter(item => item.Exigido_NRC !== null)
+      : relatorio;
+    if (!filtroStatus.includes('todos')) {
+      base = base.filter(item => filtroStatus.includes(item.status_nutricional as FiltroStatus));
+    }
+    return base;
+  }, [relatorio, filtroSomenteNRC, filtroStatus]);
+
+  // ── Agrupamento ───────────────────────────────────────────────────────────
+
+  const relatorioAgrupado = useMemo(() => {
+    const grupos: Record<string, RelatorioItem[]> = {};
+    for (const item of relatorioFiltrado) {
+      const grupo = resolverGrupo(item.nutriente);
+      if (!grupos[grupo]) grupos[grupo] = [];
+      grupos[grupo].push(item);
+    }
+    return GRUPOS_ORDEM
+      .filter(g => grupos[g]?.length > 0)
+      .map(g => ({ grupo: g, itens: grupos[g] }));
+  }, [relatorioFiltrado]);
+
+  // ── Loaders ───────────────────────────────────────────────────────────────
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
@@ -197,7 +299,7 @@ const RelatorioNutricional = () => {
     if (effectiveAnimalId) gerarRelatorio();
   }, [effectiveAnimalId, gerarRelatorio]);
 
-  // ── Lógica de filtros (multi-select) ─────────────────────────────────────
+  // ── Lógica de filtros ─────────────────────────────────────────────────────
 
   const handleFiltroClick = (valor: FiltroStatus) => {
     if (valor === 'todos') {
@@ -214,10 +316,9 @@ const RelatorioNutricional = () => {
     });
   };
 
-  // ── ERRO 2 CORRIGIDO: mensagem do empty state usa filtroStatus como array ─
-
   const mensagemVazia = (): string => {
     if (relatorio.length === 0) return 'Nenhum dado disponível.';
+    if (filtroSomenteNRC && relatorioFiltrado.length === 0) return 'Nenhum nutriente NRC encontrado.';
     if (filtroStatus.includes('todos')) return 'Nenhum nutriente encontrado.';
     if (filtroStatus.length === 1) {
       const label = FILTROS.find(f => f.value === filtroStatus[0])?.label ?? filtroStatus[0];
@@ -235,22 +336,24 @@ const RelatorioNutricional = () => {
       </div>
     </PageContainer>
   );
- 
+
   if (!effectiveAnimalId) return (
     <PageContainer maxWidth="7xl">
       <p className="text-center py-10 text-gray-500">Selecione um animal.</p>
     </PageContainer>
   );
- 
+
+  const totalColunas = 1 + colunasDinamicas.length + 5; // nutriente + alimentos + exigido + total + saldo + % + status
+
   // ── Render ────────────────────────────────────────────────────────────────
- 
+
   return (
     <PageContainer maxWidth="7xl">
       <div className="space-y-4 text-gray-900">
- 
+
         {/* Voltar */}
         <BotaoVoltar className="mb-4" />
- 
+
         {/* Seletor de animal */}
         <SeletorAnimal
           animais={animaisDoProprietario}
@@ -258,7 +361,7 @@ const RelatorioNutricional = () => {
           rotaBase="/relatorio-nutricional"
           className="mb-4"
         />
- 
+
         {/* Card do animal */}
         {currentAnimal && (
           <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-4">
@@ -300,7 +403,7 @@ const RelatorioNutricional = () => {
             </div>
           </div>
         )}
- 
+
         {/* Header + botão atualizar */}
         <div className="flex items-center justify-between">
           <div>
@@ -331,13 +434,29 @@ const RelatorioNutricional = () => {
             {generating ? 'Gerando...' : 'Atualizar'}
           </button>
         </div>
- 
-        {/* Filtros multi-select */}
-        <div className="flex gap-2 flex-wrap">
+
+        {/* Filtros */}
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Toggle Somente NRC */}
+          <button
+            onClick={() => setFiltroSomenteNRC(prev => !prev)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors border ${
+              filtroSomenteNRC
+                ? 'bg-blue-700 text-white border-blue-700'
+                : 'bg-white border-blue-300 text-blue-700 hover:border-blue-500'
+            }`}
+          >
+            Somente NRC
+          </button>
+
+          <div className="w-px h-5 bg-gray-200" />
+
+          {/* Filtros de status */}
           {FILTROS.map(f => {
+            const base = filtroSomenteNRC ? relatorio.filter(i => i.Exigido_NRC !== null) : relatorio;
             const count = f.value === 'todos'
-              ? relatorio.length
-              : relatorio.filter(i => i.status_nutricional === f.value).length;
+              ? base.length
+              : base.filter(i => i.status_nutricional === f.value).length;
             const ativo = filtroStatus.includes(f.value);
             return (
               <button
@@ -359,14 +478,14 @@ const RelatorioNutricional = () => {
             );
           })}
         </div>
- 
+
         {/* Aviso sem plano */}
         {snapshot && !snapshot.linhas.length && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
             Nenhum dado nutricional encontrado. Verifique se o animal possui um plano de dieta ativo com alimentos cadastrados.
           </div>
         )}
- 
+
         {/* Tabela */}
         <div className="bg-white rounded-xl shadow overflow-hidden">
           <div className="overflow-auto" style={{ maxHeight: '60vh' }}>
@@ -381,74 +500,108 @@ const RelatorioNutricional = () => {
                       {formatarNome(col)}
                     </th>
                   ))}
-                  <th className="px-4 py-2.5 text-right text-gray-700 font-semibold">Total/dia</th>
                   <th className="px-4 py-2.5 text-right text-gray-700 font-semibold">Exigido</th>
+                  <th className="px-4 py-2.5 text-right text-gray-700 font-semibold">Total/dia</th>
                   <th className="px-4 py-2.5 text-right text-gray-700 font-semibold">Saldo</th>
                   <th className="px-4 py-2.5 text-right text-gray-700 font-semibold">%</th>
                   <th className="px-4 py-2.5 text-center text-gray-700 font-semibold">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {relatorioFiltrado.length === 0 ? (
+                {relatorioAgrupado.length === 0 ? (
                   <tr>
-                    <td colSpan={6 + colunasDinamicas.length} className="px-4 py-10 text-center text-gray-400">
+                    <td colSpan={totalColunas} className="px-4 py-10 text-center text-gray-400">
                       {mensagemVazia()}
                     </td>
                   </tr>
-                ) : relatorioFiltrado.map((item, idx) => (
-                  <tr key={idx} className="border-t hover:bg-gray-50">
-                    <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-gray-100 whitespace-nowrap">
-                      <span className="font-medium text-gray-900">{formatarNome(item.nutriente)}</span>
-                      {item.unidade && (
-                        <span className="text-[10px] text-gray-400 ml-1">({item.unidade})</span>
-                      )}
-                    </td>
-                    {colunasDinamicas.map(col => (
-                      <td key={col} className="px-4 py-2 text-right text-gray-700">
-                        {formatarValor(item[col] as number | null)}
-                      </td>
-                    ))}
-                    <td className="px-4 py-2 text-right font-semibold text-gray-900">
-                      {formatarValor(item.Total_Dieta)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-700">
-                      {formatarValor(item.Exigido_NRC)}
-                    </td>
-                    <td
-                      className="px-4 py-2 text-right font-semibold"
-                      style={{ color: item.Saldo === null ? '#9ca3af' : (item.Saldo as number) < 0 ? '#dc2626' : '#16a34a' }}
+                ) : relatorioAgrupado.map(({ grupo, itens }) => {
+                  const colapsado = gruposColapsados.has(grupo);
+                  const toggleGrupo = () => setGruposColapsados(prev => {
+                    const next = new Set(prev);
+                    if (next.has(grupo)) next.delete(grupo); else next.add(grupo);
+                    return next;
+                  });
+                  return (
+                  <React.Fragment key={grupo}>
+                    {/* Cabeçalho do grupo */}
+                    <tr
+                      className="bg-gray-50 border-t-2 border-gray-200 cursor-pointer select-none hover:bg-gray-100"
+                      onClick={toggleGrupo}
                     >
-                      {item.Saldo === null
-                        ? '—'
-                        : `${(item.Saldo as number) >= 0 ? '+' : ''}${formatarValor(item.Saldo)}`}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-700">
-                      {item.Percentual_Atendido !== null ? `${item.Percentual_Atendido}%` : '—'}
-                    </td>
-                    <td className="px-4 py-2 text-center">
-                      <span className={`px-2 py-1 rounded-full text-[11px] font-medium ${
-                        COR_STATUS[item.status_nutricional] ?? 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {LABEL_STATUS[item.status_nutricional] ?? item.status_nutricional}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                      <td
+                        colSpan={totalColunas}
+                        className="px-4 py-1.5 text-[11px] font-bold text-gray-500 uppercase tracking-wider"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          {colapsado
+                            ? <ChevronRight size={13} className="text-gray-400" />
+                            : <ChevronDown  size={13} className="text-gray-400" />}
+                          {grupo}
+                          <span className="ml-1 text-gray-400 normal-case font-normal">({itens.length})</span>
+                        </span>
+                      </td>
+                    </tr>
+
+                    {/* Linhas do grupo */}
+                    {!colapsado && itens.map((item, idx) => (
+                      <tr key={idx} className="border-t hover:bg-gray-50">
+                        <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-gray-100 whitespace-nowrap">
+                          <span className="font-medium text-gray-900">{formatarNome(item.nutriente)}</span>
+                          {item.unidade && (
+                            <span className="text-[10px] text-gray-400 ml-1">({item.unidade})</span>
+                          )}
+                        </td>
+                        {colunasDinamicas.map(col => (
+                          <td key={col} className="px-4 py-2 text-right text-gray-700">
+                            {formatarValor(item[col] as number | null)}
+                          </td>
+                        ))}
+                        <td className="px-4 py-2 text-right text-gray-700">
+                          {formatarValor(item.Exigido_NRC)}
+                        </td>
+                        <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                          {formatarValor(item.Total_Dieta)}
+                        </td>
+                        <td
+                          className="px-4 py-2 text-right font-semibold"
+                          style={{ color: item.Saldo === null ? '#9ca3af' : (item.Saldo as number) < 0 ? '#dc2626' : '#16a34a' }}
+                        >
+                          {item.Saldo === null
+                            ? '—'
+                            : `${(item.Saldo as number) >= 0 ? '+' : ''}${formatarValor(item.Saldo)}`}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-700">
+                          {item.Percentual_Atendido !== null
+                            ? `${(item.Percentual_Atendido as number).toFixed(1)}%`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          <span className={`px-2 py-1 rounded-full text-[11px] font-medium ${
+                            COR_STATUS[item.status_nutricional] ?? 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {LABEL_STATUS[item.status_nutricional] ?? item.status_nutricional}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+                })}
               </tbody>
             </table>
           </div>
         </div>
- 
+
         {/* Contagem */}
         {!generating && relatorio.length > 0 && (
           <p className="text-center text-xs text-gray-400">
             {relatorioFiltrado.length} de {relatorio.length} nutrientes
           </p>
         )}
- 
+
       </div>
     </PageContainer>
   );
 };
- 
+
 export default RelatorioNutricional;
