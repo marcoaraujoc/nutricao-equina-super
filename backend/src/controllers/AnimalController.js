@@ -4,6 +4,7 @@
 const { PrismaClient } = require('@prisma/client');
 const crypto           = require('crypto');
 const emailService     = require('../services/emailService');
+const { storage }      = require('../storage');
 
 const prisma = new PrismaClient();
 
@@ -481,7 +482,7 @@ class AnimalController {
               proprietarioEmailParaEmail = prop?.email    || null;
             }
 
-      const photoUrl = req.file ? `/uploads/${req.file.filename}` : null;
+      const photoUrl = req.file ? await storage.upload(req.file, '') : null;
 
       const animal = await prisma.animal.create({
         data: {
@@ -607,7 +608,7 @@ class AnimalController {
         where:  { id: animalId },
         select: { user: { select: { fullName: true, email: true } } },
       });
-      const photoUrl = req.file ? `/uploads/${req.file.filename}` : undefined;
+      const photoUrl = req.file ? await storage.upload(req.file, '') : undefined;
 
       const animal = await prisma.animal.update({
         where: { id: animalId },

@@ -2,6 +2,7 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { processarExame } = require('../services/exameParserService');
+const { storage }        = require('../storage');
 
 // Helper seguro para converter valor (aceita número ou string com vírgula)
 const safeParseFloat = (val) => {
@@ -29,7 +30,7 @@ exports.getExamesByAnimal = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const { animalId, nutrienteId, dataExame, valorEncontrado, unidade, valorMinRef, valorMaxRef, observacao } = req.body;
-    const arquivoUrl = req.file ? `/uploads/exames/${req.file.filename}` : null;
+    const arquivoUrl = req.file ? await storage.upload(req.file, 'exames') : null;
 
     const exame = await prisma.exameNutricional.create({
       data: {

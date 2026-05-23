@@ -4,22 +4,21 @@ const router = express.Router();
 const multer = require('multer');
 const exameController = require('../controllers/ExameController');
 
-// Configuração do Multer
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/exames/');
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
+// memoryStorage para upload persistente — StorageProvider decide o destino
+const upload = multer({ storage: multer.memoryStorage() });
 
-const upload = multer({ storage: storage });
+// diskStorage apenas para análise LLM (exameParserService precisa do path)
+const uploadTemp = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, 'uploads/exames/'),
+    filename:    (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  }),
+});
 
 // Rotas existentes
 router.get('/animal/:animalId', exameController.getExamesByAnimal);
 router.post('/', upload.single('arquivo'), exameController.create);
-router.post('/analisar-llm', upload.single('arquivo'), exameController.analisarLLM);
+router.post('/analisar-llm', uploadTemp.single('arquivo'), exameController.analisarLLM);
 router.delete('/:id', exameController.delete);
 router.put('/:id', exameController.update);   // ← adicione esta linha
 

@@ -1,31 +1,18 @@
 // backend/src/routes/animais.js
 'use strict';
 
-const express        = require('express');
-const multer         = require('multer');
-const path           = require('path');
-const fs             = require('fs');
+const express          = require('express');
+const multer           = require('multer');
+const path             = require('path');
 const { authenticate } = require('../middlewares/auth.js');
 const animalController = require('../controllers/AnimalController');
 
 const router = express.Router();
 
-// ─── Configuração do Multer ───────────────────────────────────────────────────
-
-const uploadsDir = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename:    (_req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${unique}${path.extname(file.originalname)}`);
-  },
-});
-
+// ─── Configuração do Multer (memoryStorage — StorageProvider decide o destino) ─
 const upload = multer({
-  storage,
-  limits:    { fileSize: 15 * 1024 * 1024 }, // 5 MB
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 15 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = /jpeg|jpg|png|gif|webp/;
     cb(null, allowed.test(path.extname(file.originalname).toLowerCase()) && allowed.test(file.mimetype));
