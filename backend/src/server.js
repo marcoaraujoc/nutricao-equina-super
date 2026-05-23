@@ -6,6 +6,17 @@ const rateLimit = require('express-rate-limit');
 
 dotenv.config();
 
+const logger = require('./lib/logger');
+
+// Roteia todo console.* do processo para Winston
+console.log   = (...a) => logger.info(a.join(' '));
+console.info  = (...a) => logger.info(a.join(' '));
+console.warn  = (...a) => logger.warn(a.join(' '));
+console.debug = (...a) => logger.debug(a.join(' '));
+console.error = (...a) => logger.error(
+  a.map(x => (x instanceof Error ? x.stack : typeof x === 'object' ? JSON.stringify(x) : x)).join(' ')
+);
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const path = require('path');
@@ -46,10 +57,9 @@ const analiseRoutes = require('./routes/analise');
 const auditRoutes = require('./routes/audit');
 const especiesRoutes = require('./routes/especies');
 const racasRoutes = require('./routes/racas');
-const userRoutes = require('./routes/user');
+const usersRoutes = require('./routes/users');
 const nutrientesRoutes = require('./routes/nutrientes');
 const composicaoAlimentarRoutes = require('./routes/composicaoAlimentar');
-const usersRoutes = require('./routes/users');
 
 const crmvRoutes = require('./routes/crmv');
 
@@ -79,10 +89,9 @@ app.use('/api/analise', analiseRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/especies', especiesRoutes);
 app.use('/api/racas', racasRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/users', usersRoutes);
 app.use('/api/nutrientes', nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
-app.use('/api/users', usersRoutes);
 
 app.use('/api/clinica/evolucoes', evolucaoRoutes);
 app.use('/api/clinica/faturas',   faturaRoutes);
@@ -124,7 +133,7 @@ app.use((req, res) => {
 // ===================== GLOBAL ERROR HANDLER =====================
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(`[ERROR] ${req.method} ${req.path}:`, err);
+  logger.error(`${req.method} ${req.path}`, { message: err.message, stack: err.stack });
   const status = err.status || err.statusCode || 500;
   res.status(status).json({
     sucesso: false,
@@ -133,8 +142,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Servidor rodando na porta ${PORT}`);
-  console.log(`📡 API disponível em: http://localhost:${PORT}`);
+  logger.info(`Servidor rodando na porta ${PORT}`, { port: PORT, env: process.env.NODE_ENV || 'development' });
 });
 
 module.exports = app;
