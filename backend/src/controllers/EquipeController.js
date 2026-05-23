@@ -300,9 +300,160 @@ const EquipeController = {
         prisma.conviteEquipe.update({ where: { token }, data: { status: 'ACEITO' } }),
       ]);
 
+      // Aplica permissões padrão para o cargo
+      await PermissaoService.aplicarPermissoesPadrao({
+        equipeId:      convite.equipeId,
+        userId,
+        cargo:         convite.cargo,
+        atualizadoPor: 0,
+      });
+
       res.json({ sucesso: true, mensagem: 'Bem-vindo à equipe!' });
     } catch (err) {
       console.error('Erro ao aceitar convite:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  getMinhaEquipe: async (req, res) => {
+    try {
+      const membro = await prisma.membroEquipe.findFirst({
+        where: { userId: Number(req.user.id) },
+        include: {
+          equipe: {
+            include: {
+              empresa: true,
+              membros: {
+                include: {
+                  user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } },
+                },
+                orderBy: { createdAt: 'asc' },
+              },
+              convites: {
+                where: { status: 'PENDENTE', expiresAt: { gt: new Date() } },
+                orderBy: { createdAt: 'desc' },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      if (!membro?.equipe) return res.status(404).json({ sucesso: false, mensagem: 'Nenhuma equipe encontrada.' });
+      res.json({ sucesso: true, dados: membro.equipe });
+    } catch (err) {
+      console.error('Erro ao buscar equipe:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  recusarConvite: async (req, res) => {
+    try {
+      const { token } = req.params;
+      const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { email: true } });
+      const convite = await prisma.conviteEquipe.findUnique({ where: { token } });
+
+      if (!convite)                      return res.status(404).json({ sucesso: false, mensagem: 'Convite não encontrado' });
+      if (convite.status !== 'PENDENTE') return res.status(410).json({ sucesso: false, mensagem: 'Convite já respondido' });
+      if (!user || user.email !== convite.email) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Convite pertence a outro e-mail.' });
+      }
+
+      await prisma.conviteEquipe.update({ where: { token }, data: { status: 'RECUSADO' } });
+      res.json({ sucesso: true, mensagem: 'Convite recusado.' });
+    } catch (err) {
+      console.error('Erro ao recusar convite:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  cancelarConvite: async (req, res) => {
+    try {
+      const equipeId  = Number(req.params.equipeId);
+      const conviteId = Number(req.params.conviteId);
+
+      const membroSolicitante = await prisma.membroEquipe.findUnique({
+        where: { equipeId_userId: { equipeId, userId: req.user.id } },
+        select: { cargo: true },
+      });
+      if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem cancelar convites.' });
+      }
+
+      await prisma.conviteEquipe.updateMany({
+        where: { id: conviteId, equipeId, status: 'PENDENTE' },
+        data:  { status: 'CANCELADO' },
+      });
+      res.json({ sucesso: true, mensagem: 'Convite cancelado.' });
+    } catch (err) {
+      console.error('Erro ao cancelar convite:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  alterarCargo: async (req, res) => {
+    try {
+      const equipeId   = Number(req.params.equipeId);
+      const alvoUserId = Number(req.params.alvoUserId);
+      const { cargo }  = req.body;
+
+      const CARGOS_VALIDOS = ['SOCIO', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];
+      if (!CARGOS_VALIDOS.includes(cargo)) {
+        return res.status(400).json({ sucesso: false, mensagem: `Cargo inválido: ${cargo}` });
+      }
+
+      const membroSolicitante = await prisma.membroEquipe.findUnique({
+        where: { equipeId_userId: { equipeId, userId: req.user.id } },
+        select: { cargo: true },
+      });
+      if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem alterar cargos.' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.membroEquipe.update({
+          where: { equipeId_userId: { equipeId, userId: alvoUserId } },
+          data:  { cargo },
+        });
+        await tx.permissaoMembro.deleteMany({ where: { equipeId, userId: alvoUserId } });
+        await PermissaoService.aplicarPermissoesPadrao({ equipeId, userId: alvoUserId, cargo, atualizadoPor: req.user.id });
+      });
+
+      res.json({ sucesso: true, mensagem: 'Cargo alterado com sucesso.' });
+    } catch (err) {
+      console.error('Erro ao alterar cargo:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  setup: async (req, res) => {
+    try {
+      const { empresaNome, equipeName } = req.body;
+      if (!empresaNome?.trim() || !equipeName?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'empresaNome e equipeName são obrigatórios.' });
+      }
+
+      const empresaExistente = await prisma.empresa.findFirst({ where: { ownerId: req.user.id } });
+      if (empresaExistente) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Você já possui uma empresa cadastrada.' });
+      }
+
+      const resultado = await prisma.$transaction(async (tx) => {
+        const empresa = await tx.empresa.create({
+          data: { nome: empresaNome.trim(), ownerId: req.user.id },
+        });
+        const equipe = await tx.equipe.create({
+          data: { nome: equipeName.trim(), empresaId: empresa.id },
+        });
+        await tx.membroEquipe.create({
+          data: { equipeId: equipe.id, userId: req.user.id, cargo: 'SOCIO' },
+        });
+        return { empresa, equipe };
+      });
+
+      res.status(201).json({ sucesso: true, dados: resultado });
+    } catch (err) {
+      console.error('Erro ao criar setup:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
