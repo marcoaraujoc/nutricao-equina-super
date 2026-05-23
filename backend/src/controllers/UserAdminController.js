@@ -1,10 +1,9 @@
 // backend/src/controllers/UserAdminController.js
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {

@@ -1,9 +1,9 @@
 // src/pages/Login.tsx
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
-import { GoogleLogin } from '@react-oauth/google';
+import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
   const { login }  = useAuth();
@@ -14,10 +14,11 @@ export default function Login() {
   const returnUrl    = searchParams.get('returnUrl');
   const msg          = searchParams.get('msg');
 
-  const [email,    setEmail]    = useState('');
-  const [password, setPassword] = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
+  const [email,        setEmail]        = useState('');
+  const [password,     setPassword]     = useState('');
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [forgotEmail,     setForgotEmail]     = useState('');
@@ -33,35 +34,6 @@ export default function Login() {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse: { credential?: string }) => {
-    if (!credentialResponse?.credential) {
-      alert('Google não retornou o token.');
-      return;
-    }
-    try {
-      const res  = await fetch('/api/auth/google', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ credential: credentialResponse.credential }),
-      });
-      const data = await res.json();
-      if (res.ok && data.token) {
-        login(data.token);
-        localStorage.removeItem('s2vet_ob');
-        redirecionarAposLogin();
-      } else {
-        alert(data.error || 'Erro no login Google');
-      }
-    } catch (err) {
-      console.error('Erro ao processar login Google:', err);
-      alert('Erro de conexão com o servidor.');
-    }
-  };
-
-  const handleGoogleError = () => {
-    alert('Falha ao conectar com Google. Tente novamente.');
-  };
-
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -74,7 +46,7 @@ export default function Login() {
       });
       const data = await res.json();
       if (res.ok) {
-        login(data.token);
+        login(data.token, data.refreshToken);
         localStorage.removeItem('s2vet_ob');
         redirecionarAposLogin();
       } else {
@@ -86,6 +58,32 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  const loginComGoogle = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      try {
+        const res  = await fetch('/api/auth/google', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token: tokenResponse.access_token }),
+        });
+        const data = await res.json();
+        if (res.ok && data.token) {
+          login(data.token, data.refreshToken);
+          localStorage.removeItem('s2vet_ob');
+          redirecionarAposLogin();
+        } else {
+          alert(data.error || 'Erro no login Google');
+        }
+      } catch (err) {
+        console.error('Erro ao processar login Google:', err);
+        alert('Erro de conexão com o servidor.');
+      }
+    },
+    onError: () => alert('Falha ao conectar com Google. Tente novamente.'),
+    prompt: 'select_account',
+    flow:   'implicit',
+  });
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,14 +159,24 @@ export default function Login() {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Senha</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 sm:py-3 rounded-3xl border border-gray-300
-                         focus:outline-none focus:border-emerald-500 text-sm sm:text-base"
-              required
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full px-4 py-2.5 sm:py-3 pr-11 rounded-3xl border border-gray-300
+                           focus:outline-none focus:border-emerald-500 text-sm sm:text-base"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
 
           {error && (
@@ -201,16 +209,21 @@ export default function Login() {
           <div className="flex-1 h-px bg-gray-300" />
         </div>
 
-        <GoogleLogin
-          onSuccess={handleGoogleSuccess}
-          onError={handleGoogleError}
-          useOneTap={false}
-          theme="outline"
-          size="large"
-          text="continue_with"
-          shape="rectangular"
-          width="100%"
-        />
+        <button
+          type="button"
+          onClick={() => loginComGoogle()}
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300
+                     rounded-3xl text-sm font-medium text-gray-700 bg-white hover:bg-gray-50
+                     transition-colors shadow-sm"
+        >
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          </svg>
+          Entrar com Google
+        </button>
 
         <p className="text-center text-gray-500 text-sm mt-4 sm:mt-6">
           Não tem uma conta?{' '}

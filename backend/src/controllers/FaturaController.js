@@ -1,8 +1,7 @@
 // backend/src/controllers/FaturaController.js
 
-const { PrismaClient } = require('@prisma/client');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 const recalcularTotal = async (faturaId) => {
   const itens = await prisma.faturaItem.findMany({ where: { faturaId } });

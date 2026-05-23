@@ -9,7 +9,6 @@ import BotaoVoltar from '../components/BotaoVoltar';
 // =====================================================================
 // INTERFACES
 // =====================================================================
-
 interface Especie {
   id: number;
   nome: string;

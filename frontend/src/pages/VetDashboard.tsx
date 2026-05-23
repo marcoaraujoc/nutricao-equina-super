@@ -10,6 +10,7 @@ import {
   Unlink, Search, Pencil, LayoutDashboard,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,16 +26,18 @@ interface AnimalResumido {
   tipoExercicio?:   string | null;
   especie?:         { nome: string } | null;
   raca?:            { nome: string } | null;
-  user?:            { fullName: string; email: string } | null;
+  user?:            { fullName: string; email: string; phone?: string | null } | null;
 }
 
 interface Solicitacao {
-  id:             number;
-  status:         string;
-  createdAt:      string;
-  solicitanteId?: number | null;
-  mensagem?:      string | null;
-  animal:         AnimalResumido;
+  id:               number;
+  tipo:             string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
+  status:           string;
+  createdAt:        string;
+  solicitanteId?:   number | null;
+  mensagem?:        string | null;
+  animal:           AnimalResumido;
+  novoVeterinario?: { fullName: string } | null;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
@@ -80,8 +83,19 @@ function SolicitacaoCard({ sol, onResponder }: {
   sol:         Solicitacao;
   onResponder: (id: number, status: 'ACEITO' | 'RECUSADO') => void;
 }) {
+  const isDesvinculo = sol.tipo === 'DESVINCULO';
+  const isTroca      = sol.tipo === 'TROCA_VET';
+  const borderClass  = isDesvinculo ? 'border-red-200' : isTroca ? 'border-orange-200' : 'border-amber-200';
   return (
-    <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-4">
+    <div className={`bg-white rounded-2xl border shadow-sm p-4 ${borderClass}`}>
+      {(isDesvinculo || isTroca) && (
+        <div className={`flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 py-1.5 mb-3 ${
+          isDesvinculo ? 'text-red-600 bg-red-50' : 'text-orange-600 bg-orange-50'
+        }`}>
+          <XCircle size={12} />
+          {isDesvinculo ? 'Solicitação de remoção de acesso' : 'Solicitação de troca de veterinário'}
+        </div>
+      )}
       <div className="flex items-start gap-3">
         <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
           {sol.animal.photoUrl
@@ -94,19 +108,52 @@ function SolicitacaoCard({ sol, onResponder }: {
           <p className="text-xs text-gray-500 truncate">
             {sol.animal.especie?.nome} · {sol.animal.raca?.nome} · {idadeDisplay(sol.animal)}
           </p>
-          <p className="text-xs text-gray-400 mt-0.5">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
-          {sol.mensagem && <p className="text-xs text-gray-600 mt-1 italic">"{sol.mensagem}"</p>}
+          {isTroca && sol.novoVeterinario && (
+            <p className="text-xs text-orange-700 mt-0.5">→ Novo vet: Dr(a). {sol.novoVeterinario.fullName}</p>
+          )}
+          <p className="text-xs text-gray-500 mt-0.5 font-medium">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
+          <p className="text-xs text-gray-400">Tel: {sol.animal.user?.phone || 'Não informado'}</p>
+          <p className="text-xs text-gray-400">{sol.animal.user?.email || '—'}</p>
+          {sol.mensagem && !isDesvinculo && !isTroca && (
+            <p className="text-xs text-gray-600 mt-1 italic">"{sol.mensagem}"</p>
+          )}
         </div>
       </div>
       <div className="flex gap-2 mt-3">
-        <button onClick={() => onResponder(sol.id, 'ACEITO')}
-          className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
-          <CheckCircle2 size={14} /> Aceitar
-        </button>
-        <button onClick={() => onResponder(sol.id, 'RECUSADO')}
-          className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 text-sm font-semibold rounded-xl transition-colors">
-          <XCircle size={14} /> Recusar
-        </button>
+        {isDesvinculo ? (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar remoção
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Manter acesso
+            </button>
+          </>
+        ) : isTroca ? (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar troca
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600 text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Manter vínculo
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Recusar
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -260,8 +307,23 @@ export default function VetDashboard() {
     </PageContainer>
   );
 
+  const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
+    await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
+    toast.success(status === 'ACEITO' ? 'Solicitação aceita!' : 'Solicitação recusada.');
+    carregar();
+  };
+
   return (
-    <PageContainer maxWidth="7xl">
+    <>
+      {user?.id && (
+        <VetNotificationModal
+          solicitations={solicitacoes as SolicitacaoNotif[]}
+          vetId={Number(user.id)}
+          onResponder={handleResponderModal}
+          onDismiss={() => {}}
+        />
+      )}
+      <PageContainer maxWidth="7xl">
       <div className="space-y-5">
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
@@ -300,7 +362,7 @@ export default function VetDashboard() {
         {solicitacoes.length > 0 && (
           <div>
             <h2 className="text-sm font-semibold text-gray-700 mb-3">
-              Solicitações de vínculo pendentes
+              Solicitações pendentes
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {solicitacoes.map(s => (
@@ -478,6 +540,7 @@ export default function VetDashboard() {
           </div>
         </div>
       )}
-    </PageContainer>
+      </PageContainer>
+    </>
   );
 }

@@ -1,8 +1,7 @@
 // src/controllers/AiUsageController.js
 // Retorna métricas de uso de LLM para o dashboard de monitoramento
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 const AiUsageController = {
 

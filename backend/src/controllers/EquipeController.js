@@ -1,12 +1,11 @@
 // backend/src/controllers/EquipeController.js
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
 const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 // ─── Helper: garante empresa + equipe padrão do vet ──────────────────────────
 async function garantirEquipePadrao(vetUserId) {

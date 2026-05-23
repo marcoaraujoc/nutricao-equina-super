@@ -1,10 +1,14 @@
-const { PrismaClient } = require('@prisma/client');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
+const jwt      = require('jsonwebtoken');
+const bcrypt   = require('bcryptjs');
+const crypto   = require('crypto');
 const nodemailer = require('nodemailer');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 const SECRET = process.env.JWT_SECRET;
+
+function generateRefreshToken() {
+  return crypto.randomBytes(48).toString('hex');
+}
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -26,7 +30,6 @@ const AuthController = {
 
     try {
       const emailLower = email.trim().toLowerCase();
-
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const user = await prisma.user.create({
@@ -59,7 +62,7 @@ const AuthController = {
 
   // ==================== LOGIN COM GOOGLE (NOVO) ====================
   googleLogin: async (req, res) => {
-    const { email, fullName, picture } = req.body;
+    const { email, fullName } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'E-mail é obrigatório' });
@@ -135,7 +138,7 @@ const AuthController = {
         },
       });
 
-      const resetLink = `http://localhost:5173/reset-password?token=${resetToken}`;
+      const resetLink = `${process.env.APP_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
 
       await transporter.sendMail({
         from: `"Equipe Equine Nutrition" <${process.env.EMAIL_USER}>`,
@@ -184,6 +187,69 @@ const AuthController = {
       console.error('Erro resetPassword:', err);
       res.status(400).json({ error: 'Token inválido ou expirado' });
     }
+  },
+
+  // ==================== REFRESH TOKEN ====================
+  refreshToken: async (req, res) => {
+    const { refreshToken } = req.body;
+
+    try {
+      const user = await prisma.user.findFirst({
+        where: { refreshToken, ativo: true },
+        select: {
+          id:       true,
+          email:    true,
+          fullName: true,
+          role:     true,
+          userType: true,
+          mustChangePassword: true,
+        },
+      });
+
+      if (!user) {
+        return res.status(401).json({ error: 'Refresh token inválido ou expirado' });
+      }
+
+      const newAccessToken = jwt.sign(
+        { id: user.id, email: user.email, role: user.role, fullName: user.fullName },
+        SECRET,
+        { expiresIn: '24h' }
+      );
+
+      // Rotação: gera novo refresh token a cada uso
+      const newRefreshToken = generateRefreshToken();
+      await prisma.user.update({
+        where: { id: user.id },
+        data:  { refreshToken: newRefreshToken },
+      });
+
+      res.json({
+        token:        newAccessToken,
+        refreshToken: newRefreshToken,
+        user: {
+          id:                 user.id,
+          fullName:           user.fullName,
+          role:               user.role,
+          userType:           user.userType,
+          mustChangePassword: user.mustChangePassword,
+        },
+      });
+    } catch (err) {
+      console.error('Erro refreshToken:', err);
+      res.status(500).json({ error: 'Erro interno ao renovar sessão' });
+    }
+  },
+
+  // ==================== LOGOUT ====================
+  logout: async (req, res) => {
+    const { refreshToken } = req.body;
+    if (refreshToken) {
+      await prisma.user.updateMany({
+        where: { refreshToken },
+        data:  { refreshToken: null },
+      }).catch(() => { /* silencioso — logout é best-effort */ });
+    }
+    res.json({ success: true, message: 'Sessão encerrada' });
   },
 };
 

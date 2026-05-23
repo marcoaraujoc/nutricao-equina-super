@@ -1,30 +1,57 @@
 // src/routes/equipes.js
 'use strict';
 
-const express          = require('express');
-const EquipeController = require('../controllers/EquipeController');
-const { authenticate } = require('../middlewares/auth');
+const express             = require('express');
+const EquipeController    = require('../controllers/EquipeController');
+const PermissaoController = require('../controllers/PermissaoController');
+const { authenticate }    = require('../middlewares/auth');
+const validate            = require('../middlewares/validate');
+const { criarEmpresaRules, convidarMembroRules } = require('../validators/equipe.validators');
 
 const router = express.Router();
 
-// ─── Empresas ──────────────────────────────────────────────────────────────
-router.post('/empresas', authenticate, EquipeController.criarEmpresa);
-router.get('/empresas',  authenticate, EquipeController.listarEmpresas);
+// =============================================================================
+// ROTAS FIXAS (sem parâmetro dinâmico) — DEVEM VIR ANTES de /:equipeId
+// =============================================================================
 
-// ─── Convites (rotas fixas — devem vir antes de /:equipeId) ──────────────
-router.post('/convites',               authenticate, EquipeController.convidarMembro);
-router.get('/convite/:token',                        EquipeController.verificarConvite);
-router.post('/convite/:token/aceitar', authenticate, EquipeController.aceitarConvite);
+// ─── Empresas ─────────────────────────────────────────────────────────────────
+router.post('/empresas', authenticate, criarEmpresaRules, validate, EquipeController.criarEmpresa);
+router.get ('/empresas', authenticate, EquipeController.listarEmpresas);
 
-// ─── Membros fixos (devem vir antes de /:equipeId/membros) ───────────────
-router.get('/membros',               authenticate, EquipeController.listarMembros);
-router.post('/membros',              authenticate, EquipeController.adicionarMembro);
-router.put('/membros/:id',           authenticate, EquipeController.atualizarMembro);
-router.patch('/membros/:id/toggle',  authenticate, EquipeController.toggleMembro);
+// ─── Setup inicial (cria empresa + equipe em uma transação) ──────────────────
+router.post('/setup',  authenticate, EquipeController.setup);
+
+// ─── Equipe ativa do usuário logado ───────────────────────────────────────────
+router.get('/minha',   authenticate, EquipeController.getMinhaEquipe);
+
+// ─── Convites (rotas fixas) ────────────────────────────────────────────────────
+router.post('/convites',                       authenticate, convidarMembroRules, validate, EquipeController.convidarMembro);
+router.get ('/convite/:token',                               EquipeController.verificarConvite);
+router.post('/convite/:token/aceitar',         authenticate, EquipeController.aceitarConvite);
+router.post('/convite/:token/recusar',         authenticate, EquipeController.recusarConvite);
+
+// ─── Membros (rotas fixas) ─────────────────────────────────────────────────────
+router.get   ('/membros',            authenticate, EquipeController.listarMembros);
+router.post  ('/membros',            authenticate, EquipeController.adicionarMembro);
+router.put   ('/membros/:id',        authenticate, EquipeController.atualizarMembro);
+router.patch ('/membros/:id/toggle', authenticate, EquipeController.toggleMembro);
 router.delete('/membros/:membroId',  authenticate, EquipeController.removerMembro);
 
-// ─── Equipes ───────────────────────────────────────────────────────────────
-router.post('/',                   authenticate, EquipeController.criarEquipe);
-router.get('/:equipeId/membros',   authenticate, EquipeController.listarMembrosPorEquipe);
+// ─── Criar equipe avulsa ───────────────────────────────────────────────────────
+router.post('/', authenticate, EquipeController.criarEquipe);
+
+// =============================================================================
+// ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO
+// =============================================================================
+
+router.get   ('/:equipeId/membros',                    authenticate, EquipeController.listarMembrosPorEquipe);
+router.delete('/:equipeId/membros/:alvoUserId',        authenticate, EquipeController.removerMembro);
+router.patch ('/:equipeId/membros/:alvoUserId/cargo',  authenticate, EquipeController.alterarCargo);
+router.delete('/:equipeId/convites/:conviteId',        authenticate, EquipeController.cancelarConvite);
+router.get   ('/:equipeId/permissoes/:membroUserId',   authenticate, PermissaoController.getPermissoesMembro);
+router.put   ('/:equipeId/permissoes/:membroUserId',   authenticate, PermissaoController.atualizarPermissoes);
+router.get   ('/:equipeId/proprietarios',              authenticate, PermissaoController.getPermissoesProprietarios);
+router.put   ('/:equipeId/proprietarios/:alvoUserId',  authenticate, PermissaoController.atualizarPermissoesProprietario);
+router.get   ('/:equipeId/auditoria',                  authenticate, PermissaoController.getAuditoria);
 
 module.exports = router;

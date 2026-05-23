@@ -37,7 +37,8 @@ model User {
   ativo                Boolean   @default(true)
   resetPasswordToken   String?   @unique @db.VarChar(255)
   resetPasswordExpires DateTime?
-  mustChangePassword  Boolean  @default(false)
+  mustChangePassword   Boolean   @default(false)
+  refreshToken         String?   @db.VarChar(512)
 
   animais              Animal[]
   auditLogs            AuditLog[]
@@ -53,9 +54,11 @@ model User {
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
   vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
+  novasVetSolicitacoes VetAnimalSolicitacao[] @relation("NovoVetSolicitacoes")
   empresasOwner        Empresa[]              @relation("EmpresaOwner")
   membrosEquipe        MembroEquipe[]
-
+  permissoesMembro       PermissaoMembro[]
+  permissoesProprietario PermissaoProprietario[]
   @@map("users")
   @@schema("schs2vet")
 }
@@ -76,6 +79,7 @@ model Animal {
   especieId          Int
   racaId             Int?
   userId             Int
+  empresaId          Int?     // multi-tenant: clínica principal que gerencia este animal
   categoriaAnimal    String?  @db.VarChar(100)
   tipoExercicio      String?  @db.VarChar(100)
   veterinarioNome    String?  @db.VarChar(255)
@@ -83,9 +87,10 @@ model Animal {
   local              String?  @db.VarChar(255)
   idadeAnos          Int?
 
-  especie         Especie              @relation(fields: [especieId], references: [id])
-  raca            Raca?                @relation(fields: [racaId],    references: [id])
-  user            User                 @relation(fields: [userId],    references: [id], onDelete: Cascade)
+  especie         Especie              @relation(fields: [especieId],  references: [id])
+  raca            Raca?                @relation(fields: [racaId],     references: [id])
+  user            User                 @relation(fields: [userId],     references: [id], onDelete: Cascade)
+  empresa         Empresa?             @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: SetNull)
   dietas          Dieta[]
   exames          ExameNutricional[]
   ocorrencias     OcorrenciaSaude[]
@@ -102,6 +107,7 @@ model Animal {
   @@index([especieId])
   @@index([racaId])
   @@index([userId])
+  @@index([empresaId])
   @@map("tb_animais")
   @@schema("schs2vet")
 }
@@ -480,11 +486,13 @@ model AuditLog {
   userName  String   @db.Text
   email     String   @db.Text
   action    String   @db.Text
+  empresaId Int?     // multi-tenant: sem FK — logs sobrevivem à exclusão da empresa
   timestamp DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  @@index([empresaId])
   @@map("tb_audit_logs")
   @@schema("schs2vet")
 }
@@ -560,22 +568,26 @@ model VetSubespecialidade {
 }
 
 model VetAnimalSolicitacao {
-  id            Int       @id @default(autoincrement())
-  animalId      Int
-  vetUserId     Int
-  status        String    @default("PENDENTE")
-  mensagem      String?   @db.Text
-  approvalToken String?   @unique @db.VarChar(64)
-  expiresAt     DateTime?
-  solicitanteId Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  vetUserId       Int
+  status          String    @default("PENDENTE")
+  mensagem        String?   @db.Text
+  approvalToken   String?   @unique @db.VarChar(64)
+  expiresAt       DateTime?
+  solicitanteId   Int?
+  tipo            String    @default("VINCULO") // VINCULO | DESVINCULO | TROCA_VET
+  novoVetUserId   Int?      // TROCA_VET: ID do novo vet a ser vinculado após aceite do vet atual
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  animal      Animal @relation("AnimalSolicitacoes", fields: [animalId],  references: [id], onDelete: Cascade)
-  veterinario User   @relation("VetSolicitacoes",    fields: [vetUserId], references: [id], onDelete: Cascade)
+  animal          Animal @relation("AnimalSolicitacoes",    fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario     User   @relation("VetSolicitacoes",       fields: [vetUserId],     references: [id], onDelete: Cascade)
+  novoVeterinario User?  @relation("NovoVetSolicitacoes",   fields: [novoVetUserId], references: [id], onDelete: SetNull)
 
   @@unique([animalId, vetUserId])
   @@index([approvalToken])
+  @@index([novoVetUserId])
   @@map("tb_vet_animal_solicitacoes")
   @@schema("schs2vet")
 }
@@ -596,6 +608,7 @@ model Empresa {
 
   owner   User     @relation("EmpresaOwner", fields: [ownerId], references: [id])
   equipes Equipe[]
+  animais Animal[] @relation("EmpresaAnimais")
 
   @@map("tb_empresas")
   @@schema("schs2vet")
@@ -610,6 +623,8 @@ model Equipe {
   empresa  Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   membros  MembroEquipe[]
   convites ConviteEquipe[]
+  permissoesMembros       PermissaoMembro[]
+  permissoesProprietarios PermissaoProprietario[]
 
   @@map("tb_equipes")
   @@schema("schs2vet")
@@ -643,5 +658,123 @@ model ConviteEquipe {
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
 
   @@map("tb_convites_equipe")
+  @@schema("schs2vet")
+}
+
+// Catálogo imutável de módulos e ações do sistema.
+// Populado via seed — NUNCA alterado em runtime.
+model ModuloSistema {
+  id        Int    @id @default(autoincrement())
+  slug      String @unique // "atendimento.evolucoes.criar"
+  modulo    String @db.VarChar(50)   // "atendimento"
+  submodulo String @db.VarChar(50)   // "evolucoes"
+  acao      String @db.VarChar(50)   // "criar"
+  label     String @db.VarChar(150)  // "Evoluções — Criar"
+  ordemExib Int    @default(0)
+
+  permissoes PermissaoMembro[]
+
+  @@map("tb_modulos_sistema")
+  @@schema("schs2vet")
+}
+
+// Matriz real de permissões — uma linha por (equipeId, userId, moduloSlug).
+// nivel: NENHUM | LEITURA | PROPRIO | EQUIPE | FULL
+model PermissaoMembro {
+  id            Int      @id @default(autoincrement())
+  equipeId      Int
+  userId        Int
+  moduloSlug    String   @db.VarChar(100)
+  nivel         String   @default("LEITURA") @db.VarChar(20)
+  atualizadoPor Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  equipe Equipe        @relation(fields: [equipeId],    references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId],      references: [id], onDelete: Cascade)
+  modulo ModuloSistema @relation(fields: [moduloSlug],  references: [slug])
+
+  @@unique([equipeId, userId, moduloSlug])
+  @@index([equipeId, userId])
+  @@map("tb_permissoes_membros")
+  @@schema("schs2vet")
+}
+
+// Log imutável de alterações de permissão.
+// Sem FKs deletáveis — deve persistir mesmo se user for removido.
+model AuditoriaPermissao {
+  id              Int      @id @default(autoincrement())
+  equipeId        Int
+  equipeNome      String   @db.VarChar(150)
+  alvoUserId      Int
+  alvoUserNome    String   @db.VarChar(255)
+  alvoUserEmail   String   @db.VarChar(255)
+  moduloSlug      String   @db.VarChar(100)
+  moduloLabel     String   @db.VarChar(150)
+  nivelAnterior   String?  @db.VarChar(20)
+  nivelNovo       String   @db.VarChar(20)
+  alteradoPorId   Int
+  alteradoPorNome String   @db.VarChar(255)
+  motivo          String?  @db.Text
+  ipOrigem        String?  @db.VarChar(45)
+  createdAt       DateTime @default(now())
+
+  @@index([equipeId])
+  @@index([alvoUserId])
+  @@index([alteradoPorId])
+  @@index([createdAt])
+  @@map("tb_auditoria_permissoes")
+  @@schema("schs2vet")
+}
+
+// Permissões especiais liberadas para proprietários pelo veterinário sócio.
+// Por padrão todas são false — habilitadas sob demanda.
+// funcionalidade: "ver_prontuario" | "ver_exames" | "ver_faturas" | "agendar"
+model PermissaoProprietario {
+  id              Int      @id @default(autoincrement())
+  equipeId        Int
+  userId          Int      // userId do proprietário
+  funcionalidade  String   @db.VarChar(50)
+  habilitado      Boolean  @default(false)
+  atualizadoPor   Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+
+  @@unique([equipeId, userId, funcionalidade])
+  @@index([equipeId, userId])
+  @@map("tb_permissoes_proprietarios")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// ÍNDICE CRMV (scraping diário do SISCAD/CFMV)
+// =============================================================================
+
+// Armazena SHA-256(numero_6digits + UF) de cada CRMV ativo encontrado no SISCAD.
+// Nunca armazena o número em claro — apenas hash unidirecional.
+model CrmvValido {
+  id        Int      @id @default(autoincrement())
+  hash      String   @unique @db.VarChar(64)
+  uf        String   @db.VarChar(2)
+  createdAt DateTime @default(now())
+
+  @@index([uf])
+  @@map("tb_crmv_validos")
+  @@schema("schs2vet")
+}
+
+// Log de cada execução do scraper
+model CrmvSyncLog {
+  id             Int      @id @default(autoincrement())
+  executadoEm    DateTime @default(now())
+  totalRegistros Int      @default(0)
+  duracao        Int?     // segundos
+  sucesso        Boolean  @default(true)
+  erro           String?  @db.Text
+
+  @@map("tb_crmv_sync_log")
   @@schema("schs2vet")
 }

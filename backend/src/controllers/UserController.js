@@ -1,8 +1,9 @@
 // backend/src/controllers/UserController.js
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const bcrypt = require('bcryptjs');
+const jwt    = require('jsonwebtoken');
+const prisma = require('../lib/prisma').default;
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
 // Ex: "00123/SP" → "123/SP" | "13557/RJ" → "13557/RJ"
@@ -136,7 +137,6 @@ const UserController = {
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
 
-      const jwt = require('jsonwebtoken');
       const novoToken = jwt.sign(
         {
           id:       updatedUser.id,
@@ -196,15 +196,13 @@ alterarSenha: async (req, res) => {
         if (!senhaAtual) {
           return res.status(400).json({ sucesso: false, mensagem: 'Senha atual é obrigatória' });
         }
-        const bcrypt = require('bcryptjs');
         const valida = await bcrypt.compare(senhaAtual, user.passwordHash);
         if (!valida) {
           return res.status(401).json({ sucesso: false, mensagem: 'Senha atual incorreta' });
         }
       }
 
-      const bcrypt = require('bcryptjs');
-      const hash   = await bcrypt.hash(novaSenha, 10);
+      const hash = await bcrypt.hash(novaSenha, 10);
 
       await prisma.user.update({
         where: { id: Number(req.user.id) },

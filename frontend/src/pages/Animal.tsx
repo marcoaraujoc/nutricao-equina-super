@@ -5,7 +5,9 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
+import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
 const NRC_CATEGORIAS: Record<string, string[]> = {
@@ -52,6 +54,7 @@ interface Vet {
 }
 
 interface Solicitacao {
+  tipo:        string;
   status:      string;
   vetUserId:   number;
   veterinario?: { id: number; fullName: string; email: string } | null;
@@ -279,10 +282,20 @@ const Animal = () => {
           const a = animalRes.data?.dados ?? animalRes.data;
 
           const solicitacoes: Solicitacao[] = a.solicitacoes ?? [];
-          const solAceita   = solicitacoes.find(s => s.status === 'ACEITO');
+          // Apenas VINCULO ACEITO representa vet ativo; DESVINCULO ACEITO significa vet removido
+          const solAceita   = solicitacoes.find(s => s.status === 'ACEITO' && s.tipo === 'VINCULO');
           const solPendente = solicitacoes.find(s => s.status === 'PENDENTE');
           const solAtual    = solAceita ?? solPendente ?? null;
-          const vetCarregadoId = solAtual?.vetUserId ?? null;
+          let vetCarregadoId: number | null = solAtual?.vetUserId ?? null;
+
+          // Fallback: sem solicitação mas veterinarioNome gravado → tenta encontrar pelo nome
+          if (!vetCarregadoId && a.veterinarioNome) {
+            const match = vetsData.find(
+              (v: { vetUserId: number; nome: string }) =>
+                v.nome.toLowerCase() === (a.veterinarioNome as string).toLowerCase()
+            );
+            if (match) vetCarregadoId = match.vetUserId;
+          }
 
           setVetOriginalId(vetCarregadoId);
           setVetStatusAtual(solAtual?.status ?? null);
@@ -412,6 +425,8 @@ const Animal = () => {
     setSubmitting(true);
 
     if (!formData.nome?.trim())  { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.especieId)     { toast.error('Espécie é obrigatória'); setSubmitting(false); return; }
+    if (!formData.sexo)          { toast.error('Sexo é obrigatório'); setSubmitting(false); return; }
     if (!formData.local?.trim()) { toast.error('Local do animal é obrigatório'); setSubmitting(false); return; }
     if (!formData.racaId)        { toast.error('Raça é obrigatória'); setSubmitting(false); return; }
     if (!formData.dataNascimento && !formData.idadeAnos) { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
@@ -460,17 +475,13 @@ const Animal = () => {
         }),
       };
 
-      let animalId: number;
-
       if (photoFile) {
         const fd = new FormData();
+        // Campos primitivos: string, number, boolean (objetos são tratados abaixo)
         Object.entries(payload).forEach(([k, v]) => {
           if (v != null && typeof v !== 'object') fd.append(k, String(v));
         });
-        if (formData.veterinarioUserId != null)
-          fd.append('veterinarioUserId', String(formData.veterinarioUserId));
-        if (animalEncontrado && statusBuscaAnimal === 'sem_vet')
-          fd.append('animalExistenteId', String(animalEncontrado.id));
+        // proprietario é um objeto → precisa ser serializado manualmente
         if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
           fd.append('proprietario', JSON.stringify({
             fullName: formProp.nomeCompleto.trim(),
@@ -483,18 +494,14 @@ const Animal = () => {
 
         if (isEditMode) {
           await api.put(`/animais/${id}`, fd, cfg);
-          animalId = Number(id);
         } else {
-          const r  = await api.post('/animais', fd, cfg);
-          animalId = r.data.dados.id;
+          await api.post('/animais', fd, cfg);
         }
       } else {
         if (isEditMode) {
           await api.put(`/animais/${id}`, payload);
-          animalId = Number(id);
         } else {
-          const r  = await api.post('/animais', payload);
-          animalId = r.data.dados.id;
+          await api.post('/animais', payload);
         }
       }
 
@@ -525,28 +532,21 @@ const Animal = () => {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="text-center">
-        <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-4" />
-        <p className="text-gray-500">Carregando...</p>
+    <PageContainer maxWidth="2xl">
+      <div className="flex items-center justify-center py-20 text-gray-500">
+        Carregando...
       </div>
-    </div>
+    </PageContainer>
   );
 
   const inputClass = 'w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 transition-colors';
 
   return (
-    <div className="min-h-screen bg-gray-50 p-3 md:p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white shadow-2xl rounded-3xl p-4 md:p-8 border border-gray-100">
+    <PageContainer maxWidth="2xl">
 
-          <div className="flex items-center gap-3 mb-6">
-            <button onClick={() => navigate(isVet ? '/animais-vet' : '/meus-animais')}
-              className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium">
-              <ArrowLeft size={20} />
-              <span className="text-base md:text-lg">Voltar</span>
-            </button>
-          </div>
+      <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
+
+      <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
 
           {/* Foto */}
           <div className="flex flex-col items-center gap-3 mb-8">
@@ -570,7 +570,7 @@ const Animal = () => {
             )}
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} noValidate className="space-y-5">
 
             {/* ── 1. Nome do animal ─────────────────────────────────────────── */}
             <div>
@@ -656,7 +656,6 @@ const Animal = () => {
                 onChange={e => setFormData({ ...formData, local: e.target.value })}
                 placeholder="Ex: Fazenda Santa Clara, Haras Bela Vista..."
                 className={inputClass}
-                required
               />
             </div>
 
@@ -726,7 +725,7 @@ const Animal = () => {
             {/* ── 4. Espécie + Sexo ─────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
                 <select
                   value={formData.especieId}
                   onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
@@ -737,7 +736,7 @@ const Animal = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
                 <select
                   value={formData.sexo}
                   onChange={e => setFormData({ ...formData, sexo: e.target.value })}
@@ -928,6 +927,11 @@ const Animal = () => {
               </div>
             )}
 
+            {/* Legenda campos obrigatórios */}
+            <p className="text-xs text-gray-400">
+              <span className="text-red-500">*</span> Campos obrigatórios
+            </p>
+
             {/* Submit */}
             <button
               type="submit"
@@ -947,8 +951,7 @@ const Animal = () => {
 
           </form>
         </div>
-      </div>
-    </div>
+    </PageContainer>
   );
 };
 

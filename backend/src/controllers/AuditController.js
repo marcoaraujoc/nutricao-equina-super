@@ -1,9 +1,8 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 class AuditController {
   async registrar(req, res) {
-    const { userId, userName, email, action } = req.body;
+    const { userId, userName, email, action, empresaId } = req.body;
 
     try {
       const log = await prisma.auditLog.create({
@@ -12,6 +11,7 @@ class AuditController {
           userName,
           email,
           action,
+          ...(empresaId ? { empresaId: Number(empresaId) } : {}),
         }
       });
       res.status(201).json(log);

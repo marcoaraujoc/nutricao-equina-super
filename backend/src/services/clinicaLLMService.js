@@ -1,40 +1,8 @@
 // backend/src/services/clinicaLLMService.js
 'use strict';
 
-const { chamarGroqComLog } = require('./aiLogger.service');
-
-// =====================================================================
-// PROMPT
-// =====================================================================
-
-const PROMPT_INTERPRETAR = (texto) =>
-  `Você é um assistente clínico veterinário especializado.
-
-Analise o texto da evolução clínica abaixo e identifique APENAS itens que possam gerar cobrança ou registro clínico:
-- Medicamentos prescritos  → tipo: "MEDICAMENTO"
-- Procedimentos realizados → tipo: "PROCEDIMENTO"
-- Exames solicitados       → tipo: "EXAME"
-- Encaminhamentos          → tipo: "ENCAMINHAMENTO"
-- Vacinas aplicadas        → tipo: "VACINA"
-
-Estime valores em reais baseados na tabela veterinária brasileira vigente.
-
-Retorne APENAS um JSON válido, sem markdown, sem texto adicional:
-{
-  "acoes": [
-    {
-      "tipo": "MEDICAMENTO",
-      "descricao": "Amoxicilina 500mg — 1 comprimido 2x ao dia por 7 dias",
-      "valorEstimado": 45.00,
-      "quantidade": 1
-    }
-  ]
-}
-
-Se não identificar nenhum item faturável, retorne: { "acoes": [] }
-
-Texto da evolução:
-${texto.slice(0, 8000)}`;
+const { callAI }      = require('../ai');
+const { buildPrompt } = require('../ai/prompts');
 
 // =====================================================================
 // EXPORTAÇÃO PRINCIPAL
@@ -49,11 +17,11 @@ ${texto.slice(0, 8000)}`;
  * @returns {Promise<{ acoes: Array }>}
  */
 async function interpretarEvolucao(texto, userId = null, animalId = null) {
+  const { operacaoVers, prompt } = buildPrompt('interpretacao_clinica', texto);
   try {
-    const respostaTexto = await chamarGroqComLog({
-      operacao:    'interpretacao_clinica',
-      prompt:      PROMPT_INTERPRETAR(texto),
-      modelo:      'llama-3.3-70b-versatile',
+    const respostaTexto = await callAI({
+      operacao:    operacaoVers,
+      prompt,
       maxTokens:   1000,
       temperature: 0.1,
       userId,

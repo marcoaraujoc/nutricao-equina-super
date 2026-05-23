@@ -1,10 +1,9 @@
 // backend/src/services/relatorioNutricional.service.js
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
 const { getCalculator } = require('./speciesCalculatorRegistry');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 // ─── Status nutricional ───────────────────────────────────────────────────────
 
@@ -19,14 +18,24 @@ const resolverStatus = (percentual) => {
 
 // ─── Helpers de normalização ──────────────────────────────────────────────────
 
+// Chave interna: sem acentos, lowercase — garante deduplicação entre "Manganês" e "Manganes"
 const normalizarNomeNutriente = (nome) =>
-  (nome || '').trim().toLowerCase().normalize('NFC');
+  String(nome || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
 
-const capitalizarNome = (nome) => {
-  if (!nome) return '';
-  const n = nome.trim();
-  return n.charAt(0).toUpperCase() + n.slice(1);
-};
+// Nome de exibição: sem acentos + Title Case por palavra ("Proteina Bruta", "Manganes")
+const normalizarDisplayNome = (nome) =>
+  String(nome || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .split(/\s+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
 
 // ─── Conversão quantidade de dieta → kg ──────────────────────────────────────
 
@@ -252,7 +261,7 @@ const computarRelatorio = async (animalId, { salvar = true } = {}) => {
 
       if (!tabelaNutrientes[chaveNutriente]) {
         tabelaNutrientes[chaveNutriente] = {
-          nutriente: capitalizarNome(nomeNutriente),
+          nutriente: normalizarDisplayNome(nomeNutriente),
           unidade:   tokenAtual, porAlimento: {}, total: 0,
         };
       } else {
@@ -283,6 +292,26 @@ const computarRelatorio = async (animalId, { salvar = true } = {}) => {
       const entrada = tabelaNutrientes[chaveNutriente];
       entrada.porAlimento[nomeAlimento] = (entrada.porAlimento[nomeAlimento] || 0) + consumo;
       entrada.total += consumo;
+    }
+  }
+
+  // ── Passo 2b: nutrientes NRC não consumidos — aparecem zerados no relatório ──
+  // Garante que TODOS os nutrientes NRC apareçam mesmo sem composição na dieta.
+  // O Set deduplica aliases: "cobalto", "co", "cobalt" → mesmo objeto entry
+  // → apenas o primeiro alias (nome canônico em português) é inserido.
+
+  const seenExigencias = new Set();
+  for (const [chaveRaw, exigencia] of Object.entries(mapExigencias)) {
+    if (seenExigencias.has(exigencia)) continue;
+    seenExigencias.add(exigencia);
+    const chave = normalizarNomeNutriente(chaveRaw); // normaliza para casar com chaves de tabelaNutrientes
+    if (!tabelaNutrientes[chave]) {
+      tabelaNutrientes[chave] = {
+        nutriente:   normalizarDisplayNome(chaveRaw),
+        unidade:     normalizarUnidade(exigencia.unidadeNRC),
+        porAlimento: {},
+        total:       0,
+      };
     }
   }
 

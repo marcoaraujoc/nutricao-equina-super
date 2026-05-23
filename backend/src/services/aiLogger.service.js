@@ -2,8 +2,7 @@
 // Helper centralizado para logging de uso de LLM
 // Usar em qualquer serviço que chame uma LLM
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 // ─── Tabela de preços por modelo (USD por 1M tokens) ─────────────────────────
 // Atualizar conforme mudanças de pricing dos provedores

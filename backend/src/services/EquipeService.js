@@ -3,9 +3,8 @@
 // Service de equipes — gerenciamento de membros, convites e empresa.
 // =============================================================================
 
-const { PrismaClient } = require('@prisma/client');
 const crypto = require('crypto');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 const { aplicarPermissoesPadrao } = require('./PermissaoService');
 
 const CARGOS_VALIDOS      = ['SOCIO', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];

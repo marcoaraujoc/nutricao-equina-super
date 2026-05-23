@@ -5,8 +5,28 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft } from 'lucide-react';
+import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
+
+interface Solicitacao {
+  id:               number;
+  tipo:             string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
+  status:           string;
+  solicitanteId?:   number | null;
+  mensagem?:        string | null;
+  novoVeterinario?: { fullName: string } | null;
+  animal: {
+    id:       number;
+    nome:     string;
+    photoUrl?: string | null;
+    especie?:  { nome: string } | null;
+    raca?:     { nome: string } | null;
+    dataNascimento?: string | null;
+    idadeAnos?:      number | null;
+    user?:     { fullName: string; email: string; phone?: string | null } | null;
+  };
+}
 
 interface Animal {
   id:               number;
@@ -113,6 +133,91 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, onExcl
   );
 }
 
+// ─── SolicitacaoCard ──────────────────────────────────────────────────────────
+function SolicitacaoCard({ sol, onResponder }: {
+  sol:         Solicitacao;
+  onResponder: (id: number, status: 'ACEITO' | 'RECUSADO') => void;
+}) {
+  const isDesvinculo = sol.tipo === 'DESVINCULO';
+  const isTroca      = sol.tipo === 'TROCA_VET';
+  const age = sol.animal.dataNascimento ? calcularIdade(sol.animal.dataNascimento)
+    : sol.animal.idadeAnos ? `${sol.animal.idadeAnos} ${sol.animal.idadeAnos === 1 ? 'ano' : 'anos'}`
+    : '—';
+  const borderClass = isDesvinculo ? 'border-red-200' : isTroca ? 'border-orange-200' : 'border-amber-200';
+  return (
+    <div className={`bg-white rounded-2xl border shadow-sm p-4 ${borderClass}`}>
+      <div className={`flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 py-1.5 mb-3 ${
+        isDesvinculo ? 'text-red-600 bg-red-50'
+        : isTroca    ? 'text-orange-600 bg-orange-50'
+        :              'text-amber-600 bg-amber-50'
+      }`}>
+        {isDesvinculo ? <><XCircle size={12} /> Solicitação de remoção de acesso</>
+         : isTroca    ? <><XCircle size={12} /> Solicitação de troca de veterinário</>
+         :              <><Clock size={12} /> Nova solicitação de vínculo</>}
+      </div>
+      <div className="flex items-start gap-3">
+        <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+          {sol.animal.photoUrl
+            ? <img src={sol.animal.photoUrl} alt={sol.animal.nome} className="w-full h-full object-cover" />
+            : <div className="w-full h-full flex items-center justify-center text-xl">🐾</div>
+          }
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
+          <p className="text-xs text-gray-500 truncate">
+            {sol.animal.especie?.nome} · {sol.animal.raca?.nome} · {age}
+          </p>
+          {isTroca && sol.novoVeterinario && (
+            <p className="text-xs text-orange-700 mt-0.5">→ Novo vet: Dr(a). {sol.novoVeterinario.fullName}</p>
+          )}
+          <p className="text-xs text-gray-500 mt-0.5 font-medium">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
+          <p className="text-xs text-gray-400">Tel: {sol.animal.user?.phone || 'Não informado'}</p>
+          <p className="text-xs text-gray-400">{sol.animal.user?.email || '—'}</p>
+          {sol.mensagem && !isDesvinculo && !isTroca && (
+            <p className="text-xs text-gray-600 mt-1 italic">"{sol.mensagem}"</p>
+          )}
+        </div>
+      </div>
+      <div className="flex gap-2 mt-3">
+        {isDesvinculo ? (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar remoção
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Manter acesso
+            </button>
+          </>
+        ) : isTroca ? (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar troca
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600 text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Manter vínculo
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => onResponder(sol.id, 'ACEITO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
+              <CheckCircle2 size={14} /> Aceitar
+            </button>
+            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 text-sm font-semibold rounded-xl transition-colors">
+              <XCircle size={14} /> Recusar
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
@@ -120,6 +225,7 @@ const AnimaisVet = () => {
   const navigate                                     = useNavigate();
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
+  const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
   const [busca,          setBusca]          = useState('');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
@@ -129,8 +235,12 @@ const AnimaisVet = () => {
 
   const loadAnimais = async () => {
     try {
-      const res = await api.get('/animais');
-      setAnimais(res.data?.dados ?? res.data ?? []);
+      const [animaisRes, solRes] = await Promise.all([
+        api.get('/animais'),
+        api.get('/veterinarios/solicitacoes?status=PENDENTE'),
+      ]);
+      setAnimais(animaisRes.data?.dados ?? animaisRes.data ?? []);
+      setSolicitacoes(solRes.data?.dados ?? solRes.data ?? []);
     } catch {
       toast.error('Erro ao carregar pacientes');
     } finally {
@@ -191,6 +301,26 @@ const AnimaisVet = () => {
     }
   };
 
+  const handleResponder = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
+    const sol = solicitacoes.find(s => s.id === id);
+    try {
+      await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
+      setSolicitacoes(prev => prev.filter(s => s.id !== id));
+      if (sol?.tipo === 'DESVINCULO') {
+        toast.success(status === 'ACEITO'
+          ? `Remoção de ${sol.animal.nome} aceita.`
+          : `Acesso a ${sol.animal.nome} mantido.`);
+      } else {
+        toast.success(status === 'ACEITO'
+          ? `${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`
+          : 'Solicitação recusada.');
+      }
+      loadAnimais();
+    } catch {
+      toast.error('Erro ao responder solicitação');
+    }
+  };
+
   const confirmDesvincular = async () => {
     if (!animalToUnlink) return;
     setUnlinking(true);
@@ -207,8 +337,30 @@ const AnimaisVet = () => {
     }
   };
 
+  const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
+    await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
+    const sol = solicitacoes.find(s => s.id === id);
+    if (sol?.tipo === 'DESVINCULO') {
+      toast.success(status === 'ACEITO' ? `Remoção de ${sol.animal.nome} aceita.` : `Acesso a ${sol.animal.nome} mantido.`);
+    } else if (sol?.tipo === 'TROCA_VET') {
+      toast.success(status === 'ACEITO' ? 'Troca aceita.' : 'Vínculo mantido.');
+    } else {
+      toast.success(status === 'ACEITO' ? `${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.` : 'Solicitação recusada.');
+    }
+    loadAnimais();
+  };
+
   return (
-    <PageContainer maxWidth="7xl">
+    <>
+      {user?.id && (
+        <VetNotificationModal
+          solicitations={solicitacoes as SolicitacaoNotif[]}
+          vetId={Number(user.id)}
+          onResponder={handleResponderModal}
+          onDismiss={() => {}}
+        />
+      )}
+      <PageContainer maxWidth="7xl">
       <div className="space-y-5">
 
         {/* ── Header ────────────────────────────────────────────────────── */}
@@ -255,6 +407,18 @@ const AnimaisVet = () => {
             />
           </div>
         </div>
+
+        {/* ── Solicitações pendentes ─────────────────────────────────────── */}
+        {!loading && solicitacoes.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+              Solicitações pendentes ({solicitacoes.length})
+            </h2>
+            {solicitacoes.map(sol => (
+              <SolicitacaoCard key={sol.id} sol={sol} onResponder={handleResponder} />
+            ))}
+          </div>
+        )}
 
         {/* ── Conteúdo ───────────────────────────────────────────────────── */}
         {loading ? (
@@ -418,7 +582,8 @@ const AnimaisVet = () => {
           </div>
         </div>
       )}
-    </PageContainer>
+      </PageContainer>
+    </>
   );
 };
 

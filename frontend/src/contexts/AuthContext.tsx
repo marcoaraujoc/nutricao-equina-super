@@ -21,9 +21,9 @@ interface AuditLog {
 
 interface AuthContextType {
   user: User | null;
-  login: (token: string) => void;
+  login: (token: string, refreshToken?: string) => void;
   logout: () => void;
-  refreshUser: () => Promise<void>; // ← NOVO
+  refreshUser: () => Promise<void>;
   loading: boolean;
   auditLogs: AuditLog[];
 }
@@ -65,6 +65,48 @@ async function enriquecerComPerfil(userData: User): Promise<User> {
   }
 }
 
+// ── Token refresh silencioso ────────────────────────────────────────────────
+async function tryRefreshToken(): Promise<string | null> {
+  const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) {
+      localStorage.removeItem('refreshToken');
+      return null;
+    }
+    const data = await res.json();
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('refreshToken', data.refreshToken);
+    return data.token;
+  } catch {
+    return null;
+  }
+}
+
+// ── Fetch autenticado com refresh automático em 401 ─────────────────────────
+export async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const token = localStorage.getItem('token');
+  const headers = new Headers(init?.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  let res = await fetch(input, { ...init, headers });
+
+  if (res.status === 401) {
+    const newToken = await tryRefreshToken();
+    if (newToken) {
+      headers.set('Authorization', `Bearer ${newToken}`);
+      res = await fetch(input, { ...init, headers });
+    }
+  }
+
+  return res;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser]           = useState<User | null>(null);
   const [loading, setLoading]     = useState(true);
@@ -72,12 +114,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      const token = localStorage.getItem('token');
+      let token = localStorage.getItem('token');
       if (token) {
         const userData = decodeToken(token);
         if (userData) {
           const enriquecido = await enriquecerComPerfil(userData);
           setUser(enriquecido);
+        }
+      } else {
+        // sem token de acesso — tenta renovar via refresh token
+        token = await tryRefreshToken();
+        if (token) {
+          const userData = decodeToken(token);
+          if (userData) {
+            const enriquecido = await enriquecerComPerfil(userData);
+            setUser(enriquecido);
+          }
         }
       }
       const savedLogs = localStorage.getItem('auditLogs');
@@ -120,8 +172,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(enriquecido);
   };
 
-  const login = async (token: string) => {
+  const login = async (token: string, refreshToken?: string) => {
     localStorage.setItem('token', token);
+    if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
     const userData = decodeToken(token);
     if (userData) {
       setUser(userData);
@@ -132,7 +185,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     registrarAuditoria('LOGOUT');
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (refreshToken) {
+      fetch('/api/auth/logout', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ refreshToken }),
+      }).catch(() => { /* best-effort */ });
+    }
     localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
     setUser(null);
   };
 

@@ -1,6 +1,5 @@
 // backend/src/controllers/ExameController.js
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 const { processarExame } = require('../services/exameParserService');
 const { storage }        = require('../storage');
 

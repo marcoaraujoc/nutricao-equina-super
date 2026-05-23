@@ -1,46 +1,52 @@
 // src/pages/CadastroPessoal.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+import { CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
+
+type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
 
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
 const SUBESPECIALIDADES = [
-  'Clínico',
-  'Quiroprata',
-  'Fisioterapeuta',
-  'Oftalmologista',
-  'Dermatologista',
-  'Cardiologista',
-  'Ortopedista',
-  'Neurologista',
-  'Oncologista',
-  'Nutricionista',
-  'Anestesiologista',
-  'Radiologista',
+  'Clínico', 'Quiroprata', 'Fisioterapeuta', 'Oftalmologista',
+  'Dermatologista', 'Cardiologista', 'Ortopedista', 'Neurologista',
+  'Oncologista', 'Nutricionista', 'Anestesiologista', 'Radiologista',
   'Reprodução Animal',
 ];
 
+// ── Label com asterisco de obrigatório ────────────────────────────────────────
+function Label({ text, required, optional }: { text: string; required?: boolean; optional?: boolean }) {
+  return (
+    <label className="block text-sm font-medium text-gray-700 mb-1">
+      {text}
+      {required && <span className="text-red-500 ml-0.5">*</span>}
+      {optional && <span className="text-gray-400 text-xs font-normal ml-1">(opcional)</span>}
+    </label>
+  );
+}
+
 export default function CadastroPessoal() {
-  const { user }                  = useAuth();
-  const { refreshSelectedAnimal } = useSelectedAnimal();
-  const navigate                  = useNavigate();
-  const [loading, setLoading]     = useState(true);
-  const [saving,  setSaving]      = useState(false);
+  const { user, refreshUser }      = useAuth();
+  const { refreshSelectedAnimal }  = useSelectedAnimal();
+  const navigate                   = useNavigate();
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [crmvStatus,  setCrmvStatus]  = useState<CrmvStatus>('idle');
+  const crmvTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Espécies ──────────────────────────────────────────────────────────────
   const [especies, setEspecies] = useState<{ id: number; nome: string }[]>([]);
-
   useEffect(() => {
     api.get('/especies')
       .then(res => setEspecies(res.data?.dados ?? res.data ?? []))
       .catch(() => {});
   }, []);
 
-  // ── Formulário ────────────────────────────────────────────────────────────
   const [form, setForm] = useState({
     nomeCompleto:      '',
     telefone:          '',
@@ -57,14 +63,12 @@ export default function CadastroPessoal() {
     subespecialidades: [] as string[],
   });
 
-  // ── Carregar dados do usuário ─────────────────────────────────────────────
   useEffect(() => {
     const loadUserData = async () => {
       const token = localStorage.getItem('token');
       if (!token || !user?.email) { setLoading(false); return; }
       try {
         const res = await fetch('/api/users/me', {
-          method:  'GET',
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
@@ -94,7 +98,6 @@ export default function CadastroPessoal() {
     loadUserData();
   }, [user?.email]);
 
-  // ── Busca de CEP ──────────────────────────────────────────────────────────
   const buscarCep = async (cep: string) => {
     const cepLimpo = cep.replace(/\D/g, '');
     if (cepLimpo.length !== 8) return;
@@ -110,7 +113,7 @@ export default function CadastroPessoal() {
         estado:   data.uf         || '',
       }));
     } catch {
-      toast.error('Erro ao buscar CEP');
+      toast.error('Erro ao buscar CEP. Verifique sua conexão.');
     }
   };
 
@@ -122,10 +125,29 @@ export default function CadastroPessoal() {
     return `${digitos}/${letras}`;
   };
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  const verificarCRMV = (crmv: string) => {
+    if (crmvTimerRef.current) clearTimeout(crmvTimerRef.current);
+    if (!CRMV_REGEX.test(crmv.trim())) { setCrmvStatus('idle'); return; }
+
+    setCrmvStatus('checking');
+    crmvTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get('/crmv/validar', { params: { crmv: crmv.trim() } });
+        const { valido, motivo } = res.data.dados ?? {};
+        if (valido === true)  setCrmvStatus('valido');
+        else if (valido === false && motivo === 'nao_encontrado') setCrmvStatus('invalido');
+        else if (motivo === 'indice_vazio') setCrmvStatus('indice_vazio');
+        else setCrmvStatus('erro');
+      } catch {
+        setCrmvStatus('erro');
+      }
+    }, 600);
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
+    if (name === 'tipoUsuario') setCrmvStatus('idle');
   };
 
   const toggleEspecie = (id: number) => {
@@ -137,36 +159,87 @@ export default function CadastroPessoal() {
     }));
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────────
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-
+  // ── Validação em JS — sem popup do browser ────────────────────────────────
+  const validar = (): boolean => {
+    if (!form.nomeCompleto.trim()) {
+      toast.error('Nome completo é obrigatório');
+      return false;
+    }
+    if (!form.telefone.trim()) {
+      toast.error('Telefone é obrigatório');
+      return false;
+    }
+    if (!form.cep.trim()) {
+      toast.error('CEP é obrigatório');
+      return false;
+    }
+    if (!form.endereco.trim()) {
+      toast.error('Endereço é obrigatório');
+      return false;
+    }
+    if (!form.bairro.trim()) {
+      toast.error('Bairro é obrigatório');
+      return false;
+    }
+    if (!form.cidade.trim()) {
+      toast.error('Cidade é obrigatória');
+      return false;
+    }
+    if (!form.estado.trim()) {
+      toast.error('Estado é obrigatório');
+      return false;
+    }
     if (form.tipoUsuario === 'VETERINARIO') {
       if (!form.crmv.trim()) {
         toast.error('CRMV é obrigatório para Médicos Veterinários');
-        setSaving(false);
-        return;
+        return false;
       }
       if (!CRMV_REGEX.test(form.crmv.trim())) {
         toast.error('Formato de CRMV inválido. Use o formato: 12345/SP');
-        setSaving(false);
-        return;
+        return false;
+      }
+      if (crmvStatus === 'invalido') {
+        toast.error('CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.');
+        return false;
+      }
+      if (crmvStatus === 'checking') {
+        toast.error('Aguarde a verificação do CRMV ser concluída');
+        return false;
+      }
+      if (form.especiesAtendidas.length === 0) {
+        toast.error('Selecione ao menos uma espécie atendida');
+        return false;
+      }
+      if (form.subespecialidades.length === 0) {
+        toast.error('Selecione uma subespecialidade');
+        return false;
       }
     }
+    return true;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validar()) return;
+
+    setSaving(true);
 
     const token = localStorage.getItem('token');
-    if (!token) { toast.error('Você precisa estar logado'); setSaving(false); return; }
+    if (!token) {
+      toast.error('Você precisa estar logado para continuar');
+      setSaving(false);
+      return;
+    }
 
     const payload = {
-      fullName:    form.nomeCompleto,
-      phone:       form.telefone,
-      cep:         form.cep,
-      endereco:    form.endereco,
-      complemento: form.complemento,
-      bairro:      form.bairro,
-      cidade:      form.cidade,
-      estado:      form.estado,
+      fullName:    form.nomeCompleto.trim(),
+      phone:       form.telefone.trim(),
+      cep:         form.cep.trim(),
+      endereco:    form.endereco.trim(),
+      complemento: form.complemento.trim(),
+      bairro:      form.bairro.trim(),
+      cidade:      form.cidade.trim(),
+      estado:      form.estado.trim().toUpperCase(),
       userType:    form.tipoUsuario,
       ...(form.tipoUsuario === 'VETERINARIO' && {
         crmv:              form.crmv.trim(),
@@ -176,17 +249,17 @@ export default function CadastroPessoal() {
     };
 
     try {
-      const res      = await fetch('/api/users/me', {
+      const res     = await fetch('/api/users/me', {
         method:  'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload),
       });
-      const resData  = await res.json();
+      const resData = await res.json();
 
       if (res.ok) {
-        // Atualiza o JWT com o userType correto para refletir imediatamente no app
         if (resData.token) {
           localStorage.setItem('token', resData.token);
+          await refreshUser();
         }
         toast.success('Cadastro pessoal salvo com sucesso!');
         await refreshSelectedAnimal();
@@ -195,8 +268,7 @@ export default function CadastroPessoal() {
           localStorage.setItem('s2vet_ob', 'd');
           navigate('/clinica');
         } else {
-          const ob = localStorage.getItem('s2vet_ob');
-          if (ob === 'p' || ob === null || ob === '') {
+          if (localStorage.getItem('s2vet_ob') === 'p') {
             localStorage.setItem('s2vet_ob', 'a');
             navigate('/animais');
           } else {
@@ -204,101 +276,136 @@ export default function CadastroPessoal() {
           }
         }
       } else {
-        toast.error(`Erro ao salvar: ${resData.error || 'Tente novamente'}`);
+        toast.error(resData.error || 'Não foi possível salvar o cadastro. Tente novamente.');
       }
-    } catch (err) {
-      console.error('Erro ao salvar:', err);
-      toast.error('Erro de conexão com o servidor');
+    } catch {
+      toast.error('Erro de conexão com o servidor. Verifique sua internet e tente novamente.');
     } finally {
       setSaving(false);
     }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
-  if (loading) return <div className="p-8 text-center text-gray-500">Carregando dados...</div>;
+  if (loading) {
+    return (
+      <PageContainer maxWidth="2xl">
+        <div className="flex items-center justify-center py-20 text-gray-500">
+          Carregando dados...
+        </div>
+      </PageContainer>
+    );
+  }
 
   const inputClass = 'w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:border-emerald-500 text-gray-900';
 
   return (
-    <div className="max-w-2xl mx-auto px-2 sm:px-0">
+    <PageContainer maxWidth="2xl">
+
+      <BotaoVoltar className="mb-4" />
+
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
-        <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900 mb-1">Cadastro Pessoal</h1>
+
+        <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900 mb-1">
+          Cadastro Pessoal
+        </h1>
         <p className="text-gray-500 mb-6 sm:mb-8 text-sm sm:text-base">
           Complete suas informações para continuar
         </p>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        {/* noValidate desativa o popup do browser — usamos toast no lugar */}
+        <form onSubmit={handleSubmit} noValidate className="space-y-5">
 
           {/* Nome */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
-            <input type="text" name="nomeCompleto" value={form.nomeCompleto}
-              onChange={handleChange} className={inputClass} required />
+            <Label text="Nome Completo" required />
+            <input
+              type="text" name="nomeCompleto" value={form.nomeCompleto}
+              onChange={handleChange} className={inputClass}
+              placeholder="Seu nome completo"
+            />
           </div>
 
           {/* Telefone + Email */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-              <input type="tel" name="telefone" value={form.telefone}
-                onChange={handleChange} className={inputClass} />
+              <Label text="Telefone" required />
+              <input
+                type="tel" name="telefone" value={form.telefone}
+                onChange={handleChange} className={inputClass}
+                placeholder="(11) 99999-9999"
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-              <input type="email" name="email" value={form.email} readOnly
-                className="w-full px-4 py-3 border border-gray-300 bg-gray-100 rounded-2xl text-gray-900 cursor-not-allowed" />
+              <Label text="E-mail" />
+              <input
+                type="email" name="email" value={form.email} readOnly
+                className="w-full px-4 py-3 border border-gray-300 bg-gray-100 rounded-2xl text-gray-500 cursor-not-allowed"
+              />
             </div>
           </div>
 
           {/* CEP */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
+            <Label text="CEP" required />
             <input
               type="text" name="cep" maxLength={8} value={form.cep}
               onChange={e => {
                 setForm(prev => ({ ...prev, cep: e.target.value }));
-                if (e.target.value.length === 8) buscarCep(e.target.value);
+                if (e.target.value.replace(/\D/g, '').length === 8) buscarCep(e.target.value);
               }}
-              className={inputClass} required
+              className={inputClass}
+              placeholder="00000000"
             />
           </div>
 
           {/* Endereço + Complemento */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Endereço</label>
-              <input type="text" name="endereco" value={form.endereco}
-                onChange={handleChange} className={inputClass} required />
+              <Label text="Endereço" required />
+              <input
+                type="text" name="endereco" value={form.endereco}
+                onChange={handleChange} className={inputClass}
+                placeholder="Rua, Avenida..."
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Complemento</label>
-              <input type="text" name="complemento" value={form.complemento}
-                onChange={handleChange} className={inputClass} />
+              <Label text="Complemento" optional />
+              <input
+                type="text" name="complemento" value={form.complemento}
+                onChange={handleChange} className={inputClass}
+                placeholder="Apto, Sala..."
+              />
             </div>
           </div>
 
           {/* Bairro + Cidade + Estado */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Bairro</label>
-              <input type="text" name="bairro" value={form.bairro}
-                onChange={handleChange} className={inputClass} required />
+              <Label text="Bairro" required />
+              <input
+                type="text" name="bairro" value={form.bairro}
+                onChange={handleChange} className={inputClass}
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
-              <input type="text" name="cidade" value={form.cidade}
-                onChange={handleChange} className={inputClass} required />
+              <Label text="Cidade" required />
+              <input
+                type="text" name="cidade" value={form.cidade}
+                onChange={handleChange} className={inputClass}
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-              <input type="text" name="estado" maxLength={2} value={form.estado}
-                onChange={handleChange} className={inputClass} required />
+              <Label text="Estado" required />
+              <input
+                type="text" name="estado" maxLength={2} value={form.estado}
+                onChange={handleChange} className={`${inputClass} uppercase`}
+                placeholder="SP"
+              />
             </div>
           </div>
 
           {/* Tipo de Usuário */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Usuário</label>
+            <Label text="Tipo de Usuário" required />
             <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange}
               className={inputClass}>
               <option value="PROPRIETARIO">Proprietário</option>
@@ -311,26 +418,46 @@ export default function CadastroPessoal() {
             <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 
-              {/* CRMV */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  CRMV <span className="text-red-500">*</span>
-                </label>
+                <Label text="CRMV" required />
                 <input
                   type="text" name="crmv" value={form.crmv}
-                  onChange={e => setForm(prev => ({ ...prev, crmv: maskCRMV(e.target.value) }))}
-                  placeholder="Ex: 12345/SP" maxLength={9}
+                  onChange={e => {
+                    const masked = maskCRMV(e.target.value);
+                    setForm(prev => ({ ...prev, crmv: masked }));
+                    setCrmvStatus('idle');
+                    verificarCRMV(masked);
+                  }}
+                  placeholder="12345/SP" maxLength={9}
                   className={inputClass}
                 />
-                <p className="text-xs text-gray-400 mt-1">Ex: 12345/SP</p>
+                {crmvStatus === 'idle' && (
+                  <p className="text-xs text-gray-400 mt-1">Formato: 12345/SP</p>
+                )}
+                {crmvStatus === 'checking' && (
+                  <p className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
+                    <Loader2 size={12} className="animate-spin" /> Verificando no CFMV...
+                  </p>
+                )}
+                {crmvStatus === 'valido' && (
+                  <p className="flex items-center gap-1.5 text-xs text-emerald-600 mt-1">
+                    <CheckCircle2 size={12} /> CRMV encontrado no cadastro do CFMV
+                  </p>
+                )}
+                {crmvStatus === 'invalido' && (
+                  <p className="flex items-center gap-1.5 text-xs text-red-600 mt-1">
+                    <XCircle size={12} /> CRMV não encontrado no cadastro do CFMV
+                  </p>
+                )}
+                {(crmvStatus === 'indice_vazio' || crmvStatus === 'erro') && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-600 mt-1">
+                    <Info size={12} /> Verificação indisponível — formato aceito
+                  </p>
+                )}
               </div>
 
-              {/* Espécies atendidas — checkboxes */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Espécies atendidas{' '}
-                  <span className="text-gray-400 text-xs font-normal">(opcional)</span>
-                </label>
+                <Label text="Espécies atendidas" required />
                 {especies.length === 0 ? (
                   <p className="text-xs text-gray-400">Carregando espécies...</p>
                 ) : (
@@ -358,12 +485,8 @@ export default function CadastroPessoal() {
                 )}
               </div>
 
-              {/* Subespecialidade — select (único valor) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Subespecialidade{' '}
-                  <span className="text-gray-400 text-xs font-normal">(opcional)</span>
-                </label>
+                <Label text="Subespecialidade" required />
                 <select
                   value={form.subespecialidades[0] ?? ''}
                   onChange={e => setForm(prev => ({
@@ -378,17 +501,23 @@ export default function CadastroPessoal() {
                   ))}
                 </select>
               </div>
-
             </div>
           )}
 
-          <button type="submit" disabled={saving}
-            className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-4 rounded-3xl text-base sm:text-lg font-semibold mt-4 transition-colors">
+          {/* Legenda campos obrigatórios */}
+          <p className="text-xs text-gray-400">
+            <span className="text-red-500">*</span> Campos obrigatórios
+          </p>
+
+          <button
+            type="submit" disabled={saving}
+            className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-4 rounded-3xl text-base sm:text-lg font-semibold mt-2 transition-colors"
+          >
             {saving ? 'Salvando...' : 'Salvar e Continuar'}
           </button>
 
         </form>
       </div>
-    </div>
+    </PageContainer>
   );
 }

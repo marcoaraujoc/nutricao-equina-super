@@ -2,9 +2,12 @@
 
 const express = require('express');
 const router  = express.Router();
-const EvolucaoController       = require('../controllers/EvolucaoController');
-const { authenticate }         = require('../middlewares/auth');
-const { interpretarEvolucao }  = require('../services/clinicaLLMService');
+const EvolucaoController                    = require('../controllers/EvolucaoController');
+const { authenticate }                        = require('../middlewares/auth');
+const { injectTenant }                        = require('../middlewares/tenant');
+const { interpretarEvolucao }                 = require('../services/clinicaLLMService');
+const validate                                = require('../middlewares/validate');
+const { criarEvolucaoRules, evolucaoIdParam } = require('../validators/evolucao.validators');
 
 // Rota específica ANTES das parametrizadas
 router.post('/interpretar', authenticate, async (req, res) => {
@@ -21,11 +24,11 @@ router.post('/interpretar', authenticate, async (req, res) => {
   }
 });
 
-router.get('/animal/:animalId', authenticate, EvolucaoController.listarPorAnimal);
-router.get('/:id',             authenticate, EvolucaoController.obterPorId);
-router.post('/',               authenticate, EvolucaoController.criar);
-router.put('/:id',             authenticate, EvolucaoController.atualizar);
-router.delete('/:id',          authenticate, EvolucaoController.excluir);
-router.patch('/:id/aprovar',   authenticate, EvolucaoController.aprovar);
+router.get('/animal/:animalId', authenticate, injectTenant, EvolucaoController.listarPorAnimal);
+router.get('/:id',             authenticate, injectTenant, evolucaoIdParam, validate, EvolucaoController.obterPorId);
+router.post('/',               authenticate, injectTenant, criarEvolucaoRules, validate, EvolucaoController.criar);
+router.put('/:id',             authenticate, evolucaoIdParam, validate, EvolucaoController.atualizar);
+router.delete('/:id',          authenticate, evolucaoIdParam, validate, EvolucaoController.excluir);
+router.patch('/:id/aprovar',   authenticate, evolucaoIdParam, validate, EvolucaoController.aprovar);
 
 module.exports = router;

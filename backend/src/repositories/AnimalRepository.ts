@@ -21,11 +21,18 @@ export class AnimalRepository extends BaseRepository {
     });
   }
 
-  async findAll(where?: Prisma.AnimalWhereInput) {
+  async findAll(where?: Prisma.AnimalWhereInput, opts?: { empresaId?: number }) {
     return this.prisma.animal.findMany({
-      where:   { ativo: true, ...where },
+      where:   { ativo: true, ...(opts?.empresaId ? { empresaId: opts.empresaId } : {}), ...where },
       include: { especie: true, raca: true, user: { select: { id: true, fullName: true } } },
       orderBy: { nome: 'asc' },
+    });
+  }
+
+  async setEmpresa(animalId: number, empresaId: number | null) {
+    return this.prisma.animal.update({
+      where: { id: animalId },
+      data:  { empresaId } as Prisma.AnimalUncheckedUpdateInput,
     });
   }
 

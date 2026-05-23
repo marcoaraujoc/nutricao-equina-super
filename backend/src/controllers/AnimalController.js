@@ -1,24 +1,33 @@
 // backend/src/controllers/AnimalController.js
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
 const crypto           = require('crypto');
+const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const { storage }      = require('../storage');
 
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
 
 const ANIMAL_INCLUDE = {
   especie: true,
   raca:    true,
   user:    { select: { id: true, fullName: true, email: true, phone: true } },
   solicitacoes: {
-    where:  { status: { in: ['ACEITO', 'PENDENTE'] } },
+    // DESVINCULO ACEITO é excluído: vet não tem mais acesso, não deve aparecer no form de edição
+    where: {
+      OR: [
+        { status: 'PENDENTE' },
+        { tipo: 'VINCULO', status: 'ACEITO' },
+      ],
+    },
     select: {
-      id:          true,
-      status:      true,
-      vetUserId:   true,
-      veterinario: { select: { id: true, fullName: true, email: true } },
+      id:              true,
+      tipo:            true,
+      status:          true,
+      vetUserId:       true,
+      novoVetUserId:   true,
+      veterinario:     { select: { id: true, fullName: true, email: true } },
+      novoVeterinario: { select: { id: true, fullName: true } },
     },
     orderBy: { createdAt: 'desc' },
   },
@@ -39,40 +48,17 @@ const obterUserType = async (userId) => {
   return { userType: u?.userType ?? 'PROPRIETARIO', role: u?.role ?? 'USER' };
 };
 
-// Cria ou atualiza solicitação PENDENTE + dispara email ao destinatário correto
-// Quando solicitanteId === novoVetId → vet solicitou → email ao proprietário
-// Quando solicitanteId !== novoVetId → proprietário solicitou → email ao vet
+// Cria ou atualiza solicitação PENDENTE + dispara email ao destinatário correto.
+// Fluxos:
+//   - Sem vet ativo → VINCULO PENDENTE (email ao vet ou ao proprietário dependendo de quem solicitou)
+//   - Com vet ACEITO ou TROCA_VET PENDENTE → TROCA_VET PENDENTE (email ao vet atual pedindo aprovação)
+//   - solicitanteId === novoVetId → vet solicitou → email ao proprietário
 const criarSolicitacaoPendente = async ({
-  animalId, novoVetId, animalNome, solicitanteId, proprietarioNome, proprietarioEmail,
+  animalId, novoVetId, animalNome, solicitanteId,
+  proprietarioNome, proprietarioEmail, proprietarioPhone = null,
 }) => {
   const novoVetIdNum = novoVetId ? Number(novoVetId) : null;
   if (!novoVetIdNum || isNaN(novoVetIdNum)) throw new Error(`novoVetId inválido: ${novoVetId}`);
-
-  // Buscar e notificar vet anterior ACEITO
-  const solAnterior = await prisma.vetAnimalSolicitacao.findFirst({
-    where:   { animalId: Number(animalId), status: 'ACEITO', vetUserId: { not: novoVetIdNum } },
-    include: { veterinario: { select: { fullName: true, email: true } } },
-  });
-
-  // Cancelar solicitações ativas de outros vets
-  await prisma.vetAnimalSolicitacao.updateMany({
-    where: {
-      animalId:  Number(animalId),
-      status:    { in: ['ACEITO', 'PENDENTE'] },
-      vetUserId: { not: novoVetIdNum },
-    },
-    data: { status: 'CANCELADO' },
-  });
-
-  // Notificar vet anterior (sem informar quem assumiu)
-  if (solAnterior?.veterinario?.email) {
-    emailService.enviarNotificacaoTrocaVet({
-      vetEmail:         solAnterior.veterinario.email,
-      vetNome:          solAnterior.veterinario.fullName,
-      animalNome,
-      proprietarioNome: proprietarioNome || 'Proprietário',
-    }).catch(err => console.error('[emailService] Falha ao notificar vet anterior:', err));
-  }
 
   const vet = await prisma.user.findUnique({
     where:  { id: novoVetIdNum },
@@ -80,6 +66,52 @@ const criarSolicitacaoPendente = async ({
   });
   if (!vet) throw new Error(`Veterinário id=${novoVetIdNum} não encontrado`);
 
+  // Detecta vet com acesso ativo ao animal (ACEITO ou TROCA_VET que ainda está pendendo)
+  const solAtiva = await prisma.vetAnimalSolicitacao.findFirst({
+    where: {
+      animalId:  Number(animalId),
+      vetUserId: { not: novoVetIdNum },
+      OR: [
+        { status: 'ACEITO', tipo: 'VINCULO' },
+        { tipo: 'TROCA_VET', status: 'PENDENTE' },
+      ],
+    },
+    include: { veterinario: { select: { id: true, fullName: true, email: true } } },
+  });
+
+  if (solAtiva) {
+    // ── TROCA_VET: vet atual precisa aprovar antes de trocar ──────────────────
+    const token     = gerarToken();
+    const expiresAt = gerarExpiracao(1); // 24 horas
+
+    await prisma.vetAnimalSolicitacao.update({
+      where: { id: solAtiva.id },
+      data: {
+        tipo:          'TROCA_VET',
+        status:        'PENDENTE',
+        novoVetUserId: novoVetIdNum,
+        approvalToken: token,
+        expiresAt,
+        solicitanteId: solicitanteId ? Number(solicitanteId) : null,
+        mensagem:      null,
+      },
+    });
+
+    emailService.enviarSolicitacaoTrocaVet({
+      vetEmail:          solAtiva.veterinario.email,
+      vetNome:           solAtiva.veterinario.fullName,
+      novoVetNome:       vet.fullName,
+      animalNome,
+      proprietarioNome:  proprietarioNome || 'Proprietário',
+      proprietarioEmail: proprietarioEmail || null,
+      proprietarioPhone: proprietarioPhone || null,
+      token,
+    }).catch(err => console.error('[emailService] Falha ao enviar TROCA_VET:', err));
+
+    return vet;
+  }
+
+  // ── VINCULO: sem vet ativo → solicitação direta ───────────────────────────
   const token     = gerarToken();
   const expiresAt = gerarExpiracao(7);
 
@@ -88,53 +120,48 @@ const criarSolicitacaoPendente = async ({
     create: {
       animalId:      Number(animalId),
       vetUserId:     novoVetIdNum,
+      tipo:          'VINCULO',
       status:        'PENDENTE',
       approvalToken: token,
       expiresAt,
       solicitanteId: solicitanteId ? Number(solicitanteId) : null,
     },
     update: {
+      tipo:          'VINCULO',
       status:        'PENDENTE',
       approvalToken: token,
       expiresAt,
       solicitanteId: solicitanteId ? Number(solicitanteId) : null,
+      mensagem:      null,
     },
   });
 
   const solicitanteEOVet = solicitanteId && Number(solicitanteId) === novoVetIdNum;
 
   if (solicitanteEOVet) {
-    // Vet solicitou → email ao proprietário pedindo autorização
     if (proprietarioEmail) {
-      try {
-        await emailService.enviarSolicitacaoVinculoProprietario({
-          proprietarioEmail,
-          proprietarioNome: proprietarioNome || 'Proprietário',
-          animalNome,
-          vetNome:          vet.fullName,
-          token,
-        });
-        console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmail}`);
-      } catch (err) {
-        console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err);
-      }
+      emailService.enviarSolicitacaoVinculoProprietario({
+        proprietarioEmail,
+        proprietarioNome: proprietarioNome || 'Proprietário',
+        animalNome,
+        vetNome:          vet.fullName,
+        token,
+      })
+        .then(() => console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmail}`))
+        .catch(err => console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err));
     } else {
       console.warn('[emailService] Proprietário sem email — notificação não enviada');
     }
   } else {
-    // Proprietário solicitou → email ao vet pedindo aprovação (fluxo original)
-    try {
-      await emailService.enviarSolicitacaoVinculo({
-        vetEmail:         vet.email,
-        vetNome:          vet.fullName,
-        animalNome,
-        proprietarioNome: proprietarioNome || 'Proprietário',
-        token,
-      });
-      console.log(`[emailService] Email ao vet enviado → ${vet.email}`);
-    } catch (err) {
-      console.error('[emailService] FALHA ao enviar para vet:', err?.message ?? err);
-    }
+    emailService.enviarSolicitacaoVinculo({
+      vetEmail:         vet.email,
+      vetNome:          vet.fullName,
+      animalNome,
+      proprietarioNome: proprietarioNome || 'Proprietário',
+      token,
+    })
+      .then(() => console.log(`[emailService] Email ao vet enviado → ${vet.email}`))
+      .catch(err => console.error('[emailService] FALHA ao enviar para vet:', err?.message ?? err));
   }
 
   return vet;
@@ -267,6 +294,20 @@ class AnimalController {
         data:  { status: novoStatus, approvalToken: null },
       });
 
+      // Multi-tenant: ao aceitar, vincula o animal à empresa do veterinário
+      if (acao === 'aceitar') {
+        const membro = await prisma.membroEquipe.findFirst({
+          where:   { userId: solicitacao.vetUserId },
+          include: { equipe: { select: { empresaId: true } } },
+        });
+        if (membro?.equipe?.empresaId) {
+          await prisma.animal.update({
+            where: { id: solicitacao.animalId },
+            data:  { empresaId: membro.equipe.empresaId },
+          });
+        }
+      }
+
       // Busca nome do proprietário para o email de confirmação ao vet
       const proprietario = await prisma.user.findUnique({
         where:  { id: solicitacao.animal.userId },
@@ -298,6 +339,37 @@ class AnimalController {
     }
   }
 
+  // ── GET /api/animais/minhas-solicitacoes ─────────────────────────────────
+  // Retorna todas as solicitações de vínculo dos animais do proprietário autenticado.
+  // Usado pelo hook de polling para notificar quando vet aceita/recusa.
+
+  async minhasSolicitacoes(req, res) {
+    const userId = Number(req.user?.id);
+    if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
+
+    try {
+      const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
+        where:   { animal: { userId } },
+        select: {
+          id:              true,
+          tipo:            true,
+          status:          true,
+          updatedAt:       true,
+          novoVetUserId:   true,
+          animal:          { select: { id: true, nome: true } },
+          veterinario:     { select: { fullName: true } },
+          novoVeterinario: { select: { fullName: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      res.json({ sucesso: true, dados: solicitacoes });
+    } catch (error) {
+      console.error('[AnimalController.minhasSolicitacoes]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar solicitações' });
+    }
+  }
+
   // ── GET /api/animais ─────────────────────────────────────────────────────
 
   async listar(req, res) {
@@ -311,7 +383,11 @@ class AnimalController {
       const where = isAdmin
         ? {}
         : userType === 'VETERINARIO'
-          ? { solicitacoes: { some: { vetUserId: Number(userId), status: { in: ['ACEITO', 'PENDENTE'] } } } }
+          ? { solicitacoes: { some: { vetUserId: Number(userId), OR: [
+                { tipo: 'VINCULO',   status: 'ACEITO'   },
+                { tipo: 'DESVINCULO', status: 'PENDENTE' },
+                { tipo: 'TROCA_VET',  status: 'PENDENTE' },
+              ] } } }
           : { userId: Number(userId) };
 
       const animais = await prisma.animal.findMany({
@@ -340,6 +416,31 @@ class AnimalController {
         include: ANIMAL_INCLUDE,
       });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+
+      // Vets só podem visualizar o animal após aprovação (ACEITO)
+      const userId = req.user?.id;
+      if (userId) {
+        const { userType, role } = await obterUserType(userId);
+        if (userType === 'VETERINARIO' && role !== 'ADMIN') {
+          const isOwner = animal.userId === Number(userId);
+          if (!isOwner) {
+            const aceito = await prisma.vetAnimalSolicitacao.findFirst({
+              where: {
+                animalId: id, vetUserId: Number(userId),
+                OR: [
+                  { tipo: 'VINCULO',    status: 'ACEITO'   },
+                  { tipo: 'DESVINCULO', status: 'PENDENTE' },
+                  { tipo: 'TROCA_VET',  status: 'PENDENTE' },
+                ],
+              },
+            });
+            if (!aceito) {
+              return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+            }
+          }
+        }
+      }
+
       res.json({ sucesso: true, dados: animal });
     } catch (error) {
       console.error('[AnimalController.obterPorId]', error);
@@ -455,7 +556,6 @@ class AnimalController {
               if (propData?.email) {
                 let prop = await prisma.user.findUnique({ where: { email: propData.email } });
                 if (!prop) {
-                  const bcrypt = require('bcryptjs');
                   prop = await prisma.user.create({
                     data: {
                       fullName:           propData.fullName || 'Proprietário',
@@ -528,20 +628,17 @@ class AnimalController {
           });
 
           if (proprietarioEmailParaEmail) {
-            try {
-              await emailService.enviarSolicitacaoVinculoProprietario({
-                proprietarioEmail: proprietarioEmailParaEmail,
-                proprietarioNome:  proprietarioNomeParaEmail,
-                animalNome:        animal.nome,
-                vetNome:           vetNomeCompleto,
-                token:             tokenVinculo,
-                isNewUser:         isNewProprietario,        // ← NOVO
-                senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,  // ← NOVO
-              });
-              console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmailParaEmail}`);
-            } catch (err) {
-              console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err);
-            }
+            emailService.enviarSolicitacaoVinculoProprietario({
+              proprietarioEmail: proprietarioEmailParaEmail,
+              proprietarioNome:  proprietarioNomeParaEmail,
+              animalNome:        animal.nome,
+              vetNome:           vetNomeCompleto,
+              token:             tokenVinculo,
+              isNewUser:         isNewProprietario,
+              senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,
+            })
+              .then(() => console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmailParaEmail}`))
+              .catch(err => console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err));
           } else {
             console.warn('[emailService] Proprietário sem email — notificação não enviada');
           }
@@ -549,7 +646,9 @@ class AnimalController {
       }
 
       // Proprietário indicou um vet → solicitação PENDENTE + email ao vet
-      const vetIdParaSolicitar = veterinarioUserId ? Number(veterinarioUserId) : null;
+      // Normaliza o valor: FormData com campo duplicado chega como array ['5','5']
+      const vetIdRaw = Array.isArray(veterinarioUserId) ? veterinarioUserId[0] : veterinarioUserId;
+      const vetIdParaSolicitar = vetIdRaw ? Number(vetIdRaw) : null;
       if (!isVet && vetIdParaSolicitar && !isNaN(vetIdParaSolicitar)) {
         await criarSolicitacaoPendente({
           animalId:          animal.id,
@@ -597,16 +696,19 @@ class AnimalController {
       }
 
       const solicitacaoAtual = await prisma.vetAnimalSolicitacao.findFirst({
-        where:  { animalId, status: 'ACEITO' },
-        select: { vetUserId: true },
+        where:   { animalId, status: 'ACEITO', tipo: 'VINCULO' },
+        select:  { vetUserId: true, veterinario: { select: { fullName: true, email: true } } },
       });
       const vetAtualId = solicitacaoAtual?.vetUserId ?? null;
-      const novoVetId  = veterinarioUserId ? Number(veterinarioUserId) : null;
-      const vetMudou   = novoVetId !== null && !isNaN(novoVetId) && novoVetId !== vetAtualId;
+      // Normaliza: FormData com campo duplicado pode chegar como array
+      const vetIdRawUpd = Array.isArray(veterinarioUserId) ? veterinarioUserId[0] : veterinarioUserId;
+      const novoVetId   = vetIdRawUpd ? Number(vetIdRawUpd) : null;
+      const vetMudou    = novoVetId !== null && !isNaN(novoVetId) && novoVetId !== vetAtualId;
+      const vetRemovido = (novoVetId === null || isNaN(novoVetId)) && vetAtualId !== null;
 
       const animalAtual = await prisma.animal.findUnique({
         where:  { id: animalId },
-        select: { user: { select: { fullName: true, email: true } } },
+        select: { user: { select: { fullName: true, email: true, phone: true } } },
       });
       const photoUrl = req.file ? await storage.upload(req.file, '') : undefined;
 
@@ -637,7 +739,33 @@ class AnimalController {
           solicitanteId:     req.user.id,
           proprietarioNome:  animalAtual?.user?.fullName || 'Proprietário',
           proprietarioEmail: animalAtual?.user?.email    || null,
+          proprietarioPhone: animalAtual?.user?.phone    || null,
         });
+      }
+
+      if (vetRemovido && vetAtualId) {
+        // Cria solicitação PENDENTE de DESVINCULO (mesma lógica do vínculo, mas ao contrário)
+        const token     = gerarToken();
+        const expiresAt = gerarExpiracao(1); // 24 horas
+        await prisma.vetAnimalSolicitacao.update({
+          where: { animalId_vetUserId: { animalId, vetUserId: vetAtualId } },
+          data:  {
+            tipo:          'DESVINCULO',
+            status:        'PENDENTE',
+            mensagem:      'Proprietário quer remover o seu acesso ao animal',
+            approvalToken: token,
+            expiresAt,
+          },
+        });
+        if (solicitacaoAtual?.veterinario?.email) {
+          emailService.enviarSolicitacaoDesvinculo({
+            vetEmail:         solicitacaoAtual.veterinario.email,
+            vetNome:          solicitacaoAtual.veterinario.fullName,
+            animalNome:       animal.nome,
+            proprietarioNome: animalAtual?.user?.fullName || 'Proprietário',
+            token,
+          }).catch(err => console.error('[emailService] Falha ao enviar desvinculo:', err));
+        }
       }
 
       const animalAtualizado = await prisma.animal.findUnique({
@@ -683,6 +811,87 @@ class AnimalController {
       res.json({ sucesso: true, mensagem: 'Vínculo criado com sucesso' });
     } catch (error) {
       console.error('[AnimalController.vincularVet]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  }
+
+  // ── DELETE /api/animais/:id/cancelar-solicitacao ────────────────────────
+  // Proprietário cancela uma solicitação pendente e desfaz o estado.
+  // VINCULO    PENDENTE → CANCELADO
+  // DESVINCULO PENDENTE → restaura VINCULO ACEITO (vet mantém acesso)
+  // TROCA_VET  PENDENTE → restaura VINCULO ACEITO (sem novoVet)
+  // TROCA_VET  ACEITO   + VINCULO PENDENTE (step 2) → cancela step 2 e restaura vet anterior
+
+  async cancelarSolicitacao(req, res) {
+    const animalId = Number(req.params.id);
+    const userId   = Number(req.user?.id);
+
+    if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
+
+    try {
+      const animal = await prisma.animal.findFirst({
+        where:  { id: animalId, userId },
+        select: { id: true, nome: true },
+      });
+      if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado ou sem permissão' });
+
+      // Solicitações PENDENTE para este animal
+      const pendentes = await prisma.vetAnimalSolicitacao.findMany({
+        where: { animalId, status: 'PENDENTE' },
+      });
+
+      if (pendentes.length === 0) {
+        // Verifica step 2 de TROCA_VET (old vet aceitou, new vet ainda pendente)
+        const trocaAceita = await prisma.vetAnimalSolicitacao.findFirst({
+          where: { animalId, tipo: 'TROCA_VET', status: 'ACEITO', novoVetUserId: { not: null } },
+        });
+        if (trocaAceita) {
+          await prisma.$transaction([
+            // Cancela VINCULO PENDENTE do novo vet
+            prisma.vetAnimalSolicitacao.updateMany({
+              where: { animalId, vetUserId: trocaAceita.novoVetUserId, status: 'PENDENTE' },
+              data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
+            }),
+            // Restaura acesso do vet original
+            prisma.vetAnimalSolicitacao.update({
+              where: { id: trocaAceita.id },
+              data:  { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null },
+            }),
+          ]);
+          return res.json({ sucesso: true, mensagem: 'Troca cancelada. Veterinário anterior restaurado.' });
+        }
+        return res.status(404).json({ sucesso: false, mensagem: 'Nenhuma solicitação pendente encontrada' });
+      }
+
+      // Processa cada PENDENTE por tipo
+      const ops = pendentes.map(sol => {
+        if (sol.tipo === 'VINCULO') {
+          return prisma.vetAnimalSolicitacao.update({
+            where: { id: sol.id },
+            data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
+          });
+        }
+        if (sol.tipo === 'DESVINCULO') {
+          // Restaura vínculo: vet mantém acesso
+          return prisma.vetAnimalSolicitacao.update({
+            where: { id: sol.id },
+            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null },
+          });
+        }
+        if (sol.tipo === 'TROCA_VET') {
+          // Restaura vínculo: vet atual mantém acesso, novo vet descartado
+          return prisma.vetAnimalSolicitacao.update({
+            where: { id: sol.id },
+            data:  { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null },
+          });
+        }
+        return null;
+      }).filter(Boolean);
+
+      await prisma.$transaction(ops);
+      res.json({ sucesso: true, mensagem: 'Solicitação cancelada com sucesso.' });
+    } catch (error) {
+      console.error('[AnimalController.cancelarSolicitacao]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   }

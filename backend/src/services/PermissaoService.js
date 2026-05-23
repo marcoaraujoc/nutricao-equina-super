@@ -4,8 +4,8 @@
 // Toda alteração de permissão passa por aqui e gera auditoria automática.
 // =============================================================================
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+
+const prisma = require('../lib/prisma').default;
 const { NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 

@@ -11,6 +11,8 @@ import {
   Users, Users2, ShieldCheck,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
+import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
+import { useProprietarioNotificacoes } from '../hooks/useProprietarioNotificacoes';
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 const CLS_MODULE_ACTIVE  = 'bg-emerald-50 text-emerald-600';
@@ -44,6 +46,8 @@ export default function Sidebar() {
   const { isNewUser, selectedAnimal } = useSelectedAnimal();
   const location                      = useLocation();
   const pendentesCount                = useVetPendentes();
+  useVetSolicitacaoMonitor();
+  useProprietarioNotificacoes();
 
   const role          = (user?.role      ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType  ?? '').toUpperCase();

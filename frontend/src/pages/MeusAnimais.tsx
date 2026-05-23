@@ -4,8 +4,18 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Pencil, Trash2, Plus, Clock, MapPin, Search } from 'lucide-react';
+import { Pencil, Trash2, Plus, Clock, MapPin, Search, XCircle } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+
+interface Solicitacao {
+  id:               number;
+  tipo:             string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
+  status:           string;
+  vetUserId?:       number;
+  novoVetUserId?:   number | null;
+  veterinario?:     { fullName: string };
+  novoVeterinario?: { fullName: string } | null;
+}
 
 interface Animal {
   id:               number;
@@ -19,7 +29,7 @@ interface Animal {
   categoriaAnimal?: string | null;
   tipoExercicio?:   string | null;
   raca?:            { nome: string } | null;
-  solicitacoes?:    { status: string }[];
+  solicitacoes?:    Solicitacao[];
 }
 
 const calcularIdade = (dataNascimento: string): string => {
@@ -45,15 +55,63 @@ const idadeDisplay = (animal: Animal): string => {
   return '-';
 };
 
+const getSolicitacaoPendente = (animal: Animal): Solicitacao | undefined =>
+  animal.solicitacoes?.find(s => s.status === 'PENDENTE');
+
+type BannerInfo = { text: string; bg: string; borderColor: string; textColor: string; iconColor: string };
+const getBannerInfo = (tipo: string): BannerInfo => {
+  if (tipo === 'DESVINCULO') return {
+    text: 'Aguardando confirmação de remoção do veterinário',
+    bg: 'bg-red-50', borderColor: 'border-red-100', textColor: 'text-red-700', iconColor: 'text-red-400',
+  };
+  if (tipo === 'TROCA_VET') return {
+    text: 'Aguardando aprovação de troca de veterinário',
+    bg: 'bg-blue-50', borderColor: 'border-blue-100', textColor: 'text-blue-700', iconColor: 'text-blue-400',
+  };
+  return {
+    text: 'Aguardando aprovação do veterinário',
+    bg: 'bg-amber-50', borderColor: 'border-amber-100', textColor: 'text-amber-700', iconColor: 'text-amber-500',
+  };
+};
+
+const getBadgeInfo = (tipo: string): { text: string; className: string } => {
+  if (tipo === 'DESVINCULO') return { text: 'Remoção pendente', className: 'bg-red-100 text-red-700' };
+  if (tipo === 'TROCA_VET')  return { text: 'Troca pendente',   className: 'bg-blue-100 text-blue-700' };
+  return { text: 'Pendente', className: 'bg-amber-100 text-amber-700' };
+};
+
+const getCardBorderClass = (tipo: string): string => {
+  if (tipo === 'DESVINCULO') return 'border-red-200 opacity-80';
+  if (tipo === 'TROCA_VET')  return 'border-blue-200 opacity-80';
+  return 'border-amber-200 opacity-80';
+};
+
+const CANCEL_TEXTOS: Record<string, { titulo: string; descricao: string }> = {
+  VINCULO:    {
+    titulo: 'Cancelar solicitação de vínculo?',
+    descricao: 'O veterinário não será mais notificado e o vínculo não será criado.',
+  },
+  DESVINCULO: {
+    titulo: 'Cancelar remoção do veterinário?',
+    descricao: 'A solicitação de remoção será cancelada e o veterinário continuará vinculado ao animal.',
+  },
+  TROCA_VET:  {
+    titulo: 'Cancelar troca de veterinário?',
+    descricao: 'A solicitação de troca será cancelada e o vínculo atual será mantido.',
+  },
+};
+
 const MeusAnimais = () => {
   const { user }                                     = useAuth();
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate                                     = useNavigate();
 
-  const [animais,        setAnimais]        = useState<Animal[]>([]);
-  const [search,         setSearch]         = useState('');
-  const [loading,        setLoading]        = useState(true);
-  const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
+  const [animais,                setAnimais]                = useState<Animal[]>([]);
+  const [search,                 setSearch]                 = useState('');
+  const [loading,                setLoading]                = useState(true);
+  const [animalToDelete,         setAnimalToDelete]         = useState<Animal | null>(null);
+  const [cancelSolicitacaoAnimal, setCancelSolicitacaoAnimal] = useState<Animal | null>(null);
+  const [cancelando,             setCancelando]             = useState(false);
 
   const loadAnimais = async () => {
     try {
@@ -73,8 +131,7 @@ const MeusAnimais = () => {
   );
 
   const isPendente = (animal: Animal): boolean =>
-    !!animal.solicitacoes?.some(s => s.status === 'PENDENTE') &&
-    !animal.solicitacoes?.some(s => s.status === 'ACEITO');
+    !!getSolicitacaoPendente(animal);
 
   const handleEdit = (animal: Animal) => {
     setSelectedAnimal({
@@ -98,6 +155,20 @@ const MeusAnimais = () => {
       loadAnimais();
     } catch (error) {
       console.error(error);
+    }
+  };
+
+  const confirmCancelar = async () => {
+    if (!cancelSolicitacaoAnimal) return;
+    setCancelando(true);
+    try {
+      await api.delete(`/animais/${cancelSolicitacaoAnimal.id}/cancelar-solicitacao`);
+      setCancelSolicitacaoAnimal(null);
+      loadAnimais();
+    } catch (error) {
+      console.error('Erro ao cancelar solicitação:', error);
+    } finally {
+      setCancelando(false);
     }
   };
 
@@ -148,23 +219,25 @@ const MeusAnimais = () => {
         ) : (
           <div className="space-y-3">
             {filteredAnimais.map(animal => {
-              const pendente = isPendente(animal);
+              const pendente     = isPendente(animal);
+              const solPendente  = getSolicitacaoPendente(animal);
+              const bannerInfo   = solPendente ? getBannerInfo(solPendente.tipo) : null;
+              const badgeInfo    = solPendente ? getBadgeInfo(solPendente.tipo) : null;
+              const cardBorder   = pendente && solPendente
+                ? getCardBorderClass(solPendente.tipo)
+                : 'border-gray-100 hover:shadow-md cursor-pointer';
               return (
                 <div
                   key={animal.id}
-                  className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
-                    pendente
-                      ? 'border-amber-200 opacity-80'
-                      : 'border-gray-100 hover:shadow-md cursor-pointer'
-                  }`}
+                  className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${cardBorder}`}
                   onClick={() => !pendente && handleEdit(animal)}
                 >
                   {/* Banner pendente */}
-                  {pendente && (
-                    <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-100">
-                      <Clock size={12} className="text-amber-500 flex-shrink-0" />
-                      <span className="text-xs text-amber-700 font-medium">
-                        Aguardando aprovação do veterinário
+                  {pendente && bannerInfo && (
+                    <div className={`flex items-center gap-2 px-4 py-2 ${bannerInfo.bg} border-b ${bannerInfo.borderColor}`}>
+                      <Clock size={12} className={`${bannerInfo.iconColor} flex-shrink-0`} />
+                      <span className={`text-xs ${bannerInfo.textColor} font-medium`}>
+                        {bannerInfo.text}
                       </span>
                     </div>
                   )}
@@ -189,9 +262,9 @@ const MeusAnimais = () => {
                         <h3 className="text-base sm:text-lg font-bold text-gray-900 truncate">
                           {animal.nome}
                         </h3>
-                        {pendente && (
-                          <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium flex-shrink-0">
-                            <Clock size={9} /> Pendente
+                        {pendente && badgeInfo && (
+                          <span className={`inline-flex items-center gap-1 text-[10px] ${badgeInfo.className} px-2 py-0.5 rounded-full font-medium flex-shrink-0`}>
+                            <Clock size={9} /> {badgeInfo.text}
                           </span>
                         )}
                       </div>
@@ -237,6 +310,17 @@ const MeusAnimais = () => {
                         <Pencil size={13} />
                         <span className="hidden sm:inline">Editar</span>
                       </button>
+
+                      {pendente && (
+                        <button
+                          onClick={() => setCancelSolicitacaoAnimal(animal)}
+                          className="flex items-center gap-1.5 bg-gray-500 hover:bg-gray-600
+                                     text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                        >
+                          <XCircle size={13} />
+                          <span className="hidden sm:inline">Cancelar</span>
+                        </button>
+                      )}
 
                       {!pendente && (
                         <button
@@ -308,6 +392,44 @@ const MeusAnimais = () => {
           </div>
         </div>
       )}
+
+      {/* Modal — Cancelar solicitação */}
+      {cancelSolicitacaoAnimal && (() => {
+        const solPend = getSolicitacaoPendente(cancelSolicitacaoAnimal);
+        const tipo    = solPend?.tipo ?? 'VINCULO';
+        const info    = CANCEL_TEXTOS[tipo] ?? CANCEL_TEXTOS.VINCULO;
+        return (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
+              <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">
+                ⚠️
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-2">{info.titulo}</h2>
+              <p className="text-gray-500 text-sm mb-2">
+                Animal: <strong className="text-gray-700">{cancelSolicitacaoAnimal.nome}</strong>
+              </p>
+              <p className="text-gray-500 text-sm mb-6">{info.descricao}</p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setCancelSolicitacaoAnimal(null)}
+                  disabled={cancelando}
+                  className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={confirmCancelar}
+                  disabled={cancelando}
+                  className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-800 text-white rounded-2xl text-sm font-semibold disabled:opacity-50"
+                >
+                  {cancelando ? 'Cancelando...' : 'Confirmar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </PageContainer>
   );
 };

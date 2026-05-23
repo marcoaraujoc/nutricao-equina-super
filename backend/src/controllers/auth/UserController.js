@@ -1,11 +1,16 @@
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
-const bcrypt           = require('bcryptjs');
-const jwt              = require('jsonwebtoken');
+const bcrypt  = require('bcryptjs');
+const jwt     = require('jsonwebtoken');
+const crypto  = require('crypto');
 
-const prisma = new PrismaClient();
-const SECRET = process.env.JWT_SECRET;
+const prisma = require('../../lib/prisma').default;
+const SECRET          = process.env.JWT_SECRET;
+const REFRESH_SECRET  = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
+
+function generateRefreshToken() {
+  return crypto.randomBytes(48).toString('hex');
+}
 
 class UserController {
 
@@ -63,15 +68,22 @@ class UserController {
         { expiresIn: '24h' }
       );
 
+      const refreshToken = generateRefreshToken();
+      await prisma.user.update({
+        where: { id: user.id },
+        data:  { refreshToken },
+      });
+
       console.log('✅ Login bem-sucedido!');
       res.json({
         token,
+        refreshToken,
         user: {
           id:                 user.id,
           fullName:           user.fullName,
           role:               user.role,
           userType:           user.userType,
-          mustChangePassword: user.mustChangePassword, // ← NOVO
+          mustChangePassword: user.mustChangePassword,
         },
       });
     } catch (err) {

@@ -1,5 +1,16 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma').default;
+
+// Normaliza nome de nutriente: sem acentos + Title Case por palavra
+// Ex: "selênio" → "Selenio" | "proteína bruta" → "Proteina Bruta"
+const normalizarNomeNutriente = (nome) =>
+  String(nome || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .split(/\s+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
 
 // Remove o sufixo "/kg" ou "/g" da unidade — armazena só a grandeza
 const normalizarUnidade = (unidade) => {
@@ -274,12 +285,13 @@ const ComposicaoAlimentarController = {
           continue;
         }
 
-        // Busca nutriente pelo nome (case-insensitive)
+        // Busca nutriente pelo nome (sem acentos)
         const unidadeComp = normalizarUnidade(comp.unidade);
+        const nomeSemAcento = normalizarNomeNutriente(comp.nutrienteNome.trim());
 
         let nutriente = await prisma.nutriente.findFirst({
           where: {
-            nome: comp.nutrienteNome.trim(),
+            nome: nomeSemAcento,
             unidadePadrao: unidadeComp,
           },
         });
@@ -287,7 +299,7 @@ const ComposicaoAlimentarController = {
         if (!nutriente) {
           nutriente = await prisma.nutriente.create({
             data: {
-              nome: comp.nutrienteNome.trim(),
+              nome: nomeSemAcento,
               categoria: 'Importado',
               unidadePadrao: unidadeComp,
             },
