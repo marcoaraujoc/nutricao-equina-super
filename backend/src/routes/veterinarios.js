@@ -21,5 +21,6 @@ router.get('/solicitacoes/pendentes',authenticate, VeterinarioController.listarP
 router.get('/solicitacoes',          authenticate, VeterinarioController.listarSolicitacoes);
 router.post('/solicitacoes',         authenticate, VeterinarioController.solicitarVinculo);
 router.patch('/solicitacoes/:id',    authenticate, VeterinarioController.responderSolicitacao);
+router.post('/solicitar-vinculo',    authenticate, VeterinarioController.solicitarVinculoVet);
 
 module.exports = router;

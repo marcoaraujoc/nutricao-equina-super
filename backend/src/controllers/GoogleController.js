@@ -1,5 +1,6 @@
 const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
+const https  = require('https');
 
 const prisma = require('../lib/prisma').default;
 const SECRET = process.env.JWT_SECRET;
@@ -8,17 +9,48 @@ function generateRefreshToken() {
   return crypto.randomBytes(48).toString('hex');
 }
 
+function fetchGoogleUserInfo(accessToken) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'www.googleapis.com',
+      path:     '/oauth2/v3/userinfo',
+      method:   'GET',
+      headers:  { Authorization: `Bearer ${accessToken}` },
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) reject(new Error(parsed.error.message || 'Google userinfo error'));
+          else resolve(parsed);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 const GoogleController = {
   login: async (req, res) => {
     try {
-      const { credential } = req.body;
-      if (!credential) {
-        return res.status(400).json({ error: 'Credential do Google não fornecido' });
+      const { access_token } = req.body;
+      if (!access_token) {
+        return res.status(400).json({ error: 'access_token do Google não fornecido' });
       }
 
-      // Decodifica o token Google
-      const decoded = jwt.decode(credential);
-      const { email, name: fullName } = decoded;
+      // Busca dados do usuário na API do Google
+      let googleUser;
+      try {
+        googleUser = await fetchGoogleUserInfo(access_token);
+      } catch (e) {
+        return res.status(400).json({ error: 'Token Google inválido ou expirado' });
+      }
+
+      const email    = googleUser.email;
+      const fullName = googleUser.name;
 
       if (!email) {
         return res.status(400).json({ error: 'E-mail não encontrado no token Google' });

@@ -33,6 +33,9 @@ router.get('/buscar-por-nome', authenticate, animalController.buscarPorNome);
 // GET  /api/animais/minhas-solicitacoes           → solicitações dos animais do proprietário (polling)
 router.get('/minhas-solicitacoes', authenticate, animalController.minhasSolicitacoes);
 
+// PATCH /api/animais/solicitacoes/:id/responder  → proprietário responde a convite iniciado pelo vet
+router.patch('/solicitacoes/:id/responder', authenticate, animalController.responderSolicitacaoVet);
+
 // POST /api/animais/proprietario/aprovar    → proprietário aprova/recusa vínculo (pública)
 router.post('/proprietario/aprovar', animalController.proprietarioAprovar);
 

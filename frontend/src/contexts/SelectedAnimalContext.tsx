@@ -38,6 +38,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
   const [hasAnimals, setHasAnimals] = useState(false);
   const [hasSingleAnimal, setHasSingleAnimal] = useState(false);
   const [cadastroCompleto, setCadastroCompleto] = useState(false);
+  const [isVeterinario, setIsVeterinario] = useState(false);
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
@@ -58,14 +59,15 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
 
       // Perfil
       if (perfilRes.status === 'fulfilled') {
-        const perfil        = perfilRes.value.data;
-        const isVeterinario = perfil?.userType === 'VETERINARIO';
+        const perfil         = perfilRes.value.data;
+        const vet            = perfil?.userType === 'VETERINARIO';
         const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
 
         setCadastroCompleto(perfilCompleto);
+        setIsVeterinario(vet);
 
         // Veterinário sem animais ainda tem acesso — não bloqueia os módulos
-        if (isVeterinario && animais.length === 0) {
+        if (vet && animais.length === 0) {
           setHasAnimals(true);
           setHasSingleAnimal(false);
         }
@@ -124,7 +126,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
         clearSelectedAnimal,
         hasAnimals,
         hasSingleAnimal,
-        isNewUser: !hasAnimals || !cadastroCompleto,
+        isNewUser: isVeterinario ? !cadastroCompleto : (!hasAnimals || !cadastroCompleto),
       }}
     >
       {children}

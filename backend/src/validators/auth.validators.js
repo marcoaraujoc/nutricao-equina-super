@@ -27,7 +27,7 @@ const registerRules = [
     .notEmpty().withMessage('Senha é obrigatória')
     .isLength({ min: 8, max: 128 }).withMessage('Senha deve ter entre 8 e 128 caracteres'),
   body('phone')
-    .optional({ nullable: true })
+    .optional({ values: 'falsy' })
     .isMobilePhone('pt-BR').withMessage('Telefone inválido'),
   body('userType')
     .optional()

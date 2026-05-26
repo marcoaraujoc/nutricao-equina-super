@@ -1,32 +1,18 @@
 // src/controllers/EvolucaoController.js
 
 const prisma = require('../lib/prisma').default;
+const fs     = require('fs');
+const path   = require('path');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROMPT LLM — detectar ações clínicas no texto da evolução
+// INCLUDE PADRÃO — retorna veterinário, modificador e mídias
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PROMPT_INTERPRETACAO = `Você é um assistente clínico veterinário especializado em equinos.
-Analise o texto de evolução clínica abaixo e extraia APENAS as ações concretas que o veterinário mencionou realizar: medicamentos prescritos, procedimentos realizados ou solicitados, exames solicitados, vacinas aplicadas e encaminhamentos indicados.
-
-Retorne SOMENTE um JSON válido, sem texto adicional, sem markdown, sem \`\`\`:
-{
-  "acoes": [
-    {
-      "tipo": "MEDICAMENTO" | "PROCEDIMENTO" | "EXAME" | "VACINA" | "ENCAMINHAMENTO",
-      "descricao": "descrição clara e objetiva",
-      "valorEstimado": 0.00,
-      "quantidade": 1
-    }
-  ]
-}
-
-Regras:
-- Se não houver ações concretas, retorne { "acoes": [] }
-- valorEstimado deve ser um número (use 0.00 se não mencionado)
-- quantidade deve ser um número inteiro
-- descricao deve incluir dosagem quando mencionada (ex: "Calcidrato 30ml IV")
-- Ignore sintomas, observações e diagnósticos — extraia apenas AÇÕES`;
+const INCLUDE_PADRAO = {
+  veterinario:   { select: { id: true, fullName: true } },
+  modificadoPor: { select: { id: true, fullName: true } },
+  midias:        { orderBy: { criadoEm: 'asc' } },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER — registrar audit log
@@ -38,7 +24,6 @@ async function registrarAuditoria(userId, userName, email, action) {
       data: { userId, userName, email, action, timestamp: new Date() },
     });
   } catch (err) {
-    // Auditoria nunca bloqueia o fluxo principal
     console.error('Erro ao registrar auditoria:', err);
   }
 }
@@ -51,7 +36,7 @@ const EvolucaoController = {
 
   // ── Listar evoluções de um animal ────────────────────────────────────────
   // GET /clinica/evolucoes/animal/:animalId
-  // Query: page, limit, status, dataInicio, dataFim, responsavelId
+  // Query: page, limit, status, dataInicio, dataFim, responsavelId, busca
 
   listarPorAnimal: async (req, res) => {
     const { animalId } = req.params;
@@ -92,10 +77,7 @@ const EvolucaoController = {
           skip,
           take:    Number(limit),
           orderBy: { dataInicio: 'desc' },
-          include: {
-            veterinario:   { select: { id: true, fullName: true } },
-            modificadoPor: { select: { id: true, fullName: true } },
-          },
+          include: INCLUDE_PADRAO,
         }),
         prisma.evolucaoClinica.count({ where }),
       ]);
@@ -138,9 +120,8 @@ const EvolucaoController = {
       const evolucao = await prisma.evolucaoClinica.findUnique({
         where:   { id: Number(id) },
         include: {
-          veterinario:   { select: { id: true, fullName: true } },
-          modificadoPor: { select: { id: true, fullName: true } },
-          animal:        { select: { id: true, nome: true } },
+          ...INCLUDE_PADRAO,
+          animal: { select: { id: true, nome: true } },
         },
       });
 
@@ -157,6 +138,8 @@ const EvolucaoController = {
 
   // ── Criar evolução ────────────────────────────────────────────────────────
   // POST /clinica/evolucoes
+  //
+  // Regra: não permite criar se já existir uma evolução EM_ANDAMENTO para este animal.
 
   criar: async (req, res) => {
     const { animalId, especialidade, texto, status = 'EM_ANDAMENTO' } = req.body;
@@ -167,7 +150,6 @@ const EvolucaoController = {
     if (!texto?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Texto da evolução é obrigatório' });
 
     try {
-      // Verifica se o animal existe e o usuário tem acesso
       const animal = await prisma.animal.findUnique({
         where:  { id: Number(animalId) },
         select: { id: true, nome: true },
@@ -175,6 +157,20 @@ const EvolucaoController = {
 
       if (!animal) {
         return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      }
+
+      // Bloqueia nova evolução se já existe uma em andamento para este animal
+      const evolucaoAberta = await prisma.evolucaoClinica.findFirst({
+        where: { animalId: Number(animalId), status: 'EM_ANDAMENTO', ativo: true },
+        select: { id: true },
+      });
+
+      if (evolucaoAberta) {
+        return res.status(400).json({
+          sucesso:  false,
+          mensagem: 'Já existe uma evolução em andamento para este animal. Finalize ou cancele-a antes de criar uma nova.',
+          code:     'EVOLUCAO_EM_ANDAMENTO',
+        });
       }
 
       const evolucao = await prisma.evolucaoClinica.create({
@@ -186,13 +182,10 @@ const EvolucaoController = {
           status,
           dataInicio:    new Date(),
           dataFim:       status === 'FINALIZADA' ? new Date() : null,
-          aprovado:      true, // estagiários podem requerer aprovação futuramente
+          aprovado:      true,
           ativo:         true,
         },
-        include: {
-          veterinario:   { select: { id: true, fullName: true } },
-          modificadoPor: { select: { id: true, fullName: true } },
-        },
+        include: INCLUDE_PADRAO,
       });
 
       await registrarAuditoria(
@@ -213,9 +206,9 @@ const EvolucaoController = {
   // PUT /clinica/evolucoes/:id
   //
   // Regras:
-  //  - FINALIZADA não pode ser editada
-  //  - O vet que edita assume a responsabilidade (veterinarioId = req.user.id)
-  //  - Toda alteração é registrada em auditoria
+  //  - FINALIZADA e CANCELADA não podem ser editadas
+  //  - veterinarioId só muda quando o status muda (quem cria = responsável EM_ANDAMENTO)
+  //  - Quem finaliza ou cancela se torna o responsável
 
   atualizar: async (req, res) => {
     const { id }                            = req.params;
@@ -238,34 +231,38 @@ const EvolucaoController = {
         });
       }
 
-      // Vet que edita assume a responsabilidade
-      const novoResponsavelId = userId;
+      if (existente.status === 'CANCELADA') {
+        return res.status(403).json({
+          sucesso:  false,
+          mensagem: 'Evoluções canceladas não podem ser editadas',
+        });
+      }
+
+      // veterinarioId só muda quando o status muda (quem finaliza/cancela = responsável)
+      const statusMudou   = status && status !== existente.status;
+      const novoVetId     = statusMudou ? userId : existente.veterinarioId;
 
       const atualizada = await prisma.evolucaoClinica.update({
         where: { id: Number(id) },
         data: {
-          especialidade:    especialidade ?? existente.especialidade,
-          texto:            texto?.trim() ?? existente.texto,
-          status:           status        ?? existente.status,
-          veterinarioId:    novoResponsavelId,
-          modificadoPorId:  userId,
-          dataModificacao:  new Date(),
-          // Seta dataFim quando muda para FINALIZADA
+          especialidade:   especialidade ?? existente.especialidade,
+          texto:           texto?.trim() ?? existente.texto,
+          status:          status        ?? existente.status,
+          veterinarioId:   novoVetId,
+          modificadoPorId: userId,
+          dataModificacao: new Date(),
           dataFim: (status === 'FINALIZADA' && !existente.dataFim)
             ? new Date()
             : existente.dataFim,
         },
-        include: {
-          veterinario:   { select: { id: true, fullName: true } },
-          modificadoPor: { select: { id: true, fullName: true } },
-        },
+        include: INCLUDE_PADRAO,
       });
 
       await registrarAuditoria(
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_EDITADA | id=${id} | animal=${existente.animalId} | status=${status ?? existente.status} | responsavelAnterior=${existente.veterinarioId} | responsavelNovo=${novoResponsavelId}`
+        `EVOLUCAO_EDITADA | id=${id} | animal=${existente.animalId} | status=${status ?? existente.status} | responsavelAnterior=${existente.veterinarioId} | responsavelNovo=${novoVetId}`
       );
 
       res.json({ sucesso: true, dados: atualizada });
@@ -304,7 +301,6 @@ const EvolucaoController = {
         });
       }
 
-      // Soft delete — preserva para auditoria
       await prisma.evolucaoClinica.update({
         where: { id: Number(id) },
         data: {
@@ -356,9 +352,7 @@ const EvolucaoController = {
           modificadoPorId: userId,
           dataModificacao: new Date(),
         },
-        include: {
-          veterinario: { select: { id: true, fullName: true } },
-        },
+        include: INCLUDE_PADRAO,
       });
 
       await registrarAuditoria(
@@ -375,100 +369,122 @@ const EvolucaoController = {
     }
   },
 
+  // ── Salvar título gerado pela LLM ─────────────────────────────────────────
+  // PATCH /clinica/evolucoes/:id/titulo
+  // Body: { titulo }
+
+  salvarTitulo: async (req, res) => {
+    const { id }    = req.params;
+    const { titulo } = req.body;
+
+    if (!titulo?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Título é obrigatório' });
+    }
+
+    try {
+      await prisma.evolucaoClinica.update({
+        where: { id: Number(id) },
+        data:  { titulo: titulo.trim().substring(0, 255) },
+      });
+      res.json({ sucesso: true });
+    } catch (error) {
+      console.error('Erro ao salvar título:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Adicionar mídia a uma evolução ────────────────────────────────────────
+  // POST /clinica/evolucoes/:id/midias
+  // multipart/form-data: midia (arquivo), tipo (IMAGEM|VIDEO|AUDIO)
+
+  adicionarMidia: async (req, res) => {
+    const { id }   = req.params;
+    const { tipo } = req.body;
+    const file     = req.file;
+
+    if (!file) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Arquivo é obrigatório' });
+    }
+
+    const tiposValidos = ['IMAGEM', 'VIDEO', 'AUDIO'];
+    const tipoFinal    = tipo && tiposValidos.includes(tipo.toUpperCase())
+      ? tipo.toUpperCase()
+      : derivarTipo(file.mimetype);
+
+    try {
+      const evolucao = await prisma.evolucaoClinica.findUnique({
+        where:  { id: Number(id) },
+        select: { id: true, ativo: true },
+      });
+
+      if (!evolucao || !evolucao.ativo) {
+        fs.unlink(file.path, () => {});
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      const midia = await prisma.evolucaoMidia.create({
+        data: {
+          evolucaoId: Number(id),
+          tipo:       tipoFinal,
+          url:        `/uploads/evolucoes/${file.filename}`,
+          nome:       file.originalname,
+          tamanho:    file.size,
+        },
+      });
+
+      res.status(201).json({ sucesso: true, dados: midia });
+    } catch (error) {
+      fs.unlink(file.path, () => {});
+      console.error('Erro ao adicionar mídia:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Remover mídia de uma evolução ─────────────────────────────────────────
+  // DELETE /clinica/evolucoes/:evolucaoId/midias/:midiaId
+
+  removerMidia: async (req, res) => {
+    const { midiaId } = req.params;
+
+    try {
+      const midia = await prisma.evolucaoMidia.findUnique({
+        where: { id: Number(midiaId) },
+      });
+
+      if (!midia) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Mídia não encontrada' });
+      }
+
+      // Remove arquivo físico (caminho relativo ao backend)
+      const filePath = path.join(__dirname, '../../', midia.url);
+      fs.unlink(filePath, () => {});
+
+      await prisma.evolucaoMidia.delete({ where: { id: Number(midiaId) } });
+
+      res.json({ sucesso: true });
+    } catch (error) {
+      console.error('Erro ao remover mídia:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   // ── Interpretar texto com LLM (Groq) ──────────────────────────────────────
-  // POST /clinica/evolucoes/interpretar
-  // Body: { texto }
-  //
-  // Detecta ações clínicas (medicamentos, procedimentos, exames, etc.)
-  // e retorna lista estruturada para o frontend apresentar ao usuário.
+  // Rota inline em evolucao.js — usa clinicaLLMService
+  // Este método é mantido como fallback mas não está em uso direto no router
 
   interpretar: async (req, res) => {
     const { texto } = req.body;
-    const userId    = req.user.id;
-
     if (!texto?.trim()) {
       return res.status(400).json({ sucesso: false, mensagem: 'Texto é obrigatório' });
     }
-
-    const inicio = Date.now();
-
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method:  'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-          'Content-Type':  'application/json',
-        },
-        body: JSON.stringify({
-          model:      'llama-3.3-70b-versatile',
-          temperature: 0.1,
-          max_tokens:  1000,
-          messages: [
-            { role: 'system', content: PROMPT_INTERPRETACAO },
-            { role: 'user',   content: texto.trim() },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const erro = await response.text();
-        console.error('Groq API erro:', erro);
-        return res.status(502).json({ sucesso: false, mensagem: 'Erro ao chamar serviço de IA' });
-      }
-
-      const groqData = await response.json();
-      const latencia = Date.now() - inicio;
-
-      const conteudo  = groqData.choices?.[0]?.message?.content ?? '{"acoes":[]}';
-      const tokens    = groqData.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-
-      // Parse seguro do JSON retornado pelo LLM
-      let acoes = [];
-      try {
-        const limpo  = conteudo.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(limpo);
-        acoes = Array.isArray(parsed.acoes) ? parsed.acoes : [];
-      } catch (parseErr) {
-        console.error('Erro ao parsear resposta LLM:', parseErr, conteudo);
-        acoes = [];
-      }
-
-      // Registrar uso de IA para monitoramento
-      try {
-        await prisma.aiUsageLog.create({
-          data: {
-            operacao:     'INTERPRETAR_EVOLUCAO',
-            modelo:       'llama-3.3-70b-versatile',
-            provedor:     'groq',
-            tokensEntrada: tokens.prompt_tokens,
-            tokensSaida:   tokens.completion_tokens,
-            tokensTotal:   tokens.total_tokens,
-            custoUsd:      tokens.total_tokens * 0.00000059, // preço aproximado llama-3.3-70b
-            latenciaMs:    latencia,
-            userId:        userId,
-            sucesso:       true,
-          },
-        });
-      } catch (logErr) {
-        console.error('Erro ao registrar AI log:', logErr);
-      }
-
-      res.json({ sucesso: true, dados: { acoes } });
-    } catch (error) {
-      console.error('Erro ao interpretar evolução:', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro ao interpretar evolução' });
-    }
+    res.status(501).json({ sucesso: false, mensagem: 'Use a rota POST /interpretar do router' });
   },
 
   // ── Transcrever áudio com Groq Whisper ────────────────────────────────────
   // POST /clinica/evolucoes/transcrever
   // multipart/form-data: audio (arquivo)
-  //
-  // Usado quando o dispositivo está online.
-  // Quando offline, o frontend usa Whisper local (whisperService.ts).
 
   transcrever: async (req, res) => {
-    const fs     = require('fs');
     const userId = req.user.id;
 
     if (!req.file) {
@@ -490,10 +506,8 @@ const EvolucaoController = {
       const latencia = Date.now() - inicio;
       const texto    = transcription.text?.trim() ?? '';
 
-      // Remove arquivo temporário
       try { fs.unlinkSync(req.file.path); } catch {}
 
-      // Registrar uso de IA
       try {
         await prisma.aiUsageLog.create({
           data: {
@@ -503,7 +517,7 @@ const EvolucaoController = {
             tokensEntrada: 0,
             tokensSaida:   0,
             tokensTotal:   0,
-            custoUsd:      0.0, // Whisper tem preço por minuto, não por token
+            custoUsd:      0.0,
             latenciaMs:    latencia,
             userId:        userId,
             sucesso:       true,
@@ -515,9 +529,8 @@ const EvolucaoController = {
 
       res.json({ sucesso: true, dados: { texto } });
     } catch (error) {
-      // Limpeza do arquivo temporário em caso de erro
       if (req.file?.path) {
-        try { require('fs').unlinkSync(req.file.path); } catch {}
+        try { fs.unlinkSync(req.file.path); } catch {}
       }
       console.error('Erro ao transcrever áudio:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro na transcrição do áudio' });
@@ -525,5 +538,16 @@ const EvolucaoController = {
   },
 
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS PRIVADOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function derivarTipo(mimetype = '') {
+  if (mimetype.startsWith('image/')) return 'IMAGEM';
+  if (mimetype.startsWith('video/')) return 'VIDEO';
+  if (mimetype.startsWith('audio/')) return 'AUDIO';
+  return 'IMAGEM';
+}
 
 module.exports = EvolucaoController;

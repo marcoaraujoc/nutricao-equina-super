@@ -29,17 +29,21 @@ async function interpretarEvolucao(texto, userId = null, animalId = null) {
     });
 
     const jsonMatch = respostaTexto.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { acoes: [] };
+    if (!jsonMatch) return { acoes: [], titulo: '' };
 
     try {
-      return JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        acoes:  Array.isArray(parsed.acoes) ? parsed.acoes : [],
+        titulo: typeof parsed.titulo === 'string' ? parsed.titulo : '',
+      };
     } catch {
       console.error('[clinicaLLMService] Erro ao parsear resposta:', respostaTexto);
-      return { acoes: [] };
+      return { acoes: [], titulo: '' };
     }
   } catch (err) {
     console.error('[clinicaLLMService] Falha na chamada ao modelo:', err.message);
-    return { acoes: [] };
+    return { acoes: [], titulo: '' };
   }
 }
 

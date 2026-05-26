@@ -1,6 +1,6 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-05-23
+# Atualizado em: 2026-05-26
 
 ---
 
@@ -166,10 +166,13 @@ NOTA: unique constraint (animalId, vetUserId) — só existe 1 registro por par,
 ```
 
 ### Endpoints de solicitações
-- `GET  /api/animais/minhas-solicitacoes` — proprietário: lista todas suas solicitações (inclui tipo)
-- `GET  /api/veterinarios/solicitacoes?status=PENDENTE` — vet: lista pendentes (inclui tipo)
-- `PATCH /api/veterinarios/solicitacoes/:id/responder` — vet: aceita/recusa (body: {status})
-- `GET  /api/veterinarios/solicitacoes/:token/responder-email` — resposta via link de email
+- `GET   /api/animais/minhas-solicitacoes` — proprietário: polling de status (inclui vetUserId, solicitanteId)
+- `PATCH /api/animais/solicitacoes/:id/responder` — proprietário responde convite V→P (body: {status})
+- `POST  /api/animais/proprietario/aprovar` — proprietário aprova/recusa via token de email (body: {token, acao})
+- `GET   /api/veterinarios/solicitacoes?status=PENDENTE` — vet: lista pendentes (inclui tipo, solicitanteId)
+- `PATCH /api/veterinarios/solicitacoes/:id` — vet aceita/recusa (body: {status})
+- `GET   /api/veterinarios/solicitacoes/responder-email?token=X&acao=aceitar` — vet responde via email
+- `POST  /api/veterinarios/solicitar-vinculo` — vet inicia V→P (body: {animalId})
 
 ---
 
@@ -514,6 +517,227 @@ New-Item -ItemType Junction `
 - [ ] AI: adicionar OpenAIProvider / GeminiProvider para text completions
 - [ ] Testes unitários nos services de permissão e equipe
 - [ ] Frontend: migrar raw `fetch('/api...')` restantes para `authFetch` ou `api` (axios)
+
+---
+
+## 13. MAPA DE ARQUIVOS — REFERÊNCIA RÁPIDA
+
+> Leia esta seção antes de explorar o código. Evita reads desnecessários.
+
+### Backend — Controllers
+
+| Arquivo | Responsabilidade principal |
+|---|---|
+| `AnimalController.js` | CRUD animais, `ANIMAL_INCLUDE`, `criarSolicitacaoPendente`, todos os fluxos de vínculo (VINCULO/DESVINCULO/TROCA_VET), `proprietarioAprovar`, `responderSolicitacaoVet`, `minhasSolicitacoes`, `cancelarSolicitacao`, `vincularVet`, `desvincularVet`, `buscarPorNome` |
+| `VeterinarioController.js` | Perfil vet, `solicitarVinculo` (P→V), `solicitarVinculoVet` (V→P), `listarSolicitacoes`, `responderSolicitacao`, `responderViaEmail`, `listarPendentes`, `meusAnimais` |
+| `AuthController.js` | Login email/senha, registro, refresh token, logout |
+| `GoogleController.js` | OAuth Google — troca `access_token` por JWT interno |
+| `UserController.js` | CRUD usuários, `/me`, troca de senha |
+| `DietaController.js` | CRUD dietas e itens de dieta por animal |
+| `RelatorioNutricionalController.js` | Geração e persistência de relatórios nutricionais |
+| `ExameController.js` | Exames nutricionais e clínicos |
+| `EvolucaoController.js` | Prontuário clínico (EvolucaoClinica) |
+| `EquipeController.js` | Equipes, membros, convites |
+| `AlimentoController.js` | Banco de alimentos |
+| `ComposicaoAlimentarController.js` | Composição nutricional por alimento/espécie |
+| `NutrientesController.js` | Banco de nutrientes |
+| `AnaliseController.js` | Análise nutricional via NRC |
+| `emailService.js` | Todos os templates de email (ver lista abaixo) |
+
+### Backend — Funções e Constantes Críticas
+
+```javascript
+// AnimalController.js
+ANIMAL_INCLUDE          // Include Prisma padrão para todas as queries de animal
+                        // inclui: especie, raca, user, solicitacoes(PENDENTE + VINCULO ACEITO)
+                        // solicitacoes.select: id, tipo, status, vetUserId, novoVetUserId,
+                        //   solicitanteId, veterinario{id,fullName,email}, novoVeterinario{id,fullName}
+
+criarSolicitacaoPendente({ animalId, novoVetId, animalNome, solicitanteId,
+                           proprietarioNome, proprietarioEmail, proprietarioPhone })
+// Lógica de roteamento:
+//   sem vet ativo → VINCULO PENDENTE
+//   com vet ACEITO → TROCA_VET PENDENTE (email ao vet atual)
+//   solicitanteId === novoVetId → vet iniciou → email ao PROPRIETÁRIO
+//   caso contrário → email ao VET
+
+// VetAnimalSolicitacao: unique constraint (animalId, vetUserId)
+// Um registro por par animal-vet, sempre reutilizado (upsert)
+// solicitanteId === vetUserId → solicitação iniciada pelo VET (proprietário deve responder)
+// solicitanteId !== vetUserId → solicitação iniciada pelo PROPRIETÁRIO (vet deve responder)
+```
+
+### Backend — Templates de Email (`emailService.js`)
+
+| Função | Destinatário | Quando |
+|---|---|---|
+| `enviarSolicitacaoVinculo` | Vet | Proprietário solicita vínculo |
+| `enviarSolicitacaoVinculoProprietario` | Proprietário | Vet solicita vínculo (link `/proprietario/aprovar-vinculo`) |
+| `enviarConfirmacaoVinculo` | Vet | Proprietário aceita/recusa (também usado para notificar vet sobre decisão do proprietário) |
+| `enviarSolicitacaoDesvinculo` | Vet | Proprietário inicia desvinculo |
+| `enviarSolicitacaoTrocaVet` | Vet atual | Proprietário inicia troca de vet |
+
+### Backend — Rotas completas
+
+```
+# animais.js — prefixo /api/animais
+GET    /buscar-por-nome?nome=X          → AnimalController.buscarPorNome (vet)
+GET    /minhas-solicitacoes             → AnimalController.minhasSolicitacoes (proprietário, polling)
+PATCH  /solicitacoes/:id/responder      → AnimalController.responderSolicitacaoVet (proprietário responde V→P)
+POST   /proprietario/aprovar            → AnimalController.proprietarioAprovar (email token, público)
+POST   /vincular-vet                    → AnimalController.vincularVet (vínculo direto ACEITO)
+GET    /                                → AnimalController.listar
+POST   /                                → AnimalController.criar
+GET    /:id                             → AnimalController.obterPorId
+PUT    /:id                             → AnimalController.atualizar
+DELETE /:id                             → AnimalController.excluir
+DELETE /:id/desvincular-vet             → AnimalController.desvincularVet
+DELETE /:id/cancelar-solicitacao        → AnimalController.cancelarSolicitacao
+
+# veterinarios.js — prefixo /api/veterinarios
+GET    /solicitacoes/responder-email    → VeterinarioController.responderViaEmail (público, token)
+GET    /proprietarios                   → VeterinarioController.listarProprietarios
+GET    /                                → VeterinarioController.listar
+GET    /perfil                          → VeterinarioController.obterPerfil
+PUT    /perfil                          → VeterinarioController.atualizarPerfil
+GET    /meus-animais                    → VeterinarioController.meusAnimais
+GET    /solicitacoes/pendentes          → VeterinarioController.listarPendentes
+GET    /solicitacoes                    → VeterinarioController.listarSolicitacoes
+POST   /solicitacoes                    → VeterinarioController.solicitarVinculo (P→V, legacy)
+PATCH  /solicitacoes/:id                → VeterinarioController.responderSolicitacao (vet responde)
+POST   /solicitar-vinculo               → VeterinarioController.solicitarVinculoVet (V→P)
+
+# Outros prefixos relevantes
+/api/auth          → AuthController (login, refresh, logout)
+/api/users         → UserController (/me, CRUD)
+/api/dietas        → DietaController
+/api/animais/:id/evolucoes → EvolucaoController
+/api/animais/:id/exames    → ExameController
+/api/equipes       → EquipeController
+/api/relatorios    → RelatorioNutricionalController
+/api/alimentos     → AlimentoController
+/api/nutrientes    → NutrientesController
+/api/composicoes   → ComposicaoAlimentarController
+```
+
+### Backend — Middlewares
+
+| Arquivo | Uso |
+|---|---|
+| `auth.js` | `authenticate` — valida JWT, injeta `req.user` |
+| `tenant.js` | `injectTenant` — injeta `empresaId` no contexto (usado em animais e evolução) |
+| `validate.js` | Roda express-validator, retorna 422 em erros |
+| `permissao.middleware.js` | RBAC por userType |
+| `requestId.js` | Injeta `x-request-id` em toda requisição |
+
+### Frontend — Páginas
+
+| Arquivo | Rota / Propósito |
+|---|---|
+| `Login.tsx` | `/login` — autenticação email/senha + Google |
+| `Register.tsx` | `/register` — cadastro de usuário |
+| `CadastroPessoal.tsx` | `/cadastro-pessoal` — onboarding pós-registro |
+| `AlterarSenhaObrigatoria.tsx` | `/alterar-senha` — bloqueio `mustChangePassword` |
+| `Dashboard.tsx` | `/` — dashboard principal (PROPRIETARIO/ESTAGIARIO) |
+| `VetDashboard.tsx` | `/vet-dashboard` — dashboard VETERINARIO com SolicitacaoCard |
+| `ClinicaDashboard.tsx` | `/clinica-dashboard` — dashboard clínica |
+| `MeusAnimais.tsx` | `/meus-animais` — lista animais do PROPRIETARIO + botões Autorizar/Recusar (V→P) |
+| `AnimaisVet.tsx` | `/vet-animais` — lista pacientes do VET + "Buscar Paciente" modal + SolicitacaoCard |
+| `Animal.tsx` | `/animais` — formulário criar/editar animal |
+| `AnimalDetail.tsx` | `/animal/:id` — dashboard do animal (aba única) |
+| `AnimalView.tsx` | visualização detalhada do animal |
+| `Dieta.tsx` | `/dieta` — visualização da dieta do animal selecionado |
+| `CriaDieta.tsx` | `/cria-dieta` — formulário de criação/edição de dieta |
+| `RelatorioNutricional.tsx` | `/relatorio` — relatório nutricional do animal selecionado |
+| `Exames.tsx` | `/exames` — exames do animal selecionado |
+| `Atendimento.tsx` | `/atendimento` — prontuário clínico (evolução clínica) |
+| `AprovarVinculo.tsx` | `/aprovar-vinculo` — vet aprova vínculo via link de email (público) |
+| `AprovarVinculoProprietario.tsx` | `/proprietario/aprovar-vinculo` — proprietário aprova via email (público) |
+| `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
+| `EquipeManager.tsx` | `/equipe-manager` — admin de equipes |
+| `Alimentos.tsx` | `/alimentos` — banco de alimentos |
+| `ComposicaoAlimentar.tsx` | `/composicao` — composição nutricional |
+| `Nutrientes.tsx` | `/nutrientes` — banco de nutrientes |
+| `Analise.tsx` | `/analise` — análise NRC |
+| `Auditoria.tsx` | `/auditoria` — log de auditoria |
+| `Usuarios.tsx` | `/usuarios` — gestão de usuários (admin) |
+| `AiUsageDashboard.tsx` | `/ai-usage` — monitoramento de uso de IA |
+
+### Frontend — Componentes Globais
+
+| Arquivo | Propósito |
+|---|---|
+| `PageContainer.tsx` | Wrapper obrigatório de toda página interna. Props: `maxWidth` (`7xl`\|`5xl`\|`3xl`), `noPadding` |
+| `Sidebar.tsx` | Navegação lateral. Chama `useProprietarioNotificacoes` e `useVetSolicitacaoMonitor` |
+| `AnimalCard.tsx` | Card de resumo do animal. Resolve vet via `solicitacaoAceita ?? veterinarioNome`. Exibe badge PENDENTE |
+| `VetNotificationModal.tsx` | Modal bloqueante para vets: mostra solicitações recebidas (não as que o vet iniciou). Tracking via localStorage |
+| `ProtectedRoute.tsx` | Guarda de rota por `userType` |
+| `SeletorAnimal.tsx` | Dropdown de seleção de animal (alimenta SelectedAnimalContext) |
+| `PageContainer.tsx` | Wrapper com padding e maxWidth padronizados |
+
+### Frontend — Hooks e Contextos
+
+| Arquivo | Propósito |
+|---|---|
+| `AuthContext.tsx` | `useAuth()` → `{ user, login, logout, loading }`. `user` tem `{ id, email, fullName, userType }` |
+| `SelectedAnimalContext.tsx` | `useSelectedAnimal()` → `{ selectedAnimal, setSelectedAnimal, refreshSelectedAnimal }` |
+| `useProprietarioNotificacoes.ts` | Polling 30s em `/animais/minhas-solicitacoes`. Dispara toast ao detectar mudança de status. Só para PROPRIETARIO |
+| `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE. Só para VETERINARIO |
+| `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
+| `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Base URL: `/api` |
+
+### Frontend — Fluxo Vínculo V→P (Vet solicita, Proprietário aprova)
+
+```
+1. VET: AnimaisVet.tsx → "Buscar Paciente" → GET /animais/buscar-por-nome?nome=X
+2. VET: modal → "Solicitar Vínculo" → POST /veterinarios/solicitar-vinculo {animalId}
+   → cria VetAnimalSolicitacao {tipo:'VINCULO', status:'PENDENTE', solicitanteId=vetId}
+   → email ao proprietário (enviarSolicitacaoVinculoProprietario)
+3. PROPRIETÁRIO: MeusAnimais.tsx → animal aparece com badge verde "Aguardando sua aprovação"
+   → botões "Autorizar" / "Recusar" → PATCH /animais/solicitacoes/:id/responder {status}
+   → AnimalController.responderSolicitacaoVet
+4. VET: recebe email de confirmação (enviarConfirmacaoVinculo)
+   OU: AprovarVinculoProprietario.tsx (link do email) → POST /animais/proprietario/aprovar
+IDENTIFICAÇÃO: sol.solicitanteId === sol.vetUserId → iniciado pelo VET
+```
+
+### Frontend — Fluxo Vínculo P→V (Proprietário solicita, Vet aprova) — NÃO MODIFICAR
+
+```
+1. PROPRIETÁRIO: Animal.tsx (editar) → seleciona vet → PUT /animais/:id
+   → criarSolicitacaoPendente → email ao vet (enviarSolicitacaoVinculo)
+2. VET: AnimaisVet.tsx → SolicitacaoCard (border-amber) → "Aceitar" / "Recusar"
+   → PATCH /veterinarios/solicitacoes/:id {status}
+   OU: link email → GET /veterinarios/solicitacoes/responder-email?token=X&acao=aceitar
+3. PROPRIETÁRIO: recebe email de confirmação + toast via useProprietarioNotificacoes
+IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIETÁRIO
+```
+
+### Armadilhas conhecidas (evita re-leitura para descobrir)
+
+```
+1. Rotas literais ANTES de /:id no Express — sempre registrar /buscar-por-nome, /minhas-solicitacoes
+   ANTES de /:id, senão Express interpreta o literal como valor do parâmetro.
+
+2. prisma.membroEquipe (correto) — não usar prisma.equipeMembro (está errado em buscarPorNome,
+   ignorar aquela instância). Modelo no schema: MembroEquipe → prisma.membroEquipe.
+
+3. VetNotificationModal recebe solicitacoesRecebidas (não solicitacoes completo) — filtra
+   as iniciadas pelo próprio vet para não mostrar modal das próprias solicitações.
+
+4. SolicitacaoCard em AnimaisVet: solicitacoesRecebidas = sol onde solicitanteId !== vetId
+   solicitacoesEnviadas = sol onde solicitanteId === vetId (aguardando proprietário)
+
+5. ANIMAL_INCLUDE filtra solicitacoes: apenas PENDENTE + (VINCULO ACEITO). DESVINCULO ACEITO
+   é excluído propositalmente (vet perdeu acesso, não deve aparecer no form de edição).
+
+6. Template literals em PowerShell: usar [System.IO.File]::ReadAllText + .Replace() em vez
+   de Edit tool quando o conteúdo tem backticks. Edit tool falha por encoding em arquivos TSX.
+
+7. Prisma + Windows: após npm install, criar junction manualmente:
+   New-Item -ItemType Junction -Path "backend\node_modules\@prisma\client\.prisma"
+                               -Target "backend\node_modules\.prisma"
+```
 
 ---
 

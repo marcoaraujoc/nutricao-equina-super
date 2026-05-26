@@ -6,25 +6,17 @@ const criarEvolucaoRules = [
   body('animalId')
     .notEmpty().withMessage('Animal é obrigatório')
     .isInt({ min: 1 }).withMessage('ID de animal inválido'),
-  body('descricao')
+  body('especialidade')
     .trim()
-    .notEmpty().withMessage('Descrição é obrigatória')
-    .isLength({ min: 1, max: 10000 }).withMessage('Descrição muito longa'),
-  body('tipoAtendimento')
+    .notEmpty().withMessage('Especialidade é obrigatória')
+    .isLength({ max: 100 }).withMessage('Especialidade muito longa'),
+  body('texto')
+    .trim()
+    .notEmpty().withMessage('Texto da evolução é obrigatório')
+    .isLength({ min: 1, max: 10000 }).withMessage('Texto muito longo'),
+  body('status')
     .optional()
-    .isLength({ max: 100 }).withMessage('Tipo de atendimento muito longo'),
-  body('peso')
-    .optional({ nullable: true })
-    .isFloat({ min: 0.1, max: 10000 }).withMessage('Peso deve ser entre 0.1 e 10000 kg'),
-  body('temperatura')
-    .optional({ nullable: true })
-    .isFloat({ min: 30, max: 45 }).withMessage('Temperatura deve ser entre 30 e 45°C'),
-  body('frequenciaCardiaca')
-    .optional({ nullable: true })
-    .isInt({ min: 1, max: 500 }).withMessage('FC deve ser entre 1 e 500 bpm'),
-  body('frequenciaRespiratoria')
-    .optional({ nullable: true })
-    .isInt({ min: 1, max: 200 }).withMessage('FR deve ser entre 1 e 200 irpm'),
+    .isIn(['EM_ANDAMENTO', 'FINALIZADA', 'CANCELADA']).withMessage('Status inválido'),
 ];
 
 const evolucaoIdParam = [

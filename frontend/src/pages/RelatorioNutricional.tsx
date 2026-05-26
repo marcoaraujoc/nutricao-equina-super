@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
+import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
@@ -36,6 +37,8 @@ interface Animal {
   photoUrl?: string;
   dataNascimento?: string;
   idadeAnos?: number | null;
+  peso?: number | null;
+  tipoExercicio?: string | null;
   raca?: { nome: string };
   user?: { fullName: string; email: string };
 }
@@ -162,30 +165,6 @@ const resolverGrupo = (nutriente: string): string =>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const formatarDataBR = (data: string | null | undefined): string => {
-  if (!data) return '-';
-  const d = new Date(data);
-  if (isNaN(d.getTime())) return '-';
-  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
-};
-
-const calcularIdade = (dataNascimento: string): string => {
-  const partes  = dataNascimento.split('T')[0].split('-');
-  const anoNasc = parseInt(partes[0]);
-  const mesNasc = parseInt(partes[1]) - 1;
-  const diaNasc = parseInt(partes[2]);
-  const hoje    = new Date();
-  const diffMs  = hoje.getTime() - new Date(anoNasc, mesNasc, diaNasc).getTime();
-  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  let diffMeses  = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
-  if (hoje.getDate() < diaNasc) diffMeses--;
-  let diffAnos = hoje.getFullYear() - anoNasc;
-  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
-  if (diffDias < 30)  return `${diffDias} ${diffDias  === 1 ? 'dia'  : 'dias'}`;
-  if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês'  : 'meses'}`;
-  return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
-};
-
 const formatarNome = (nome: string): string =>
   (nome || '').normalize('NFC').replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -258,7 +237,13 @@ const RelatorioNutricional = () => {
       const lista = (res.data?.dados ?? res.data ?? []) as Animal[];
       setAnimaisDoProprietario(lista);
       if (lista.length === 1 && !selectedAnimal) {
-        setSelectedAnimal({ ...lista[0], photoUrl: lista[0].photoUrl ?? undefined, idadeAnos: lista[0].idadeAnos ?? undefined });
+        setSelectedAnimal({
+          ...lista[0],
+          photoUrl:      lista[0].photoUrl      ?? undefined,
+          idadeAnos:     lista[0].idadeAnos     ?? undefined,
+          peso:          lista[0].peso          ?? undefined,
+          tipoExercicio: lista[0].tipoExercicio ?? undefined,
+        });
         if (!paramAnimalId) navigate(`/relatorio-nutricional/${lista[0].id}`, { replace: true });
       }
     } catch (error) {
@@ -343,7 +328,7 @@ const RelatorioNutricional = () => {
     </PageContainer>
   );
 
-  const totalColunas = 1 + colunasDinamicas.length + 5; // nutriente + alimentos + exigido + total + saldo + % + status
+  const totalColunas = 1 + colunasDinamicas.length + 5;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -351,10 +336,8 @@ const RelatorioNutricional = () => {
     <PageContainer maxWidth="7xl">
       <div className="space-y-4 text-gray-900">
 
-        {/* Voltar */}
         <BotaoVoltar className="mb-4" />
 
-        {/* Seletor de animal */}
         <SeletorAnimal
           animais={animaisDoProprietario}
           animalIdAtual={effectiveAnimalId}
@@ -362,47 +345,7 @@ const RelatorioNutricional = () => {
           className="mb-4"
         />
 
-        {/* Card do animal */}
-        {currentAnimal && (
-          <div className="bg-white rounded-xl shadow p-2 flex gap-2 mb-4">
-            <div className="w-16 self-stretch bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
-              <img
-                src={currentAnimal.photoUrl || 'https://picsum.photos/id/1015/400/400'}
-                alt={currentAnimal.nome}
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="grid grid-cols-4 gap-x-3">
-                {[
-                  { label: 'Nome',       value: currentAnimal.nome },
-                  { label: 'Nascimento', value: currentAnimal.dataNascimento ? formatarDataBR(currentAnimal.dataNascimento) : '-' },
-                  { label: 'Idade',      value: currentAnimal.dataNascimento ? calcularIdade(currentAnimal.dataNascimento) : currentAnimal.idadeAnos ? `${currentAnimal.idadeAnos} anos` : '-' },
-                  { label: 'Raça',       value: currentAnimal.raca?.nome || '-' },
-                ].map(({ label, value }) => (
-                  <div key={label}>
-                    <span className="text-[10px] text-gray-400 leading-none">{label}</span>
-                    <p className="text-xs font-semibold text-gray-900 truncate">{value}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1.5 pt-1.5 border-t border-gray-100 grid grid-cols-2 gap-x-3">
-                <div>
-                  <span className="text-[10px] text-gray-400 leading-none">Proprietário</span>
-                  <p className="text-xs font-medium text-gray-900 truncate">
-                    {currentAnimal.user?.fullName || user?.fullName}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-[10px] text-gray-400 leading-none">E-mail</span>
-                  <p className="text-xs text-gray-900 truncate">
-                    {currentAnimal.user?.email || user?.email}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
         {/* Header + botão atualizar */}
         <div className="flex items-center justify-between">
@@ -437,7 +380,6 @@ const RelatorioNutricional = () => {
 
         {/* Filtros */}
         <div className="flex gap-2 flex-wrap items-center">
-          {/* Toggle Somente NRC */}
           <button
             onClick={() => setFiltroSomenteNRC(prev => !prev)}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors border ${
@@ -451,7 +393,6 @@ const RelatorioNutricional = () => {
 
           <div className="w-px h-5 bg-gray-200" />
 
-          {/* Filtros de status */}
           {FILTROS.map(f => {
             const base = filtroSomenteNRC ? relatorio.filter(i => i.Exigido_NRC !== null) : relatorio;
             const count = f.value === 'todos'
@@ -523,7 +464,6 @@ const RelatorioNutricional = () => {
                   });
                   return (
                   <React.Fragment key={grupo}>
-                    {/* Cabeçalho do grupo */}
                     <tr
                       className="bg-gray-50 border-t-2 border-gray-200 cursor-pointer select-none hover:bg-gray-100"
                       onClick={toggleGrupo}
@@ -542,7 +482,6 @@ const RelatorioNutricional = () => {
                       </td>
                     </tr>
 
-                    {/* Linhas do grupo */}
                     {!colapsado && itens.map((item, idx) => (
                       <tr key={idx} className="border-t hover:bg-gray-50">
                         <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-gray-100 whitespace-nowrap">
@@ -592,7 +531,6 @@ const RelatorioNutricional = () => {
           </div>
         </div>
 
-        {/* Contagem */}
         {!generating && relatorio.length > 0 && (
           <p className="text-center text-xs text-gray-400">
             {relatorioFiltrado.length} de {relatorio.length} nutrientes

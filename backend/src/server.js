@@ -68,8 +68,9 @@ const veterinariosRoutes = require('./routes/veterinarios');
 const equipesRoutes      = require('./routes/equipes');
 
 
-const evolucaoRoutes = require('./routes/evolucao');
-const faturaRoutes   = require('./routes/fatura');
+const evolucaoRoutes    = require('./routes/evolucao');
+const faturaRoutes      = require('./routes/fatura');
+const prescricoesRoutes = require('./routes/prescricoes');
 
 //Monitoração de Custo IA
 const aiUsageRoutes = require('./routes/aiUsage');
@@ -93,8 +94,9 @@ app.use('/api/users', usersRoutes);
 app.use('/api/nutrientes', nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 
-app.use('/api/clinica/evolucoes', evolucaoRoutes);
-app.use('/api/clinica/faturas',   faturaRoutes);
+app.use('/api/clinica/evolucoes',   evolucaoRoutes);
+app.use('/api/clinica/faturas',    faturaRoutes);
+app.use('/api/clinica/prescricoes', prescricoesRoutes);
 
 app.use('/api/crmv', crmvRoutes);
 

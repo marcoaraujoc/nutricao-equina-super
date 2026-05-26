@@ -369,6 +369,13 @@ const VeterinarioController = {
       data:  { status: novoStatus, approvalToken: null, expiresAt: null },
     });
 
+    if (!aceito) {
+      await prisma.animal.update({
+        where: { id: solicitacao.animalId },
+        data:  { veterinarioNome: null, veterinarioClinica: null },
+      });
+    }
+
     const prop = solicitacao.animal?.user;
     if (prop?.email) {
       emailService.enviarConfirmacaoVinculo({
@@ -426,6 +433,13 @@ const VeterinarioController = {
         data:  { status, approvalToken: null, expiresAt: null },
       });
 
+      if (status === 'RECUSADO') {
+        await prisma.animal.update({
+          where: { id: solicitacao.animalId },
+          data:  { veterinarioNome: null, veterinarioClinica: null },
+        });
+      }
+
       res.json({
         sucesso:  true,
         dados:    atualizada,
@@ -433,6 +447,99 @@ const VeterinarioController = {
       });
     } catch (error) {
       console.error('[VeterinarioController.responderSolicitacao]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── POST /api/veterinarios/solicitar-vinculo ─────────────────────────────
+  // Vet solicita acesso a um animal: proprietário recebe o convite por email.
+  solicitarVinculoVet: async (req, res) => {
+    try {
+      const vetId      = Number(req.user.id);
+      const { animalId } = req.body;
+
+      if (!animalId) {
+        return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
+      }
+
+      const animal = await prisma.animal.findUnique({
+        where:  { id: Number(animalId) },
+        select: {
+          id:   true,
+          nome: true,
+          user: { select: { id: true, fullName: true, email: true } },
+          solicitacoes: {
+            where: {
+              vetUserId: vetId,
+              status:    { in: ['ACEITO', 'PENDENTE'] },
+            },
+            select: { status: true },
+          },
+        },
+      });
+
+      if (!animal) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      }
+
+      const jaVinculado = animal.solicitacoes.some(s => s.status === 'ACEITO');
+      if (jaVinculado) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Você já é responsável por este animal' });
+      }
+      const jaPendente = animal.solicitacoes.some(s => s.status === 'PENDENTE');
+      if (jaPendente) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma solicitação pendente para este animal' });
+      }
+
+      const vet = await prisma.user.findUnique({
+        where:  { id: vetId },
+        select: { fullName: true },
+      });
+
+      const token     = gerarToken();
+      const expiresAt = gerarExpiracao(7);
+
+      await prisma.vetAnimalSolicitacao.upsert({
+        where:  { animalId_vetUserId: { animalId: Number(animalId), vetUserId: vetId } },
+        create: {
+          animalId:      Number(animalId),
+          vetUserId:     vetId,
+          tipo:          'VINCULO',
+          status:        'PENDENTE',
+          approvalToken: token,
+          expiresAt,
+          solicitanteId: vetId,
+        },
+        update: {
+          tipo:          'VINCULO',
+          status:        'PENDENTE',
+          approvalToken: token,
+          expiresAt,
+          solicitanteId: vetId,
+          mensagem:      null,
+        },
+      });
+
+      if (animal.user?.email) {
+        emailService.enviarSolicitacaoVinculoProprietario({
+          proprietarioEmail: animal.user.email,
+          proprietarioNome:  animal.user.fullName || 'Proprietário',
+          animalNome:        animal.nome,
+          vetNome:           vet?.fullName || 'Veterinário',
+          token,
+        })
+          .then(() => console.log(`[emailService] Email ao proprietário enviado → ${animal.user.email}`))
+          .catch(err => console.error('[emailService] Falha ao enviar para proprietário:', err?.message ?? err));
+      } else {
+        console.warn('[emailService] Proprietário sem email — notificação não enviada');
+      }
+
+      res.status(201).json({
+        sucesso:  true,
+        mensagem: 'Solicitação enviada ao proprietário. Aguarde a aprovação.',
+      });
+    } catch (error) {
+      console.error('[VeterinarioController.solicitarVinculoVet]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },

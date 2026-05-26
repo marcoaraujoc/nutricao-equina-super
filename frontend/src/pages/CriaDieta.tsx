@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import PageContainer from '../components/PageContainer';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -366,15 +367,17 @@ const CriaDieta = () => {
   // ── Render ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-500 text-sm">Carregando dados...</p>
-      </div>
+      <PageContainer>
+        <div className="flex items-center justify-center py-20">
+          <p className="text-gray-500 text-sm">Carregando dados...</p>
+        </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-3xl mx-auto space-y-4">
+    <PageContainer maxWidth="3xl">
+      <div className="space-y-4">
 
         {/* Card do formulário */}
         <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
@@ -545,7 +548,7 @@ const CriaDieta = () => {
           </div>
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 };
 

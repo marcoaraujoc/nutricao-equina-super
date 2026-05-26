@@ -8,7 +8,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Plus, Pencil, Trash2, Check, X,
-  Search, ToggleLeft, ToggleRight, Printer, AlertTriangle,
+  Search, ToggleLeft, ToggleRight, Printer, AlertTriangle, Share2,
 } from 'lucide-react';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
 import AnimalCard from '../components/AnimalCard';
@@ -83,6 +83,29 @@ const SLOT_EMOJI: Record<string, string> = {
   'Segunda': '📅', 'Terça': '📅', 'Quarta': '📅', 'Quinta': '📅',
   'Sexta': '📅', 'Sábado': '📅', 'Domingo': '📅',
   'Dia 1': '📆', 'Dia 7': '📆', 'Dia 15': '📆', 'Dia 22': '📆', 'Último dia': '📆',
+};
+
+const SLOT_BG: Record<string, string> = {
+  'Manhã': 'bg-amber-50', 'Meio-dia': 'bg-yellow-50',
+  'Tarde': 'bg-orange-50', 'Noite': 'bg-slate-100',
+};
+
+const calcTotal = (items: DietaItem[]): string => {
+  let kg = 0, ml = 0;
+  const others: Record<string, number> = {};
+  items.forEach(i => {
+    if (i.unidade === 'kg')      kg  += i.qtdGramasDia;
+    else if (i.unidade === 'g')  kg  += i.qtdGramasDia / 1000;
+    else if (i.unidade === 'L')  ml  += i.qtdGramasDia * 1000;
+    else if (i.unidade === 'mL') ml  += i.qtdGramasDia;
+    else others[i.unidade] = (others[i.unidade] ?? 0) + i.qtdGramasDia;
+  });
+  const fmt = (v: number) => v % 1 === 0 ? String(v) : parseFloat(v.toFixed(2)).toString();
+  const parts: string[] = [];
+  if (kg > 0) parts.push(`${fmt(kg)} kg`);
+  if (ml > 0) parts.push(ml >= 1000 && ml % 1000 === 0 ? `${ml / 1000} L` : `${ml} mL`);
+  Object.entries(others).forEach(([u, v]) => parts.push(`${fmt(v)} ${u}`));
+  return parts.join(' + ') || '—';
 };
 
 // ─── Helper de tipo de periodicidade ─────────────────────────────────────────
@@ -160,18 +183,15 @@ function HorarioSlot({
 }) {
   if (items.length === 0) return null;
 
-  const totalKg = items.reduce((acc, i) => {
-    if (i.unidade === 'g')  return acc + i.qtdGramasDia / 1000;
-    if (i.unidade === 'kg') return acc + i.qtdGramasDia;
-    return acc;
-  }, 0);
-
   return (
     <div className="mb-4">
-      <div className="flex items-center justify-center gap-2 px-4 py-2 sticky top-0 bg-white z-10">
-        <span className="text-base leading-none">{SLOT_EMOJI[horario] ?? '🍽️'}</span>
-        <span className="text-sm font-semibold text-gray-700">{horario}</span>
-        <span className="text-xs text-gray-400">{items.length} {items.length === 1 ? 'item' : 'itens'} · {totalKg.toFixed(1)} kg</span>
+      <div className={`flex items-center justify-between gap-2 px-4 py-2 sticky top-0 z-10 ${SLOT_BG[horario] ?? 'bg-gray-50'}`}>
+        <div className="flex items-center gap-2">
+          <span className="text-base leading-none">{SLOT_EMOJI[horario] ?? '🍽️'}</span>
+          <span className="text-sm font-semibold text-gray-800">{horario}</span>
+          <span className="text-xs text-gray-400">• {items.length} {items.length === 1 ? 'item' : 'itens'}</span>
+        </div>
+        <span className="text-xs text-gray-500 font-medium">Total: {calcTotal(items)}</span>
       </div>
       {items.map(item => (
         <div key={item.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-gray-50 border-b border-gray-50 last:border-0">
@@ -198,7 +218,7 @@ function HorarioSlot({
             </>
           ) : (
             <>
-              <span className="flex-1 text-sm text-gray-900 min-w-0 truncate">{item.alimento?.nome}</span>
+              <span className="flex-1 text-sm text-emerald-700 font-medium min-w-0 truncate">{item.alimento?.nome}</span>
               <span className="text-xs text-gray-900 font-medium flex-shrink-0 w-16 text-right">{item.qtdGramasDia} {item.unidade}</span>
               <button onClick={() => onEditStart(item)} className="text-emerald-400 hover:text-emerald-600 flex-shrink-0 p-0.5"><Pencil size={14} /></button>
               <button onClick={() => onDelete(item)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-0.5"><Trash2 size={14} /></button>
@@ -397,7 +417,7 @@ function BottomAddBar({
   if (mobile) {
     return (
       <>
-        <div className="border-t border-gray-100 bg-white p-3 space-y-2 flex-shrink-0">
+        <div className="border-b border-gray-100 bg-white p-3 space-y-2 flex-shrink-0">
           <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
             className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 focus:outline-none focus:border-emerald-500">
             <option value="">Selecionar alimento...</option>
@@ -439,7 +459,7 @@ function BottomAddBar({
 
   return (
     <>
-      <div className="border-t border-gray-100 bg-white p-2 flex gap-2 items-center flex-shrink-0">
+      <div className="border-b border-gray-100 bg-white p-2 flex gap-2 items-center flex-shrink-0">
         <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
           className="flex-1 min-w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
           <option value="">Selecionar alimento...</option>
@@ -735,6 +755,12 @@ const Dieta = () => {
     } catch (err) { console.error(err); toast.error('Erro ao excluir alimento'); }
   };
 
+  const handleCompartilhar = () => {
+    navigator.clipboard.writeText(window.location.href)
+      .then(() => toast.success('Link da dieta copiado!'))
+      .catch(() => toast.error('Não foi possível copiar o link'));
+  };
+
   const dispararImpressao = () => {
     if (!planoSelecionado) return;
 
@@ -839,7 +865,7 @@ const Dieta = () => {
 
         <BotaoVoltar className="mb-4" />
 
-        {animal && <AnimalCard animal={animal} planoNome={planoSelecionado?.nome} />}
+        {animal && <AnimalCard animal={animal} />}
 
         <SeletorAnimal
           animais={animaisDoProprietario}
@@ -852,25 +878,37 @@ const Dieta = () => {
         <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
 
           {/* Header */}
-          <div className="relative flex items-center px-4 py-3 border-b border-gray-100 flex-shrink-0">
-            <span className="absolute inset-x-0 text-base font-semibold text-gray-900 text-center pointer-events-none">
-              {planoSelecionado?.nome ?? ''}
-            </span>
-            <div className="ml-auto flex items-center gap-2 relative z-10">
+          <div className="px-5 py-4 border-b border-gray-100 flex-shrink-0">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-base font-bold text-gray-900 truncate">{planoSelecionado?.nome ?? ''}</h2>
+                  {planoSelecionado && (
+                    <button onClick={handleTogglePlano}
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 transition-colors ${
+                        planoSelecionado.ativo
+                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}>
+                      • {planoSelecionado.ativo ? 'ATIVO' : 'INATIVO'}
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
+                </p>
+              </div>
               {planoSelecionado && (
-                <>
-                  <button onClick={handleTogglePlano}
-                    className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                      planoSelecionado.ativo ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                    }`}>
-                    {planoSelecionado.ativo ? <ToggleRight size={13} /> : <ToggleLeft size={13} />}
-                    {planoSelecionado.ativo ? 'Ativo' : 'Inativo'}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={handleCompartilhar}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg text-xs text-gray-600 transition-colors">
+                    <Share2 size={13} /> Compartilhar Dieta
                   </button>
                   <button onClick={dispararImpressao}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-xs text-gray-600 transition-colors">
-                    <Printer size={13} /> Imprimir
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 rounded-lg text-xs text-white font-semibold transition-colors">
+                    <Printer size={13} /> Imprimir Dieta
                   </button>
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -947,6 +985,7 @@ const Dieta = () => {
                 </div>
               ) : (
                 <>
+                  <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} />
                   {conflitosFrequencia.length > 0 && (
                     <div className="mx-4 mt-3 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 flex-shrink-0">
                       <AlertTriangle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
@@ -959,7 +998,6 @@ const Dieta = () => {
                   <div ref={itensRef} className="flex-1 overflow-y-auto py-2">
                     {renderItensPanel(loadingItens)}
                   </div>
-                  <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} />
                 </>
               )}
             </div>
@@ -1022,6 +1060,10 @@ const Dieta = () => {
                 </button>
               </div>
 
+              {planoSelecionado && (
+                <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} mobile />
+              )}
+
               {conflitosFrequencia.length > 0 && (
                 <div className="mx-3 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2">
                   <AlertTriangle size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
@@ -1032,10 +1074,6 @@ const Dieta = () => {
               <div className="flex-1 overflow-y-auto py-2">
                 {renderItensPanel(loadingItens)}
               </div>
-
-              {planoSelecionado && (
-                <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} mobile />
-              )}
             </div>
           )}
         </div>

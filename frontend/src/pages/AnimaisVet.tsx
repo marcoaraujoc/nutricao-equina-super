@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
@@ -41,6 +41,14 @@ interface Animal {
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
+}
+
+interface BuscaResultado {
+  id:             number;
+  nome:           string;
+  temVet:         boolean;
+  vetDaMinhaEquipe: boolean;
+  proprietario:   { id: number; fullName: string; email: string; phone?: string | null } | null;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
@@ -232,6 +240,11 @@ const AnimaisVet = () => {
   const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
+  const [showBuscarModal,  setShowBuscarModal]  = useState(false);
+  const [buscaAnimal,      setBuscaAnimal]      = useState('');
+  const [resultadoBusca,   setResultadoBusca]   = useState<BuscaResultado | null>(null);
+  const [buscando,         setBuscando]         = useState(false);
+  const [solicitando,      setSolicitando]      = useState(false);
 
   const loadAnimais = async () => {
     try {
@@ -350,11 +363,49 @@ const AnimaisVet = () => {
     loadAnimais();
   };
 
+  const handleBuscarAnimal = async () => {
+    if (!buscaAnimal.trim()) return;
+    setBuscando(true);
+    setResultadoBusca(null);
+    try {
+      const res = await api.get(`/animais/buscar-por-nome?nome=${encodeURIComponent(buscaAnimal.trim())}`);
+      setResultadoBusca(res.data?.dados ?? null);
+    } catch {
+      toast.error('Erro ao buscar animal');
+    } finally {
+      setBuscando(false);
+    }
+  };
+
+  const handleSolicitarVinculoVet = async () => {
+    if (!resultadoBusca) return;
+    setSolicitando(true);
+    try {
+      await api.post('/veterinarios/solicitar-vinculo', { animalId: resultadoBusca.id });
+      toast.success('Solicitação enviada! Aguarde a aprovação do proprietário.');
+      setShowBuscarModal(false);
+      setBuscaAnimal('');
+      setResultadoBusca(null);
+      loadAnimais();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo');
+    } finally {
+      setSolicitando(false);
+    }
+  };
+
+  const solicitacoesRecebidas = solicitacoes.filter(
+    s => !s.solicitanteId || Number(s.solicitanteId) !== Number(user?.id)
+  );
+  const solicitacoesEnviadas = solicitacoes.filter(
+    s => s.solicitanteId && Number(s.solicitanteId) === Number(user?.id)
+  );
+
   return (
     <>
       {user?.id && (
         <VetNotificationModal
-          solicitations={solicitacoes as SolicitacaoNotif[]}
+          solicitations={solicitacoesRecebidas as SolicitacaoNotif[]}
           vetId={Number(user.id)}
           onResponder={handleResponderModal}
           onDismiss={() => {}}
@@ -372,15 +423,26 @@ const AnimaisVet = () => {
             </button>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
           </div>
-          <button
-            onClick={() => navigate('/animais')}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
-                       px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
-          >
-            <Plus size={15} />
-            <span className="hidden sm:inline">Novo Paciente</span>
-            <span className="sm:hidden">Novo</span>
-          </button>
+          <div class="flex gap-2">
+            <button
+              onClick={() => setShowBuscarModal(true)}
+              className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
+                         px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+            >
+              <UserPlus size={15} />
+              <span className="hidden sm:inline">Buscar Paciente</span>
+              <span className="sm:hidden">Buscar</span>
+            </button>
+            <button
+              onClick={() => navigate('/animais')}
+              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
+                         px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+            >
+              <Plus size={15} />
+              <span className="hidden sm:inline">Novo Paciente</span>
+              <span className="sm:hidden">Novo</span>
+            </button>
+          </div>
         </div>
 
         {/* ── Busca ──────────────────────────────────────────────────────── */}
@@ -408,14 +470,40 @@ const AnimaisVet = () => {
           </div>
         </div>
 
-        {/* ── Solicitações pendentes ─────────────────────────────────────── */}
-        {!loading && solicitacoes.length > 0 && (
+        {/* ── Solicitações recebidas (proprietário convida vet) ───────── */}
+        {!loading && solicitacoesRecebidas.length > 0 && (
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-              Solicitações pendentes ({solicitacoes.length})
+              Solicitações pendentes ({solicitacoesRecebidas.length})
             </h2>
-            {solicitacoes.map(sol => (
+            {solicitacoesRecebidas.map(sol => (
               <SolicitacaoCard key={sol.id} sol={sol} onResponder={handleResponder} />
+            ))}
+          </div>
+        )}
+
+        {/* ── Solicitações enviadas (vet aguarda aprovação do proprietário) ─ */}
+        {!loading && solicitacoesEnviadas.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+              Aguardando aprovação do proprietário ({solicitacoesEnviadas.length})
+            </h2>
+            {solicitacoesEnviadas.map(sol => (
+              <div key={sol.id} className="bg-white rounded-2xl border border-blue-200 shadow-sm p-4 flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                  {sol.animal.photoUrl
+                    ? <img src={sol.animal.photoUrl} alt={sol.animal.nome} className="w-full h-full object-cover" />
+                    : <div className="w-full h-full flex items-center justify-center text-xl">🐾</div>
+                  }
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
+                  <p className="text-xs text-gray-500 truncate">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
+                </div>
+                <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-full font-medium flex-shrink-0">
+                  <Clock size={10} /> Aguardando aprovação
+                </span>
+              </div>
             ))}
           </div>
         )}
@@ -583,6 +671,88 @@ const AnimaisVet = () => {
         </div>
       )}
       </PageContainer>
+
+      {/* Modal — Buscar Paciente */}
+      {showBuscarModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">Buscar Paciente</h2>
+              <button onClick={() => { setShowBuscarModal(false); setBuscaAnimal(''); setResultadoBusca(null); }}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-500 mb-4">
+              Digite o nome do animal para solicitar acesso. O proprietário receberá um convite por e-mail.
+            </p>
+
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                placeholder="Nome do animal..."
+                value={buscaAnimal}
+                onChange={e => { setBuscaAnimal(e.target.value); setResultadoBusca(null); }}
+                onKeyDown={e => e.key === 'Enter' && handleBuscarAnimal()}
+                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-2xl text-sm
+                           text-gray-900 focus:outline-none focus:border-emerald-600
+                           focus:ring-2 focus:ring-emerald-100 transition-colors"
+                autoFocus
+              />
+              <button
+                onClick={handleBuscarAnimal}
+                disabled={buscando || !buscaAnimal.trim()}
+                className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                           text-white rounded-2xl text-sm font-semibold transition-colors flex-shrink-0"
+              >
+                {buscando ? '...' : <Search size={15} />}
+              </button>
+            </div>
+
+            {resultadoBusca === null && !buscando && buscaAnimal.trim() && (
+              <p className="text-sm text-gray-400 text-center py-4">Nenhum animal encontrado</p>
+            )}
+
+            {resultadoBusca && (
+              <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50 space-y-3">
+                <div>
+                  <p className="font-semibold text-gray-900">{resultadoBusca.nome}</p>
+                  <p className="text-xs text-gray-500">
+                    Proprietário: {resultadoBusca.proprietario?.fullName ?? '—'}
+                  </p>
+                  {resultadoBusca.proprietario?.email && (
+                    <p className="text-xs text-gray-400">{resultadoBusca.proprietario.email}</p>
+                  )}
+                </div>
+
+                {resultadoBusca.temVet && !resultadoBusca.vetDaMinhaEquipe && (
+                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    <Clock size={12} />
+                    Este animal já possui um veterinário responsável de outra equipe.
+                  </div>
+                )}
+
+                {resultadoBusca.vetDaMinhaEquipe && (
+                  <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                    <CheckCircle2 size={12} />
+                    Animal atendido por colega de equipe.
+                  </div>
+                )}
+
+                <button
+                  onClick={handleSolicitarVinculoVet}
+                  disabled={solicitando}
+                  className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                             text-white rounded-2xl text-sm font-semibold transition-colors"
+                >
+                  {solicitando ? 'Enviando...' : 'Solicitar Vínculo'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 };

@@ -101,6 +101,8 @@ const faturaRoutes             = require('./routes/fatura');
 const aiUsageRoutes            = require('./routes/aiUsage');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const relatorioRoutes          = require('./routes/relatorio.routes');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const prescricoesRoutes        = require('./routes/prescricoes');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -117,6 +119,7 @@ app.use('/api/nutrientes',            nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 app.use('/api/clinica/evolucoes',     evolucaoRoutes);
 app.use('/api/clinica/faturas',       faturaRoutes);
+app.use('/api/clinica/prescricoes',   prescricoesRoutes);
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);
 app.use('/api/veterinarios',          veterinariosRoutes);

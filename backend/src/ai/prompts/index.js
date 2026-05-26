@@ -170,22 +170,29 @@ IMPORTANTE:
 ${texto.slice(0, 22000)}`,
   },
 
-  // ── Evolução clínica: interpretação e extração de itens faturáveis ──────────
+  // ── Evolução clínica: interpretação, título e extração de itens faturáveis ──
+  // v1: retornava apenas "acoes"
+  // v2: adicionado campo "titulo" — título conciso gerado pela LLM
   'interpretacao_clinica': {
-    version: 'v1',
-    build: (texto) => `Você é um assistente clínico veterinário especializado.
+    version: 'v2',
+    build: (texto) => `Você é um assistente clínico veterinário especializado em equinos.
 
-Analise o texto da evolução clínica abaixo e identifique APENAS itens que possam gerar cobrança ou registro clínico:
-- Medicamentos prescritos  → tipo: "MEDICAMENTO"
-- Procedimentos realizados → tipo: "PROCEDIMENTO"
-- Exames solicitados       → tipo: "EXAME"
-- Encaminhamentos          → tipo: "ENCAMINHAMENTO"
-- Vacinas aplicadas        → tipo: "VACINA"
+Analise o texto da evolução clínica abaixo e retorne um JSON com DOIS campos:
+
+1. "titulo": título descritivo e conciso (máximo 60 caracteres) que resume o principal achado ou intervenção. Exemplos: "Avaliação clínica - cólica estomacal", "Vacinação anual - influenza equina", "Exame ortopédico - claudicação MAE".
+
+2. "acoes": lista de itens que possam gerar cobrança ou registro clínico:
+   - Medicamentos prescritos  → tipo: "MEDICAMENTO"
+   - Procedimentos realizados → tipo: "PROCEDIMENTO"
+   - Exames solicitados       → tipo: "EXAME"
+   - Encaminhamentos          → tipo: "ENCAMINHAMENTO"
+   - Vacinas aplicadas        → tipo: "VACINA"
 
 Estime valores em reais baseados na tabela veterinária brasileira vigente.
 
 Retorne APENAS um JSON válido, sem markdown, sem texto adicional:
 {
+  "titulo": "Título conciso da evolução clínica",
   "acoes": [
     {
       "tipo": "MEDICAMENTO",
@@ -196,7 +203,7 @@ Retorne APENAS um JSON válido, sem markdown, sem texto adicional:
   ]
 }
 
-Se não identificar nenhum item faturável, retorne: { "acoes": [] }
+Se não identificar nenhum item faturável, retorne: { "titulo": "...", "acoes": [] }
 
 Texto da evolução:
 ${texto.slice(0, 8000)}`,

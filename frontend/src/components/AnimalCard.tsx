@@ -16,6 +16,8 @@ interface AnimalCardAnimal {
   photoUrl?:        string | null;
   dataNascimento?:  string | Date | null;
   idadeAnos?:       number | null;
+  peso?:            number | null;
+  tipoExercicio?:   string | null;
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
@@ -25,18 +27,10 @@ interface AnimalCardAnimal {
 }
 
 interface AnimalCardProps {
-  animal:     AnimalCardAnimal;
-  planoNome?: string | null;
+  animal: AnimalCardAnimal;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatarDataBR(data: string | Date | null | undefined): string {
-  if (!data) return '-';
-  const d = new Date(data instanceof Date ? data.toISOString() : data);
-  if (isNaN(d.getTime())) return '-';
-  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
-}
 
 function calcularIdade(dataNascimento: string): string {
   const partes   = dataNascimento.split('T')[0].split('-');
@@ -63,7 +57,7 @@ function calcularIdade(dataNascimento: string): string {
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
-export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
+export default function AnimalCard({ animal }: AnimalCardProps) {
   const { user } = useAuth();
 
   // Resolve vet responsável — prioridade: ACEITO > fallback texto livre
@@ -74,8 +68,7 @@ export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
   const vetPendente         = solicitacaoPendente?.veterinario?.fullName ?? null;
 
   // Proprietário: prioriza dados do animal (join), fallback para usuário logado
-  const proprietarioNome  = animal.user?.fullName ?? user?.fullName ?? '-';
-  const proprietarioEmail = animal.user?.email    ?? user?.email    ?? '-';
+  const proprietarioNome = animal.user?.fullName ?? user?.fullName ?? '-';
 
   const idade = animal.dataNascimento
     ? calcularIdade(String(animal.dataNascimento))
@@ -97,24 +90,11 @@ export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
 
       {/* Info */}
       <div className="flex flex-col flex-1 min-w-0">
-        {planoNome && (
-          <span className="text-base font-bold text-emerald-700 mb-2">
-            Dieta {planoNome}
-          </span>
-        )}
-
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-2">
 
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
             <span className="text-base font-semibold text-gray-900 truncate block">{animal.nome}</span>
-          </div>
-
-          <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Nascimento</span>
-            <span className="text-base font-semibold text-gray-900 block">
-              {animal.dataNascimento ? formatarDataBR(animal.dataNascimento) : '-'}
-            </span>
           </div>
 
           <div>
@@ -129,14 +109,23 @@ export default function AnimalCard({ animal, planoNome }: AnimalCardProps) {
             </span>
           </div>
 
+          {animal.peso != null && (
+            <div>
+              <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Peso</span>
+              <span className="text-base font-semibold text-gray-900 block">{animal.peso} kg</span>
+            </div>
+          )}
+
+          {animal.tipoExercicio && (
+            <div>
+              <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Tipo de Trabalho</span>
+              <span className="text-base font-semibold text-gray-900 truncate block">{animal.tipoExercicio}</span>
+            </div>
+          )}
+
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Proprietário</span>
             <span className="text-base font-semibold text-gray-900 truncate block">{proprietarioNome}</span>
-          </div>
-
-          <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">E-mail</span>
-            <span className="text-base font-semibold text-gray-900 truncate block">{proprietarioEmail}</span>
           </div>
 
           {/* Veterinário Responsável — exibe badge PENDENTE quando não há ACEITO */}

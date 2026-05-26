@@ -341,6 +341,7 @@ model EvolucaoClinica {
   especialidade         String
   status                String    @default("EM_ANDAMENTO")
   texto                 String    @db.Text
+  titulo                String?   @db.VarChar(255)
   dataInicio            DateTime  @default(now())
   dataFim               DateTime?
   dataModificacao       DateTime?
@@ -348,28 +349,53 @@ model EvolucaoClinica {
   justificativaExclusao String?   @db.Text
   aprovado              Boolean   @default(true)
 
-  animal        Animal @relation("AnimalEvolucoes",      fields: [animalId],        references: [id])
-  veterinario   User   @relation("EvolucaoVeterinario",  fields: [veterinarioId],   references: [id])
-  modificadoPor User?  @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id])
+  animal        Animal          @relation("AnimalEvolucoes",       fields: [animalId],        references: [id])
+  veterinario   User            @relation("EvolucaoVeterinario",   fields: [veterinarioId],   references: [id])
+  modificadoPor User?           @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id])
+  midias        EvolucaoMidia[]
 
   @@map("tb_evolucoes_clinicas")
   @@schema("schs2vet")
 }
 
+model EvolucaoMidia {
+  id         Int             @id @default(autoincrement())
+  evolucaoId Int
+  tipo       String          @db.VarChar(10)
+  url        String          @db.VarChar(500)
+  nome       String          @db.VarChar(255)
+  tamanho    Int?
+  criadoEm  DateTime         @default(now())
+
+  evolucao   EvolucaoClinica @relation(fields: [evolucaoId], references: [id])
+
+  @@map("tb_evolucao_midias")
+  @@schema("schs2vet")
+}
+
 model Prescricao {
-  id            Int       @id @default(autoincrement())
-  animalId      Int
-  veterinarioId Int
-  medicamento   String
-  dose          String
-  frequencia    String
-  duracao       String
-  via           String    @default("oral")
-  observacao    String?   @db.Text
-  dataInicio    DateTime  @default(now())
-  dataFim       DateTime?
-  ativo         Boolean   @default(true)
-  aprovado      Boolean   @default(true)
+  id                  Int       @id @default(autoincrement())
+  animalId            Int
+  veterinarioId       Int
+  tipo                String    @default("MEDICAMENTO")
+  medicamento         String
+  dose                String    @default("")
+  dosagem             String?
+  unidade             String?
+  frequencia          String    @default("")
+  duracao             String    @default("")
+  duracaoDias         Int       @default(1)
+  diasAplicacaoInicio Int       @default(1)
+  diasAplicacaoFim    Int?
+  horaInicio          String?
+  via                 String    @default("Oral")
+  observacao          String?
+  status              String    @default("RASCUNHO")
+  horariosGerados     Json?
+  dataInicio          DateTime  @default(now())
+  dataFim             DateTime?
+  ativo               Boolean   @default(true)
+  aprovado            Boolean   @default(true)
 
   animal      Animal @relation("AnimalPrescricoes",     fields: [animalId],      references: [id])
   veterinario User   @relation("PrescricaoVeterinario", fields: [veterinarioId], references: [id])

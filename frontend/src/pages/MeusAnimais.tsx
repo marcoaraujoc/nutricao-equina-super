@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Pencil, Trash2, Plus, Clock, MapPin, Search, XCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, Plus, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 
 interface Solicitacao {
@@ -12,6 +13,7 @@ interface Solicitacao {
   tipo:             string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
   status:           string;
   vetUserId?:       number;
+  solicitanteId?:   number | null;
   novoVetUserId?:   number | null;
   veterinario?:     { fullName: string };
   novoVeterinario?: { fullName: string } | null;
@@ -112,6 +114,7 @@ const MeusAnimais = () => {
   const [animalToDelete,         setAnimalToDelete]         = useState<Animal | null>(null);
   const [cancelSolicitacaoAnimal, setCancelSolicitacaoAnimal] = useState<Animal | null>(null);
   const [cancelando,             setCancelando]             = useState(false);
+  const [respondendo,            setRespondendo]            = useState(false);
 
   const loadAnimais = async () => {
     try {
@@ -172,6 +175,22 @@ const MeusAnimais = () => {
     }
   };
 
+  const handleResponderVet = async (solId: number, status: 'ACEITO' | 'RECUSADO') => {
+    setRespondendo(true);
+    try {
+      const res = await api.patch(`/animais/solicitacoes/${solId}/responder`, { status });
+      toast.success(res.data?.mensagem ?? (status === 'ACEITO' ? 'Vínculo autorizado!' : 'Vínculo recusado.'));
+      loadAnimais();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.mensagem ?? 'Erro ao responder solicitação');
+    } finally {
+      setRespondendo(false);
+    }
+  };
+
+  const isVetIniciado = (sol: Solicitacao) =>
+    !!sol.solicitanteId && !!sol.vetUserId && sol.solicitanteId === sol.vetUserId;
+
   return (
     <PageContainer>
       <div className="space-y-5">
@@ -221,10 +240,19 @@ const MeusAnimais = () => {
             {filteredAnimais.map(animal => {
               const pendente     = isPendente(animal);
               const solPendente  = getSolicitacaoPendente(animal);
-              const bannerInfo   = solPendente ? getBannerInfo(solPendente.tipo) : null;
-              const badgeInfo    = solPendente ? getBadgeInfo(solPendente.tipo) : null;
+              const vetInit     = solPendente ? isVetIniciado(solPendente) : false;
+              const bannerInfo   = solPendente
+                ? (vetInit && solPendente.tipo === 'VINCULO'
+                  ? { text: 'Veterinário solicitou acesso — aguardando sua aprovação', bg: 'bg-green-50', borderColor: 'border-green-100', textColor: 'text-green-700', iconColor: 'text-green-500' }
+                  : getBannerInfo(solPendente.tipo))
+                : null;
+              const badgeInfo    = solPendente
+                ? (vetInit && solPendente.tipo === 'VINCULO'
+                  ? { text: 'Aguardando sua aprovação', className: 'bg-green-100 text-green-700' }
+                  : getBadgeInfo(solPendente.tipo))
+                : null;
               const cardBorder   = pendente && solPendente
-                ? getCardBorderClass(solPendente.tipo)
+                ? (vetInit && solPendente.tipo === 'VINCULO' ? 'border-green-200 opacity-80' : getCardBorderClass(solPendente.tipo))
                 : 'border-gray-100 hover:shadow-md cursor-pointer';
               return (
                 <div
@@ -311,7 +339,28 @@ const MeusAnimais = () => {
                         <span className="hidden sm:inline">Editar</span>
                       </button>
 
-                      {pendente && (
+                      {pendente && solPendente && isVetIniciado(solPendente) ? (
+                        <>
+                          <button
+                            onClick={() => handleResponderVet(solPendente.id, 'ACEITO')}
+                            disabled={respondendo}
+                            className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                                       text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                          >
+                            <CheckCircle2 size={13} />
+                            <span className="hidden sm:inline">Autorizar</span>
+                          </button>
+                          <button
+                            onClick={() => handleResponderVet(solPendente.id, 'RECUSADO')}
+                            disabled={respondendo}
+                            className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 disabled:bg-gray-300
+                                       text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                          >
+                            <XCircle size={13} />
+                            <span className="hidden sm:inline">Recusar</span>
+                          </button>
+                        </>
+                      ) : pendente ? (
                         <button
                           onClick={() => setCancelSolicitacaoAnimal(animal)}
                           className="flex items-center gap-1.5 bg-gray-500 hover:bg-gray-600
@@ -320,7 +369,7 @@ const MeusAnimais = () => {
                           <XCircle size={13} />
                           <span className="hidden sm:inline">Cancelar</span>
                         </button>
-                      )}
+                      ) : null}
 
                       {!pendente && (
                         <button
