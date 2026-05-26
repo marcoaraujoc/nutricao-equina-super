@@ -7,6 +7,7 @@ const { authenticate }     = require('../middlewares/auth');
 
 // Rotas estáticas antes das parametrizadas
 router.post('/finalizar/:animalId', authenticate, PrescricaoController.finalizarTodas);
+router.post('/finalizar-uma/:id',   authenticate, PrescricaoController.finalizarUma);
 router.get('/animal/:animalId',     authenticate, PrescricaoController.listarPorAnimal);
 
 // CRUD

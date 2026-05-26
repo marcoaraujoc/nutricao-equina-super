@@ -188,6 +188,53 @@ const PrescricaoController = {
     }
   },
 
+  // POST /clinica/prescricoes/finalizar-uma/:id
+  finalizarUma: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const vet = req.user;
+
+      const prescricao = await prisma.prescricao.findFirst({
+        where: { id: Number(id), ativo: true },
+      });
+
+      if (!prescricao) return res.status(404).json({ error: 'Prescrição não encontrada' });
+      if (prescricao.status !== 'RASCUNHO') {
+        return res.status(400).json({ error: 'Apenas rascunhos podem ser finalizados' });
+      }
+
+      await prisma.prescricao.update({ where: { id: Number(id) }, data: { status: 'ATIVA' } });
+
+      let fatura = await prisma.fatura.findFirst({
+        where: { animalId: prescricao.animalId, status: 'ABERTA' },
+        orderBy: { criadoEm: 'desc' },
+      });
+      if (!fatura) {
+        fatura = await prisma.fatura.create({
+          data: { animalId: prescricao.animalId, total: 0, status: 'ABERTA' },
+        });
+      }
+
+      const descricao = prescricao.tipo === 'MEDICAMENTO'
+        ? [prescricao.medicamento, prescricao.dosagem ? `${prescricao.dosagem}${prescricao.unidade || ''}` : null, prescricao.via ? `(${prescricao.via})` : null]
+            .filter(Boolean).join(' ')
+        : `Procedimento: ${prescricao.medicamento}`;
+
+      await prisma.faturaItem.create({
+        data: { faturaId: fatura.id, tipo: prescricao.tipo, descricao, valor: 0, quantidade: 1, veterinarioId: vet.id },
+      });
+
+      const itens = await prisma.faturaItem.findMany({ where: { faturaId: fatura.id } });
+      const total = itens.reduce((sum, i) => sum + i.valor * i.quantidade, 0);
+      await prisma.fatura.update({ where: { id: fatura.id }, data: { total } });
+
+      res.json({ dados: { finalizado: 1 } });
+    } catch (err) {
+      console.error('Erro ao finalizar prescrição:', err);
+      res.status(500).json({ error: 'Erro ao finalizar prescrição' });
+    }
+  },
+
   // POST /clinica/prescricoes/finalizar/:animalId
   finalizarTodas: async (req, res) => {
     try {

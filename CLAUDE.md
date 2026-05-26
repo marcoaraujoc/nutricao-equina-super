@@ -1,6 +1,6 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-05-26
+# Atualizado em: 2026-05-27
 
 ---
 
@@ -193,8 +193,11 @@ Dieta             → itens de dieta atribuídos a animal
 PlanoDieta        → agrupamento de itens de dieta
 ExameNutricional  → resultados de exames nutricionais
 ExameClinico      → exames clínicos solicitados/resultados
-EvolucaoClinica   → prontuário/evolução clínica
-Prescricao        → prescrições médicas
+EvolucaoClinica   → prontuário/evolução clínica (campos: titulo VARCHAR255, ativo, status)
+EvolucaoMidia     → mídias (imagem/vídeo/áudio) anexadas a evoluções (tipo, url, nome, tamanho)
+Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, status: RASCUNHO|ATIVA,
+                    dosagem, unidade, via, frequencia, duracaoDias, horaInicio,
+                    horariosGerados: JSONB, diasAplicacaoInicio, diasAplicacaoFim)
 VacinaClinica     → registro de vacinas
 EncaminhamentoClinico → encaminhamentos entre especialistas
 Fatura / FaturaItem → financeiro básico
@@ -209,6 +212,12 @@ Empresa           → clínicas/empresas cadastradas
 Equipe            → equipes dentro de uma empresa
 MembroEquipe      → membros de cada equipe
 ConviteEquipe     → convites para entrar em equipes
+ModuloSistema     → catálogo de módulos/submodulos/ações do sistema (slug único, label, ordemExib)
+PermissaoMembro   → permissão por membro+módulo dentro de uma equipe (nivel: LEITURA|ESCRITA|ADMIN)
+                    unique(equipeId, userId, moduloSlug)
+AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
+PermissaoProprietario → funcionalidades habilitadas por proprietário dentro de uma equipe
+                    unique(equipeId, userId, funcionalidade)
 ```
 
 ### Regras de modelagem
@@ -367,7 +376,7 @@ res.status(404).json({ error: 'Recurso não encontrado' })
 
 ### Operações de IA existentes
 - Geração/sugestão de dietas nutricionais
-- (expandir conforme implementado)
+- `interpretarEvolucao(texto)` em `clinicaLLMService.js` → extrai ações clínicas estruturadas + sugere título a partir de texto livre do prontuário (rota: `POST /api/clinica/evolucoes/interpretar`, degradação graciosa em caso de falha)
 
 ---
 
@@ -511,6 +520,17 @@ New-Item -ItemType Junction `
 - [x] SolicitacaoCard com TROCA_VET em VetDashboard.tsx e AnimaisVet.tsx (border orange, "Aceitar troca" / "Manter vínculo")
 - [x] useProprietarioNotificacoes: toast TROCA_VET (ACEITO = aprovação step1, RECUSADO = troca recusada)
 - [x] useVetSolicitacaoMonitor: toast para novas solicitações detectadas durante polling
+- [x] EvolucaoClinica.titulo — campo opcional para nomear a evolução (migration `20260524`)
+- [x] EvolucaoMidia — tabela para anexar imagens/vídeos/áudio à evolução (migration `20260524`)
+- [x] EvolucaoController expandido: `transcrever` (Whisper), `adicionarMidia`, `removerMidia`, `salvarTitulo`, rota `interpretar` com LLM
+- [x] Prescrição expandida — campos `tipo`, `status`, `dosagem`, `unidade`, `duracaoDias`, `horaInicio`, `horariosGerados` (JSONB), `diasAplicacaoInicio/Fim` (migration `20260526`)
+- [x] PrescricaoController.js — CRUD + `finalizarTodas` (RASCUNHO→ATIVA + cria FaturaItems)
+- [x] Rotas `/api/clinica/prescricoes` montadas em server.ts
+- [x] Atendimento.tsx refatorado como shell — delega a SubModuloEvolucao, SubModuloPrescricao, SubModuloVacina, SubModuloExames, SubModuloEncaminhamento
+- [x] SubModulo* com speech recognition online (Web Speech API) + Whisper offline (whisperService)
+- [x] EvolucaoPrint.ts — utilitário de impressão de evoluções clínicas
+- [x] ModuloSistema + PermissaoMembro + AuditoriaPermissao + PermissaoProprietario (migration `20260524`)
+- [x] PermissaoController.js + seeds/002_permissoes_padrao.seed.js
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -536,7 +556,9 @@ New-Item -ItemType Junction `
 | `DietaController.js` | CRUD dietas e itens de dieta por animal |
 | `RelatorioNutricionalController.js` | Geração e persistência de relatórios nutricionais |
 | `ExameController.js` | Exames nutricionais e clínicos |
-| `EvolucaoController.js` | Prontuário clínico (EvolucaoClinica) |
+| `EvolucaoController.js` | Prontuário clínico — INCLUDE_PADRAO (veterinario, modificadoPor, midias), `listarPorAnimal`, `obterPorId`, `criar`, `atualizar`, `excluir`, `aprovar`, `salvarTitulo`, `transcrever` (Whisper), `adicionarMidia`, `removerMidia`, `listarResponsaveis` |
+| `PrescricaoController.js` | Prescrições médicas — `listarPorAnimal` (page/limit/tipo/status/busca), `criar` (gera `horariosGerados` via `gerarHorarios()`), `atualizar`, `excluir` (soft), `finalizarTodas` (RASCUNHO→ATIVA + cria FaturaItems em fatura ABERTA) |
+| `PermissaoController.js` | CRUD de permissões por membro/módulo e por proprietário dentro de uma equipe |
 | `EquipeController.js` | Equipes, membros, convites |
 | `AlimentoController.js` | Banco de alimentos |
 | `ComposicaoAlimentarController.js` | Composição nutricional por alimento/espécie |
@@ -607,17 +629,38 @@ POST   /solicitacoes                    → VeterinarioController.solicitarVincu
 PATCH  /solicitacoes/:id                → VeterinarioController.responderSolicitacao (vet responde)
 POST   /solicitar-vinculo               → VeterinarioController.solicitarVinculoVet (V→P)
 
+# clinica/evolucoes — prefixo /api/clinica/evolucoes
+POST   /interpretar                     → LLM extrai ações clínicas + título (body: {texto})
+POST   /transcrever                     → Whisper: transcreve áudio (multipart: audio)
+GET    /responsaveis/:animalId          → lista vets que atenderam o animal
+GET    /animal/:animalId                → lista evoluções (page/limit/status/dataInicio/dataFim/responsavelId/busca)
+GET    /:id                             → obter por ID
+POST   /                                → criar evolução
+PUT    /:id                             → atualizar
+DELETE /:id                             → soft delete
+PATCH  /:id/aprovar                     → aprovar evolução
+PATCH  /:id/titulo                      → salvar título
+POST   /:id/midias                      → upload de mídia (multipart: midia, máx 100MB, image|video|audio)
+DELETE /:id/midias/:midiaId             → remover mídia
+
+# clinica/prescricoes — prefixo /api/clinica/prescricoes
+POST   /finalizar/:animalId             → finaliza rascunhos → ATIVA + cria FaturaItems
+GET    /animal/:animalId                → lista prescrições (page/limit/tipo/status/busca)
+POST   /                                → criar prescrição (status RASCUNHO, gera horariosGerados se horaInicio)
+PUT    /:id                             → atualizar
+DELETE /:id                             → soft delete
+
 # Outros prefixos relevantes
 /api/auth          → AuthController (login, refresh, logout)
 /api/users         → UserController (/me, CRUD)
 /api/dietas        → DietaController
-/api/animais/:id/evolucoes → EvolucaoController
-/api/animais/:id/exames    → ExameController
+/api/exames        → ExameController
 /api/equipes       → EquipeController
-/api/relatorios    → RelatorioNutricionalController
+/api/relatorio     → RelatorioNutricionalController
 /api/alimentos     → AlimentoController
 /api/nutrientes    → NutrientesController
-/api/composicoes   → ComposicaoAlimentarController
+/api/composicoes-alimentares → ComposicaoAlimentarController
+/api/clinica/faturas → FaturaController
 ```
 
 ### Backend — Middlewares
@@ -650,7 +693,12 @@ POST   /solicitar-vinculo               → VeterinarioController.solicitarVincu
 | `CriaDieta.tsx` | `/cria-dieta` — formulário de criação/edição de dieta |
 | `RelatorioNutricional.tsx` | `/relatorio` — relatório nutricional do animal selecionado |
 | `Exames.tsx` | `/exames` — exames do animal selecionado |
-| `Atendimento.tsx` | `/atendimento` — prontuário clínico (evolução clínica) |
+| `Atendimento.tsx` | `/atendimento` — shell clínico com abas: evolucao, prescricao, vacina, exames, encaminhamento. Delega a SubModulo* |
+| `SubModuloEvolucao.tsx` | Prontuário clínico — speech recognition (Web Speech API) + Whisper offline, anexo de mídias, impressão via `EvolucaoPrint` |
+| `SubModuloPrescricao.tsx` | Prescrições — speech recognition + Whisper offline, fluxo RASCUNHO→ATIVA via `finalizarTodas` |
+| `SubModuloVacina.tsx` | Registro de vacinas do animal |
+| `SubModuloExames.tsx` | Exames clínicos do animal |
+| `SubModuloEncaminhamento.tsx` | Encaminhamentos entre especialistas |
 | `AprovarVinculo.tsx` | `/aprovar-vinculo` — vet aprova vínculo via link de email (público) |
 | `AprovarVinculoProprietario.tsx` | `/proprietario/aprovar-vinculo` — proprietário aprova via email (público) |
 | `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
@@ -685,6 +733,8 @@ POST   /solicitar-vinculo               → VeterinarioController.solicitarVincu
 | `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE. Só para VETERINARIO |
 | `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
 | `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Base URL: `/api` |
+| `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
+| `utils/EvolucaoPrint.ts` | `imprimirEvolucao(evolucao)` — abre janela de impressão formatada para evolução clínica |
 
 ### Frontend — Fluxo Vínculo V→P (Vet solicita, Proprietário aprova)
 
@@ -737,6 +787,15 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 7. Prisma + Windows: após npm install, criar junction manualmente:
    New-Item -ItemType Junction -Path "backend\node_modules\@prisma\client\.prisma"
                                -Target "backend\node_modules\.prisma"
+
+8. Evoluções clínicas — prefixo de rota é /api/clinica/evolucoes (NÃO /api/animais/:id/evolucoes).
+   O filtro por animal é via query param/rota /animal/:animalId dentro do mesmo prefixo.
+
+9. Prescricao.finalizarTodas — transita status RASCUNHO→ATIVA e cria FaturaItems na fatura ABERTA
+   do animal (criando a fatura se não existir). Retorna { dados: { finalizado: N } }.
+
+10. SubModulo* em Atendimento.tsx — cada sub-aba é um componente autônomo que gerencia
+    seu próprio estado/fetch. Atendimento.tsx só cuida da navegação entre abas e do header do animal.
 ```
 
 ---
