@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Plus, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X } from 'lucide-react';
+import { Pencil, Plus, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
@@ -74,12 +74,11 @@ const idadeDisplay = (animal: Animal): string => {
 };
 
 // ─── Card mobile ──────────────────────────────────────────────────────────────
-function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, onExcluir }: {
+function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
   animal:        Animal;
   onDashboard:   () => void;
   onEditar:      () => void;
   onDesvincular: () => void;
-  onExcluir:     () => void;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
@@ -130,11 +129,6 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, onExcl
           className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
           title="Desvincular">
           <Unlink size={15} />
-        </button>
-        <button onClick={onExcluir}
-          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-          title="Excluir">
-          <Trash2 size={15} />
         </button>
       </div>
     </div>
@@ -237,7 +231,6 @@ const AnimaisVet = () => {
   const [busca,          setBusca]          = useState('');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
-  const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
   const [showBuscarModal,  setShowBuscarModal]  = useState(false);
@@ -301,32 +294,27 @@ const AnimaisVet = () => {
     navigate(`/animais/${animal.id}`);
   };
 
-  const confirmDelete = async () => {
-    if (!animalToDelete) return;
-    try {
-      await api.delete(`/animais/${animalToDelete.id}`);
-      setAnimalToDelete(null);
-      await refreshSelectedAnimal();
-      loadAnimais();
-      toast.success('Paciente excluído');
-    } catch {
-      toast.error('Erro ao excluir paciente');
-    }
-  };
-
   const handleResponder = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
     const sol = solicitacoes.find(s => s.id === id);
     try {
       await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
       setSolicitacoes(prev => prev.filter(s => s.id !== id));
-      if (sol?.tipo === 'DESVINCULO') {
-        toast.success(status === 'ACEITO'
-          ? `Remoção de ${sol.animal.nome} aceita.`
-          : `Acesso a ${sol.animal.nome} mantido.`);
+      if (status === 'ACEITO') {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
+        } else {
+          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
+        }
       } else {
-        toast.success(status === 'ACEITO'
-          ? `${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`
-          : 'Solicitação recusada.');
+        if (sol?.tipo === 'DESVINCULO') {
+          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
+        } else {
+          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
+        }
       }
       loadAnimais();
     } catch {
@@ -342,7 +330,7 @@ const AnimaisVet = () => {
       setAnimalToUnlink(null);
       await refreshSelectedAnimal();
       loadAnimais();
-      toast.success(`${animalToUnlink.nome} removido da sua lista`);
+      toast.success(`Solicitação de desvinculação enviada ao proprietário de ${animalToUnlink.nome}`);
     } catch {
       toast.error('Erro ao desvincular');
     } finally {
@@ -351,16 +339,30 @@ const AnimaisVet = () => {
   };
 
   const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
-    await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
     const sol = solicitacoes.find(s => s.id === id);
-    if (sol?.tipo === 'DESVINCULO') {
-      toast.success(status === 'ACEITO' ? `Remoção de ${sol.animal.nome} aceita.` : `Acesso a ${sol.animal.nome} mantido.`);
-    } else if (sol?.tipo === 'TROCA_VET') {
-      toast.success(status === 'ACEITO' ? 'Troca aceita.' : 'Vínculo mantido.');
-    } else {
-      toast.success(status === 'ACEITO' ? `${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.` : 'Solicitação recusada.');
+    try {
+      await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
+      if (status === 'ACEITO') {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
+        } else {
+          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
+        }
+      } else {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
+        } else {
+          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
+        }
+      }
+      loadAnimais();
+    } catch {
+      toast.error('Erro ao responder solicitação');
     }
-    loadAnimais();
   };
 
   const handleBuscarAnimal = async () => {
@@ -423,7 +425,7 @@ const AnimaisVet = () => {
             </button>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
           </div>
-          <div class="flex gap-2">
+          <div className="flex gap-2">
             <button
               onClick={() => setShowBuscarModal(true)}
               className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
@@ -531,7 +533,6 @@ const AnimaisVet = () => {
                   onDashboard={() => irParaAnimal(animal)}
                   onEditar={() => irParaEditar(animal)}
                   onDesvincular={() => setAnimalToUnlink(animal)}
-                  onExcluir={() => setAnimalToDelete(animal)}
                 />
               ))}
             </div>
@@ -594,11 +595,6 @@ const AnimaisVet = () => {
                         title="Desvincular">
                         <Unlink size={15} />
                       </button>
-                      <button onClick={() => setAnimalToDelete(animal)}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Excluir">
-                        <Trash2 size={15} />
-                      </button>
                     </div>
                   </div>
                 ))}
@@ -626,11 +622,12 @@ const AnimaisVet = () => {
             <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Unlink size={24} className="text-amber-600" />
             </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Desvincular paciente?</h2>
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Solicitar desvinculação?</h2>
             <p className="text-gray-500 text-sm mb-6">
-              Você não será mais o veterinário responsável por{' '}
+              Uma solicitação será enviada ao proprietário de{' '}
               <strong className="text-gray-700">{animalToUnlink.nome}</strong>.
-              O animal continua no sistema e o proprietário será notificado.
+              O proprietário terá <strong className="text-gray-700">24 horas</strong> para
+              aprovar ou recusar. Sem resposta, o desvinculo será confirmado automaticamente.
             </p>
             <div className="flex gap-3">
               <button onClick={() => setAnimalToUnlink(null)}
@@ -646,30 +643,6 @@ const AnimaisVet = () => {
         </div>
       )}
 
-      {/* Modal — Excluir */}
-      {animalToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
-            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">⚠️</div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir paciente?</h2>
-            <p className="text-gray-500 text-sm mb-6">
-              Isso removerá permanentemente{' '}
-              <strong className="text-gray-700">{animalToDelete.nome}</strong> do sistema.
-              Esta ação não pode ser desfeita.
-            </p>
-            <div className="flex gap-3">
-              <button onClick={() => setAnimalToDelete(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button onClick={confirmDelete}
-                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-2xl text-sm font-semibold">
-                Excluir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       </PageContainer>
 
       {/* Modal — Buscar Paciente */}

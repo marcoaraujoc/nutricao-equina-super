@@ -240,6 +240,14 @@ async function autoAceitarSolicitacoesPendentes() {
         where: { id: { in: simples.map(p => p.id) } },
         data:  { status: 'ACEITO', approvalToken: null, expiresAt: null },
       });
+      // Limpa vet do animal para cada DESVINCULO auto-aceito
+      const desvinculos = simples.filter(p => p.tipo === 'DESVINCULO');
+      for (const d of desvinculos) {
+        await prisma.animal.update({
+          where: { id: d.animalId },
+          data:  { veterinarioNome: null, veterinarioClinica: null },
+        });
+      }
     }
 
     // TROCA_VET → aceitar step 1 + criar VINCULO PENDENTE para novo vet
@@ -269,6 +277,7 @@ async function autoAceitarSolicitacoesPendentes() {
             status:        'PENDENTE',
             approvalToken: token,
             expiresAt:     expiry,
+            solicitanteId: troca.solicitanteId,
             mensagem:      null,
           },
         }),

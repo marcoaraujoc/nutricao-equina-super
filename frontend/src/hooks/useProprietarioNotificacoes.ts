@@ -11,6 +11,8 @@ interface SolicitacaoStatus {
   tipo:             string;
   status:           string;
   updatedAt:        string;
+  vetUserId?:       number | null;
+  solicitanteId?:   number | null;
   animal:           { nome: string };
   veterinario:      { fullName: string };
   novoVeterinario?: { fullName: string } | null;
@@ -70,9 +72,13 @@ export function useProprietarioNotificacoes(): void {
       const list = res.data.dados ?? [];
 
       if (prevStatusRef.current === null) {
-        // Primeira carga — apenas inicializa o mapa sem notificar
+        // Primeira carga — inicializa o mapa apenas com registros ainda ativos (PENDENTE/ACEITO).
+        // RECUSADO e CANCELADO são excluídos: se o vet recusou antes desta sessão começar,
+        // o próximo poll detecta como `anterior === undefined` e usa o check de updatedAt.
         const mapa = new Map<number, string>();
-        list.forEach(s => mapa.set(s.id, s.status));
+        list
+          .filter(s => s.status === 'PENDENTE' || s.status === 'ACEITO')
+          .forEach(s => mapa.set(s.id, s.status));
         prevStatusRef.current = mapa;
         return;
       }
@@ -84,13 +90,39 @@ export function useProprietarioNotificacoes(): void {
           // Transição normal — vet respondeu entre dois polls
           if (s.status === 'ACEITO')        notificarAceito(s);
           else if (s.status === 'RECUSADO') notificarRecusado(s);
+        } else if (anterior === 'ACEITO' && s.status === 'PENDENTE') {
+          // Vet iniciou DESVINCULO → registro foi de VINCULO ACEITO para DESVINCULO PENDENTE
+          const vetIniciouDesvinculo = s.solicitanteId != null && s.vetUserId != null
+            && s.solicitanteId === s.vetUserId && s.tipo === 'DESVINCULO';
+          if (vetIniciouDesvinculo) {
+            toast(
+              `Dr(a). ${s.veterinario.fullName} quer se desvincular do animal ${s.animal.nome} — acesse Meus Animais para responder`,
+              { duration: 12000, icon: '🔔' },
+            );
+          }
+        } else if (anterior === 'ACEITO' && s.status === 'CANCELADO') {
+          // Vet se desvinculou do animal por conta própria
+          toast(
+            `Dr(a). ${s.veterinario.fullName} se desvinculou do animal ${s.animal.nome}`,
+            { duration: 10000, icon: '⚠️' },
+          );
+        } else if (anterior === undefined && s.status === 'PENDENTE') {
+          // Nova solicitação de vínculo iniciada pelo VET (V→P)
+          const vetIniciou = s.solicitanteId != null && s.vetUserId != null
+            && s.solicitanteId === s.vetUserId;
+          if (vetIniciou) {
+            toast(
+              `Dr(a). ${s.veterinario.fullName} quer se vincular ao animal ${s.animal.nome} — acesse Meus Animais para responder`,
+              { duration: 12000, icon: '🔔' },
+            );
+          }
         } else if (anterior === undefined && s.status !== 'PENDENTE') {
-          // Registro apareceu já resolvido — vet respondeu no mesmo intervalo de 30s
-          // em que o proprietário criou a solicitação; notifica se recente (<90s)
+          // Registro apareceu já resolvido — vet respondeu antes desta sessão começar.
+          // Notifica se a mudança foi nos últimos 10 minutos.
           const ageMs = s.updatedAt
             ? Date.now() - new Date(s.updatedAt).getTime()
             : Infinity;
-          if (ageMs < 90_000) {
+          if (ageMs < 600_000) {
             if (s.status === 'ACEITO')   notificarAceito(s);
             if (s.status === 'RECUSADO') notificarRecusado(s);
           }
@@ -107,7 +139,7 @@ export function useProprietarioNotificacoes(): void {
     if (!isProprietario) return;
 
     buscar();
-    const interval = setInterval(buscar, 30_000);
+    const interval = setInterval(buscar, 15_000);
     return () => clearInterval(interval);
   }, [isProprietario, buscar]);
 }

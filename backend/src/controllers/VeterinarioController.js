@@ -312,7 +312,8 @@ const VeterinarioController = {
             user: { select: { fullName: true, email: true } },
           },
         },
-        veterinario: { select: { id: true, fullName: true, email: true } },
+        veterinario:     { select: { id: true, fullName: true, email: true } },
+        novoVeterinario: { select: { id: true, fullName: true, email: true } },
       },
     });
 
@@ -364,16 +365,58 @@ const VeterinarioController = {
     const novoStatus = acao === 'aceitar' ? 'ACEITO' : 'RECUSADO';
     const aceito     = novoStatus === 'ACEITO';
 
+    // TROCA_VET recusado: restaura VINCULO ACEITO (vet antigo mantém acesso)
+    const isTrocaRecusada = !aceito && solicitacao.tipo === 'TROCA_VET';
+
     await prisma.vetAnimalSolicitacao.update({
       where: { id: solicitacao.id },
-      data:  { status: novoStatus, approvalToken: null, expiresAt: null },
+      data: isTrocaRecusada
+        ? { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null }
+        : { status: novoStatus, approvalToken: null, expiresAt: null },
     });
 
-    if (!aceito) {
+    if (!aceito && !isTrocaRecusada) {
       await prisma.animal.update({
         where: { id: solicitacao.animalId },
         data:  { veterinarioNome: null, veterinarioClinica: null },
       });
+    }
+
+    // TROCA_VET aceita via email: criar VINCULO PENDENTE para o novo vet e notificá-lo
+    if (aceito && solicitacao.tipo === 'TROCA_VET' && solicitacao.novoVetUserId) {
+      const novoToken  = gerarToken();
+      const expiresAt  = gerarExpiracao(7);
+
+      await prisma.vetAnimalSolicitacao.upsert({
+        where:  { animalId_vetUserId: { animalId: solicitacao.animalId, vetUserId: solicitacao.novoVetUserId } },
+        create: {
+          animalId:      solicitacao.animalId,
+          vetUserId:     solicitacao.novoVetUserId,
+          tipo:          'VINCULO',
+          status:        'PENDENTE',
+          approvalToken: novoToken,
+          expiresAt,
+          solicitanteId: solicitacao.solicitanteId,
+        },
+        update: {
+          tipo:          'VINCULO',
+          status:        'PENDENTE',
+          approvalToken: novoToken,
+          expiresAt,
+          solicitanteId: solicitacao.solicitanteId,
+          mensagem:      null,
+        },
+      });
+
+      if (solicitacao.novoVeterinario?.email) {
+        emailService.enviarSolicitacaoVinculo({
+          vetEmail:         solicitacao.novoVeterinario.email,
+          vetNome:          solicitacao.novoVeterinario.fullName,
+          animalNome:       solicitacao.animal.nome,
+          proprietarioNome: solicitacao.animal.user?.fullName || 'Proprietário',
+          token:            novoToken,
+        }).catch(err => console.error('[emailService] Falha ao notificar novo vet (TROCA_VET via email):', err?.message));
+      }
     }
 
     const prop = solicitacao.animal?.user;
@@ -419,6 +462,10 @@ const VeterinarioController = {
 
       const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
         where: { id: Number(id), vetUserId },
+        include: {
+          animal:          { select: { id: true, nome: true, user: { select: { fullName: true, email: true } } } },
+          novoVeterinario: { select: { id: true, fullName: true, email: true } },
+        },
       });
       if (!solicitacao) {
         return res.status(404).json({ sucesso: false, mensagem: 'Solicitação não encontrada' });
@@ -427,17 +474,70 @@ const VeterinarioController = {
         return res.status(409).json({ sucesso: false, mensagem: 'Solicitação já foi respondida' });
       }
 
+      // TROCA_VET recusado: restaura VINCULO ACEITO (vet antigo mantém acesso)
+      const isTrocaRecusada = status === 'RECUSADO' && solicitacao.tipo === 'TROCA_VET';
+
       const atualizada = await prisma.vetAnimalSolicitacao.update({
         where: { id: Number(id) },
-        // Invalida token ao responder pela plataforma (evita uso posterior do link de email)
-        data:  { status, approvalToken: null, expiresAt: null },
+        data: isTrocaRecusada
+          ? { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null }
+          : { status, approvalToken: null, expiresAt: null },
       });
 
-      if (status === 'RECUSADO') {
+      if (status === 'RECUSADO' && !isTrocaRecusada) {
         await prisma.animal.update({
           where: { id: solicitacao.animalId },
           data:  { veterinarioNome: null, veterinarioClinica: null },
         });
+      }
+
+      // Notifica proprietário por email em qualquer recusa
+      if (status === 'RECUSADO' && solicitacao.animal.user?.email) {
+        const vetNomeLogado = req.user?.fullName || 'Veterinário';
+        emailService.enviarConfirmacaoVinculo({
+          proprietarioEmail: solicitacao.animal.user.email,
+          proprietarioNome:  solicitacao.animal.user.fullName || 'Proprietário',
+          animalNome:        solicitacao.animal.nome,
+          vetNome:           vetNomeLogado,
+          aceito:            false,
+        }).catch(err => console.error('[emailService] Falha ao notificar proprietário sobre recusa:', err?.message));
+      }
+
+      // TROCA_VET aceita: criar VINCULO PENDENTE para o novo vet e notificá-lo
+      if (status === 'ACEITO' && solicitacao.tipo === 'TROCA_VET' && solicitacao.novoVetUserId) {
+        const token     = gerarToken();
+        const expiresAt = gerarExpiracao(7);
+
+        await prisma.vetAnimalSolicitacao.upsert({
+          where:  { animalId_vetUserId: { animalId: solicitacao.animalId, vetUserId: solicitacao.novoVetUserId } },
+          create: {
+            animalId:      solicitacao.animalId,
+            vetUserId:     solicitacao.novoVetUserId,
+            tipo:          'VINCULO',
+            status:        'PENDENTE',
+            approvalToken: token,
+            expiresAt,
+            solicitanteId: solicitacao.solicitanteId,
+          },
+          update: {
+            tipo:          'VINCULO',
+            status:        'PENDENTE',
+            approvalToken: token,
+            expiresAt,
+            solicitanteId: solicitacao.solicitanteId,
+            mensagem:      null,
+          },
+        });
+
+        if (solicitacao.novoVeterinario?.email) {
+          emailService.enviarSolicitacaoVinculo({
+            vetEmail:         solicitacao.novoVeterinario.email,
+            vetNome:          solicitacao.novoVeterinario.fullName,
+            animalNome:       solicitacao.animal.nome,
+            proprietarioNome: solicitacao.animal.user?.fullName || 'Proprietário',
+            token,
+          }).catch(err => console.error('[emailService] Falha ao notificar novo vet (TROCA_VET):', err?.message));
+        }
       }
 
       res.json({

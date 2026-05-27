@@ -244,15 +244,21 @@ const MeusAnimais = () => {
               const bannerInfo   = solPendente
                 ? (vetInit && solPendente.tipo === 'VINCULO'
                   ? { text: 'Veterinário solicitou acesso — aguardando sua aprovação', bg: 'bg-green-50', borderColor: 'border-green-100', textColor: 'text-green-700', iconColor: 'text-green-500' }
+                  : vetInit && solPendente.tipo === 'DESVINCULO'
+                  ? { text: `Dr(a). ${solPendente.veterinario?.fullName ?? 'Veterinário'} quer se desvincular — aguardando sua decisão`, bg: 'bg-amber-50', borderColor: 'border-amber-100', textColor: 'text-amber-700', iconColor: 'text-amber-500' }
                   : getBannerInfo(solPendente.tipo))
                 : null;
               const badgeInfo    = solPendente
                 ? (vetInit && solPendente.tipo === 'VINCULO'
                   ? { text: 'Aguardando sua aprovação', className: 'bg-green-100 text-green-700' }
+                  : vetInit && solPendente.tipo === 'DESVINCULO'
+                  ? { text: 'Desvinculo aguardando aprovação', className: 'bg-amber-100 text-amber-700' }
                   : getBadgeInfo(solPendente.tipo))
                 : null;
               const cardBorder   = pendente && solPendente
-                ? (vetInit && solPendente.tipo === 'VINCULO' ? 'border-green-200 opacity-80' : getCardBorderClass(solPendente.tipo))
+                ? (vetInit && solPendente.tipo === 'VINCULO' ? 'border-green-200 opacity-80'
+                  : vetInit && solPendente.tipo === 'DESVINCULO' ? 'border-amber-200 opacity-80'
+                  : getCardBorderClass(solPendente.tipo))
                 : 'border-gray-100 hover:shadow-md cursor-pointer';
               return (
                 <div
@@ -339,7 +345,28 @@ const MeusAnimais = () => {
                         <span className="hidden sm:inline">Editar</span>
                       </button>
 
-                      {pendente && solPendente && isVetIniciado(solPendente) ? (
+                      {pendente && solPendente && isVetIniciado(solPendente) && solPendente.tipo === 'DESVINCULO' ? (
+                        <>
+                          <button
+                            onClick={() => handleResponderVet(solPendente.id, 'ACEITO')}
+                            disabled={respondendo}
+                            className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 disabled:bg-gray-300
+                                       text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                          >
+                            <CheckCircle2 size={13} />
+                            <span className="hidden sm:inline">Aceitar remoção</span>
+                          </button>
+                          <button
+                            onClick={() => handleResponderVet(solPendente.id, 'RECUSADO')}
+                            disabled={respondendo}
+                            className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                                       text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                          >
+                            <XCircle size={13} />
+                            <span className="hidden sm:inline">Manter vínculo</span>
+                          </button>
+                        </>
+                      ) : pendente && solPendente && isVetIniciado(solPendente) ? (
                         <>
                           <button
                             onClick={() => handleResponderVet(solPendente.id, 'ACEITO')}

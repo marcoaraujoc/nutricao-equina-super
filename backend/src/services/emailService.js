@@ -286,6 +286,58 @@ const emailService = {
     console.log(`[emailService] Solicitação de desvinculo enviada → ${vetEmail}`);
   },
 
+  // ── Solicitação de DESVINCULO para o PROPRIETÁRIO (vet quer se remover) ─────────
+  async enviarSolicitacaoDesvinculoProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, token }) {
+    if (!podeEnviar()) return;
+
+    const appUrl    = process.env.APP_URL || 'http://localhost:5173';
+    const aceitarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=aceitar`;
+    const recusarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=recusar`;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      proprietarioEmail,
+      subject: `[S2Vet] Veterinário quer se desvincular — ${animalNome}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#d97706;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#fef3c7;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Solicitação de desvinculação</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Olá, <strong>${proprietarioNome}</strong>.<br/>
+              Dr(a). <strong>${vetNome}</strong> solicitou se <strong>desvincular</strong> do animal:
+            </p>
+            <div style="background:white;border:2px solid #fde68a;border-radius:12px;padding:20px;margin:24px 0;text-align:center;">
+              <div style="font-size:40px;">🐎</div>
+              <p style="margin:8px 0 0;font-size:20px;font-weight:700;color:#92400e;">${animalNome}</p>
+              <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Aguardando sua decisão</p>
+            </div>
+            <div style="margin:32px 0;text-align:center;">
+              <a href="${aceitarUrl}"
+                 style="background:#dc2626;color:white;padding:14px 32px;border-radius:8px;
+                        text-decoration:none;font-weight:700;font-size:15px;display:inline-block;margin-right:12px;">
+                ✅ Aceitar remoção
+              </a>
+              <a href="${recusarUrl}"
+                 style="background:#059669;color:white;padding:14px 32px;border-radius:8px;
+                        text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
+                🔒 Manter vínculo
+              </a>
+            </div>
+            <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px;">
+              Link válido por <strong>24 horas</strong>. Sem resposta, o desvinculo será aceito automaticamente.<br/>
+              Acesse a plataforma em <a href="${appUrl}" style="color:#059669;">${appUrl}</a>.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Solicitação de desvinculo (vet→prop) enviada → ${proprietarioEmail}`);
+  },
+
   // ── Solicitação de TROCA_VET para o vet atual (proprietário quer trocar de vet) ──
   async enviarSolicitacaoTrocaVet({
     vetEmail, vetNome, novoVetNome, animalNome,

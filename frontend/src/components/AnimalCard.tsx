@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface Solicitacao {
   vetUserId:   number;
+  tipo:        string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
   status:      string; // 'ACEITO' | 'PENDENTE' | 'RECUSADO' | 'CANCELADO'
   veterinario?: { fullName: string; email: string } | null;
 }
@@ -60,12 +61,21 @@ function calcularIdade(dataNascimento: string): string {
 export default function AnimalCard({ animal }: AnimalCardProps) {
   const { user } = useAuth();
 
-  // Resolve vet responsável — prioridade: ACEITO > fallback texto livre
-  // PENDENTE exibe badge de "aguardando aceite" separado
-  const solicitacaoAceita   = animal.solicitacoes?.find(s => s.status === 'ACEITO');
-  const solicitacaoPendente = animal.solicitacoes?.find(s => s.status === 'PENDENTE');
-  const vetNome             = solicitacaoAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
-  const vetPendente         = solicitacaoPendente?.veterinario?.fullName ?? null;
+  // Resolve vet responsável:
+  //   VINCULO ACEITO → vet ativo
+  //   DESVINCULO PENDENTE → vet ainda ativo (aguardando proprietário aceitar saída)
+  //   TROCA_VET PENDENTE  → vet ainda ativo (aguardando vet antigo aceitar troca)
+  // "Aguardando" badge: apenas VINCULO PENDENTE (vet ainda não aceitou entrar)
+  const solicitacaoAceita = animal.solicitacoes?.find(s =>
+    (s.tipo === 'VINCULO'    && s.status === 'ACEITO')  ||
+    (s.tipo === 'DESVINCULO' && s.status === 'PENDENTE') ||
+    (s.tipo === 'TROCA_VET'  && s.status === 'PENDENTE')
+  );
+  const solicitacaoPendente = animal.solicitacoes?.find(s =>
+    s.tipo === 'VINCULO' && s.status === 'PENDENTE'
+  );
+  const vetNome     = solicitacaoAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
+  const vetPendente = solicitacaoPendente?.veterinario?.fullName ?? null;
 
   // Proprietário: prioriza dados do animal (join), fallback para usuário logado
   const proprietarioNome = animal.user?.fullName ?? user?.fullName ?? '-';

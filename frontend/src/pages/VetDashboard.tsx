@@ -262,9 +262,26 @@ export default function VetDashboard() {
   useEffect(() => { carregar(); }, [user?.id]);
 
   const handleResponder = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
+    const sol = solicitacoes.find(s => s.id === id);
     try {
       await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
-      toast.success(status === 'ACEITO' ? 'Animal aceito!' : 'Solicitação recusada.');
+      if (status === 'ACEITO') {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
+        } else {
+          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
+        }
+      } else {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
+        } else {
+          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
+        }
+      }
       carregar();
     } catch {
       toast.error('Erro ao responder solicitação');
@@ -308,9 +325,30 @@ export default function VetDashboard() {
   );
 
   const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
-    await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
-    toast.success(status === 'ACEITO' ? 'Solicitação aceita!' : 'Solicitação recusada.');
-    carregar();
+    const sol = solicitacoes.find(s => s.id === id);
+    try {
+      await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
+      if (status === 'ACEITO') {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
+        } else {
+          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
+        }
+      } else {
+        if (sol?.tipo === 'DESVINCULO') {
+          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
+        } else if (sol?.tipo === 'TROCA_VET') {
+          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
+        } else {
+          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
+        }
+      }
+      carregar();
+    } catch {
+      toast.error('Erro ao responder solicitação');
+    }
   };
 
   return (

@@ -288,31 +288,53 @@ class AnimalController {
         });
       }
 
-      const novoStatus = acao === 'aceitar' ? 'ACEITO' : 'RECUSADO';
-
-      await prisma.vetAnimalSolicitacao.update({
-        where: { id: solicitacao.id },
-        data:  { status: novoStatus, approvalToken: null },
-      });
-
-      if (acao === 'aceitar') {
-        // Multi-tenant: vincula o animal à empresa do veterinário
-        const membro = await prisma.membroEquipe.findFirst({
-          where:   { userId: solicitacao.vetUserId },
-          include: { equipe: { select: { empresaId: true } } },
-        });
-        if (membro?.equipe?.empresaId) {
+      if (solicitacao.tipo === 'DESVINCULO') {
+        // Vet-iniciado: proprietário decide se aceita a remoção do vet
+        if (acao === 'aceitar') {
+          // Proprietário aceita → vet perde acesso (DESVINCULO ACEITO)
+          await prisma.vetAnimalSolicitacao.update({
+            where: { id: solicitacao.id },
+            data:  { status: 'ACEITO', approvalToken: null },
+          });
           await prisma.animal.update({
             where: { id: solicitacao.animalId },
-            data:  { empresaId: membro.equipe.empresaId },
+            data:  { veterinarioNome: null, veterinarioClinica: null },
+          });
+        } else {
+          // Proprietário recusa → vet mantém acesso (restaura VINCULO ACEITO)
+          await prisma.vetAnimalSolicitacao.update({
+            where: { id: solicitacao.id },
+            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, mensagem: null },
           });
         }
       } else {
-        // Recusa: limpa o vet responsável do animal
-        await prisma.animal.update({
-          where: { id: solicitacao.animalId },
-          data:  { veterinarioNome: null, veterinarioClinica: null },
+        // VINCULO: comportamento original
+        const novoStatus = acao === 'aceitar' ? 'ACEITO' : 'RECUSADO';
+
+        await prisma.vetAnimalSolicitacao.update({
+          where: { id: solicitacao.id },
+          data:  { status: novoStatus, approvalToken: null },
         });
+
+        if (acao === 'aceitar') {
+          // Multi-tenant: vincula o animal à empresa do veterinário
+          const membro = await prisma.membroEquipe.findFirst({
+            where:   { userId: solicitacao.vetUserId },
+            include: { equipe: { select: { empresaId: true } } },
+          });
+          if (membro?.equipe?.empresaId) {
+            await prisma.animal.update({
+              where: { id: solicitacao.animalId },
+              data:  { empresaId: membro.equipe.empresaId },
+            });
+          }
+        } else {
+          // Recusa: limpa o vet responsável do animal
+          await prisma.animal.update({
+            where: { id: solicitacao.animalId },
+            data:  { veterinarioNome: null, veterinarioClinica: null },
+          });
+        }
       }
 
       // Busca nome do proprietário para o email de confirmação ao vet
@@ -794,6 +816,7 @@ class AnimalController {
     const animalId = Number(req.params.id);
     try {
       await prisma.dieta.deleteMany({ where: { animalId } });
+      await prisma.planoDieta.deleteMany({ where: { animalId } });
       await prisma.vetAnimalSolicitacao.deleteMany({ where: { animalId } });
       await prisma.animal.delete({ where: { id: animalId } });
       res.json({ sucesso: true, mensagem: 'Animal excluído com sucesso' });
@@ -934,27 +957,49 @@ class AnimalController {
         return res.status(404).json({ sucesso: false, mensagem: 'Solicitação não encontrada ou sem permissão' });
       }
 
-      await prisma.vetAnimalSolicitacao.update({
-        where: { id: solId },
-        data:  { status, approvalToken: null, expiresAt: null },
-      });
-
-      if (status === 'ACEITO') {
-        const membro = await prisma.membroEquipe.findFirst({
-          where:   { userId: solicitacao.vetUserId },
-          include: { equipe: { select: { empresaId: true } } },
-        });
-        if (membro?.equipe?.empresaId) {
+      if (solicitacao.tipo === 'DESVINCULO') {
+        // Vet-iniciado: proprietário decide se aceita a remoção do vet
+        if (status === 'ACEITO') {
+          // Proprietário aceita → vet perde acesso
+          await prisma.vetAnimalSolicitacao.update({
+            where: { id: solId },
+            data:  { status: 'ACEITO', approvalToken: null, expiresAt: null },
+          });
           await prisma.animal.update({
             where: { id: solicitacao.animalId },
-            data:  { empresaId: membro.equipe.empresaId },
+            data:  { veterinarioNome: null, veterinarioClinica: null },
+          });
+        } else {
+          // Proprietário recusa → restaura VINCULO ACEITO
+          await prisma.vetAnimalSolicitacao.update({
+            where: { id: solId },
+            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null },
           });
         }
       } else {
-        await prisma.animal.update({
-          where: { id: solicitacao.animalId },
-          data:  { veterinarioNome: null, veterinarioClinica: null },
+        // VINCULO: comportamento original
+        await prisma.vetAnimalSolicitacao.update({
+          where: { id: solId },
+          data:  { status, approvalToken: null, expiresAt: null },
         });
+
+        if (status === 'ACEITO') {
+          const membro = await prisma.membroEquipe.findFirst({
+            where:   { userId: solicitacao.vetUserId },
+            include: { equipe: { select: { empresaId: true } } },
+          });
+          if (membro?.equipe?.empresaId) {
+            await prisma.animal.update({
+              where: { id: solicitacao.animalId },
+              data:  { empresaId: membro.equipe.empresaId },
+            });
+          }
+        } else {
+          await prisma.animal.update({
+            where: { id: solicitacao.animalId },
+            data:  { veterinarioNome: null, veterinarioClinica: null },
+          });
+        }
       }
 
       const proprietario = await prisma.user.findUnique({
@@ -969,12 +1014,17 @@ class AnimalController {
         aceito:            status === 'ACEITO',
       }).catch(err => console.error('[emailService] Falha ao notificar vet:', err?.message));
 
+      const isDesvinculo = solicitacao.tipo === 'DESVINCULO';
       res.json({
         sucesso:  true,
         aceito:   status === 'ACEITO',
-        mensagem: status === 'ACEITO'
-          ? `Vínculo com Dr(a). ${solicitacao.veterinario.fullName} autorizado!`
-          : 'Vínculo recusado. O veterinário foi notificado.',
+        mensagem: isDesvinculo
+          ? (status === 'ACEITO'
+              ? `Remoção de Dr(a). ${solicitacao.veterinario.fullName} confirmada.`
+              : `Vínculo mantido. Dr(a). ${solicitacao.veterinario.fullName} continua responsável.`)
+          : (status === 'ACEITO'
+              ? `Vínculo com Dr(a). ${solicitacao.veterinario.fullName} autorizado!`
+              : 'Vínculo recusado. O veterinário foi notificado.'),
       });
     } catch (error) {
       console.error('[AnimalController.responderSolicitacaoVet]', error);
@@ -983,6 +1033,7 @@ class AnimalController {
   }
 
   // ── DELETE /api/animais/:id/desvincular-vet ─────────────────────────────
+  // Cria DESVINCULO PENDENTE aguardando aprovação do proprietário (24h → auto-aceite via cron)
 
   async desvincularVet(req, res) {
     const animalId  = Number(req.params.id);
@@ -995,26 +1046,63 @@ class AnimalController {
       });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
 
-      await prisma.vetAnimalSolicitacao.updateMany({
-        where: { animalId, vetUserId, status: { in: ['ACEITO', 'PENDENTE'] } },
-        data:  { status: 'CANCELADO' },
+      // Busca o vínculo ativo deste vet com o animal
+      const solAtiva = await prisma.vetAnimalSolicitacao.findFirst({
+        where: {
+          animalId, vetUserId,
+          OR: [
+            { tipo: 'VINCULO',    status: 'ACEITO'   },
+            { tipo: 'DESVINCULO', status: 'PENDENTE' },
+          ],
+        },
       });
 
+      if (!solAtiva) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Vínculo ativo não encontrado' });
+      }
+
+      // Já existe solicitação pendente — evita duplicata
+      if (solAtiva.tipo === 'DESVINCULO' && solAtiva.status === 'PENDENTE') {
+        return res.status(409).json({
+          sucesso:  false,
+          mensagem: 'Já existe uma solicitação de desvinculação aguardando aprovação do proprietário',
+        });
+      }
+
+      const token     = gerarToken();
+      const expiresAt = gerarExpiracao(1); // 24 horas
+
+      await prisma.vetAnimalSolicitacao.update({
+        where: { id: solAtiva.id },
+        data: {
+          tipo:          'DESVINCULO',
+          status:        'PENDENTE',
+          solicitanteId: vetUserId,
+          approvalToken: token,
+          expiresAt,
+          mensagem:      'Veterinário solicitou a remoção do próprio acesso ao animal',
+        },
+      });
+
+      // Email ao proprietário com links de aprovar/recusar
       if (animal.user?.email) {
         const vet = await prisma.user.findUnique({
           where:  { id: vetUserId },
           select: { fullName: true },
         });
-        emailService.enviarConfirmacaoVinculo({
+        emailService.enviarSolicitacaoDesvinculoProprietario({
           proprietarioEmail: animal.user.email,
           proprietarioNome:  animal.user.fullName,
           animalNome:        animal.nome,
           vetNome:           vet?.fullName || 'Veterinário',
-          aceito:            false,
-        }).catch(err => console.error('[emailService] Falha ao notificar proprietário:', err));
+          token,
+        }).catch(err => console.error('[emailService] Falha ao enviar desvinculo ao proprietário:', err));
       }
 
-      res.json({ sucesso: true, mensagem: 'Desvinculado com sucesso' });
+      res.json({
+        sucesso:  true,
+        mensagem: 'Solicitação de desvinculação enviada ao proprietário. O acesso será removido após aprovação ou em 24 horas.',
+      });
     } catch (error) {
       console.error('[AnimalController.desvincularVet]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
