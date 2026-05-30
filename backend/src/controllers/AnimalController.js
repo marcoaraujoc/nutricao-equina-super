@@ -185,9 +185,17 @@ class AnimalController {
         const animais = await prisma.animal.findMany({
           where:   { nome: { contains: nome.trim(), mode: 'insensitive' } },
           include: {
-            user: { select: { id: true, fullName: true, email: true, phone: true } },
+            user:    { select: { id: true, fullName: true, email: true, phone: true } },
+            especie: { select: { id: true, nome: true } },
+            raca:    { select: { id: true, nome: true } },
             solicitacoes: {
-              where:  { status: { in: ['ACEITO', 'PENDENTE'] } },
+              // Mesmo critério do ANIMAL_INCLUDE: exclui DESVINCULO ACEITO (vet já saiu)
+              where: {
+                OR: [
+                  { status: 'PENDENTE' },
+                  { tipo: 'VINCULO', status: 'ACEITO' },
+                ],
+              },
               select: { status: true, vetUserId: true },
             },
           },
@@ -241,6 +249,17 @@ class AnimalController {
           dados: {
             id:              animal.id,
             nome:            animal.nome,
+            photoUrl:        animal.photoUrl        ?? null,
+            dataNascimento:  animal.dataNascimento  ?? null,
+            idadeAnos:       animal.idadeAnos       ?? null,
+            peso:            animal.peso            ?? null,
+            sexo:            animal.sexo            ?? null,
+            categoriaAnimal: animal.categoriaAnimal ?? null,
+            tipoExercicio:   animal.tipoExercicio   ?? null,
+            especieId:       animal.especieId       ?? null,
+            racaId:          animal.racaId          ?? null,
+            especie:         animal.especie         ?? null,
+            raca:            animal.raca            ?? null,
             temVet,
             vetDaMinhaEquipe,
             proprietario:    animal.user,
@@ -485,7 +504,7 @@ class AnimalController {
     const {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
-      proprietarioId, veterinarioUserId, local,
+      proprietarioId, veterinarioUserId, local, baia,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -514,7 +533,12 @@ class AnimalController {
             nome: true,
             user: { select: { fullName: true, email: true } },
             solicitacoes: {
-              where:  { status: { in: ['ACEITO', 'PENDENTE'] } },
+              where: {
+                OR: [
+                  { status: 'PENDENTE' },
+                  { tipo: 'VINCULO', status: 'ACEITO' },
+                ],
+              },
               select: { status: true },
             },
           },
@@ -524,9 +548,7 @@ class AnimalController {
           return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
         }
 
-        const jaTemVet = animalExistente.solicitacoes.some(
-          s => s.status === 'ACEITO' || s.status === 'PENDENTE'
-        );
+        const jaTemVet = animalExistente.solicitacoes.length > 0;
         if (jaTemVet) {
           return res.status(409).json({
             sucesso:  false,
@@ -627,6 +649,7 @@ class AnimalController {
           veterinarioNome:    veterinarioNome    || null,
           veterinarioClinica: veterinarioClinica || null,
           local:           local?.trim() || null,
+          baia:            baia?.trim()  || null,
           photoUrl,
           especieId: Number(especieId),
           racaId:    Number(racaId),
@@ -705,7 +728,7 @@ class AnimalController {
     const {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
-      veterinarioUserId, local,
+      veterinarioUserId, local, baia,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -756,6 +779,7 @@ class AnimalController {
           veterinarioNome:    veterinarioNome    || null,
           veterinarioClinica: veterinarioClinica || null,
           local:           local?.trim() || null,
+          baia:            baia?.trim()  || null,
           especieId: Number(especieId),
           racaId:    Number(racaId),
           ...(photoUrl && { photoUrl }),

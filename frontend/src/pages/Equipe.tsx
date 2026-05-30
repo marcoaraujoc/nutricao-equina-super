@@ -4,9 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Users2, Plus, Mail, Trash2, ToggleLeft, ToggleRight,
+  Users2, Mail, Trash2, ToggleLeft, ToggleRight,
   UserCheck, Loader2, X, Send,
 } from 'lucide-react';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,6 @@ const badgeCargo = (cargo: string) => {
   return map[cargo] ?? 'bg-gray-100 text-gray-600';
 };
 
-const formatarData = (iso: string) => {
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-};
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
@@ -179,7 +176,7 @@ export default function Equipe() {
             onClick={() => setShowConvite(true)}
             className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors"
           >
-            <Plus size={16} /> Convidar primeiro membro
+            Convidar primeiro membro
           </button>
         </div>
       ) : (
@@ -219,7 +216,7 @@ export default function Equipe() {
 
                     {/* Data */}
                     <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">
-                      Desde {formatarData(m.createdAt)}
+                      Desde {formatDate(m.createdAt)}
                     </p>
 
                     {/* Ações */}

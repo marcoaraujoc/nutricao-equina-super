@@ -327,7 +327,7 @@ const Dashboard = () => {
       <p className="text-gray-500 mb-8">Cadastre um animal para começar a usar o sistema.</p>
       <button onClick={() => navigate('/animais')}
         className="inline-flex items-center gap-3 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-4 rounded-3xl font-semibold text-lg transition-colors">
-        <Plus size={22} /> Cadastrar Animal
+        Cadastrar Animal
       </button>
     </div>
   );

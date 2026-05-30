@@ -10,6 +10,8 @@ import prisma from './lib/prisma';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const requestIdMiddleware = require('./middlewares/requestId');
 
+// Fuso horário padrão — garante que new Date() e operações de data usem America/Sao_Paulo
+process.env.TZ = 'America/Sao_Paulo';
 dotenv.config();
 
 // Extend Express Request with runtime-injected fields
@@ -103,6 +105,12 @@ const aiUsageRoutes            = require('./routes/aiUsage');
 const relatorioRoutes          = require('./routes/relatorio.routes');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const prescricoesRoutes        = require('./routes/prescricoes');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const farmaciaRoutes           = require('./routes/farmacia');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const medicamentosRoutes       = require('./routes/medicamentos');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const procedimentosRoutes      = require('./routes/procedimentos');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -125,6 +133,9 @@ app.use('/api/ai-usage',              aiUsageRoutes);
 app.use('/api/veterinarios',          veterinariosRoutes);
 app.use('/api/equipes',               equipesRoutes);
 app.use('/api/relatorio',             relatorioRoutes);
+app.use('/api/farmacia',              farmaciaRoutes);
+app.use('/api/medicamentos',          medicamentosRoutes);
+app.use('/api/procedimentos',         procedimentosRoutes);
 
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

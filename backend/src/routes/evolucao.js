@@ -68,8 +68,9 @@ router.put('/:id',      authenticate, evolucaoIdParam, validate, EvolucaoControl
 router.delete('/:id',   authenticate, evolucaoIdParam, validate, EvolucaoController.excluir);
 
 // Ações de patch
-router.patch('/:id/aprovar', authenticate, evolucaoIdParam, validate, EvolucaoController.aprovar);
-router.patch('/:id/titulo',  authenticate, evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
+router.patch('/:id/cancelar', authenticate, evolucaoIdParam, validate, EvolucaoController.cancelar);
+router.patch('/:id/aprovar',  authenticate, evolucaoIdParam, validate, EvolucaoController.aprovar);
+router.patch('/:id/titulo',   authenticate, evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
 
 // Mídias
 router.post('/:id/midias',              authenticate, evolucaoIdParam, validate, uploadMidia.single('midia'), EvolucaoController.adicionarMidia);

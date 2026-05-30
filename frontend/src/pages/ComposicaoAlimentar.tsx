@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Plus, Edit, Trash2 } from 'lucide-react';
+import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 // =====================================================================
@@ -218,14 +218,12 @@ const ComposicaoAlimentar = () => {
               onClick={() => navigate('/composicao-alimentar/nutriente/novo')}
               className="flex items-center justify-center gap-2 bg-white hover:bg-gray-50 text-emerald-700 border-2 border-emerald-700 px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
             >
-              <Plus size={20} />
               Novo Nutriente
             </button>
             <button
               onClick={() => navigate('/composicao-alimentar/novo')}
               className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
             >
-              <Plus size={20} />
               Nova Composição
             </button>
           </div>

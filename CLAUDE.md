@@ -1,6 +1,6 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-05-27
+# Atualizado em: 2026-05-28
 
 ---
 
@@ -150,7 +150,7 @@ Proprietário associa vet → cria VetAnimalSolicitacao {tipo:'VINCULO', status:
 Email enviado ao vet com links aceitar/recusar (approvalToken)
 Vet responde (dashboard ou email) → status → 'ACEITO' ou 'RECUSADO'
 24h sem resposta → cron auto-aceita (status→'ACEITO')
-Proprietário notificado via polling (useProprietarioNotificacoes, 30s)
+Proprietário notificado via polling (useProprietarioNotificacoes, 15s)
 ```
 
 ### Fluxo de DESVINCULO vet-animal (DESVINCULO)
@@ -158,10 +158,10 @@ Proprietário notificado via polling (useProprietarioNotificacoes, 30s)
 Proprietário remove vet → MESMO registro VetAnimalSolicitacao atualizado:
   {tipo:'DESVINCULO', status:'PENDENTE', approvalToken, expiresAt}
 Email enviado ao vet: "Aceitar remoção" / "Manter meu acesso" (24h expiry)
-Vet aceita  → status:'ACEITO'  → vet não aparece mais como responsável
+Vet aceita  → status:'ACEITO'  → vet não aparece mais como responsável + veterinarioNome=null
 Vet recusa  → registro restaurado: {tipo:'VINCULO', status:'ACEITO', mensagem:null}
-24h sem resposta → cron auto-aceita (remoção confirmada)
-Proprietário notificado via useProprietarioNotificacoes (30s polling)
+24h sem resposta → cron auto-aceita (remoção confirmada) + veterinarioNome=null
+Proprietário notificado via useProprietarioNotificacoes (15s polling)
 NOTA: unique constraint (animalId, vetUserId) — só existe 1 registro por par, que é reutilizado
 ```
 
@@ -301,15 +301,18 @@ const { t } = useTranslation()
 #### Hooks de polling (notificações em tempo real)
 ```typescript
 // Padrão: useRef<Map<id, status>> para detectar mudanças sem re-render excessivo
-// Primeira carga: inicializa o mapa sem disparar toast (prevStatusRef.current === null)
-// Polling a cada 30s com setInterval, limpado no cleanup
+// Primeira carga: inicializa o mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos
+//   propositalmente para que o check de updatedAt detecte recusas ocorridas antes da sessão
+// Polling a cada 15s com setInterval, limpado no cleanup
 // Fire-and-forget: nunca bloquear UI por falha de polling
+// Janela de detecção retroativa: updatedAt < 10min → notifica mesmo sem ter visto PENDENTE antes
 
 // Hooks existentes (chamados no Sidebar para todos os perfis):
 // useProprietarioNotificacoes — /animais/minhas-solicitacoes (só PROPRIETARIO)
-//   Detecta: PENDENTE→ACEITO e PENDENTE→RECUSADO, diferencia tipo VINCULO vs DESVINCULO
+//   Detecta: PENDENTE→ACEITO, PENDENTE→RECUSADO, ACEITO→PENDENTE (vet inicia DESVINCULO),
+//            ACEITO→CANCELADO (vet se desvinculou), undefined+PENDENTE (nova solicitação V→P)
 // useVetSolicitacaoMonitor — /veterinarios/solicitacoes (só VETERINARIO)
-//   Detecta: novas solicitações PENDENTE, mudanças ACEITO/CANCELADO
+//   Detecta: novas solicitações PENDENTE, mudanças PENDENTE/ACEITO→CANCELADO
 ```
 
 #### SolicitacaoCard — padrão de card para solicitações de vínculo/desvinculo
@@ -531,6 +534,12 @@ New-Item -ItemType Junction `
 - [x] EvolucaoPrint.ts — utilitário de impressão de evoluções clínicas
 - [x] ModuloSistema + PermissaoMembro + AuditoriaPermissao + PermissaoProprietario (migration `20260524`)
 - [x] PermissaoController.js + seeds/002_permissoes_padrao.seed.js
+- [x] AnimalCard.tsx: campo `tipo` adicionado à interface Solicitacao; lógica de resolução do vet corrigida (DESVINCULO PENDENTE e TROCA_VET PENDENTE → vet ainda ativo; VINCULO PENDENTE → badge âmbar)
+- [x] DESVINCULO aceito: `veterinarioNome` e `veterinarioClinica` limpos em 3 pontos (proprietarioAprovar, responderSolicitacaoVet, cron autoAceitarSolicitacoesPendentes)
+- [x] TROCA_VET: `solicitanteId` incluído no UPDATE branch do upsert em VeterinarioController e server.ts (corrige popup de autorização aparecendo para proprietário errado)
+- [x] TROCA_VET recusa: restaura `{tipo:'VINCULO', status:'ACEITO'}` ao invés de RECUSADO + email ao proprietário notificando recusa — em `responderSolicitacao` e `responderViaEmail`
+- [x] VetDashboard.tsx + AnimaisVet.tsx: toasts diferenciados por tipo ao responder solicitações (ACEITO: toast.success; RECUSADO: toast() com ícone 🔒/🔄/❌ por tipo); try-catch em handleResponderModal
+- [x] useProprietarioNotificacoes: inicialização exclui RECUSADO/CANCELADO do mapa inicial; janela de updatedAt ampliada de 90s para 10min; polling reduzido de 30s para 15s
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -595,7 +604,7 @@ criarSolicitacaoPendente({ animalId, novoVetId, animalNome, solicitanteId,
 |---|---|---|
 | `enviarSolicitacaoVinculo` | Vet | Proprietário solicita vínculo |
 | `enviarSolicitacaoVinculoProprietario` | Proprietário | Vet solicita vínculo (link `/proprietario/aprovar-vinculo`) |
-| `enviarConfirmacaoVinculo` | Vet | Proprietário aceita/recusa (também usado para notificar vet sobre decisão do proprietário) |
+| `enviarConfirmacaoVinculo` | Vet ou Proprietário | V→P: vet recebe confirmação quando proprietário decide. P→V: proprietário recebe notificação quando vet recusa. Destinatário varia por call site. |
 | `enviarSolicitacaoDesvinculo` | Vet | Proprietário inicia desvinculo |
 | `enviarSolicitacaoTrocaVet` | Vet atual | Proprietário inicia troca de vet |
 
@@ -729,8 +738,8 @@ DELETE /:id                             → soft delete
 |---|---|
 | `AuthContext.tsx` | `useAuth()` → `{ user, login, logout, loading }`. `user` tem `{ id, email, fullName, userType }` |
 | `SelectedAnimalContext.tsx` | `useSelectedAnimal()` → `{ selectedAnimal, setSelectedAnimal, refreshSelectedAnimal }` |
-| `useProprietarioNotificacoes.ts` | Polling 30s em `/animais/minhas-solicitacoes`. Dispara toast ao detectar mudança de status. Só para PROPRIETARIO |
-| `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE. Só para VETERINARIO |
+| `useProprietarioNotificacoes.ts` | Polling 15s em `/animais/minhas-solicitacoes`. Inicializa mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos para detecção retroativa via updatedAt <10min. Só para PROPRIETARIO |
+| `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE e mudanças CANCELADO. Só para VETERINARIO |
 | `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
 | `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Base URL: `/api` |
 | `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
@@ -796,6 +805,18 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 
 10. SubModulo* em Atendimento.tsx — cada sub-aba é um componente autônomo que gerencia
     seu próprio estado/fetch. Atendimento.tsx só cuida da navegação entre abas e do header do animal.
+
+11. TROCA_VET recusa: ao recusar, o registro volta a {tipo:'VINCULO', status:'ACEITO'} — NÃO
+    fica como RECUSADO. veterinarioNome NÃO é limpo (vet antigo mantém o acesso). Só o novoVetUserId
+    é nullado. Email ao proprietário via enviarConfirmacaoVinculo.
+
+12. useProprietarioNotificacoes: RECUSADO/CANCELADO NÃO entram no mapa de inicialização.
+    Na segunda chamada, esses registros têm anterior===undefined e caem no check de updatedAt.
+    Janela: 10 minutos. Se a recusa tem mais de 10min quando o proprietário abre a página,
+    não há toast in-app — somente o email (se configurado).
+
+13. VetDashboard/AnimaisVet handleResponder e handleResponderModal: ao recusar, usar toast()
+    com ícone (não toast.success) — visual diferente do aceite. VINCULO=❌, DESVINCULO=🔒, TROCA_VET=🔄.
 ```
 
 ---

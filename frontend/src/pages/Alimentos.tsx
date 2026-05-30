@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ const Alimentos = () => {
           <button
             onClick={() => navigate('/alimentos/novo')}
             className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold transition-colors text-sm w-full sm:w-auto">
-            <Plus size={18} /> Novo Alimento
+            Novo Alimento
           </button>
         </div>
 

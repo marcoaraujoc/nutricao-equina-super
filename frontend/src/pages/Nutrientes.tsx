@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Edit, Trash2, Plus } from 'lucide-react';
+import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 const Nutrientes = () => {
@@ -63,7 +63,6 @@ const Nutrientes = () => {
               onClick={() => navigate('/nutrientes/novo')}
               className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 sm:py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
             >
-              <Plus size={20} />
               Novo Nutriente
             </button>
           </div>

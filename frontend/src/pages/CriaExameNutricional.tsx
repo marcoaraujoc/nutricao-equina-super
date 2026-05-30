@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Upload, Edit, Trash2, AlertCircle, X, Plus, FileText } from 'lucide-react';
+import { Upload, Edit, Trash2, AlertCircle, X, FileText } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 const CriaExameNutricional = () => {
@@ -445,7 +445,7 @@ const CriaExameNutricional = () => {
                   onClick={addManualRow} 
                   className="w-full py-4 border-2 border-dashed border-emerald-300 rounded-2xl text-emerald-600 hover:bg-emerald-50 flex items-center justify-center gap-2 font-medium"
                 >
-                  <Plus size={20} /> Adicionar outro exame
+                  Adicionar outro exame
                 </button>
               </div>
 

@@ -8,7 +8,8 @@ import {
   LayoutDashboard, User, Zap, ClipboardList,
   Wheat, TestTube, ChartBar, Carrot, Stethoscope,
   DollarSign, ChevronDown, LogOut, Menu, X,
-  Users, Users2, ShieldCheck,
+  Users, Users2, ShieldCheck, FlaskConical, Pill,
+  ClipboardCheck, Activity,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -16,8 +17,6 @@ import { useProprietarioNotificacoes } from '../hooks/useProprietarioNotificacoe
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 const CLS_MODULE_ACTIVE  = 'bg-emerald-50 text-emerald-600';
-const CLS_ITEM_ACTIVE    = 'bg-emerald-100 text-emerald-700 font-medium';
-const CLS_ITEM_INACTIVE  = 'text-gray-700 hover:bg-gray-100';
 const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
@@ -27,6 +26,8 @@ type ActiveSection = 'geral' | 'clinica' | 'nutricional' | 'admin';
 
 function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/clinica'))               return 'clinica';
+  if (pathname.startsWith('/farmacia'))              return 'clinica';
+  if (pathname.startsWith('/execucao-prescricao'))   return 'clinica';
   if (pathname.startsWith('/animais-vet'))           return 'geral';
   if (pathname.startsWith('/dieta'))                 return 'nutricional';
   if (pathname.startsWith('/relatorio-nutricional')) return 'nutricional';
@@ -36,7 +37,9 @@ function detectSection(pathname: string): ActiveSection {
     pathname.startsWith('/composicao-alimentar') ||
     pathname.startsWith('/usuarios') ||
     pathname.startsWith('/equipe') ||
-    pathname.startsWith('/ai-usage')
+    pathname.startsWith('/ai-usage') ||
+    pathname.startsWith('/medicamentos') ||
+    pathname.startsWith('/procedimentos')
   ) return 'admin';
   return 'geral';
 }
@@ -75,7 +78,16 @@ export default function Sidebar() {
   const [openNutricional,   setOpenNutricional]   = useState(() =>
     p.startsWith('/dieta') || p.startsWith('/relatorio-nutricional'),
   );
-  const [openAdministracao, setOpenAdministracao] = useState(false);
+  const [openAdministracao, setOpenAdministracao] = useState(() =>
+    p.startsWith('/alimentos') ||
+    p.startsWith('/nutrientes') ||
+    p.startsWith('/composicao-alimentar') ||
+    p.startsWith('/usuarios') ||
+    p.startsWith('/equipe') ||
+    p.startsWith('/ai-usage') ||
+    p.startsWith('/medicamentos') ||
+    p.startsWith('/procedimentos'),
+  );
   const [openFinanceiro,    setOpenFinanceiro]    = useState(false);
   const [isMobileMenuOpen,  setIsMobileMenuOpen]  = useState(false);
 
@@ -85,7 +97,7 @@ export default function Sidebar() {
   // ── Renderizadores ────────────────────────────────────────────────────────
   const navLink = (to: string, icon: React.ReactNode, label: string, active: boolean) => (
     <Link to={to} onClick={closeMobile}
-      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base transition-colors ${active ? CLS_ITEM_ACTIVE : CLS_ITEM_INACTIVE}`}>
+      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       {icon} {label}
     </Link>
   );
@@ -94,7 +106,7 @@ export default function Sidebar() {
     to: string, icon: React.ReactNode, label: string, active: boolean, badge: number,
   ) => (
     <Link to={to} onClick={closeMobile}
-      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-base transition-colors ${active ? CLS_ITEM_ACTIVE : CLS_ITEM_INACTIVE}`}>
+      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       {icon}
       <span className="flex-1">{label}</span>
       {badge > 0 && (
@@ -190,17 +202,45 @@ export default function Sidebar() {
               {openModulos && (
                 <div className="mt-1 pl-4 space-y-0.5">
 
-                  {/* ── Clínica — agora um único link "Atendimento" ──────── */}
+                  {/* ── Clínica — Atendimento ────────────────────────── */}
                   {temAcessoClinico && (
                     <Link
                       to="/clinica"
                       onClick={closeMobile}
                       className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                        isModuleActive('clinica') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                        activeSection === 'clinica' && p.startsWith('/clinica') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                       }`}
                     >
                       <Stethoscope size={20} />
                       Atendimento
+                    </Link>
+                  )}
+
+                  {/* ── Execução de Prescrições ───────────────────────── */}
+                  {temAcessoClinico && (
+                    <Link
+                      to="/execucao-prescricao"
+                      onClick={closeMobile}
+                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
+                        p.startsWith('/execucao-prescricao') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <ClipboardCheck size={20} />
+                      Execução de Prescrições
+                    </Link>
+                  )}
+
+                  {/* ── Farmácia ──────────────────────────────────────── */}
+                  {(isAdmin || isVet) && (
+                    <Link
+                      to="/farmacia"
+                      onClick={closeMobile}
+                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
+                        p.startsWith('/farmacia') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <FlaskConical size={20} />
+                      Farmácia
                     </Link>
                   )}
 
@@ -258,11 +298,13 @@ export default function Sidebar() {
                 <div className="mt-1 space-y-0.5 pl-4">
                   {isAdmin && (
                     <>
-                      {navLink('/alimentos',           <Wheat size={20} />,    'Alimentos',            isAdminActive('/alimentos'))}
-                      {navLink('/nutrientes',           <TestTube size={20} />, 'Nutrientes',           isAdminActive('/nutrientes'))}
-                      {navLink('/composicao-alimentar', <ChartBar size={20} />, 'Composição Alimentar', isAdminActive('/composicao-alimentar'))}
-                      {navLink('/usuarios',             <Users size={20} />,    'Usuários',             isAdminActive('/usuarios'))}
-                      {navLink('/ai-usage',             <Users size={20} />,    'Monitoramento IA',     isAdminActive('/ai-usage'))}
+                      {navLink('/medicamentos',        <Pill size={20} />,      'Medicamentos',         isAdminActive('/medicamentos'))}
+                      {navLink('/procedimentos',       <Activity size={20} />,  'Procedimentos',        isAdminActive('/procedimentos'))}
+                      {navLink('/alimentos',           <Wheat size={20} />,     'Alimentos',            isAdminActive('/alimentos'))}
+                      {navLink('/nutrientes',          <TestTube size={20} />,  'Nutrientes',           isAdminActive('/nutrientes'))}
+                      {navLink('/composicao-alimentar',<ChartBar size={20} />,  'Composição Alimentar', isAdminActive('/composicao-alimentar'))}
+                      {navLink('/usuarios',            <Users size={20} />,     'Usuários',             isAdminActive('/usuarios'))}
+                      {navLink('/ai-usage',            <Users size={20} />,     'Monitoramento IA',     isAdminActive('/ai-usage'))}
                     </>
                   )}
                   {navLink('/equipe', <Users2 size={20} />, 'Minha Equipe', isAdminActive('/equipe'))}

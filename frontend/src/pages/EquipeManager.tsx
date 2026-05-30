@@ -1,11 +1,11 @@
-// src/pages/EquipeManager.tsx
+﻿// src/pages/EquipeManager.tsx
 // Gerenciamento de empresas, equipes e convites
 
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Plus, Mail, Trash2, Building2,
+  Mail, Trash2, Building2,
   Users, ChevronDown, ChevronUp, Check, X,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -251,7 +251,7 @@ export default function EquipeManager() {
           </div>
           <button onClick={() => setShowEmpForm(f => !f)}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl transition-colors">
-            <Plus size={15} /> Nova empresa
+            Nova empresa
           </button>
         </div>
 
@@ -309,7 +309,7 @@ export default function EquipeManager() {
                   </div>
                   <button onClick={() => setShowEqForm(showEqForm === emp.id ? null : emp.id)}
                     className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-semibold rounded-xl hover:border-emerald-400 hover:text-emerald-700 transition-colors">
-                    <Plus size={12} /> Equipe
+                    Equipe
                   </button>
                 </div>
 

@@ -1,4 +1,4 @@
-// src/pages/VetDashboard.tsx
+﻿// src/pages/VetDashboard.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,7 +6,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  CheckCircle2, XCircle, Clock, Plus,
+  CheckCircle2, XCircle, Clock,
   Unlink, Search, Pencil, LayoutDashboard,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
@@ -389,7 +389,6 @@ export default function VetDashboard() {
             <button onClick={() => navigate('/animais')}
               className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
                          px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-              <Plus size={15} />
               <span className="hidden xs:inline sm:inline">Novo Paciente</span>
               <span className="xs:hidden sm:hidden">Novo</span>
             </button>
@@ -545,7 +544,7 @@ export default function VetDashboard() {
             <button onClick={() => navigate('/animais')}
               className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
                          text-white px-6 py-3 rounded-2xl font-semibold transition-colors">
-              <Plus size={18} /> Cadastrar Paciente
+              Cadastrar Paciente
             </button>
           </div>
         ) : null}

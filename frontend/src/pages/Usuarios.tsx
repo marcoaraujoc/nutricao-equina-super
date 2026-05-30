@@ -1,14 +1,15 @@
-// src/pages/Usuarios.tsx
+﻿// src/pages/Usuarios.tsx
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import {
-  Plus, Pencil, Trash2,
+  Pencil, Trash2,
   ToggleLeft, ToggleRight, X, AlertCircle,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import { formatDate as formatarDataBR } from '../utils/dateUtils';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -69,12 +70,6 @@ const ESTADOS_BR = [
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const formatarDataBR = (data: string): string => {
-  const d = new Date(data);
-  if (isNaN(d.getTime())) return '-';
-  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-};
 
 const labelRole     = (r: string) => ROLES.find(x => x.value === r)?.label     ?? r;
 const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label ?? t;
@@ -269,7 +264,7 @@ const Usuarios = () => {
           <h1 className="text-2xl font-bold text-gray-900">Usuários</h1>
           <button onClick={abrirNovo}
             className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold transition-colors text-sm w-full sm:w-auto">
-            <Plus size={18} /> Novo Usuário
+            Novo Usuário
           </button>
         </div>
 

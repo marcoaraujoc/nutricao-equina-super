@@ -104,17 +104,17 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
 
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
-            <span className="text-base font-semibold text-gray-900 truncate block">{animal.nome}</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.nome}</span>
           </div>
 
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Idade</span>
-            <span className="text-base font-semibold text-gray-900 block">{idade}</span>
+            <span className="text-sm text-gray-900 block">{idade}</span>
           </div>
 
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Raça</span>
-            <span className="text-base font-semibold text-gray-900 truncate block">
+            <span className="text-sm text-gray-900 truncate block">
               {animal.raca?.nome ?? animal.especie?.nome ?? '-'}
             </span>
           </div>
@@ -122,20 +122,20 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
           {animal.peso != null && (
             <div>
               <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Peso</span>
-              <span className="text-base font-semibold text-gray-900 block">{animal.peso} kg</span>
+              <span className="text-sm text-gray-900 block">{animal.peso} kg</span>
             </div>
           )}
 
           {animal.tipoExercicio && (
             <div>
               <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Tipo de Trabalho</span>
-              <span className="text-base font-semibold text-gray-900 truncate block">{animal.tipoExercicio}</span>
+              <span className="text-sm text-gray-900 truncate block">{animal.tipoExercicio}</span>
             </div>
           )}
 
           <div>
             <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Proprietário</span>
-            <span className="text-base font-semibold text-gray-900 truncate block">{proprietarioNome}</span>
+            <span className="text-sm text-gray-900 truncate block">{proprietarioNome}</span>
           </div>
 
           {/* Veterinário Responsável — exibe badge PENDENTE quando não há ACEITO */}
@@ -146,7 +146,7 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
 
             {vetNome ? (
               // Vet com vínculo ACEITO
-              <span className="text-base font-semibold text-gray-900 truncate block">
+              <span className="text-sm text-gray-900 truncate block">
                 {vetNome}
               </span>
             ) : vetPendente ? (
@@ -158,7 +158,7 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
               </span>
             ) : (
               // Sem vet atribuído
-              <span className="text-base font-semibold text-gray-400 italic block">
+              <span className="text-sm text-gray-400 italic block">
                 Não atribuído
               </span>
             )}

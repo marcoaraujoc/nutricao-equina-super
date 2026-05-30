@@ -5,13 +5,15 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Plus, Pencil, Trash2, Printer, Mic, MicOff, Square,
+  Pencil, Trash2, Printer, Mic, MicOff, Square,
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
   Share2, FileText, CheckCircle2, Loader2, WifiOff,
   Calendar, User, Filter, Search, Eye, Ban, Paperclip,
   Image, Film, Volume2, Lock,
 } from 'lucide-react';
 import { imprimirEvolucao } from '../utils/EvolucaoPrint';
+import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
+import DateInputBR from '../components/DateInputBR';
 import {
   isMobile     as detectarMobile,
   estaOnline,
@@ -128,23 +130,6 @@ const FORM_INICIAL: FormEvolucao = { especialidade: 'Clínico', texto: '', statu
 const LIMIT_OPTIONS = [10, 20, 50];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const formatarData = (data: string | null | undefined): string => {
-  if (!data) return '—';
-  const d = new Date(data);
-  if (isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-};
-
-const formatarDataHora = (data: string | null | undefined): string => {
-  if (!data) return '—';
-  const d = new Date(data);
-  if (isNaN(d.getTime())) return '—';
-  return d.toLocaleString('pt-BR', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
-};
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024)        return `${bytes} B`;
@@ -356,11 +341,14 @@ function ConfirmacaoEncaminhamentoModal({ acoes, onConfirmar, onCancelar, saving
 
 // ─── ExclusaoModal ────────────────────────────────────────────────────────────
 
-function ExclusaoModal({ ev, onConfirmar, onCancelar, saving }: {
-  ev:          EvolucaoItem;
-  onConfirmar: (j: string) => void;
-  onCancelar:  () => void;
-  saving:      boolean;
+function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onCancelar, saving }: {
+  ev:             EvolucaoItem;
+  titulo?:        string;
+  descricao?:     string;
+  labelConfirmar?: string;
+  onConfirmar:    (j: string) => void;
+  onCancelar:     () => void;
+  saving:         boolean;
 }) {
   const [justificativa, setJustificativa] = useState('');
   return (
@@ -371,12 +359,12 @@ function ExclusaoModal({ ev, onConfirmar, onCancelar, saving }: {
             <Trash2 size={18} className="text-red-600" />
           </div>
           <div>
-            <h3 className="font-bold text-gray-900">Remover evolução</h3>
+            <h3 className="font-bold text-gray-900">{titulo ?? 'Remover evolução'}</h3>
             <p className="text-xs text-gray-500">{ev.especialidade} — {formatarData(ev.dataInicio)}</p>
           </div>
         </div>
         <p className="text-xs text-gray-500 mb-3">
-          A evolução ficará oculta mas permanece auditável no banco de dados.
+          {descricao ?? 'A evolução ficará oculta mas permanece auditável no banco de dados.'}
         </p>
         <textarea autoFocus value={justificativa}
           onChange={e => setJustificativa(e.target.value)}
@@ -386,7 +374,7 @@ function ExclusaoModal({ ev, onConfirmar, onCancelar, saving }: {
         <div className="flex gap-3">
           <button onClick={onCancelar}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            Cancelar
+            Fechar
           </button>
           <button
             onClick={() => {
@@ -395,7 +383,7 @@ function ExclusaoModal({ ev, onConfirmar, onCancelar, saving }: {
             }}
             disabled={saving}
             className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
-            {saving ? 'Removendo...' : 'Confirmar Exclusão'}
+            {saving ? 'Processando...' : (labelConfirmar ?? 'Confirmar Exclusão')}
           </button>
         </div>
       </div>
@@ -595,7 +583,7 @@ function NovaEvolucaoModal({
 
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className={`grid gap-3 ${editingId ? 'grid-cols-2' : 'grid-cols-1'}`}>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
               <select value={form.especialidade} onChange={e => onFormChange('especialidade', e.target.value)}
@@ -603,13 +591,15 @@ function NovaEvolucaoModal({
                 {ESPECIALIDADES.map(esp => <option key={esp}>{esp}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Status</label>
-              <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
-                {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-            </div>
+            {editingId && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Status</label>
+                <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
+                  {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+              </div>
+            )}
           </div>
 
           <div>
@@ -814,9 +804,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [viewingEv,      setViewingEv]      = useState<EvolucaoItem | null>(null);
   const [editingEv,      setEditingEv]      = useState<EvolucaoItem | null>(null);
   const [deletingEv,     setDeletingEv]     = useState<EvolucaoItem | null>(null);
+  const [cancelandoEv,   setCancelandoEv]   = useState<EvolucaoItem | null>(null);
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
   const [savingEv,       setSavingEv]       = useState(false);
   const [savingExclusao, setSavingExclusao] = useState(false);
+  const [savingCancelamento, setSavingCancelamento] = useState(false);
   const [interpretando,  setInterpretando]  = useState(false);
   const [acoesLLM,       setAcoesLLM]       = useState<AcaoSelecionavel[]>([]);
   const [showLLM,        setShowLLM]        = useState(false);
@@ -1004,6 +996,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     finally { setSavingExclusao(false); }
   };
 
+  const handleCancelarFinalizada = async (justificativa: string) => {
+    if (!cancelandoEv) return;
+    setSavingCancelamento(true);
+    try {
+      await api.patch(`/clinica/evolucoes/${cancelandoEv.id}/cancelar`, { justificativa });
+      setCancelandoEv(null);
+      toast.success('Evolução cancelada');
+      carregarEvolucoes();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      toast.error(msg ?? 'Erro ao cancelar evolução');
+    } finally { setSavingCancelamento(false); }
+  };
+
   const handleRemoverMidia = async (evolucaoId: number, midiaId: number) => {
     try {
       await api.delete(`/clinica/evolucoes/${evolucaoId}/midias/${midiaId}`);
@@ -1073,7 +1079,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             disabled={temEvolucaoAberta}
             title={temEvolucaoAberta ? 'Existe uma evolução em andamento. Finalize-a antes de criar uma nova.' : undefined}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            {temEvolucaoAberta ? <Lock size={14} /> : <Plus size={15} />}
+            {temEvolucaoAberta && <Lock size={14} />}
             Nova Evolução
           </button>
           {temEvolucaoAberta && (
@@ -1097,19 +1103,24 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         </div>
 
         <div className="flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
-          <Calendar size={14} className="ml-3 text-gray-400 flex-shrink-0" />
           <div className="flex flex-col px-2 py-1 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Inicial</span>
-            <input type="date" value={filtroDataInicio}
-              onChange={e => { setFiltroDataInicio(e.target.value); setPage(1); }}
-              className="text-xs text-gray-900 bg-transparent focus:outline-none w-28" />
+            <DateInputBR
+              value={filtroDataInicio}
+              onChange={v => { setFiltroDataInicio(v); setPage(1); }}
+              className="w-28"
+              inputClassName="text-xs"
+            />
           </div>
           <span className="text-gray-300 text-xs px-1 flex-shrink-0">→</span>
           <div className="flex flex-col px-2 py-1 border-l border-gray-100 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Final</span>
-            <input type="date" value={filtroDataFim}
-              onChange={e => { setFiltroDataFim(e.target.value); setPage(1); }}
-              className="text-xs text-gray-900 bg-transparent focus:outline-none w-28" />
+            <DateInputBR
+              value={filtroDataFim}
+              onChange={v => { setFiltroDataFim(v); setPage(1); }}
+              className="w-28"
+              inputClassName="text-xs"
+            />
           </div>
         </div>
 
@@ -1154,7 +1165,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           <button onClick={abrirNova}
             disabled={temEvolucaoAberta}
             className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 disabled:bg-gray-300 transition-colors">
-            <Plus size={14} /> Nova Evolução
+            Nova Evolução
           </button>
         </div>
       ) : (
@@ -1261,13 +1272,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         )}
 
                         {ev.status === 'FINALIZADA' && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId)) && (
-                          <button onClick={async () => {
-                            try {
-                              await api.patch(`/clinica/evolucoes/${ev.id}`, { status: 'CANCELADA' });
-                              toast.success('Evolução cancelada');
-                              carregarEvolucoes();
-                            } catch { toast.error('Erro ao cancelar evolução'); }
-                          }} title="Cancelar evolução"
+                          <button onClick={() => setCancelandoEv(ev)} title="Cancelar evolução"
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                             <Ban size={14} />
                           </button>
@@ -1334,6 +1339,18 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       {deletingEv && (
         <ExclusaoModal ev={deletingEv} onConfirmar={handleExcluir}
           onCancelar={() => setDeletingEv(null)} saving={savingExclusao} />
+      )}
+
+      {cancelandoEv && (
+        <ExclusaoModal
+          ev={cancelandoEv}
+          titulo="Cancelar evolução"
+          descricao="A evolução ficará como CANCELADA e não poderá mais ser editada. A justificativa ficará registrada no sistema."
+          labelConfirmar="Confirmar Cancelamento"
+          onConfirmar={handleCancelarFinalizada}
+          onCancelar={() => setCancelandoEv(null)}
+          saving={savingCancelamento}
+        />
       )}
 
       {showLLM && (

@@ -7,6 +7,7 @@ import {
   ArrowLeft, FileText, Pill, Syringe,
   FlaskConical, Share2, Utensils, BarChart2,
 } from 'lucide-react';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -178,9 +179,7 @@ const AnimalDetail = () => {
                 <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Nascimento</span>
                   <span className="text-base sm:text-xl font-semibold text-gray-900">
-                    {animal.dataNascimento
-                      ? new Date(animal.dataNascimento).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
-                      : '-'}
+                    {animal.dataNascimento ? formatDate(animal.dataNascimento) : '-'}
                   </span>
                 </div>
                 <div>

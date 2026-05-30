@@ -47,6 +47,9 @@ model User {
   evolucoesCriadas     EvolucaoClinica[]      @relation("EvolucaoVeterinario")
   evolucoesModificadas EvolucaoClinica[]      @relation("EvolucaoModificadoPor")
   prescricoes          Prescricao[]           @relation("PrescricaoVeterinario")
+  prescricaoGrupos          PrescricaoGrupo[]      @relation("PrescricaoGrupoVet")
+  prescricaoGruposFinalizou PrescricaoGrupo[]      @relation("PrescricaoGrupoFinaliza")
+  prescricaoGruposExecutou  PrescricaoGrupo[]      @relation("PrescricaoGrupoExecuta")
   vacinas              VacinaClinica[]        @relation("VacinaVeterinario")
   encaminhamentos      EncaminhamentoClinico[] @relation("EncaminhamentoVeterinario")
   examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
@@ -85,6 +88,7 @@ model Animal {
   veterinarioNome    String?  @db.VarChar(255)
   veterinarioClinica String?  @db.VarChar(255)
   local              String?  @db.VarChar(255)
+  baia               String?  @db.VarChar(100)
   idadeAnos          Int?
 
   especie         Especie              @relation(fields: [especieId],  references: [id])
@@ -97,8 +101,9 @@ model Animal {
   planosDieta     PlanoDieta[]
   relatorios      RelatorioSalvo[]
   evolucoes       EvolucaoClinica[]      @relation("AnimalEvolucoes")
-  prescricoes     Prescricao[]           @relation("AnimalPrescricoes")
-  vacinas         VacinaClinica[]        @relation("AnimalVacinas")
+  prescricoes      Prescricao[]           @relation("AnimalPrescricoes")
+  prescricaoGrupos PrescricaoGrupo[]     @relation("AnimalPrescricaoGrupos")
+  vacinas          VacinaClinica[]       @relation("AnimalVacinas")
   encaminhamentos EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
   examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
   faturas         Fatura[]               @relation("AnimalFaturas")
@@ -377,8 +382,10 @@ model Prescricao {
   id                  Int       @id @default(autoincrement())
   animalId            Int
   veterinarioId       Int
+  grupoId             Int?      // FK para PrescricaoGrupo (null = item legado sem grupo)
+  medicamentoCatId    Int?      // FK para Medicamento quando selecionado do catálogo
   tipo                String    @default("MEDICAMENTO")
-  medicamento         String
+  medicamento         String    // nome livre ou nome do catálogo
   dose                String    @default("")
   dosagem             String?
   unidade             String?
@@ -390,17 +397,78 @@ model Prescricao {
   horaInicio          String?
   via                 String    @default("Oral")
   observacao          String?
-  status              String    @default("RASCUNHO")
+  status              String    @default("RASCUNHO")  // RASCUNHO(=SALVO) | ATIVA(=FINALIZADO) | CANCELADA
   horariosGerados     Json?
   dataInicio          DateTime  @default(now())
   dataFim             DateTime?
   ativo               Boolean   @default(true)
   aprovado            Boolean   @default(true)
 
-  animal      Animal @relation("AnimalPrescricoes",     fields: [animalId],      references: [id])
-  veterinario User   @relation("PrescricaoVeterinario", fields: [veterinarioId], references: [id])
+  animal           Animal           @relation("AnimalPrescricoes",     fields: [animalId],         references: [id])
+  veterinario      User             @relation("PrescricaoVeterinario", fields: [veterinarioId],    references: [id])
+  grupo            PrescricaoGrupo? @relation("GrupoPrescricoes",      fields: [grupoId],          references: [id])
+  medicamentoCat   Medicamento?     @relation("MedicamentoPrescricoes", fields: [medicamentoCatId], references: [id])
 
+  @@index([animalId])
+  @@index([veterinarioId])
+  @@index([grupoId])
   @@map("tb_prescricoes")
+  @@schema("schs2vet")
+}
+
+// Documento de prescrição (agrupa itens Medicamento/Procedimento)
+model PrescricaoGrupo {
+  id              Int       @id @default(autoincrement())
+  numero          Int                              // sequencial por animal (1=001, 2=002…)
+  animalId        Int
+  veterinarioId   Int
+  empresaId       Int?
+  status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO
+  finalizadoPorId Int?
+  finalizadoEm    DateTime?
+  executadoPorId  Int?
+  executadoEm     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  animal        Animal       @relation("AnimalPrescricaoGrupos", fields: [animalId],        references: [id])
+  veterinario   User         @relation("PrescricaoGrupoVet",     fields: [veterinarioId],   references: [id])
+  finalizadoPor User?        @relation("PrescricaoGrupoFinaliza", fields: [finalizadoPorId], references: [id])
+  executadoPor  User?        @relation("PrescricaoGrupoExecuta",  fields: [executadoPorId],  references: [id])
+  itens         Prescricao[] @relation("GrupoPrescricoes")
+
+  @@unique([animalId, numero])
+  @@index([animalId])
+  @@index([veterinarioId])
+  @@index([status])
+  @@map("tb_prescricao_grupos")
+  @@schema("schs2vet")
+}
+
+// Catálogo global de procedimentos veterinários
+model ProcedimentoVeterinario {
+  id               Int      @id @default(autoincrement())
+  codigo           String?  @unique @db.VarChar(50)
+  nome             String   @db.VarChar(255)
+  nomeAbreviado    String?  @db.VarChar(100)
+  descricao        String?  @db.Text
+  categoria        String   @db.VarChar(100)
+  subcategoria     String?  @db.VarChar(100)
+  especialidade    String?  @db.VarChar(100)
+  tipoProcedimento String?  @db.VarChar(50)   // CLINICO | CIRURGICO | DIAGNOSTICO
+  duracao          Int?                        // minutos
+  requerAnestesia  Boolean  @default(false)
+  requerInternacao Boolean  @default(false)
+  risco            String?  @db.VarChar(20)   // BAIXO | MEDIO | ALTO
+  valorCusto       Float?
+  valorVenda       Float?
+  ativo            Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([ativo])
+  @@index([categoria])
+  @@map("tb_procedimentos_vet")
   @@schema("schs2vet")
 }
 
@@ -632,9 +700,10 @@ model Empresa {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner   User     @relation("EmpresaOwner", fields: [ownerId], references: [id])
+  owner   User             @relation("EmpresaOwner", fields: [ownerId], references: [id])
   equipes Equipe[]
-  animais Animal[] @relation("EmpresaAnimais")
+  animais Animal[]         @relation("EmpresaAnimais")
+  estoques EstoqueClinica[] @relation("EmpresaEstoque")
 
   @@map("tb_empresas")
   @@schema("schs2vet")
@@ -802,5 +871,89 @@ model CrmvSyncLog {
   erro           String?  @db.Text
 
   @@map("tb_crmv_sync_log")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// FARMÁCIA — CATÁLOGO GLOBAL + ESTOQUE POR CLÍNICA
+// =============================================================================
+
+// Catálogo global de medicamentos (compartilhado entre clínicas)
+model Medicamento {
+  id                Int      @id @default(autoincrement())
+  nome              String   @db.VarChar(255)
+  formaFarmaceutica String   @db.VarChar(100)
+  unidade           String   @db.VarChar(50)
+  apresentacao      String   @db.VarChar(100)
+  controlado        Boolean  @default(false)
+  ativo             Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  vias        MedicamentoVia[]
+  estoques    EstoqueClinica[]
+  prescricoes Prescricao[]     @relation("MedicamentoPrescricoes")
+
+  @@unique([nome, formaFarmaceutica, apresentacao])
+  @@index([ativo])
+  @@index([controlado])
+  @@map("tb_medicamentos")
+  @@schema("schs2vet")
+}
+
+// Vias de administração vinculadas ao catálogo
+model MedicamentoVia {
+  id            Int         @id @default(autoincrement())
+  medicamentoId Int
+  via           String      @db.VarChar(100)
+
+  medicamento Medicamento @relation(fields: [medicamentoId], references: [id], onDelete: Cascade)
+
+  @@unique([medicamentoId, via])
+  @@index([medicamentoId])
+  @@map("tb_medicamento_vias")
+  @@schema("schs2vet")
+}
+
+// Estoque por clínica (uma linha = um medicamento em uma clínica)
+model EstoqueClinica {
+  id               Int       @id @default(autoincrement())
+  medicamentoId    Int
+  empresaId        Int?
+  valor            Float     @default(0)        // preço de venda
+  lote             String?   @db.VarChar(100)
+  validade         DateTime?
+  qtdEstoque       Int       @default(0)
+  estoqueMinimo    Int       @default(0)        // alerta vermelho
+  estoqueAlarmante Int       @default(0)        // alerta amarelo
+  ativo            Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  medicamento Medicamento      @relation(fields: [medicamentoId], references: [id])
+  empresa     Empresa?         @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: SetNull)
+  movimentos  MovimentoEstoque[]
+
+  @@index([medicamentoId])
+  @@index([empresaId])
+  @@index([ativo])
+  @@map("tb_estoque_clinica")
+  @@schema("schs2vet")
+}
+
+// Movimentações de estoque por clínica
+model MovimentoEstoque {
+  id         Int            @id @default(autoincrement())
+  estoqueId  Int
+  tipo       String         @db.VarChar(20)  // ENTRADA | SAIDA | AJUSTE
+  quantidade Int
+  motivo     String?        @db.Text
+  createdAt  DateTime       @default(now())
+
+  estoque EstoqueClinica @relation(fields: [estoqueId], references: [id], onDelete: Cascade)
+
+  @@index([estoqueId])
+  @@index([createdAt])
+  @@map("tb_movimentos_estoque")
   @@schema("schs2vet")
 }

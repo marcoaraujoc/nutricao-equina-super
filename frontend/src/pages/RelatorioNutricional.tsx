@@ -1,5 +1,5 @@
 // frontend/src/pages/RelatorioNutricional.tsx
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -7,8 +7,11 @@ import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
-import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronRight, Download, Printer } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import toast from 'react-hot-toast';
+import { formatDateTime } from '../utils/dateUtils';
+import * as XLSX from 'xlsx';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -191,6 +194,19 @@ const RelatorioNutricional = () => {
   const [filtroStatus,          setFiltroStatus]          = useState<FiltroStatus[]>(['todos']);
   const [filtroSomenteNRC,      setFiltroSomenteNRC]      = useState(false);
   const [gruposColapsados,      setGruposColapsados]      = useState<Set<string>>(new Set());
+  const [showExportMenu,        setShowExportMenu]        = useState(false);
+
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node))
+        setShowExportMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showExportMenu]);
 
   const effectiveAnimalId = paramAnimalId || selectedAnimal?.id?.toString();
 
@@ -312,6 +328,79 @@ const RelatorioNutricional = () => {
     return `Nenhum nutriente para os ${filtroStatus.length} filtros selecionados.`;
   };
 
+  // ── Exportação ───────────────────────────────────────────────────────────
+
+  const exportarPDF = () => {
+    if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
+    const nomeAnimal = currentAnimal?.nome ?? 'Animal';
+    const dataGerado = snapshot?.geradoEm ? formatDateTime(snapshot.geradoEm) : '';
+    const linhas = relatorio.map(item => `
+      <tr>
+        <td>${item.nutriente}</td>
+        <td>${item.unidade}</td>
+        <td>${typeof item.Total_Dieta === 'number' ? item.Total_Dieta.toFixed(1) : '—'}</td>
+        <td>${item.Exigido_NRC ?? '—'}</td>
+        <td>${typeof item.Saldo === 'number' ? item.Saldo.toFixed(1) : '—'}</td>
+        <td>${item.Percentual_Atendido != null ? Number(item.Percentual_Atendido).toFixed(1) + '%' : '—'}</td>
+        <td>${item.status_nutricional}</td>
+      </tr>`).join('');
+    const iframe = document.createElement('iframe');
+    Object.assign(iframe.style, { position: 'fixed', top: '-9999px', left: '-9999px', width: '0', height: '0', border: 'none' });
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+    if (!doc) { document.body.removeChild(iframe); return; }
+    doc.open();
+    doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/>
+      <title>Relatório Nutricional — ${nomeAnimal}</title>
+      <style>
+        body{font-family:Arial,sans-serif;padding:20px;font-size:11px;}
+        h1{font-size:15px;margin-bottom:2px;}
+        p{font-size:10px;color:#666;margin-bottom:14px;}
+        table{width:100%;border-collapse:collapse;}
+        th{background:#065f46;color:#fff;padding:7px 5px;text-align:left;font-size:10px;}
+        td{padding:5px;border-bottom:1px solid #e5e7eb;font-size:10px;}
+        tr:nth-child(even) td{background:#f9fafb;}
+      </style></head><body>
+      <h1>Relatório Nutricional — ${nomeAnimal}</h1>
+      ${dataGerado ? `<p>Gerado em ${dataGerado}</p>` : ''}
+      <table><thead><tr>
+        <th>Nutriente</th><th>Unidade</th><th>Total Dieta</th>
+        <th>Exigido NRC</th><th>Saldo</th><th>% Atendido</th><th>Status</th>
+      </tr></thead><tbody>${linhas}</tbody></table>
+    </body></html>`);
+    doc.close();
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 500);
+    }, 250);
+    setShowExportMenu(false);
+  };
+
+  const exportarExcelRelatorio = () => {
+    if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
+    const wb   = XLSX.utils.book_new();
+    const cols  = ['Nutriente', 'Unidade', 'Total Dieta', 'Exigido NRC', 'Saldo', '% Atendido', 'Status', ...colunasDinamicas];
+    const rows  = relatorio.map(item => [
+      item.nutriente,
+      item.unidade,
+      item.Total_Dieta,
+      item.Exigido_NRC,
+      item.Saldo,
+      item.Percentual_Atendido,
+      item.status_nutricional,
+      ...colunasDinamicas.map(c => item[c]),
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([cols, ...rows]);
+    ws['!cols'] = [
+      { wch: 25 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 22 },
+      ...colunasDinamicas.map(() => ({ wch: 15 })),
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Relatório Nutricional');
+    XLSX.writeFile(wb, `relatorio-nutricional-${currentAnimal?.nome ?? 'animal'}.xlsx`);
+    setShowExportMenu(false);
+  };
+
   // ── Guards ────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -324,7 +413,11 @@ const RelatorioNutricional = () => {
 
   if (!effectiveAnimalId) return (
     <PageContainer maxWidth="7xl">
-      <p className="text-center py-10 text-gray-500">Selecione um animal.</p>
+      <BotaoVoltar className="mb-4" />
+      <div className="text-center py-20">
+        <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
+        <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+      </div>
     </PageContainer>
   );
 
@@ -354,7 +447,7 @@ const RelatorioNutricional = () => {
             <div className="flex items-center gap-3 mt-0.5">
               {snapshot?.geradoEm && (
                 <p className="text-xs text-gray-400">
-                  Gerado em {new Date(snapshot.geradoEm).toLocaleString('pt-BR')}
+                  Gerado em {formatDateTime(snapshot.geradoEm)}
                 </p>
               )}
               {snapshot?.fonteCalculo && (
@@ -368,14 +461,42 @@ const RelatorioNutricional = () => {
               )}
             </div>
           </div>
-          <button
-            onClick={gerarRelatorio}
-            disabled={generating}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-          >
-            <RefreshCw size={15} className={generating ? 'animate-spin' : ''} />
-            {generating ? 'Gerando...' : 'Atualizar'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={gerarRelatorio}
+              disabled={generating}
+              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+            >
+              <RefreshCw size={15} className={generating ? 'animate-spin' : ''} />
+              {generating ? 'Gerando...' : 'Atualizar'}
+            </button>
+            {relatorio.length > 0 && (
+              <div className="relative" ref={exportMenuRef}>
+                <button
+                  onClick={() => setShowExportMenu(v => !v)}
+                  className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 transition-colors"
+                >
+                  <Download size={15} /> Exportar <ChevronDown size={13} />
+                </button>
+                {showExportMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[160px]">
+                    <button
+                      onClick={exportarPDF}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                    >
+                      <Printer size={14} /> PDF
+                    </button>
+                    <button
+                      onClick={exportarExcelRelatorio}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                    >
+                      <Download size={14} /> Excel (.xlsx)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Filtros */}

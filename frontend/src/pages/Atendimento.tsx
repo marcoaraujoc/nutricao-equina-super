@@ -390,9 +390,13 @@ const Atendimento = () => {
 
   if (!effectiveAnimalId) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-400 text-sm">Selecione um animal para acessar o módulo clínico.</p>
-      </div>
+      <PageContainer>
+        <BotaoVoltar className="mb-4" />
+        <div className="text-center py-20">
+          <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
+          <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+        </div>
+      </PageContainer>
     );
   }
 
@@ -413,6 +417,7 @@ const Atendimento = () => {
         return (
           <SubModuloPrescricao
             animalId={animalIdNum}
+            animal={animal}
             onFaturaAtualizada={carregarFatura}
           />
         );

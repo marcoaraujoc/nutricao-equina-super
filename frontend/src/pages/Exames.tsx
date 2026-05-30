@@ -1,13 +1,15 @@
-import { useState, useEffect, useMemo } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import { Plus, Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
+import { Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
+import { formatDate } from '../utils/dateUtils';
+import DateInputBR from '../components/DateInputBR';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -116,11 +118,6 @@ const Exames = () => {
     return 'normal';
   };
 
-  const formatDate = (isoString: string) => {
-    const date = new Date(isoString);
-    return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
-  };
-
   const examesFiltrados = useMemo(() => exames.filter(ex => {
     if (filtroData && ex.dataExame?.split('T')[0] !== filtroData) return false;
     if (filtroNutriente && !(ex.nutriente?.nome ?? '').toLowerCase().includes(filtroNutriente.toLowerCase())) return false;
@@ -138,7 +135,11 @@ const Exames = () => {
 
   if (!effectiveAnimalId) return (
     <PageContainer>
-      <p className="text-center py-10 text-gray-500">Selecione um animal.</p>
+      <BotaoVoltar className="mb-4" />
+      <div className="text-center py-20">
+        <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
+        <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+      </div>
     </PageContainer>
   );
 
@@ -160,7 +161,7 @@ const Exames = () => {
           onClick={handleNovoExame}
           className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-3xl flex items-center justify-center gap-2 transition-colors"
         >
-          <Plus size={20} /> Novo Exame Nutricional
+          Novo Exame Nutricional
         </button>
 
         {/* Filtros */}
@@ -168,11 +169,10 @@ const Exames = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Data</label>
-              <input
-                type="date"
+              <DateInputBR
                 value={filtroData}
-                onChange={e => setFiltroData(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                onChange={setFiltroData}
+                className="border border-gray-200 rounded-xl px-3 py-2 focus-within:border-emerald-500"
               />
             </div>
             <div>
@@ -240,11 +240,10 @@ const Exames = () => {
                       <td className="px-6 py-4 flex items-center gap-2 text-gray-900">
                         <Calendar size={16} />
                         {isEditing ? (
-                          <input
-                            type="date"
-                            value={editValues.dataExame ? editValues.dataExame.split('T')[0] : formatDate(ex.dataExame)}
-                            onChange={e => setEditValues({ ...editValues, dataExame: e.target.value })}
-                            className="border rounded p-1 text-sm"
+                          <DateInputBR
+                            value={editValues.dataExame ? editValues.dataExame.split('T')[0] : ex.dataExame?.split('T')[0] ?? ''}
+                            onChange={v => setEditValues({ ...editValues, dataExame: v })}
+                            className="border rounded p-1"
                           />
                         ) : formatDate(ex.dataExame)}
                       </td>

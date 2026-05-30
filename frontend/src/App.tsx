@@ -60,6 +60,12 @@ import QueryAdHoc from './pages/query-adhoc';
 // Pages — Monitoração Custo IA
 import AiUsageDashboard from './pages/AiUsageDashboard';
 
+// Pages — Farmácia / Medicamentos / Procedimentos
+import Farmacia            from './pages/Farmacia';
+import Medicamentos        from './pages/Medicamentos';
+import Procedimentos       from './pages/Procedimentos';
+import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
+
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 
 function App() {
@@ -170,6 +176,12 @@ function App() {
                           <Route path="/clinica/exames/:animalId"         element={<Atendimento />} />
                           <Route path="/clinica/encaminhamento"           element={<Atendimento />} />
                           <Route path="/clinica/encaminhamento/:animalId" element={<Atendimento />} />
+
+                          {/* Farmácia */}
+                          <Route path="/farmacia"              element={<Farmacia />} />
+                          <Route path="/medicamentos"          element={<Medicamentos />} />
+                          <Route path="/procedimentos"         element={<Procedimentos />} />
+                          <Route path="/execucao-prescricao"   element={<ExecucaoPrescricao />} />
 
                           {/* Equipe */}
                           <Route path="/equipe" element={<Equipe />} />

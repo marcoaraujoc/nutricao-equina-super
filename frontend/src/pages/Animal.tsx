@@ -37,6 +37,7 @@ interface FormData {
   tipoExercicio:     string;
   veterinarioUserId: number | null;
   local:             string;
+  baia:              string;
 }
 
 interface FormProprietario {
@@ -63,8 +64,19 @@ interface Solicitacao {
 interface AnimalEncontrado {
   id:               number;
   nome:             string;
+  photoUrl?:        string | null;
+  dataNascimento?:  string | null;
+  idadeAnos?:       number | null;
+  peso?:            number | null;
+  sexo?:            string | null;
+  categoriaAnimal?: string | null;
+  tipoExercicio?:   string | null;
+  especieId?:       number | null;
+  racaId?:          number | null;
+  especie?:         { id: number; nome: string } | null;
+  raca?:            { id: number; nome: string } | null;
   temVet:           boolean;
-  vetDaMinhaEquipe?: boolean; // ← novo: animal está com vet da mesma equipe
+  vetDaMinhaEquipe?: boolean;
   proprietario?:    { id: number; fullName: string; email: string; phone?: string | null } | null;
 }
 
@@ -172,7 +184,7 @@ const Animal = () => {
     dataNascimento: '', idadeAnos: '', sexo: '',
     categoriaAnimal: '', tipoExercicio: '',
     veterinarioUserId: null,
-    local: '',
+    local: '', baia: '',
   });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
@@ -185,6 +197,17 @@ const Animal = () => {
     especieAtual.nome.toLowerCase().includes('equino') ||
     especieAtual.nome.toLowerCase().includes('cavalo')
   );
+  const isCanino = !!especieAtual && (
+    especieAtual.nome.toLowerCase().includes('canino') ||
+    especieAtual.nome.toLowerCase().includes('cachorro') ||
+    especieAtual.nome.toLowerCase().includes('cão') ||
+    especieAtual.nome.toLowerCase().includes('cao')
+  );
+  const isFelino = !!especieAtual && (
+    especieAtual.nome.toLowerCase().includes('felino') ||
+    especieAtual.nome.toLowerCase().includes('gato')
+  );
+  const labelBaia = isEquino ? 'Baia' : (isCanino || isFelino) ? 'Leito' : null;
 
   const categoriasDisponiveis = useMemo(
     () => getCategoriasDisponiveis(formData.sexo, formData.dataNascimento, formData.idadeAnos),
@@ -312,6 +335,7 @@ const Animal = () => {
             tipoExercicio:     a.tipoExercicio    ?? '',
             veterinarioUserId: vetCarregadoId,
             local:             a.local            ?? '',
+            baia:              a.baia             ?? '',
           });
           if (a.photoUrl) setPhotoPreview(a.photoUrl);
           if (a.user) {
@@ -343,6 +367,20 @@ const Animal = () => {
       const animal: AnimalEncontrado | null = res.data?.dados;
       if (animal) {
         setAnimalEncontrado(animal);
+
+        // Pré-preenche campos do animal com os dados encontrados
+        setFormData(prev => ({
+          ...prev,
+          especieId:       animal.especieId       ?? prev.especieId,
+          racaId:          animal.racaId          ?? prev.racaId,
+          peso:            animal.peso != null     ? String(animal.peso) : prev.peso,
+          dataNascimento:  animal.dataNascimento   ? animal.dataNascimento.split('T')[0] : prev.dataNascimento,
+          idadeAnos:       animal.idadeAnos != null ? String(animal.idadeAnos) : prev.idadeAnos,
+          sexo:            animal.sexo             ?? prev.sexo,
+          categoriaAnimal: animal.categoriaAnimal  ?? prev.categoriaAnimal,
+          tipoExercicio:   animal.tipoExercicio    ?? prev.tipoExercicio,
+        }));
+        if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
 
         if (!animal.temVet) {
           // Sem vet → pode vincular
@@ -461,6 +499,7 @@ const Animal = () => {
         veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
         veterinarioUserId:  formData.veterinarioUserId ?? null,
         local:              formData.local.trim(),
+        baia:               formData.baia.trim() || null,
         // Vet vinculando animal existente sem vet
         ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
           animalExistenteId: animalEncontrado.id,
@@ -642,21 +681,34 @@ const Animal = () => {
               )}
             </div>
 
-            {/* ── 2. Local (obrigatório) ────────────────────────────────────── */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                <span className="flex items-center gap-1">
-                  <MapPin size={14} className="text-emerald-600" />
-                  Local do Animal <span className="text-red-500">*</span>
-                </span>
-              </label>
-              <input
-                type="text"
-                value={formData.local}
-                onChange={e => setFormData({ ...formData, local: e.target.value })}
-                placeholder="Ex: Fazenda Santa Clara, Haras Bela Vista..."
-                className={inputClass}
-              />
+            {/* ── 2. Local + Espécie ───────────────────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <span className="flex items-center gap-1">
+                    <MapPin size={14} className="text-emerald-600" />
+                    Local do Animal <span className="text-red-500">*</span>
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.local}
+                  onChange={e => setFormData({ ...formData, local: e.target.value })}
+                  placeholder="Ex: Fazenda Santa Clara, Haras Bela Vista..."
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
+                <select
+                  value={formData.especieId}
+                  onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
+                  className={inputClass}
+                >
+                  <option value={0} disabled>Selecione a espécie</option>
+                  {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                </select>
+              </div>
             </div>
 
             {/* ── 3. Proprietário (apenas vets) ────────────────────────────── */}
@@ -722,19 +774,22 @@ const Animal = () => {
               </div>
             )}
 
-            {/* ── 4. Espécie + Sexo ─────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
-                <select
-                  value={formData.especieId}
-                  onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
-                  className={inputClass}
-                >
-                  <option value={0} disabled>Selecione a espécie</option>
-                  {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                </select>
-              </div>
+            {/* ── 4. Baia/Leito + Sexo ─────────────────────────────────────── */}
+            <div className={labelBaia ? 'grid grid-cols-2 gap-4' : ''}>
+              {labelBaia && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {labelBaia}
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.baia}
+                    onChange={e => setFormData({ ...formData, baia: e.target.value })}
+                    placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
+                    className={inputClass}
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
                 <select
@@ -806,7 +861,7 @@ const Animal = () => {
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
                     <Calendar size={18} className="text-emerald-600 pointer-events-none" />
                     <input
-                      type="date" max={new Date().toISOString().split('T')[0]}
+                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
                       value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
                       onChange={e => {
                         if (!e.target.value) return;

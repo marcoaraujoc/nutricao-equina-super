@@ -11,6 +11,7 @@ import {
   ArrowLeft, Zap, DollarSign, Clock, AlertTriangle,
   TrendingUp, BarChart2, RefreshCw, CheckCircle, XCircle,
 } from 'lucide-react';
+import { formatDateShort, formatDateTime } from '../utils/dateUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -146,7 +147,7 @@ function EvolucaoChart({ data }: { data: DiaEvol[] }) {
     <div className="flex items-end gap-1 h-32 mt-2">
       {data.slice(-30).map((d, i) => {
         const h = Math.max((d.custoUsd / maxCusto) * 100, 2);
-        const dataFmt = new Date(d.data + 'T00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        const dataFmt = formatDateShort(d.data);
         return (
           <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
             <div
@@ -282,10 +283,10 @@ export default function AiUsageDashboard() {
             {!loading && evolucao.length > 0 && (
               <div className="flex justify-between mt-1">
                 <span className="text-[10px] text-gray-400">
-                  {new Date(evolucao[0]?.data + 'T00:00').toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' })}
+                  {formatDateShort(evolucao[0]?.data)}
                 </span>
                 <span className="text-[10px] text-gray-400">
-                  {new Date(evolucao[evolucao.length - 1]?.data + 'T00:00').toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' })}
+                  {formatDateShort(evolucao[evolucao.length - 1]?.data)}
                 </span>
               </div>
             )}
@@ -380,7 +381,7 @@ export default function AiUsageDashboard() {
                       {logs.map(log => (
                         <tr key={log.id} className="border-b border-gray-50 hover:bg-gray-50">
                           <td className="px-5 py-3 text-xs text-gray-500">
-                            {new Date(log.createdAt).toLocaleString('pt-BR')}
+                            {formatDateTime(log.createdAt)}
                           </td>
                           <td className="px-5 py-3 text-xs font-medium text-gray-700">
                             {labelOperacao(log.operacao)}

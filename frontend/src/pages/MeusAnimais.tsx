@@ -1,11 +1,11 @@
-// src/pages/MeusAnimais.tsx
+﻿// src/pages/MeusAnimais.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Plus, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
+import { Pencil, Trash2, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 
 interface Solicitacao {
@@ -203,7 +203,6 @@ const MeusAnimais = () => {
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
                        px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
           >
-            <Plus size={15} />
             <span className="hidden sm:inline">Novo Animal</span>
             <span className="sm:hidden">Novo</span>
           </button>

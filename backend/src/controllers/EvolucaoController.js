@@ -325,6 +325,58 @@ const EvolucaoController = {
     }
   },
 
+  // ── Cancelar evolução (EM_ANDAMENTO ou FINALIZADA) ───────────────────────
+  // PATCH /clinica/evolucoes/:id/cancelar
+  // Body: { justificativa }
+
+  cancelar: async (req, res) => {
+    const { id }             = req.params;
+    const { justificativa }  = req.body;
+    const userId             = req.user.id;
+
+    if (!justificativa?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Justificativa é obrigatória' });
+    }
+
+    try {
+      const existente = await prisma.evolucaoClinica.findUnique({
+        where: { id: Number(id) },
+      });
+
+      if (!existente || !existente.ativo) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      if (existente.status === 'CANCELADA') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está cancelada' });
+      }
+
+      const cancelada = await prisma.evolucaoClinica.update({
+        where: { id: Number(id) },
+        data: {
+          status:                'CANCELADA',
+          veterinarioId:         userId,
+          modificadoPorId:       userId,
+          dataModificacao:       new Date(),
+          justificativaExclusao: justificativa.trim(),
+        },
+        include: INCLUDE_PADRAO,
+      });
+
+      await registrarAuditoria(
+        userId,
+        req.user.fullName,
+        req.user.email,
+        `EVOLUCAO_CANCELADA | id=${id} | animal=${existente.animalId} | statusAnterior=${existente.status} | justificativa="${justificativa.trim()}"`
+      );
+
+      res.json({ sucesso: true, dados: cancelada });
+    } catch (error) {
+      console.error('Erro ao cancelar evolução:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   // ── Aprovar evolução ──────────────────────────────────────────────────────
   // PATCH /clinica/evolucoes/:id/aprovar
 

@@ -1,4 +1,4 @@
-// src/pages/Dieta.tsx
+﻿// src/pages/Dieta.tsx
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
@@ -9,7 +9,9 @@ import toast from 'react-hot-toast';
 import {
   ArrowLeft, Plus, Pencil, Trash2, Check, X,
   Search, ToggleLeft, ToggleRight, Printer, AlertTriangle, Share2,
+  Download, ChevronDown,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { gerarHtmlDieta } from '../utils/Dietaprint';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -449,7 +451,7 @@ function BottomAddBar({
           )}
           <button onClick={handleAdd} disabled={saving}
             className="w-full flex items-center justify-center gap-2 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors">
-            <Plus size={15} /> {saving ? 'Adicionando...' : 'Adicionar'}
+            {saving ? 'Adicionando...' : 'Adicionar'}
           </button>
         </div>
         {modalNode}
@@ -490,7 +492,7 @@ function BottomAddBar({
         )}
         <button onClick={handleAdd} disabled={saving}
           className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors flex-shrink-0">
-          <Plus size={14} /> {saving ? 'Salvando...' : 'Adicionar'}
+          {saving ? 'Salvando...' : 'Adicionar'}
         </button>
       </div>
       {modalNode}
@@ -530,8 +532,20 @@ const Dieta = () => {
   const [pendingCriarPlano,     setPendingCriarPlano]    = useState<{ nome: string; planoAtivoNome: string } | null>(null);
   const [showMobileItems,       setShowMobileItems]       = useState(false);
   const [showModalNovoPlano,    setShowModalNovoPlano]    = useState(false);
+  const [showExportMenu,        setShowExportMenu]        = useState(false);
 
-  const itensRef = useRef<HTMLDivElement>(null);
+  const itensRef    = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node))
+        setShowExportMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showExportMenu]);
 
   // ── Loaders ───────────────────────────────────────────────────────────────
 
@@ -559,7 +573,7 @@ const Dieta = () => {
   }, []);
 
   const carregarPlanos = useCallback(async () => {
-    if (!effectiveAnimalId) return;
+    if (!effectiveAnimalId) { setLoading(false); return; }
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -787,6 +801,26 @@ const Dieta = () => {
     }, 250);
   };
 
+  const exportarExcelDieta = () => {
+    if (!planoSelecionado || itens.length === 0) {
+      toast.error('Nenhum item na dieta para exportar'); return;
+    }
+    const wb = XLSX.utils.book_new();
+    const headers = ['Alimento', 'Quantidade', 'Unidade', 'Periodicidade', 'Horário'];
+    const rows = itens.map(i => [
+      i.alimento?.nome ?? '—',
+      i.qtdGramasDia,
+      i.unidade,
+      i.periodicidade,
+      i.horario ?? '—',
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws['!cols'] = [{ wch: 30 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws, planoSelecionado.nome.slice(0, 31));
+    XLSX.writeFile(wb, `dieta-${animal?.nome ?? 'animal'}-${planoSelecionado.nome}.xlsx`);
+    setShowExportMenu(false);
+  };
+
   // ── Derived ───────────────────────────────────────────────────────────────
 
   const itensDiarios  = itens.filter(i => getTipo(i.periodicidade) === 'diario');
@@ -847,7 +881,7 @@ const Dieta = () => {
 
   // ── Guard ─────────────────────────────────────────────────────────────────
 
-  if (!effectiveAnimalId || (!animal && loading)) {
+  if (!animal && loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -855,6 +889,18 @@ const Dieta = () => {
           <p className="text-gray-400 text-sm">Carregando...</p>
         </div>
       </div>
+    );
+  }
+
+  if (!effectiveAnimalId) {
+    return (
+      <PageContainer>
+        <BotaoVoltar className="mb-4" />
+        <div className="text-center py-20">
+          <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
+          <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+        </div>
+      </PageContainer>
     );
   }
 
@@ -902,12 +948,29 @@ const Dieta = () => {
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button onClick={handleCompartilhar}
                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg text-xs text-gray-600 transition-colors">
-                    <Share2 size={13} /> Compartilhar Dieta
+                    <Share2 size={13} /> Compartilhar
                   </button>
-                  <button onClick={dispararImpressao}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 rounded-lg text-xs text-white font-semibold transition-colors">
-                    <Printer size={13} /> Imprimir Dieta
-                  </button>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={() => setShowExportMenu(v => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 rounded-lg text-xs text-white font-semibold transition-colors">
+                      <Download size={13} /> Exportar <ChevronDown size={11} />
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
+                        <button
+                          onClick={() => { dispararImpressao(); setShowExportMenu(false); }}
+                          className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                          <Printer size={13} /> PDF
+                        </button>
+                        <button
+                          onClick={exportarExcelDieta}
+                          className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                          <Download size={13} /> Excel (.xlsx)
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -924,7 +987,7 @@ const Dieta = () => {
                 <button
                   onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
                   className="w-full flex items-center justify-center gap-1 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors">
-                  <Plus size={12} /> Novo Plano
+                  Novo Plano
                 </button>
 
                 <div className="relative">
@@ -1016,7 +1079,7 @@ const Dieta = () => {
                 </div>
                 <button onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
                   className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-2xl shadow-sm">
-                  <Plus size={15} /> Novo
+                  Novo
                 </button>
               </div>
 
@@ -1053,11 +1116,21 @@ const Dieta = () => {
                   <ArrowLeft size={16} />
                 </button>
                 <span className="font-semibold text-gray-900 text-sm">{planoSelecionado?.nome}</span>
-                <button onClick={handleTogglePlano}
-                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${planoSelecionado?.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                  {planoSelecionado?.ativo ? <ToggleRight size={12} /> : <ToggleLeft size={12} />}
-                  {planoSelecionado?.ativo ? 'Ativo' : 'Inativo'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={handleTogglePlano}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${planoSelecionado?.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {planoSelecionado?.ativo ? <ToggleRight size={12} /> : <ToggleLeft size={12} />}
+                    {planoSelecionado?.ativo ? 'Ativo' : 'Inativo'}
+                  </button>
+                  <button onClick={() => { dispararImpressao(); }} title="PDF"
+                    className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
+                    <Printer size={15} />
+                  </button>
+                  <button onClick={exportarExcelDieta} title="Excel"
+                    className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
+                    <Download size={15} />
+                  </button>
+                </div>
               </div>
 
               {planoSelecionado && (
