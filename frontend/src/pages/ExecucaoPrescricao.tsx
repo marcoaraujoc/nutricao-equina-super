@@ -1,12 +1,14 @@
-// frontend/src/pages/ExecucaoPrescricao.tsx
+﻿// frontend/src/pages/ExecucaoPrescricao.tsx
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  CheckCircle2, Loader2, Search, User,
+  CheckCircle2, ClipboardList, Loader2, Search, User,
   Eye, Printer, X, Link,
 } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import { imprimirPrescricao } from '../utils/PrescricaoPrint';
 import { useAuth } from '../contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -122,6 +124,10 @@ function saveExecMap(grupoId: number, map: ExecMap) {
   localStorage.setItem(execKey(grupoId), JSON.stringify(map));
 }
 
+const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${localToday()}`;
+function markDoneToday(grupoId: number) { localStorage.setItem(doneTodayKey(grupoId), '1'); }
+function isDoneToday(grupoId: number): boolean { return localStorage.getItem(doneTodayKey(grupoId)) === '1'; }
+
 function isSlotDone(map: ExecMap, itemId: number, slotIdx: number): boolean {
   return (map[String(itemId)] ?? []).includes(slotIdx);
 }
@@ -190,6 +196,7 @@ function ModalExecucao({
 
   const handleToggle = (item: ItemExecucao, activeIdx: number) => {
     if (activeIdx < 0) return;
+    if (isSlotDone(execMap, item.id, activeIdx)) return;
     setExecMap(prev => toggleSlot(grupo.id, prev, item.id, activeIdx));
   };
 
@@ -215,6 +222,7 @@ function ModalExecucao({
       } else {
         toast.success(`Dia ${diaAtualLabel} executado com sucesso`);
       }
+      markDoneToday(grupo.id);
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
@@ -338,10 +346,10 @@ function ModalExecucao({
                 {/* Badge / botão por item */}
                 <button
                   onClick={() => handleToggle(item, activeIdx)}
-                  disabled={activeIdx < 0}
+                  disabled={activeIdx < 0 || activeDone}
                   className={`flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
                     activeDone
-                      ? 'bg-emerald-500 text-white'
+                      ? 'bg-emerald-500 text-white cursor-default'
                       : activeIdx < 0
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       : 'bg-white border border-gray-300 text-gray-600 hover:border-teal-500 hover:text-teal-600'
@@ -388,10 +396,12 @@ function LinhaGrupo({
   g,
   onExecutar,
   onVer,
+  onImprimir,
 }: {
   g: GrupoExecucao;
   onExecutar: () => void;
   onVer: () => void;
+  onImprimir: () => void;
 }) {
   const { animal } = g;
   const lbaia      = labelBaia(animal.especie?.nome);
@@ -450,7 +460,9 @@ function LinhaGrupo({
           <Eye size={14} />
         </button>
         <button
-          className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors">
+          onClick={onImprimir}
+          title="Imprimir prescricao"
+          className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
           <Printer size={14} />
         </button>
       </div>
@@ -485,8 +497,9 @@ export default function ExecucaoPrescricao() {
   useEffect(() => { carregar(); }, [carregar]);
 
   // Filtro local — o backend já filtra busca mas permite filtrar sem ir ao servidor
-  const filtrados = busca.trim()
-    ? grupos.filter(g => {
+  const filtrados = grupos
+    .filter(g => !isDoneToday(g.id))
+    .filter(busca.trim() ? (g => {
         const q = busca.toLowerCase();
         return (
           g.animal.nome.toLowerCase().includes(q) ||
@@ -494,29 +507,28 @@ export default function ExecucaoPrescricao() {
           g.numeroFormatado.includes(q) ||
           g.veterinario.fullName.toLowerCase().includes(q)
         );
-      })
-    : grupos;
+      }) : () => true);
 
   return (
-    <div className="min-h-full bg-gray-50 flex flex-col">
+    <PageContainer maxWidth="full" noPadding>
+      <div className="px-4 py-4 md:px-8 md:py-6 space-y-4">
 
-      {/* Barra de plantão */}
-      <div className="bg-gray-900 text-white px-4 py-3 flex-shrink-0">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[10px] font-bold tracking-widest text-gray-400 uppercase">
-              Plantão Ativo de Enfermagem
-            </p>
-            <p className="font-semibold text-sm mt-0.5">{user?.fullName ?? '—'}</p>
+            <div className="flex items-center gap-2">
+              <ClipboardList className="text-emerald-600" size={22} />
+              <h1 className="text-xl font-bold text-gray-900">Execução de Prescrições</h1>
+              <span className="text-xs font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Plantão Ativo</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-0.5">Administração de medicamentos e procedimentos do turno.</p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+          <div className="flex items-center gap-2 text-xs flex-shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Online • {horaAtual}
+            <span className="font-medium text-gray-700">{user?.fullName ?? '—'}</span>
+            <span className="text-gray-400">• {horaAtual}</span>
           </div>
         </div>
-      </div>
-
-      <div className="max-w-5xl mx-auto w-full px-4 py-4 flex flex-col gap-4 flex-1">
 
         {/* Busca */}
         <div className="relative">
@@ -552,6 +564,7 @@ export default function ExecucaoPrescricao() {
                 g={g}
                 onExecutar={() => setModal(g)}
                 onVer={() => setModal(g)}
+                onImprimir={() => imprimirPrescricao(g)}
               />
             ))}
           </div>
@@ -565,6 +578,6 @@ export default function ExecucaoPrescricao() {
           onClose={() => { setModal(null); carregar(); }}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -9,6 +9,7 @@ const router  = express.Router();
 const EvolucaoController              = require('../controllers/EvolucaoController');
 const { authenticate }                = require('../middlewares/auth');
 const { injectTenant }                = require('../middlewares/tenant');
+const { checkPermission }             = require('../middlewares/permissao.middleware');
 const { interpretarEvolucao }         = require('../services/clinicaLLMService');
 const validate                        = require('../middlewares/validate');
 const { criarEvolucaoRules,
@@ -53,27 +54,27 @@ router.post('/interpretar', authenticate, async (req, res) => {
   }
 });
 
-// Transcrever áudio com Whisper
-router.post('/transcrever', authenticate, uploadAudio.single('audio'), EvolucaoController.transcrever);
+// Transcrever áudio com Whisper (utilitário — não altera dados diretamente)
+router.post('/transcrever', authenticate, checkPermission('atendimento.evolucoes.criar', 'PROPRIO'), uploadAudio.single('audio'), EvolucaoController.transcrever);
 
 // Listas
-router.get('/responsaveis/:animalId', authenticate, EvolucaoController.listarResponsaveis);
-router.get('/animal/:animalId',       authenticate, injectTenant, EvolucaoController.listarPorAnimal);
+router.get('/responsaveis/:animalId', authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), EvolucaoController.listarResponsaveis);
+router.get('/animal/:animalId',       authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), injectTenant, EvolucaoController.listarPorAnimal);
 
 // ─── Rotas parametrizadas ─────────────────────────────────────────────────────
 
-router.get('/:id',      authenticate, injectTenant, evolucaoIdParam, validate, EvolucaoController.obterPorId);
-router.post('/',        authenticate, injectTenant, criarEvolucaoRules, validate, EvolucaoController.criar);
-router.put('/:id',      authenticate, evolucaoIdParam, validate, EvolucaoController.atualizar);
-router.delete('/:id',   authenticate, evolucaoIdParam, validate, EvolucaoController.excluir);
+router.get('/:id',      authenticate, checkPermission('atendimento.evolucoes.ler',     'LEITURA'), injectTenant, evolucaoIdParam, validate, EvolucaoController.obterPorId);
+router.post('/',        authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), injectTenant, criarEvolucaoRules, validate, EvolucaoController.criar);
+router.put('/:id',      authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.atualizar);
+router.delete('/:id',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.excluir);
 
 // Ações de patch
-router.patch('/:id/cancelar', authenticate, evolucaoIdParam, validate, EvolucaoController.cancelar);
-router.patch('/:id/aprovar',  authenticate, evolucaoIdParam, validate, EvolucaoController.aprovar);
-router.patch('/:id/titulo',   authenticate, evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
+router.patch('/:id/cancelar', authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.cancelar);
+router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evolucoes.editar',  'EQUIPE'),  evolucaoIdParam, validate, EvolucaoController.aprovar);
+router.patch('/:id/titulo',   authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
 
 // Mídias
-router.post('/:id/midias',              authenticate, evolucaoIdParam, validate, uploadMidia.single('midia'), EvolucaoController.adicionarMidia);
-router.delete('/:id/midias/:midiaId',   authenticate, evolucaoIdParam, validate, EvolucaoController.removerMidia);
+router.post('/:id/midias',              authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), evolucaoIdParam, validate, uploadMidia.single('midia'), EvolucaoController.adicionarMidia);
+router.delete('/:id/midias/:midiaId',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.removerMidia);
 
 module.exports = router;

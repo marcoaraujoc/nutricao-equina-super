@@ -115,6 +115,8 @@ const AnimalDashboard = ({ animal, onNavigate, onBack }: { animal: any; onNaviga
                 { l:'Idade',      v: idadeDisplay(animal) },
                 { l:'Peso',       v: animal.peso ? `${animal.peso} kg` : '-' },
                 { l:'Perfil NRC', v: animal.categoriaAnimal ? `${animal.categoriaAnimal} · ${animal.tipoExercicio}` : 'Não informado' },
+                ...(animal.baia  ? [{ l: 'Baia',  v: animal.baia  }] : []),
+                ...(animal.local ? [{ l: 'Local', v: animal.local }] : []),
               ].map(({ l, v }) => (
                 <div key={l}>
                   <span className="block text-xs uppercase text-gray-500 tracking-widest mb-1">{l}</span>
@@ -240,6 +242,8 @@ const Dashboard = () => {
   const role          = (user?.role      ?? '').toUpperCase();
   const userTypeUpper = (user?.userType  ?? '').toUpperCase();
   const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
+  const isClinica     = isVet || role === 'ESTAGIARIO' || userTypeUpper === 'ESTAGIARIO';
+  const isConvidado   = user?.isConvidado === true;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [animais,           setAnimais]           = useState<any[]>([]);
@@ -254,45 +258,50 @@ const Dashboard = () => {
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimais(lista);
 
-      const ob = getOB();
-      if (!ob) {
-        try {
-          const perfilRes      = await api.get('/users/me');
-          const perfil         = perfilRes.data;
-          const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
+      // Membros convidados não passam pelo onboarding
+      if (isConvidado) {
+        setObPhase(null);
+      } else {
+        const ob = getOB();
+        if (!ob) {
+          try {
+            const perfilRes      = await api.get('/users/me');
+            const perfil         = perfilRes.data;
+            const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
 
-          if (perfilCompleto && lista.length > 0) {
-            setObPhase(null);
-          } else if (perfilCompleto && perfil?.userType === 'VETERINARIO') {
-            setObPhase(null);
-          } else {
+            if (perfilCompleto && lista.length > 0) {
+              setObPhase(null);
+            } else if (perfilCompleto && perfil?.userType === 'VETERINARIO') {
+              setObPhase(null);
+            } else {
+              setObPhase('greeting');
+            }
+          } catch {
             setObPhase('greeting');
           }
-        } catch {
-          setObPhase('greeting');
+        } else if (ob === 'a') {
+          setObPhase(lista.length === 0 ? 'need_animal' : 'welcome');
+        } else if (ob === 'd') {
+          setObPhase('welcome');
+        } else {
+          setObPhase(null);
         }
-      } else if (ob === 'a') {
-        setObPhase(lista.length === 0 ? 'need_animal' : 'welcome');
-      } else if (ob === 'd') {
-        setObPhase('welcome');
-      } else {
-        setObPhase(null);
       }
     } catch (err) {
       console.error('[Dashboard.loadAnimais]', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isConvidado]);
 
   useEffect(() => {
-    // Vets vão direto ao VetDashboard — não carregam aqui
-    if (!isVet) loadAnimais();
-    else        setLoading(false);
-  }, [isVet, loadAnimais]);
+    // Vets e estagiários vão direto ao VetDashboard — não carregam aqui
+    if (!isClinica) loadAnimais();
+    else            setLoading(false);
+  }, [isClinica, loadAnimais]);
 
-  // ── Veterinário → delega totalmente ao VetDashboard ──────────────────────
-  if (isVet) return <VetDashboard />;
+  // ── Veterinário / Estagiário → delega totalmente ao VetDashboard ─────────
+  if (isClinica) return <VetDashboard />;
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) return (
@@ -323,12 +332,21 @@ const Dashboard = () => {
       <div className="w-20 h-20 bg-gray-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
         <Plus size={36} className="text-gray-400" />
       </div>
-      <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Nenhum animal cadastrado</h2>
-      <p className="text-gray-500 mb-8">Cadastre um animal para começar a usar o sistema.</p>
-      <button onClick={() => navigate('/animais')}
-        className="inline-flex items-center gap-3 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-4 rounded-3xl font-semibold text-lg transition-colors">
-        Cadastrar Animal
-      </button>
+      {isConvidado ? (
+        <>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Nenhum animal encontrado</h2>
+          <p className="text-gray-500">Ainda não há animais cadastrados na clínica.</p>
+        </>
+      ) : (
+        <>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Nenhum animal cadastrado</h2>
+          <p className="text-gray-500 mb-8">Cadastre um animal para começar a usar o sistema.</p>
+          <button onClick={() => navigate('/animais')}
+            className="inline-flex items-center gap-3 bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-4 rounded-3xl font-semibold text-lg transition-colors">
+            Cadastrar Animal
+          </button>
+        </>
+      )}
     </div>
   );
 
@@ -346,7 +364,9 @@ const Dashboard = () => {
   // ── Lista de animais ──────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Meus Animais</h1>
+      <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
+        {isConvidado ? 'Animais da Clínica' : 'Meus Animais'}
+      </h1>
       <div className="space-y-4">
         {animais.map(animal => (
           <button key={animal.id}
@@ -373,6 +393,8 @@ const Dashboard = () => {
                 { l: 'Sexo',       v: animal.sexo || '-'            },
                 { l: 'Nascimento', v: formatarDataBR(animal.dataNascimento) },
                 { l: 'Idade',      v: idadeDisplay(animal)          },
+                ...(animal.baia  ? [{ l: 'Baia',  v: animal.baia  }] : []),
+                ...(animal.local ? [{ l: 'Local', v: animal.local }] : []),
               ].map(({ l, v }) => (
                 <div key={l}>
                   <span className="block text-xs uppercase text-gray-500 tracking-widest">{l}</span>

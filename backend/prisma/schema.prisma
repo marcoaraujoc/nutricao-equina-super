@@ -38,6 +38,7 @@ model User {
   resetPasswordToken   String?   @unique @db.VarChar(255)
   resetPasswordExpires DateTime?
   mustChangePassword   Boolean   @default(false)
+  isConvidado          Boolean   @default(false)
   refreshToken         String?   @db.VarChar(512)
 
   animais              Animal[]
@@ -54,6 +55,7 @@ model User {
   encaminhamentos      EncaminhamentoClinico[] @relation("EncaminhamentoVeterinario")
   examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
   faturaItens          FaturaItem[]           @relation("FaturaItemVet")
+  faturas              Fatura[]               @relation("FaturaProprietario")
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
   vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
@@ -107,6 +109,7 @@ model Animal {
   encaminhamentos EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
   examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
   faturas         Fatura[]               @relation("AnimalFaturas")
+  faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
   solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
 
   @@index([especieId])
@@ -517,15 +520,19 @@ model EncaminhamentoClinico {
 // =============================================================================
 
 model Fatura {
-  id       Int          @id @default(autoincrement())
-  animalId Int
-  total    Float        @default(0)
-  status   String       @default("ABERTA")
-  criadoEm DateTime     @default(now())
-  itens    FaturaItem[]
+  id              Int          @id @default(autoincrement())
+  animalId        Int?         // legado — manter para compatibilidade com prescricoes antigas
+  proprietarioId  Int?
+  mesReferencia   String?      @db.VarChar(7)  // "2026-06"
+  total           Float        @default(0)
+  status          String       @default("ABERTA")  // ABERTA | PAGA | CANCELADA
+  criadoEm        DateTime     @default(now())
+  itens           FaturaItem[]
 
-  animal Animal @relation("AnimalFaturas", fields: [animalId], references: [id])
+  animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])
+  proprietario User?   @relation("FaturaProprietario", fields: [proprietarioId], references: [id])
 
+  @@index([proprietarioId, status])
   @@map("tb_faturas")
   @@schema("schs2vet")
 }
@@ -533,15 +540,17 @@ model Fatura {
 model FaturaItem {
   id            Int      @id @default(autoincrement())
   faturaId      Int
-  tipo          String
+  animalId      Int?
+  tipo          String   @db.VarChar(50)   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
   descricao     String
   valor         Float    @default(0)
   quantidade    Int      @default(1)
   veterinarioId Int
   criadoEm      DateTime @default(now())
 
-  fatura      Fatura @relation(fields: [faturaId],      references: [id])
-  veterinario User   @relation("FaturaItemVet", fields: [veterinarioId], references: [id])
+  fatura      Fatura  @relation(fields: [faturaId],      references: [id])
+  animal      Animal? @relation("FaturaItemAnimal", fields: [animalId], references: [id])
+  veterinario User    @relation("FaturaItemVet",    fields: [veterinarioId], references: [id])
 
   @@map("tb_fatura_itens")
   @@schema("schs2vet")

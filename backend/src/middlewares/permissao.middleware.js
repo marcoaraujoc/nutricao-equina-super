@@ -86,11 +86,9 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return res.status(401).json({ error: 'Não autenticado.' });
       }
 
-      // Proprietários nunca acessam rotas de equipe via este middleware
-      if (req.user.userType === 'PROPRIETARIO') {
-        return res.status(403).json({
-          error: 'Acesso não permitido para proprietários nesta rota.',
-        });
+      // Proprietários e admins têm controle de acesso próprio nos controllers — bypass aqui
+      if (req.user.userType === 'PROPRIETARIO' || req.user.userType === 'ADMIN') {
+        return next();
       }
 
       const equipeId = await resolveEquipeId(req);

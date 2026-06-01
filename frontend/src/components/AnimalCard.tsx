@@ -19,6 +19,8 @@ interface AnimalCardAnimal {
   idadeAnos?:       number | null;
   peso?:            number | null;
   tipoExercicio?:   string | null;
+  baia?:            string | null;
+  local?:           string | null;
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
@@ -98,73 +100,70 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
         />
       </div>
 
-      {/* Info */}
-      <div className="flex flex-col flex-1 min-w-0">
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-2">
+      {/* Info — 2 linhas fixas com 5 colunas cada no desktop */}
+      <div className="flex flex-col flex-1 min-w-0 gap-y-3">
 
+        {/* Linha 1: identificação */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-2">
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
-            <span className="text-sm text-gray-900 truncate block">{animal.nome}</span>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
+            <span className="text-sm font-semibold text-gray-900 truncate block">{animal.nome}</span>
           </div>
-
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Idade</span>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Espécie</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.especie?.nome ?? '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Raça</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.raca?.nome ?? '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Idade</span>
             <span className="text-sm text-gray-900 block">{idade}</span>
           </div>
-
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Raça</span>
-            <span className="text-sm text-gray-900 truncate block">
-              {animal.raca?.nome ?? animal.especie?.nome ?? '-'}
-            </span>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Peso</span>
+            <span className="text-sm text-gray-900 block">{animal.peso != null ? `${animal.peso} kg` : '-'}</span>
           </div>
+        </div>
 
-          {animal.peso != null && (
-            <div>
-              <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Peso</span>
-              <span className="text-sm text-gray-900 block">{animal.peso} kg</span>
-            </div>
-          )}
+        {/* Divisor */}
+        <div className="border-t border-gray-100" />
 
-          {animal.tipoExercicio && (
-            <div>
-              <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Tipo de Trabalho</span>
-              <span className="text-sm text-gray-900 truncate block">{animal.tipoExercicio}</span>
-            </div>
-          )}
-
+        {/* Linha 2: localização + responsáveis */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-2">
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">Proprietário</span>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Baia</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.baia ?? '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Local</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.local ?? '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Tipo de Trabalho</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.tipoExercicio ?? '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Proprietário</span>
             <span className="text-sm text-gray-900 truncate block">{proprietarioNome}</span>
           </div>
-
-          {/* Veterinário Responsável — exibe badge PENDENTE quando não há ACEITO */}
+          {/* Veterinário Responsável */}
           <div>
-            <span className="block text-xs text-gray-400 uppercase tracking-wide mb-0.5">
-              Veterinário Responsável
-            </span>
-
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Vet. Responsável</span>
             {vetNome ? (
-              // Vet com vínculo ACEITO
-              <span className="text-sm text-gray-900 truncate block">
-                {vetNome}
-              </span>
+              <span className="text-sm text-gray-900 truncate block">{vetNome}</span>
             ) : vetPendente ? (
-              // Vet indicado mas ainda PENDENTE de aceite
-              <span className="inline-flex items-center gap-1.5 text-xs bg-amber-50 text-amber-700
-                               border border-amber-200 px-2 py-1 rounded-full font-medium mt-0.5">
+              <span className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
                 <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse flex-shrink-0" />
-                Aguardando: {vetPendente}
+                {vetPendente}
               </span>
             ) : (
-              // Sem vet atribuído
-              <span className="text-sm text-gray-400 italic block">
-                Não atribuído
-              </span>
+              <span className="text-sm text-gray-400 italic block">Não atribuído</span>
             )}
           </div>
-
         </div>
+
       </div>
     </div>
   );

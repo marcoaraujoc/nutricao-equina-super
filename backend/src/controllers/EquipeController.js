@@ -27,6 +27,57 @@ async function garantirEquipePadrao(vetUserId) {
   return { empresa, equipe };
 }
 
+// ─── Helper: onboarding de vet convidado ─────────────────────────────────────
+// Marca isConvidado=true e copia espécies do dono da equipe para o vet convidado
+// (somente se o convidado for VETERINARIO e ainda não tiver espécies cadastradas)
+async function aplicarOnboardingConvidado(userId, equipeId) {
+  const CARGOS_VET = ['VETERINARIO', 'ADMIN'];
+  const usuario = await prisma.user.findUnique({
+    where:  { id: userId },
+    select: { userType: true },
+  });
+
+  // Sempre marca como convidado — SQL raw para não depender do prisma generate
+  try {
+    await prisma.$executeRawUnsafe(`UPDATE schs2vet.users SET "isConvidado" = true WHERE id = $1`, userId);
+  } catch { /* coluna ainda não existe no DB legado — ignora */ }
+
+  // Copia espécies somente para vets sem espécies ainda
+  if (!usuario || !CARGOS_VET.includes(usuario.userType)) return;
+
+  const equipe = await prisma.equipe.findUnique({
+    where:   { id: equipeId },
+    include: { empresa: { select: { ownerId: true } } },
+  });
+  if (!equipe?.empresa?.ownerId) return;
+
+  const vetPerfilDono = await prisma.vetPerfil.findUnique({
+    where:   { userId: equipe.empresa.ownerId },
+    include: { especies: { select: { especieId: true } } },
+  });
+  const especiesDonoIds = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
+  if (especiesDonoIds.length === 0) return;
+
+  // Cria VetPerfil do convidado se não existir
+  let perfilConvidado = await prisma.vetPerfil.findUnique({ where: { userId } });
+  if (!perfilConvidado) {
+    perfilConvidado = await prisma.vetPerfil.create({ data: { userId } });
+  }
+
+  // Só copia se o convidado ainda não tem espécies próprias
+  const especiesConvidado = await prisma.vetEspecie.count({ where: { vetPerfilId: perfilConvidado.id } });
+  if (especiesConvidado > 0) return;
+
+  const upserts = especiesDonoIds.map(especieId =>
+    prisma.vetEspecie.upsert({
+      where:  { vetPerfilId_especieId: { vetPerfilId: perfilConvidado.id, especieId } },
+      update: {},
+      create: { vetPerfilId: perfilConvidado.id, especieId },
+    })
+  );
+  await prisma.$transaction(upserts);
+}
+
 const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
@@ -83,9 +134,9 @@ const EquipeController = {
     }
   },
 
-  // ── Membros ─────────────────────────────────────────────────────────────────
+  // ── Convites ─────────────────────────────────────────────────────────────────
 
-  listarMembros: async (req, res) => {
+  listarConvites: async (req, res) => {
     try {
       const vetUserId = req.user.id;
       const empresa   = await prisma.empresa.findFirst({ where: { ownerId: vetUserId } });
@@ -93,6 +144,45 @@ const EquipeController = {
 
       const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
       if (!equipe)  return res.json({ sucesso: true, dados: [] });
+
+      const convites = await prisma.conviteEquipe.findMany({
+        where:   { equipeId: equipe.id },
+        orderBy: { createdAt: 'desc' },
+        select:  { id: true, email: true, cargo: true, status: true, createdAt: true, expiresAt: true },
+      });
+      res.json({ sucesso: true, dados: convites });
+    } catch (err) {
+      console.error('Erro ao listar convites:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Membros ─────────────────────────────────────────────────────────────────
+
+  listarMembros: async (req, res) => {
+    try {
+      const vetUserId = req.user.id;
+
+      // Tenta como dono da equipe primeiro
+      let empresa = await prisma.empresa.findFirst({ where: { ownerId: vetUserId } });
+      const isSocio = !!empresa;
+
+      // Se não for dono, busca via associação como membro
+      if (!empresa) {
+        const assoc = await prisma.membroEquipe.findFirst({
+          where:   { userId: vetUserId },
+          include: { equipe: { select: { empresaId: true } } },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (assoc?.equipe?.empresaId) {
+          empresa = await prisma.empresa.findUnique({ where: { id: assoc.equipe.empresaId } });
+        }
+      }
+
+      if (!empresa) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
+
+      const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+      if (!equipe) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
 
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipe.id },
@@ -102,13 +192,12 @@ const EquipeController = {
         },
         orderBy: { createdAt: 'desc' },
       });
-      res.json({ sucesso: true, dados: membros });
+      res.json({ sucesso: true, dados: membros, equipeId: equipe.id, isSocio });
     } catch (err) {
       console.error('Erro ao listar membros:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
-
   listarMembrosPorEquipe: async (req, res) => {
     try {
       const { equipeId } = req.params;
@@ -168,8 +257,8 @@ const EquipeController = {
 
   atualizarMembro: async (req, res) => {
     try {
-      const { id }              = req.params;
-      const { cargo, phone, senha } = req.body;
+      const { id }                      = req.params;
+      const { cargo, phone, senha, fullName } = req.body;
 
       const membro = await prisma.membroEquipe.findUnique({ where: { id: Number(id) }, include: { user: true } });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
@@ -177,8 +266,9 @@ const EquipeController = {
       if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
 
       const dadosUser = {};
-      if (phone !== undefined) dadosUser.phone = phone;
-      if (senha)               dadosUser.passwordHash = await bcrypt.hash(senha, 10);
+      if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
+      if (phone    !== undefined) dadosUser.phone        = phone;
+      if (senha)                  dadosUser.passwordHash = await bcrypt.hash(senha, 10);
       if (Object.keys(dadosUser).length > 0) {
         await prisma.user.update({ where: { id: membro.userId }, data: dadosUser });
       }
@@ -229,25 +319,114 @@ const EquipeController = {
 
       const { equipe } = await garantirEquipePadrao(vetUserId);
 
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
+      // Bloqueia re-convite: membro já existente
+      const usuarioCheck = await prisma.user.findUnique({ where: { email } });
+      if (usuarioCheck) {
+        const jaMembro = await prisma.membroEquipe.findUnique({
+          where: { equipeId_userId: { equipeId: equipe.id, userId: usuarioCheck.id } },
+        });
+        if (jaMembro) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este e-mail já faz parte da equipe' });
+        }
+      }
+
+      // Bloqueia re-convite: já existe convite PENDENTE e não expirado
+      const conviteAtivo = await prisma.conviteEquipe.findFirst({
+        where: { equipeId: equipe.id, email, status: 'PENDENTE', expiresAt: { gt: new Date() } },
+      });
+      if (conviteAtivo) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Já existe um convite pendente para este e-mail. Aguarde expirar ou cancele o anterior.' });
+      }
+
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
 
       const convite = await prisma.conviteEquipe.create({
         data: { equipeId: equipe.id, email, cargo, expiresAt },
       });
 
-      // Buscar dados do vet para o email
+      // Buscar dados do vet para o email + espécies que ele atende
       const vetUser = await prisma.user.findUnique({
         where:  { id: vetUserId },
         select: { fullName: true },
       });
+      const vetPerfilDono = await prisma.vetPerfil.findUnique({
+        where:   { userId: vetUserId },
+        include: {
+          especies: {
+            include: { especie: { select: { nome: true } } },
+          },
+        },
+      });
+      // especiesDono: nomes para o email | especiesDonoComId: IDs para copiar ao VetPerfil
+      const especiesDono    = vetPerfilDono?.especies.map(e => e.especie) ?? [];
+      const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
-      // Enviar email com link de convite
+      // Criar usuário convidado se ainda não existir
+      const SENHA_INICIAL = 'Inicial_001';
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO' };
+      const userTypeConvidado = cargoToUserType[cargo] || 'ESTAGIARIO';
+      let usuarioCriado = false;
+      let usuarioConvidadoId = null;
+      const usuarioExistente = await prisma.user.findUnique({ where: { email } });
+
+      if (!usuarioExistente) {
+        const senhaHash = await bcrypt.hash(SENHA_INICIAL, 10);
+        const novoUsuario = await prisma.user.create({
+          data: {
+            email,
+            fullName:           '',
+            passwordHash:       senhaHash,
+            role:               'USER',
+            userType:           userTypeConvidado,
+            mustChangePassword: true,
+          },
+        });
+        usuarioConvidadoId = novoUsuario.id;
+        usuarioCriado = true;
+      } else {
+        usuarioConvidadoId = usuarioExistente.id;
+      }
+
+      // Marca isConvidado e copia espécies do vet dono — já na criação do convite
+      if (usuarioConvidadoId) {
+        try {
+          await prisma.$executeRawUnsafe(
+            `UPDATE schs2vet.users SET "isConvidado" = true WHERE id = $1`,
+            usuarioConvidadoId,
+          );
+        } catch { /* coluna ainda não existe no DB legado */ }
+
+        // Copia espécies se for vet e tiver espécies disponíveis
+        if (userTypeConvidado === 'VETERINARIO' && especiesDonoComId.length > 0) {
+          let perfilConvidado = await prisma.vetPerfil.findUnique({ where: { userId: usuarioConvidadoId } });
+          if (!perfilConvidado) {
+            perfilConvidado = await prisma.vetPerfil.create({ data: { userId: usuarioConvidadoId } });
+          }
+          const jaTemEspecies = await prisma.vetEspecie.count({ where: { vetPerfilId: perfilConvidado.id } });
+          if (jaTemEspecies === 0) {
+            await prisma.$transaction(
+              especiesDonoComId.map(especieId =>
+                prisma.vetEspecie.upsert({
+                  where:  { vetPerfilId_especieId: { vetPerfilId: perfilConvidado.id, especieId } },
+                  update: {},
+                  create: { vetPerfilId: perfilConvidado.id, especieId },
+                })
+              )
+            );
+          }
+        }
+      }
+
+      // Enviar email com link de convite + espécies que a equipe atende
       emailService.enviarConviteEquipe({
         email,
         cargo,
-        token:      convite.token,
-        vetNome:    vetUser?.fullName || 'Veterinário',
-        equipeNome: equipe.nome,
+        token:         convite.token,
+        vetNome:       vetUser?.fullName || 'Veterinário',
+        equipeNome:    equipe.nome,
+        usuarioCriado,
+        senhaInicial:  usuarioCriado ? SENHA_INICIAL : null,
+        especiesNomes: especiesDono.map(e => e.nome).filter(Boolean),
       }).catch(err => console.error('[emailService] Falha ao enviar convite de equipe:', err));
 
       res.status(201).json({
@@ -308,6 +487,9 @@ const EquipeController = {
         atualizadoPor: 0,
       });
 
+      // Marca como convidado e copia espécies do dono da equipe
+      await aplicarOnboardingConvidado(userId, convite.equipeId);
+
       res.json({ sucesso: true, mensagem: 'Bem-vindo à equipe!' });
     } catch (err) {
       console.error('Erro ao aceitar convite:', err);
@@ -363,6 +545,88 @@ const EquipeController = {
       res.json({ sucesso: true, mensagem: 'Convite recusado.' });
     } catch (err) {
       console.error('Erro ao recusar convite:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  recusarMeusConvites: async (req, res) => {
+    try {
+      const email = req.user.email;
+      await prisma.conviteEquipe.updateMany({
+        where: { email, status: 'PENDENTE' },
+        data:  { status: 'RECUSADO' },
+      });
+      res.json({ sucesso: true });
+    } catch (err) {
+      console.error('Erro ao recusar convites:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  autoAceitarConvites: async (req, res) => {
+    try {
+      const email  = req.user.email;
+      // Busca o usuario no banco para garantir o id correto (evita problema de tipo com JWT)
+      const dbUser = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+      if (!dbUser) return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
+      const userId = dbUser.id;
+
+      const convitesPendentes = await prisma.conviteEquipe.findMany({
+        where: { email, status: 'PENDENTE', expiresAt: { gt: new Date() } },
+      });
+
+      let aceitos = 0;
+      for (const convite of convitesPendentes) {
+        const jaEMembro = await prisma.membroEquipe.findUnique({
+          where: { equipeId_userId: { equipeId: convite.equipeId, userId } },
+        });
+        if (jaEMembro) continue;
+
+        await prisma.$transaction([
+          prisma.membroEquipe.create({ data: { equipeId: convite.equipeId, userId, cargo: convite.cargo } }),
+          prisma.conviteEquipe.update({ where: { id: convite.id }, data: { status: 'ACEITO' } }),
+        ]);
+
+        await PermissaoService.aplicarPermissoesPadrao({
+          equipeId:      convite.equipeId,
+          userId,
+          cargo:         convite.cargo,
+          atualizadoPor: 0,
+        });
+
+        // Marca como convidado e copia espécies do dono da equipe
+        await aplicarOnboardingConvidado(userId, convite.equipeId);
+        aceitos++;
+      }
+
+      res.json({ sucesso: true, dados: { aceitos } });
+    } catch (err) {
+      console.error('Erro ao auto-aceitar convites:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  removerConvite: async (req, res) => {
+    try {
+      const userId    = req.user.id;
+      const conviteId = Number(req.params.conviteId);
+
+      const empresa = await prisma.empresa.findFirst({ where: { ownerId: userId } });
+      if (!empresa) return res.status(403).json({ sucesso: false, mensagem: 'Sem permissão' });
+
+      const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+      if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Sem permissão' });
+
+      const convite = await prisma.conviteEquipe.findFirst({ where: { id: conviteId, equipeId: equipe.id } });
+      if (!convite) return res.status(404).json({ sucesso: false, mensagem: 'Convite não encontrado' });
+      if (convite.status === 'ACEITO') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Convite já aceito — remova o membro pela lista de membros' });
+      }
+
+      await prisma.conviteEquipe.delete({ where: { id: conviteId } });
+      res.json({ sucesso: true, mensagem: 'Convite removido' });
+    } catch (err) {
+      console.error('Erro ao remover convite:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -454,6 +718,43 @@ const EquipeController = {
       res.status(201).json({ sucesso: true, dados: resultado });
     } catch (err) {
       console.error('Erro ao criar setup:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Permissões do usuário logado ─────────────────────────────────────────────
+  // Retorna mapa plano { slug: nivel } para o frontend aplicar controle de acesso.
+  // Sócio recebe FULL em tudo automaticamente (bypass via flag isSocio).
+  minhasPermissoes: async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const membro = await prisma.membroEquipe.findFirst({
+        where:   { userId },
+        select:  { equipeId: true, cargo: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (!membro) {
+        return res.json({ sucesso: true, dados: { permissoes: {}, isSocio: false, temEquipe: false } });
+      }
+
+      if (membro.cargo === 'SOCIO') {
+        // Sócio tem bypass — retorna FULL em todos os módulos
+        const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
+        const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
+        return res.json({ sucesso: true, dados: { permissoes, isSocio: true, temEquipe: true } });
+      }
+
+      const registros = await prisma.permissaoMembro.findMany({
+        where:  { equipeId: membro.equipeId, userId },
+        select: { moduloSlug: true, nivel: true },
+      });
+
+      const permissoes = Object.fromEntries(registros.map(r => [r.moduloSlug, r.nivel]));
+      return res.json({ sucesso: true, dados: { permissoes, isSocio: false, temEquipe: true } });
+    } catch (err) {
+      console.error('Erro ao buscar permissões:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },

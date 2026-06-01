@@ -1,4 +1,4 @@
-﻿// src/pages/VetDashboard.tsx
+// src/pages/VetDashboard.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,6 +24,8 @@ interface AnimalResumido {
   sexo?:            string | null;
   categoriaAnimal?: string | null;
   tipoExercicio?:   string | null;
+  baia?:            string | null;
+  local?:           string | null;
   especie?:         { nome: string } | null;
   raca?:            { nome: string } | null;
   user?:            { fullName: string; email: string; phone?: string | null } | null;
@@ -162,10 +164,10 @@ function SolicitacaoCard({ sol, onResponder }: {
 // ─── AnimalCard (mobile) ──────────────────────────────────────────────────────
 
 function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
-  animal:        AnimalResumido;
-  onDashboard:   () => void;
-  onEditar:      () => void;
-  onDesvincular: () => void;
+  animal:         AnimalResumido;
+  onDashboard:    () => void;
+  onEditar:       () => void;
+  onDesvincular?: () => void;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
@@ -186,13 +188,23 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
         {animal.user?.fullName && (
           <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
         )}
-        <div className="flex items-center gap-2 mt-1">
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
           <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
             {idadeDisplay(animal)}
           </span>
           {animal.sexo && (
             <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
               {animal.sexo}
+            </span>
+          )}
+          {animal.baia && (
+            <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 font-medium">
+              Baia {animal.baia}
+            </span>
+          )}
+          {animal.local && (
+            <span className="text-xs bg-gray-50 text-gray-500 rounded-full px-2 py-0.5 truncate max-w-[120px]">
+              {animal.local}
             </span>
           )}
         </div>
@@ -210,11 +222,13 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
           title="Editar">
           <Pencil size={16} />
         </button>
-        <button onClick={onDesvincular}
-          className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-          title="Desvincular">
-          <Unlink size={16} />
-        </button>
+        {onDesvincular && (
+          <button onClick={onDesvincular}
+            className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+            title="Desvincular">
+            <Unlink size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -224,6 +238,8 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
 
 export default function VetDashboard() {
   const { user }              = useAuth();
+  const isConvidado           = user?.isConvidado === true;
+  const isVet                 = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal } = useSelectedAnimal();
   const navigate              = useNavigate();
 
@@ -240,7 +256,7 @@ export default function VetDashboard() {
     try {
       const [animaisRes, solRes] = await Promise.all([
         api.get('/animais'),
-        api.get('/veterinarios/solicitacoes?status=PENDENTE'),
+        isVet ? api.get('/veterinarios/solicitacoes?status=PENDENTE') : Promise.resolve({ data: [] }),
       ]);
 
       const todasSolicitacoes: Solicitacao[] = solRes.data?.dados ?? [];
@@ -353,7 +369,7 @@ export default function VetDashboard() {
 
   return (
     <>
-      {user?.id && (
+      {user?.id && !isConvidado && (
         <VetNotificationModal
           solicitations={solicitacoes as SolicitacaoNotif[]}
           vetId={Number(user.id)}
@@ -368,7 +384,7 @@ export default function VetDashboard() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
-              Olá, Dr(a). {user?.fullName?.split(' ')[0]} 👋
+              Olá, {isVet ? `Dr(a). ` : ''}{user?.fullName?.split(' ')[0]} 👋
             </h1>
             <p className="text-sm text-gray-500 mt-0.5">
               {meusAnimais.length > 0
@@ -386,12 +402,14 @@ export default function VetDashboard() {
                 </span>
               </div>
             )}
-            <button onClick={() => navigate('/animais')}
-              className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
-                         px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-              <span className="hidden xs:inline sm:inline">Novo Paciente</span>
-              <span className="xs:hidden sm:hidden">Novo</span>
-            </button>
+            {!isConvidado && (
+              <button onClick={() => navigate('/animais')}
+                className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
+                           px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
+                <span className="hidden xs:inline sm:inline">Novo Paciente</span>
+                <span className="xs:hidden sm:hidden">Novo</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -452,7 +470,7 @@ export default function VetDashboard() {
                     animal={animal}
                     onDashboard={() => irParaAnimal(animal)}
                     onEditar={() => navigate(`/animais/${animal.id}`)}
-                    onDesvincular={() => setAnimalToUnlink(animal)}
+                    onDesvincular={isVet ? () => setAnimalToUnlink(animal) : undefined}
                   />
                 ))}
               </div>
@@ -460,10 +478,11 @@ export default function VetDashboard() {
               {/* DESKTOP — tabela */}
               <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
                 {/* Cabeçalho */}
-                <div className="grid grid-cols-[44px_1fr_160px_90px_70px_120px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <div className="grid grid-cols-[44px_1fr_150px_80px_80px_70px_120px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
                   <span />
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Baia</span>
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
@@ -475,7 +494,7 @@ export default function VetDashboard() {
                     <div
                       key={animal.id}
                       onClick={() => irParaAnimal(animal)}
-                      className="grid grid-cols-[44px_1fr_160px_90px_70px_120px] items-center gap-4
+                      className="grid grid-cols-[44px_1fr_150px_80px_80px_70px_120px] items-center gap-4
                                  px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
                     >
                       <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
@@ -495,6 +514,12 @@ export default function VetDashboard() {
                       <p className="text-sm text-gray-600 truncate">
                         {animal.raca?.nome || animal.especie?.nome || '—'}
                       </p>
+                      <p className="text-sm text-gray-600">
+                        {animal.baia
+                          ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">{animal.baia}</span>
+                          : <span className="text-gray-300">—</span>
+                        }
+                      </p>
                       <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
                       <p className="text-sm text-gray-600">{animal.sexo ?? '—'}</p>
                       <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
@@ -508,11 +533,13 @@ export default function VetDashboard() {
                           title="Editar">
                           <Pencil size={15} />
                         </button>
-                        <button onClick={() => setAnimalToUnlink(animal)}
-                          className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                          title="Desvincular">
-                          <Unlink size={15} />
-                        </button>
+                        {isVet && (
+                          <button onClick={() => setAnimalToUnlink(animal)}
+                            className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                            title="Desvincular">
+                            <Unlink size={15} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -539,13 +566,17 @@ export default function VetDashboard() {
               Nenhum animal sob sua responsabilidade
             </h2>
             <p className="text-gray-500 text-sm mb-6">
-              Cadastre um paciente ou aguarde solicitações de vínculo.
+              {isConvidado
+                ? 'Aguarde a atribuição de pacientes pelo responsável da equipe.'
+                : 'Cadastre um paciente ou aguarde solicitações de vínculo.'}
             </p>
-            <button onClick={() => navigate('/animais')}
-              className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
-                         text-white px-6 py-3 rounded-2xl font-semibold transition-colors">
-              Cadastrar Paciente
-            </button>
+            {!isConvidado && (
+              <button onClick={() => navigate('/animais')}
+                className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
+                           text-white px-6 py-3 rounded-2xl font-semibold transition-colors">
+                Cadastrar Paciente
+              </button>
+            )}
           </div>
         ) : null}
 

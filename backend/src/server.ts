@@ -9,10 +9,23 @@ import logger from './lib/logger';
 import prisma from './lib/prisma';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const requestIdMiddleware = require('./middlewares/requestId');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { getEmpresaIdDoVet } = require('./lib/vetUtils');
 
 // Fuso horário padrão — garante que new Date() e operações de data usem America/Sao_Paulo
 process.env.TZ = 'America/Sao_Paulo';
 dotenv.config();
+
+// ── Startup security checks ────────────────────────────────────────────────
+const _jwtSecret = process.env.JWT_SECRET ?? '';
+if (_jwtSecret.length < 32) {
+  // eslint-disable-next-line no-console
+  process.stderr.write(
+    '[FATAL] JWT_SECRET muito fraco (mínimo 32 caracteres).\n' +
+    'Gere um seguro com: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n'
+  );
+  process.exit(1);
+}
 
 // Extend Express Request with runtime-injected fields
 declare global {
@@ -40,7 +53,26 @@ const PORT = Number(process.env.PORT) || 3001;
 // ===================== MIDDLEWARES =====================
 app.use(requestIdMiddleware);
 app.use(helmet());
-app.use(cors());
+
+// CORS — apenas origens configuradas em ALLOWED_ORIGINS (separadas por vírgula)
+const _allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permite requisições sem origin (Postman, apps mobile, health checks internos)
+    if (!origin) return callback(null, true);
+    if (_allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origem não permitida — ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+  maxAge: 3600,
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -251,13 +283,24 @@ async function autoAceitarSolicitacoesPendentes() {
         where: { id: { in: simples.map(p => p.id) } },
         data:  { status: 'ACEITO', approvalToken: null, expiresAt: null },
       });
-      // Limpa vet do animal para cada DESVINCULO auto-aceito
-      const desvinculos = simples.filter(p => p.tipo === 'DESVINCULO');
-      for (const d of desvinculos) {
-        await prisma.animal.update({
-          where: { id: d.animalId },
-          data:  { veterinarioNome: null, veterinarioClinica: null },
-        });
+
+      for (const s of simples) {
+        if (s.tipo === 'DESVINCULO') {
+          // Desvinculo: remove vet e limpa empresa do animal
+          await prisma.animal.update({
+            where: { id: s.animalId },
+            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null },
+          });
+        } else if (s.tipo === 'VINCULO') {
+          // Vinculo: associa animal à empresa do vet
+          const empId = await getEmpresaIdDoVet(s.vetUserId);
+          if (empId) {
+            await prisma.animal.update({
+              where: { id: s.animalId },
+              data:  { empresaId: empId },
+            });
+          }
+        }
       }
     }
 

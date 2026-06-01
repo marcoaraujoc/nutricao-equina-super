@@ -12,6 +12,7 @@ import {
   Image, Film, Volume2, Lock,
 } from 'lucide-react';
 import { imprimirEvolucao } from '../utils/EvolucaoPrint';
+import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
 import {
@@ -785,6 +786,7 @@ interface Props {
 
 export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
+  const { podeExecutar, isSocio, permissoes } = usePermissoes();
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
@@ -1068,24 +1070,29 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const userId = user?.id ?? 0;
   const role   = user?.role ?? 'USER';
 
+  // Permissões de evolução — derivadas do hook, respeitando nível PROPRIO vs EQUIPE
+  const podeCriarEvolucao = podeExecutar('atendimento.evolucoes.criar');
+
   return (
     <>
       {/* Barra de ação e filtros */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
 
-        <div className="relative flex-shrink-0">
-          <button
-            onClick={abrirNova}
-            disabled={temEvolucaoAberta}
-            title={temEvolucaoAberta ? 'Existe uma evolução em andamento. Finalize-a antes de criar uma nova.' : undefined}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            {temEvolucaoAberta && <Lock size={14} />}
-            Nova Evolução
-          </button>
-          {temEvolucaoAberta && (
-            <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-amber-400 rounded-full border-2 border-white" title="Evolução em andamento" />
-          )}
-        </div>
+        {podeCriarEvolucao && (
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={abrirNova}
+              disabled={temEvolucaoAberta}
+              title={temEvolucaoAberta ? 'Existe uma evolução em andamento. Finalize-a antes de criar uma nova.' : undefined}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
+              {temEvolucaoAberta && <Lock size={14} />}
+              Nova Evolução
+            </button>
+            {temEvolucaoAberta && (
+              <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-amber-400 rounded-full border-2 border-white" title="Evolução em andamento" />
+            )}
+          </div>
+        )}
 
         <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
           className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500 flex-shrink-0">
@@ -1162,11 +1169,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <FileText size={40} className="mb-3" />
           <p className="text-sm text-gray-400">Nenhuma evolução encontrada</p>
-          <button onClick={abrirNova}
-            disabled={temEvolucaoAberta}
-            className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 disabled:bg-gray-300 transition-colors">
-            Nova Evolução
-          </button>
+          {podeCriarEvolucao && (
+            <button onClick={abrirNova}
+              disabled={temEvolucaoAberta}
+              className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 disabled:bg-gray-300 transition-colors">
+              Nova Evolução
+            </button>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -1185,8 +1194,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               {evolucoes.map(ev => {
                 const emAndamento = ev.status === 'EM_ANDAMENTO';
                 const bloqueado   = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
-                const podeExcluir = emAndamento && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId));
-                const podeAprovar = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
+                const eProprioAutor = ev.veterinarioId === userId;
+
+                // Nível de permissão para editar/excluir desta evolução
+                const nivelEditar  = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar']  ?? 'NENHUM');
+                const nivelDeletar = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.deletar'] ?? 'NENHUM');
+
+                const podeEditarEsta  = nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' ||
+                  (nivelEditar  === 'PROPRIO' && eProprioAutor);
+                const podeExcluir    = emAndamento && (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' ||
+                  (nivelDeletar === 'PROPRIO' && eProprioAutor));
+                const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
                   : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
@@ -1250,7 +1268,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           <Eye size={14} />
                         </button>
 
-                        {emAndamento && (
+                        {emAndamento && podeEditarEsta && (
                           <button onClick={() => abrirEdicao(ev)} title="Editar"
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Pencil size={14} />
@@ -1315,7 +1333,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           ev={viewingEv}
           animal={animal}
           onClose={() => setViewingEv(null)}
-          onEditar={viewingEv.status === 'EM_ANDAMENTO' ? () => abrirEdicao(viewingEv) : undefined}
+          onEditar={(() => {
+            const nivelEd = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
+            const podeEd  = nivelEd === 'FULL' || nivelEd === 'EQUIPE' ||
+              (nivelEd === 'PROPRIO' && viewingEv.veterinarioId === userId);
+            return viewingEv.status === 'EM_ANDAMENTO' && podeEd ? () => abrirEdicao(viewingEv) : undefined;
+          })()}
           onImprimir={() => handleImprimir(viewingEv)}
         />
       )}

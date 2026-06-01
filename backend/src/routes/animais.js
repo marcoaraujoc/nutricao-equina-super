@@ -6,6 +6,7 @@ const multer           = require('multer');
 const path             = require('path');
 const { authenticate }                        = require('../middlewares/auth.js');
 const { injectTenant }                        = require('../middlewares/tenant');
+const { checkPermission }                     = require('../middlewares/permissao.middleware');
 const animalController                        = require('../controllers/AnimalController');
 const validate                                = require('../middlewares/validate');
 const { createAnimalRules, animalIdParam }    = require('../validators/animal.validators');
@@ -45,19 +46,19 @@ router.post('/vincular-vet', authenticate, animalController.vincularVet);
 // ─── Rotas CRUD ───────────────────────────────────────────────────────────────
 
 // GET  /api/animais         → listar animais (filtrado por perfil)
-router.get('/',     authenticate, injectTenant, animalController.listar);
+router.get('/',     authenticate, checkPermission('animais.ler', 'LEITURA'), injectTenant, animalController.listar);
 
 // POST /api/animais         → criar animal (com upload de foto opcional)
-router.post('/',    authenticate, injectTenant, upload.single('foto'), createAnimalRules, validate, animalController.criar);
+router.post('/',    authenticate, checkPermission('animais.criar', 'EQUIPE'), injectTenant, upload.single('foto'), createAnimalRules, validate, animalController.criar);
 
 // GET  /api/animais/:id     → obter animal por ID
-router.get('/:id',  authenticate, animalIdParam, validate, animalController.obterPorId);
+router.get('/:id',  authenticate, checkPermission('animais.ler', 'LEITURA'), animalIdParam, validate, animalController.obterPorId);
 
 // PUT  /api/animais/:id     → atualizar animal (com upload de foto opcional)
-router.put('/:id',  authenticate, upload.single('foto'), animalIdParam, validate, animalController.atualizar);
+router.put('/:id',  authenticate, checkPermission('animais.editar', 'EQUIPE'), upload.single('foto'), animalIdParam, validate, animalController.atualizar);
 
 // DELETE /api/animais/:id   → excluir animal
-router.delete('/:id', authenticate, animalIdParam, validate, animalController.excluir);
+router.delete('/:id', authenticate, checkPermission('animais.deletar', 'EQUIPE'), animalIdParam, validate, animalController.excluir);
 
 // DELETE /api/animais/:id/desvincular-vet → vet se remove do animal
 router.delete('/:id/desvincular-vet', authenticate, animalController.desvincularVet);

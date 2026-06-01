@@ -32,7 +32,7 @@ const UserController = {
           email:              true,
           phone:              true,
           userType:           true,
-          mustChangePassword: true, // ← NOVO
+          mustChangePassword: true,
           cep:         true,
           endereco:    true,
           complemento: true,
@@ -42,11 +42,9 @@ const UserController = {
           createdAt:   true,
           ativo:       true,
           vetPerfil: {
-                    select: {
+            select: {
               crmv:    true,
-              especies: {
-                select: { especieId: true },
-              },
+              especies: { select: { especieId: true } },
             },
           },
         },
@@ -56,11 +54,33 @@ const UserController = {
         return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
       }
 
+      // isConvidado via SQL raw — campo novo, ainda pode não estar no cliente Prisma gerado
+      let isConvidado = false;
+      try {
+        const rows = await prisma.$queryRawUnsafe(
+          `SELECT "isConvidado" FROM schs2vet.users WHERE id = $1`,
+          user.id,
+        );
+        isConvidado = rows[0]?.isConvidado ?? false;
+      } catch { /* campo ainda não existe no DB legado — ignora */ }
+
+      // Convite pendente (onboarding de convidado)
+      const convitePendente = await prisma.conviteEquipe.findFirst({
+        where:   { email: user.email, status: 'PENDENTE', expiresAt: { gt: new Date() } },
+        include: { equipe: { select: { nome: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+
       const { vetPerfil, ...userData } = user;
       return res.status(200).json({
         ...userData,
+        isConvidado,
         crmv:              vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
+        profileComplete:   !!(user.phone && user.fullName && user.fullName.trim()),
+        pendingInvite:     convitePendente
+          ? { id: convitePendente.id, cargo: convitePendente.cargo, equipeNome: convitePendente.equipe?.nome ?? '' }
+          : null,
       });
 
     } catch (error) {
@@ -92,6 +112,34 @@ const UserController = {
         especiesAtendidas,
       } = req.body;
 
+      // Determina se é usuário convidado (userType foi definido pelo convite)
+      let isConvidado = false;
+      try {
+        const rows = await prisma.$queryRawUnsafe(
+          `SELECT "isConvidado" FROM schs2vet.users WHERE email = $1`,
+          email,
+        );
+        isConvidado = rows[0]?.isConvidado ?? false;
+      } catch { /* coluna ainda não existe no DB legado */ }
+
+      // Convidados não podem alterar o userType atribuído pela equipe.
+      // Cadastros diretos só permitem PROPRIETARIO ou VETERINARIO.
+      let effectiveUserType = undefined;
+      if (userType) {
+        if (isConvidado) {
+          effectiveUserType = undefined; // mantém o que foi definido pelo convite
+        } else {
+          const TIPOS_PERMITIDOS = ['PROPRIETARIO', 'VETERINARIO'];
+          if (!TIPOS_PERMITIDOS.includes(userType)) {
+            return res.status(400).json({
+              success: false,
+              error: 'Tipo de usuário inválido. Apenas Proprietário e Médico Veterinário estão disponíveis para cadastro direto.',
+            });
+          }
+          effectiveUserType = userType;
+        }
+      }
+
       const updatedUser = await prisma.user.update({
         where: { email },
         data: {
@@ -103,7 +151,7 @@ const UserController = {
           bairro:      bairro      || undefined,
           cidade:      cidade      || undefined,
           estado:      estado      || undefined,
-          userType:    userType    || undefined,
+          userType:    effectiveUserType,
         },
       });
 
@@ -183,7 +231,7 @@ alterarSenha: async (req, res) => {
 
     try {
       const user = await prisma.user.findUnique({
-        where:  { id: Number(req.user.id) },
+        where:  { email: req.user.email },
         select: { passwordHash: true, mustChangePassword: true },
       });
 
@@ -205,7 +253,7 @@ alterarSenha: async (req, res) => {
       const hash = await bcrypt.hash(novaSenha, 10);
 
       await prisma.user.update({
-        where: { id: Number(req.user.id) },
+        where: { email: req.user.email },
         data:  { passwordHash: hash, mustChangePassword: false },
       });
 

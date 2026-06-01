@@ -1,6 +1,6 @@
-// src/App.tsx
+﻿// src/App.tsx
 
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -11,6 +11,7 @@ import AnimaisVet from './pages/AnimaisVet';
 import AprovarVinculo from './pages/AprovarVinculo';
 import AprovarVinculoProprietario from './pages/AprovarVinculoProprietario';
 import AlterarSenhaObrigatoria from './pages/AlterarSenhaObrigatoria';
+import AceitarConviteEquipe   from './pages/AceitarConviteEquipe';
 
 // Pages — Gerais
 import Login           from './pages/Login';
@@ -45,7 +46,8 @@ import CriaDieta from './pages/CriaDieta';
 import Exames               from './pages/Exames';
 import CriaExameNutricional from './pages/CriaExameNutricional';
 
-import Equipe from './pages/Equipe';
+import Equipe         from './pages/Equipe';
+import ControleAcesso from './pages/ControleAcesso';
 
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
@@ -65,6 +67,9 @@ import Farmacia            from './pages/Farmacia';
 import Medicamentos        from './pages/Medicamentos';
 import Procedimentos       from './pages/Procedimentos';
 import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
+
+// Pages — Financeiro
+import Faturamento from './pages/Faturamento';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 
@@ -183,10 +188,16 @@ function App() {
                           <Route path="/procedimentos"         element={<Procedimentos />} />
                           <Route path="/execucao-prescricao"   element={<ExecucaoPrescricao />} />
 
+                          {/* Financeiro */}
+                          <Route path="/faturamento" element={<Faturamento />} />
+
                           {/* Equipe */}
-                          <Route path="/equipe" element={<Equipe />} />
+                          <Route path="/equipe"           element={<Equipe />} />
+                          <Route path="/controle-acesso"  element={<ControleAcesso />} />
 
                           {/* Troca Senha */}
+                          {/* Onboarding de convidado — aceitar convite de equipe */}
+                          <Route path="/aceitar-convite-equipe" element={<AceitarConviteEquipe />} />
                           <Route path="/alterar-senha-obrigatoria" element={<AlterarSenhaObrigatoria />} />
 
                           {/* Debug */}

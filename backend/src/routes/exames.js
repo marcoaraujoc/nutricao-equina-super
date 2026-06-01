@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const exameController = require('../controllers/ExameController');
+const { authenticate }    = require('../middlewares/auth');
+const { checkPermission } = require('../middlewares/permissao.middleware');
 
 // memoryStorage para upload persistente — StorageProvider decide o destino
 const upload = multer({ storage: multer.memoryStorage() });
@@ -16,11 +18,11 @@ const uploadTemp = multer({
 });
 
 // Rotas existentes
-router.get('/animal/:animalId', exameController.getExamesByAnimal);
-router.post('/', upload.single('arquivo'), exameController.create);
-router.post('/analisar-llm', uploadTemp.single('arquivo'), exameController.analisarLLM);
-router.delete('/:id', exameController.delete);
-router.put('/:id', exameController.update);   // ← adicione esta linha
+router.get('/animal/:animalId', authenticate, checkPermission('atendimento.exames.ler',     'LEITURA'), exameController.getExamesByAnimal);
+router.post('/',                authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), upload.single('arquivo'), exameController.create);
+router.post('/analisar-llm',    authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), uploadTemp.single('arquivo'), exameController.analisarLLM);
+router.delete('/:id',           authenticate, checkPermission('atendimento.exames.deletar', 'PROPRIO'), exameController.delete);
+router.put('/:id',              authenticate, checkPermission('atendimento.exames.editar',  'PROPRIO'), exameController.update);
 
 // Removemos a rota PUT por enquanto (não estamos usando edição ainda)
 module.exports = router;

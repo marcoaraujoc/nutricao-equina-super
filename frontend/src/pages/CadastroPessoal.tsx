@@ -1,4 +1,4 @@
-// src/pages/CadastroPessoal.tsx
+﻿// src/pages/CadastroPessoal.tsx
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,6 +12,13 @@ import { CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
 type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
 
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
+
+const LABEL_TIPO_USUARIO: Record<string, string> = {
+  PROPRIETARIO: 'Proprietário(a)',
+  VETERINARIO:  'Médico(a) Veterinário(a)',
+  ESTAGIARIO:   'Estagiário(a)',
+  ADMIN:        'Administrador(a)',
+};
 
 const SUBESPECIALIDADES = [
   'Clínico', 'Quiroprata', 'Fisioterapeuta', 'Oftalmologista',
@@ -38,14 +45,28 @@ export default function CadastroPessoal() {
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [crmvStatus,  setCrmvStatus]  = useState<CrmvStatus>('idle');
+  const fromConvite = localStorage.getItem('s2vet_ob') === 'convite';
   const crmvTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [especies, setEspecies] = useState<{ id: number; nome: string }[]>([]);
-  useEffect(() => {
+  const [especies,        setEspecies]        = useState<{ id: number; nome: string }[]>([]);
+  const [especiesLoaded,  setEspeciesLoaded]  = useState(false);
+  const [especiesErro,    setEspeciesErro]    = useState(false);
+  // Verdadeiro quando o usuário entrou via convite — espécies são herdadas e ficam bloqueadas
+  const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
+
+  const carregarEspecies = () => {
+    setEspeciesErro(false);
+    setEspeciesLoaded(false);
     api.get('/especies')
-      .then(res => setEspecies(res.data?.dados ?? res.data ?? []))
-      .catch(() => {});
-  }, []);
+      .then(res => {
+        const lista = res.data?.dados ?? res.data ?? [];
+        setEspecies(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspeciesErro(true))
+      .finally(() => setEspeciesLoaded(true));
+  };
+
+  useEffect(() => { carregarEspecies(); }, []);
 
   const [form, setForm] = useState({
     nomeCompleto:      '',
@@ -88,6 +109,7 @@ export default function CadastroPessoal() {
             especiesAtendidas: data.especiesAtendidas || [],
             subespecialidades: data.subespecialidades || [],
           });
+          if (data.isConvidado) setIsConvidadoFlag(true);
         }
       } catch (err) {
         console.error('Erro ao carregar dados do usuário:', err);
@@ -206,7 +228,7 @@ export default function CadastroPessoal() {
         toast.error('Aguarde a verificação do CRMV ser concluída');
         return false;
       }
-      if (form.especiesAtendidas.length === 0) {
+      if (!isConvidadoFlag && form.especiesAtendidas.length === 0 && especies.length > 0) {
         toast.error('Selecione ao menos uma espécie atendida');
         return false;
       }
@@ -262,15 +284,20 @@ export default function CadastroPessoal() {
           await refreshUser();
         }
         toast.success('Cadastro pessoal salvo com sucesso!');
+
         await refreshSelectedAnimal();
 
         if (form.tipoUsuario === 'VETERINARIO') {
           localStorage.setItem('s2vet_ob', 'd');
           navigate('/clinica');
         } else {
-          if (localStorage.getItem('s2vet_ob') === 'p') {
+          const ob = localStorage.getItem('s2vet_ob');
+          if (ob === 'p') {
             localStorage.setItem('s2vet_ob', 'a');
             navigate('/animais');
+          } else if (ob === 'convite') {
+            localStorage.removeItem('s2vet_ob');
+            navigate('/');
           } else {
             navigate('/meus-animais');
           }
@@ -406,11 +433,22 @@ export default function CadastroPessoal() {
           {/* Tipo de Usuário */}
           <div>
             <Label text="Tipo de Usuário" required />
-            <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange}
-              className={inputClass}>
-              <option value="PROPRIETARIO">Proprietário</option>
-              <option value="VETERINARIO">Médico Veterinário</option>
-            </select>
+            {fromConvite ? (
+              <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
+                <span className="text-gray-800 font-medium">
+                  {LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario}
+                </span>
+                <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
+                  <Info size={11} /> Definido pela equipe
+                </span>
+              </div>
+            ) : (
+              <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange}
+                className={inputClass}>
+                <option value="PROPRIETARIO">Proprietário</option>
+                <option value="VETERINARIO">Médico Veterinário</option>
+              </select>
+            )}
           </div>
 
           {/* ── Dados profissionais — só para veterinários ── */}
@@ -456,34 +494,64 @@ export default function CadastroPessoal() {
                 )}
               </div>
 
-              <div>
-                <Label text="Espécies atendidas" required />
-                {especies.length === 0 ? (
-                  <p className="text-xs text-gray-400">Carregando espécies...</p>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {especies.map(esp => {
-                      const selecionada = form.especiesAtendidas.includes(esp.id);
-                      return (
-                        <label key={esp.id}
-                          className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
-                            selecionada
-                              ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                              : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
-                          }`}>
-                          <input
-                            type="checkbox"
-                            className="accent-emerald-600 flex-shrink-0"
-                            checked={selecionada}
-                            onChange={() => toggleEspecie(esp.id)}
-                          />
-                          <span className="text-sm font-medium">{esp.nome}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              {/* Espécies: convidado = automático; independente = seleção */}
+              {isConvidadoFlag ? (
+                <div>
+                  <Label text="Espécies atendidas" />
+                  {form.especiesAtendidas.length > 0 && especiesLoaded && especies.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {especies.filter(e => form.especiesAtendidas.includes(e.id)).map(e => (
+                        <span key={e.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium rounded-2xl">
+                          {e.nome}
+                        </span>
+                      ))}
+                      <p className="w-full text-xs text-gray-400 mt-1 flex items-center gap-1">
+                        <Info size={11} /> Definido automaticamente pela equipe
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400 mt-1">
+                      Será configurado automaticamente ao entrar na equipe.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <Label text="Espécies atendidas" required />
+                  {!especiesLoaded ? (
+                    <p className="flex items-center gap-1.5 text-xs text-gray-400">
+                      <Loader2 size={12} className="animate-spin" /> Carregando espécies...
+                    </p>
+                  ) : especiesErro ? (
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-red-500">Erro ao carregar espécies.</p>
+                      <button type="button" onClick={carregarEspecies}
+                        className="text-xs text-emerald-600 underline">Tentar novamente</button>
+                    </div>
+                  ) : especies.length === 0 ? (
+                    <p className="text-xs text-amber-600">Nenhuma espécie cadastrada. Contate o administrador.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {especies.map(esp => {
+                        const selecionada = form.especiesAtendidas.includes(esp.id);
+                        return (
+                          <label key={esp.id}
+                            className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
+                              selecionada
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
+                            }`}>
+                            <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
+                              checked={selecionada} onChange={() => toggleEspecie(esp.id)} />
+                            <span className="text-sm font-medium">{esp.nome}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <Label text="Subespecialidade" required />

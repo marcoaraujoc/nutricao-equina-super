@@ -23,9 +23,10 @@ export default function AlterarSenhaObrigatoria() {
     try {
       setSalvando(true);
       await api.patch('/users/me/senha', { novaSenha });
-      await refreshUser();               // recarrega user sem mustChangePassword
-      toast.success('Senha criada com sucesso! Bem-vindo(a) ao S2Vet.');
-      navigate('/');
+      await refreshUser();
+      toast.success('Senha definida! Agora complete o seu cadastro pessoal.');
+      localStorage.setItem('s2vet_ob', 'convite');
+      navigate('/cadastro-pessoal');
     } catch (error) {
       toast.error('Erro ao salvar senha. Tente novamente.');
     } finally {

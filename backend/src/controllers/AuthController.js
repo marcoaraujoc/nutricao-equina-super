@@ -1,4 +1,4 @@
-const jwt      = require('jsonwebtoken');
+﻿const jwt      = require('jsonwebtoken');
 const bcrypt   = require('bcryptjs');
 const crypto   = require('crypto');
 const nodemailer = require('nodemailer');
@@ -138,7 +138,7 @@ const AuthController = {
         },
       });
 
-      const resetLink = `${process.env.APP_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      const resetLink = `${process.env.APP_URL || 'http://localhost:5173'}/#/reset-password?token=${resetToken}`;
 
       await transporter.sendMail({
         from: `"Equipe Equine Nutrition" <${process.env.EMAIL_USER}>`,

@@ -4,6 +4,7 @@
 const { PrismaClient } = require('@prisma/client');
 const crypto           = require('crypto');
 const emailService     = require('../services/emailService');
+const { getEmpresaIdDoVet } = require('../lib/vetUtils');
 
 const prisma = new PrismaClient();
 
@@ -16,6 +17,26 @@ const gerarExpiracao = (dias = 7) => {
   return d;
 };
 
+/**
+ * Retorna true se o vet PODE receber solicitações (VINCULO/DESVINCULO/TROCA_VET).
+ * Regra: só recebe quem é DONO de uma empresa (Empresa.ownerId) OU é vet autônomo
+ * (sem nenhum MembroEquipe). Vets convidados (têm MembroEquipe mas não são donos) → false.
+ */
+async function podeReceberSolicitacoes(vetId) {
+  const id = Number(vetId);
+
+  // Dono de uma empresa → sempre pode
+  const empresa = await prisma.empresa.findFirst({ where: { ownerId: id } });
+  if (empresa) return true;
+
+  // Membro de uma equipe mas sem empresa própria → convidado → não pode
+  const membro = await prisma.membroEquipe.findFirst({ where: { userId: id } });
+  if (membro) return false;
+
+  // Vet autônomo (sem equipe e sem empresa ainda) → pode
+  return true;
+}
+
 // ─── Controller ───────────────────────────────────────────────────────────────
 
 const VeterinarioController = {
@@ -25,7 +46,16 @@ const VeterinarioController = {
     try {
       const { especieId } = req.query;
 
-      const where = {};
+      // Apenas vets sem vínculo de equipe (standalone) ou que sejam sócios da equipe.
+      // Vets convidados (membros com cargo != SOCIO) não aparecem para proprietários.
+      const where = {
+        user: {
+          OR: [
+            { membrosEquipe: { none: {} } },
+            { membrosEquipe: { some: { cargo: 'SOCIO' } } },
+          ],
+        },
+      };
       if (especieId) {
         where.especies = { some: { especieId: Number(especieId) } };
       }
@@ -231,6 +261,11 @@ const VeterinarioController = {
       const { status, animalId } = req.query;
       const vetUserId            = req.user.id;
 
+      // Apenas o dono da empresa recebe solicitações
+      if (!(await podeReceberSolicitacoes(vetUserId))) {
+        return res.json({ sucesso: true, dados: [] });
+      }
+
       const where = { vetUserId };
       if (status)   where.status   = status;
       if (animalId) where.animalId = Number(animalId);
@@ -264,6 +299,11 @@ const VeterinarioController = {
   listarPendentes: async (req, res) => {
     try {
       const vetUserId = Number(req.user.id);
+
+      // Apenas o dono da empresa recebe solicitações
+      if (!(await podeReceberSolicitacoes(vetUserId))) {
+        return res.json({ sucesso: true, dados: [] });
+      }
 
       const pendentes = await prisma.vetAnimalSolicitacao.findMany({
         where:   { vetUserId, status: 'PENDENTE' },
@@ -382,6 +422,17 @@ const VeterinarioController = {
       });
     }
 
+    // VINCULO aceito: associa o animal à empresa do vet (multi-tenant)
+    if (aceito && solicitacao.tipo === 'VINCULO') {
+      const empId = await getEmpresaIdDoVet(solicitacao.vetUserId);
+      if (empId) {
+        await prisma.animal.update({
+          where: { id: solicitacao.animalId },
+          data:  { empresaId: empId },
+        });
+      }
+    }
+
     // TROCA_VET aceita via email: criar VINCULO PENDENTE para o novo vet e notificá-lo
     if (aceito && solicitacao.tipo === 'TROCA_VET' && solicitacao.novoVetUserId) {
       const novoToken  = gerarToken();
@@ -491,6 +542,17 @@ const VeterinarioController = {
         });
       }
 
+      // VINCULO aceito: associa o animal à empresa do vet (multi-tenant)
+      if (status === 'ACEITO' && solicitacao.tipo === 'VINCULO') {
+        const empId = await getEmpresaIdDoVet(vetUserId);
+        if (empId) {
+          await prisma.animal.update({
+            where: { id: solicitacao.animalId },
+            data:  { empresaId: empId },
+          });
+        }
+      }
+
       // Notifica proprietário por email em qualquer recusa
       if (status === 'RECUSADO' && solicitacao.animal.user?.email) {
         const vetNomeLogado = req.user?.fullName || 'Veterinário';
@@ -560,6 +622,14 @@ const VeterinarioController = {
 
       if (!animalId) {
         return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
+      }
+
+      // Apenas o dono da empresa pode solicitar vínculo com proprietários
+      if (!(await podeReceberSolicitacoes(vetId))) {
+        return res.status(403).json({
+          sucesso:  false,
+          mensagem: 'Apenas o veterinário responsável pela equipe pode solicitar vínculos com proprietários.',
+        });
       }
 
       const animal = await prisma.animal.findUnique({

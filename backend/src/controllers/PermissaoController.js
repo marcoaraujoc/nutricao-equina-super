@@ -80,6 +80,54 @@ const PermissaoController = {
     }
   },
 
+  async getPerfisByEquipe(req, res) {
+    try {
+      const equipeId = Number(req.params.equipeId);
+      const dados    = await PermissaoService.getPerfisByEquipe({ equipeId });
+      return res.json({ sucesso: true, dados });
+    } catch (err) {
+      console.error('[PermissaoController.getPerfisByEquipe]', err);
+      return res.status(500).json({ sucesso: false, mensagem: err.message });
+    }
+  },
+
+  async getMatrizPorCargo(req, res) {
+    try {
+      const equipeId = Number(req.params.equipeId);
+      const { cargo } = req.params;
+      const dados    = await PermissaoService.getMatrizPorCargo({ equipeId, cargo });
+      return res.json({ sucesso: true, dados });
+    } catch (err) {
+      console.error('[PermissaoController.getMatrizPorCargo]', err);
+      return res.status(500).json({ sucesso: false, mensagem: err.message });
+    }
+  },
+
+  async salvarMatrizPorCargo(req, res) {
+    try {
+      const equipeId         = Number(req.params.equipeId);
+      const { cargo }        = req.params;
+      const { permissoes }   = req.body;
+
+      if (!permissoes || typeof permissoes !== 'object') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Campo "permissoes" é obrigatório.' });
+      }
+
+      const resultado = await PermissaoService.salvarMatrizPorCargo({
+        equipeId,
+        cargo,
+        permissoes,
+        atualizadoPorId:   req.user.id,
+        atualizadoPorNome: req.user.fullName ?? req.user.email,
+        ipOrigem:          req.ip,
+      });
+      return res.json({ sucesso: true, ...resultado });
+    } catch (err) {
+      console.error('[PermissaoController.salvarMatrizPorCargo]', err);
+      return res.status(500).json({ sucesso: false, mensagem: err.message });
+    }
+  },
+
   async getAuditoria(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);

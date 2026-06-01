@@ -1,4 +1,4 @@
-﻿// src/pages/AnimaisVet.tsx
+// src/pages/AnimaisVet.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -38,6 +38,8 @@ interface Animal {
   idadeAnos?:       number | null;
   categoriaAnimal?: string | null;
   tipoExercicio?:   string | null;
+  baia?:            string | null;
+  local?:           string | null;
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
@@ -109,6 +111,16 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
           {animal.categoriaAnimal && (
             <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 truncate max-w-[120px]">
               {animal.categoriaAnimal}
+            </span>
+          )}
+          {animal.baia && (
+            <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 font-medium">
+              Baia {animal.baia}
+            </span>
+          )}
+          {animal.local && (
+            <span className="text-xs bg-gray-50 text-gray-500 rounded-full px-2 py-0.5 truncate max-w-[120px]">
+              {animal.local}
             </span>
           )}
         </div>
@@ -223,6 +235,8 @@ function SolicitacaoCard({ sol, onResponder }: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
+  const isConvidado                                  = user?.isConvidado === true;
+  const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate                                     = useNavigate();
 
@@ -243,7 +257,7 @@ const AnimaisVet = () => {
     try {
       const [animaisRes, solRes] = await Promise.all([
         api.get('/animais'),
-        api.get('/veterinarios/solicitacoes?status=PENDENTE'),
+        isVet ? api.get('/veterinarios/solicitacoes?status=PENDENTE') : Promise.resolve({ data: [] }),
       ]);
       setAnimais(animaisRes.data?.dados ?? animaisRes.data ?? []);
       setSolicitacoes(solRes.data?.dados ?? solRes.data ?? []);
@@ -405,7 +419,7 @@ const AnimaisVet = () => {
 
   return (
     <>
-      {user?.id && (
+      {user?.id && !isConvidado && (
         <VetNotificationModal
           solicitations={solicitacoesRecebidas as SolicitacaoNotif[]}
           vetId={Number(user.id)}
@@ -425,25 +439,27 @@ const AnimaisVet = () => {
             </button>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowBuscarModal(true)}
-              className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
-                         px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
-            >
-              <UserPlus size={15} />
-              <span className="hidden sm:inline">Buscar Paciente</span>
-              <span className="sm:hidden">Buscar</span>
-            </button>
-            <button
-              onClick={() => navigate('/animais')}
-              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
-                         px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
-            >
-              <span className="hidden sm:inline">Novo Paciente</span>
-              <span className="sm:hidden">Novo</span>
-            </button>
-          </div>
+          {!isConvidado && (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowBuscarModal(true)}
+                className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
+                           px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+              >
+                <UserPlus size={15} />
+                <span className="hidden sm:inline">Buscar Paciente</span>
+                <span className="sm:hidden">Buscar</span>
+              </button>
+              <button
+                onClick={() => navigate('/animais')}
+                className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
+                           px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+              >
+                <span className="hidden sm:inline">Novo Paciente</span>
+                <span className="sm:hidden">Novo</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ── Busca ──────────────────────────────────────────────────────── */}
@@ -538,10 +554,11 @@ const AnimaisVet = () => {
 
             {/* DESKTOP — tabela */}
             <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="grid grid-cols-[44px_1fr_160px_130px_90px_70px_130px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
+              <div className="grid grid-cols-[44px_1fr_150px_80px_120px_80px_70px_130px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
                 <span />
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Baia</span>
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Categoria NRC</span>
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
@@ -553,7 +570,7 @@ const AnimaisVet = () => {
                   <div
                     key={animal.id}
                     onClick={() => irParaAnimal(animal)}
-                    className="grid grid-cols-[44px_1fr_160px_130px_90px_70px_130px] items-center gap-4
+                    className="grid grid-cols-[44px_1fr_150px_80px_120px_80px_70px_130px] items-center gap-4
                                px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
                   >
                     <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
@@ -572,6 +589,12 @@ const AnimaisVet = () => {
                     </div>
                     <p className="text-sm text-gray-600 truncate">
                       {animal.raca?.nome || animal.especie?.nome || '—'}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {animal.baia
+                        ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">{animal.baia}</span>
+                        : <span className="text-gray-300">—</span>
+                      }
                     </p>
                     <p className="text-sm text-gray-600 truncate">
                       {animal.categoriaAnimal || '—'}

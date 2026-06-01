@@ -12,7 +12,7 @@ const injectTenant = async (req, res, next) => {
 
   try {
     const membro = await prisma.membroEquipe.findFirst({
-      where:   { userId: req.user.id, ativo: true },
+      where:   { userId: req.user.id },
       include: { equipe: { select: { empresaId: true } } },
       orderBy: { createdAt: 'desc' },
     });

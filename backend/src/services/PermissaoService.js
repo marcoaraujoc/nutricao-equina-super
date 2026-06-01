@@ -255,6 +255,100 @@ async function getPermissoesProprietarios({ equipeId }) {
   }));
 }
 
+/**
+ * Lista os cargos (perfis) em uso numa equipe com contagem de membros
+ * e resumo de permissões concedidas.
+ */
+async function getPerfisByEquipe({ equipeId }) {
+  const membros = await prisma.membroEquipe.findMany({
+    where:  { equipeId },
+    select: { userId: true, cargo: true },
+  });
+
+  const porCargo = {};
+  for (const m of membros) {
+    if (!porCargo[m.cargo]) porCargo[m.cargo] = [];
+    porCargo[m.cargo].push(m);
+  }
+
+  const resultado = [];
+  for (const [cargo, lista] of Object.entries(porCargo)) {
+    const userIds = lista.map((m) => m.userId);
+    const perms   = cargo !== 'SOCIO'
+      ? await prisma.permissaoMembro.findMany({ where: { equipeId, userId: { in: userIds } } })
+      : [];
+
+    const slugsUnicos = new Set(perms.filter(p => p.nivel !== 'NENHUM').map(p => p.moduloSlug));
+    const ver    = [...slugsUnicos].filter(s => s.endsWith('.ler')).length;
+    const editar = [...slugsUnicos].filter(s => s.endsWith('.criar') || s.endsWith('.editar')).length;
+    const excluir= [...slugsUnicos].filter(s => s.endsWith('.deletar')).length;
+
+    resultado.push({ cargo, totalMembros: lista.length, resumo: { ver, editar, excluir } });
+  }
+
+  return resultado;
+}
+
+/**
+ * Retorna a matriz de permissões de um cargo agregada dos membros existentes.
+ * Se não há membros com aquele cargo, usa os defaults do seed.
+ */
+async function getMatrizPorCargo({ equipeId, cargo }) {
+  const modulos = await prisma.moduloSistema.findMany({ orderBy: { ordemExib: 'asc' } });
+
+  const membros = await prisma.membroEquipe.findMany({ where: { equipeId, cargo } });
+
+  let mapaPermissoes = {};
+  if (membros.length > 0) {
+    // Usa o primeiro membro como representante do perfil
+    const perms = await prisma.permissaoMembro.findMany({
+      where: { equipeId, userId: membros[0].userId },
+    });
+    mapaPermissoes = Object.fromEntries(perms.map((p) => [p.moduloSlug, p.nivel]));
+  } else {
+    mapaPermissoes = PERMISSOES_PADRAO[cargo] ?? {};
+  }
+
+  const agrupado = {};
+  for (const mod of modulos) {
+    if (!agrupado[mod.modulo])           agrupado[mod.modulo] = {};
+    if (!agrupado[mod.modulo][mod.submodulo]) agrupado[mod.modulo][mod.submodulo] = [];
+    agrupado[mod.modulo][mod.submodulo].push({
+      slug:  mod.slug,
+      acao:  mod.acao,
+      label: mod.label,
+      nivel: mapaPermissoes[mod.slug] ?? 'NENHUM',
+    });
+  }
+
+  return { cargo, totalMembros: membros.length, matriz: agrupado };
+}
+
+/**
+ * Aplica uma matriz de permissões a TODOS os membros de um cargo em uma equipe.
+ * Gera auditoria para cada alteração.
+ */
+async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPorId, atualizadoPorNome, ipOrigem }) {
+  const membros = await prisma.membroEquipe.findMany({ where: { equipeId, cargo } });
+
+  if (membros.length === 0) return { membros: 0, alteracoes: 0 };
+
+  let totalAlteracoes = 0;
+  for (const membro of membros) {
+    const res = await atualizarPermissoes({
+      equipeId,
+      alvoUserId: membro.userId,
+      alteracoes: permissoes,
+      atualizadoPorId,
+      atualizadoPorNome,
+      ipOrigem,
+    });
+    totalAlteracoes += res.alteracoes ?? 0;
+  }
+
+  return { membros: membros.length, alteracoes: totalAlteracoes };
+}
+
 module.exports = {
   aplicarPermissoesPadrao,
   getPermissoesMembro,
@@ -262,4 +356,7 @@ module.exports = {
   getAuditoriaPermissoes,
   atualizarPermissoesProprietario,
   getPermissoesProprietarios,
+  getPerfisByEquipe,
+  getMatrizPorCargo,
+  salvarMatrizPorCargo,
 };

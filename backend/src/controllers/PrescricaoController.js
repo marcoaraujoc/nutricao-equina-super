@@ -205,13 +205,23 @@ const PrescricaoController = {
 
       await prisma.prescricao.update({ where: { id: Number(id) }, data: { status: 'ATIVA' } });
 
-      let fatura = await prisma.fatura.findFirst({
-        where: { animalId: prescricao.animalId, status: 'ABERTA' },
-        orderBy: { criadoEm: 'desc' },
+      // Busca o proprietário do animal para criar fatura por proprietário
+      const animal = await prisma.animal.findUnique({
+        where:  { id: prescricao.animalId },
+        select: { userId: true },
       });
+      const proprietarioId = animal?.userId;
+      const mesRef = new Date().toISOString().slice(0, 7);
+
+      let fatura = proprietarioId
+        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } })
+        : await prisma.fatura.findFirst({ where: { animalId: prescricao.animalId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } });
+
       if (!fatura) {
         fatura = await prisma.fatura.create({
-          data: { animalId: prescricao.animalId, total: 0, status: 'ABERTA' },
+          data: proprietarioId
+            ? { proprietarioId, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
+            : { animalId: prescricao.animalId, total: 0, status: 'ABERTA' },
         });
       }
 
@@ -221,7 +231,7 @@ const PrescricaoController = {
         : `Procedimento: ${prescricao.medicamento}`;
 
       await prisma.faturaItem.create({
-        data: { faturaId: fatura.id, tipo: prescricao.tipo, descricao, valor: 0, quantidade: 1, veterinarioId: vet.id },
+        data: { faturaId: fatura.id, animalId: prescricao.animalId, tipo: prescricao.tipo, descricao, valor: 0, quantidade: 1, veterinarioId: vet.id },
       });
 
       const itens = await prisma.faturaItem.findMany({ where: { faturaId: fatura.id } });
@@ -254,13 +264,22 @@ const PrescricaoController = {
         data:  { status: 'ATIVA' },
       });
 
-      let fatura = await prisma.fatura.findFirst({
-        where:   { animalId: Number(animalId), status: 'ABERTA' },
-        orderBy: { criadoEm: 'desc' },
+      const animal = await prisma.animal.findUnique({
+        where:  { id: Number(animalId) },
+        select: { userId: true },
       });
+      const proprietarioId = animal?.userId;
+      const mesRef = new Date().toISOString().slice(0, 7);
+
+      let fatura = proprietarioId
+        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } })
+        : await prisma.fatura.findFirst({ where: { animalId: Number(animalId), status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } });
+
       if (!fatura) {
         fatura = await prisma.fatura.create({
-          data: { animalId: Number(animalId), total: 0, status: 'ABERTA' },
+          data: proprietarioId
+            ? { proprietarioId, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
+            : { animalId: Number(animalId), total: 0, status: 'ABERTA' },
         });
       }
 
@@ -273,6 +292,7 @@ const PrescricaoController = {
         await prisma.faturaItem.create({
           data: {
             faturaId:      fatura.id,
+            animalId:      Number(animalId),
             tipo:          r.tipo,
             descricao,
             valor:         0,

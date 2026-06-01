@@ -1,6 +1,6 @@
-# S2Vet — CLAUDE.md
+﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-05-28
+# Atualizado em: 2026-05-29
 
 ---
 
@@ -823,3 +823,47 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 
 *Este arquivo deve ser mantido atualizado a cada evolução arquitetural significativa.*
 *É o contrato vivo entre o time e a arquitetura do S2Vet.*
+---
+
+## 14. SEGURANÇA
+
+### Decisões de segurança implementadas
+| Item | Decisão | Motivo |
+|---|---|---|
+| Roteamento | HashRouter (`/#/path`) | Servidor recebe sempre `/`; path fica no fragment, não no request |
+| CORS | Lista explícita via `ALLOWED_ORIGINS` env | `cors()` sem config permite qualquer origem — vetor de CSRF |
+| JWT_SECRET | Validação no startup (min 32 chars, exit 1 se fraco) | Secret previsível é quebrável por força bruta |
+| SQL Injection | Protegido pelo Prisma ORM | Queries parametrizadas — sem `$queryRaw` com interpolação de usuário |
+| Headers HTTP | Helmet ativo (`app.use(helmet())`) | CSP, X-Frame-Options, HSTS, etc. |
+| Rate limiting | 200 req/min geral · 20 req/15min em /auth | Defesa contra brute force e scraping |
+| API keys | Groq e Gemini apenas no backend `.env` | Nunca expor no bundle JS do frontend |
+| Google Client ID | `VITE_GOOGLE_CLIENT_ID` no frontend — intencional | Client ID é público por design do OAuth |
+
+### CORS — configuração correta
+```
+// ALLOWED_ORIGINS=https://app.s2vet.com.br,https://www.s2vet.com.br
+// Sem config: apenas http://localhost:5173
+```
+
+### JWT_SECRET — geração segura
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+Backend recusa iniciar se JWT_SECRET tiver menos de 32 caracteres.
+**O valor atual é fraco — gerar novo antes de ir para produção.**
+
+### HashRouter — regra de ouro para links de email
+```javascript
+// SEMPRE usar /#/ antes do path nos links enviados por email
+`${appUrl}/#/veterinarios/solicitacoes/aprovar?token=X&acao=aceitar`
+`${appUrl}/#/proprietario/aprovar-vinculo?token=X&acao=aceitar`
+`${appUrl}/#/reset-password?token=X`
+`${appUrl}/#/equipe/convite/${token}`
+```
+
+### Pendências de segurança (futuro)
+- [ ] Migrar tokens de localStorage para HttpOnly Cookies
+- [ ] UUIDs em vez de IDs sequenciais (dificulta enumeração via URL)
+- [ ] Renovar JWT_SECRET antes de produção
+- [ ] Configurar ALLOWED_ORIGINS com domínio real em produção
+

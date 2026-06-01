@@ -37,6 +37,7 @@ function detectSection(pathname: string): ActiveSection {
     pathname.startsWith('/composicao-alimentar') ||
     pathname.startsWith('/usuarios') ||
     pathname.startsWith('/equipe') ||
+    pathname.startsWith('/controle-acesso') ||
     pathname.startsWith('/ai-usage') ||
     pathname.startsWith('/medicamentos') ||
     pathname.startsWith('/procedimentos')
@@ -57,6 +58,9 @@ export default function Sidebar() {
   const isAdmin          = role === 'ADMIN';
   const isVet            = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
   const temAcessoClinico = ROLES_CLINICAS.includes(role) || ROLES_CLINICAS.includes(userTypeUpper);
+
+  // Vets convidados (flag isConvidado=true) não veem Administração
+  const podeVerAdministracao = isAdmin || (isVet && !user?.isConvidado);
   const animalId         = selectedAnimal?.id;
 
   const activeSection = detectSection(location.pathname);
@@ -84,6 +88,7 @@ export default function Sidebar() {
     p.startsWith('/composicao-alimentar') ||
     p.startsWith('/usuarios') ||
     p.startsWith('/equipe') ||
+    p.startsWith('/controle-acesso') ||
     p.startsWith('/ai-usage') ||
     p.startsWith('/medicamentos') ||
     p.startsWith('/procedimentos'),
@@ -180,8 +185,8 @@ export default function Sidebar() {
                 {navLink('/', <LayoutDashboard size={20} />, 'Dashboard', isGeralActive('/'))}
                 {navLink('/cadastro-pessoal', <User size={20} />, 'Cadastro Pessoal', isGeralActive('/cadastro-pessoal'))}
 
-                {isVet
-                  ? navLinkBadge('/animais-vet', <Zap size={20} />, 'Pacientes', isGeralActive('/animais-vet'), pendentesCount)
+                {temAcessoClinico
+                  ? navLinkBadge('/animais-vet', <Zap size={20} />, 'Pacientes', isGeralActive('/animais-vet'), isVet ? pendentesCount : 0)
                   : navLink('/meus-animais', <Zap size={20} />, 'Animais', isGeralActive('/meus-animais'))
                 }
 
@@ -271,7 +276,18 @@ export default function Sidebar() {
                       <ChevronDown className={`w-4 h-4 transition-transform ${openFinanceiro ? 'rotate-180' : ''}`} />
                     </button>
                     {openFinanceiro && (
-                      <div className="mt-1 pl-6 text-gray-400 text-sm px-5 py-2">Em breve</div>
+                      <div className="mt-1 space-y-0.5">
+                        <Link
+                          to="/faturamento"
+                          onClick={closeMobile}
+                          className={`flex items-center gap-3 px-5 py-2 text-sm rounded-3xl transition-colors ${
+                            location.pathname === '/faturamento'
+                              ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                              : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                          }`}>
+                          <DollarSign size={16} /> Faturamento
+                        </Link>
+                      </div>
                     )}
                   </div>
 
@@ -286,7 +302,7 @@ export default function Sidebar() {
           )}
 
           {/* ═══ ADMINISTRAÇÃO ═══════════════════════════════════════════════ */}
-          {(isAdmin || isVet) && (
+          {podeVerAdministracao && (
             <div>
               <button onClick={() => toggle(setOpenAdministracao)}
                 className="flex items-center justify-between w-full px-5 py-2.5 text-xs font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
@@ -307,7 +323,8 @@ export default function Sidebar() {
                       {navLink('/ai-usage',            <Users size={20} />,     'Monitoramento IA',     isAdminActive('/ai-usage'))}
                     </>
                   )}
-                  {navLink('/equipe', <Users2 size={20} />, 'Minha Equipe', isAdminActive('/equipe'))}
+                  {navLink('/equipe',          <Users2      size={20} />, 'Minha Equipe',      isAdminActive('/equipe'))}
+                  {navLink('/controle-acesso', <ShieldCheck size={20} />, 'Controle de Acesso', isAdminActive('/controle-acesso'))}
                 </div>
               )}
             </div>

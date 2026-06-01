@@ -2,13 +2,23 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { jwtDecode } from 'jwt-decode';
 
+export interface PendingInvite {
+  id:                number;
+  cargo:             string;
+  equipeNome:        string;
+  especiesHerdadas?: number[];
+}
+
 interface User {
   id: number;
   email: string;
   fullName: string;
   role: string;
-  userType?: string;
-  mustChangePassword?: boolean; // ← NOVO
+  userType?:           string;
+  mustChangePassword?: boolean;
+  profileComplete?:    boolean;
+  isConvidado?:        boolean;
+  pendingInvite?:      PendingInvite | null;
 }
 
 interface AuditLog {
@@ -55,9 +65,12 @@ async function enriquecerComPerfil(userData: User): Promise<User> {
     const perfil = await res.json();
     return {
       ...userData,
-      fullName:           perfil.fullName || userData.fullName, // ← adicione isso
+      fullName:           perfil.fullName || userData.fullName,
       userType:           perfil.userType ?? userData.role,
       mustChangePassword: perfil.mustChangePassword ?? false,
+      profileComplete:    perfil.profileComplete    ?? false,
+      isConvidado:        perfil.isConvidado        ?? false,
+      pendingInvite:      perfil.pendingInvite       ?? null,
       role: perfil.userType === 'VETERINARIO' ? 'VETERINARIO' : userData.role,
     };
   } catch {

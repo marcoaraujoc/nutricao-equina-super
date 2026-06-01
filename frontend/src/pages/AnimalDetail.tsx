@@ -27,6 +27,8 @@ interface AnimalData {
   idadeAnos?:        number | null;
   categoriaAnimal?:  string | null;
   tipoExercicio?:    string | null;
+  baia?:             string | null;
+  local?:            string | null;
   veterinarioNome?:  string | null;
   veterinarioClinica?: string | null;
   raca?:             { nome: string } | null;
@@ -163,33 +165,56 @@ const AnimalDetail = () => {
                 {animal.raca?.nome || animal.especie?.nome || 'Sem raça definida'}
               </p>
 
-              <div className="grid grid-cols-2 gap-4 sm:gap-6 mt-6 sm:mt-10">
+              {/* Linha 1 — dados básicos */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5 mt-6 sm:mt-8">
                 <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Espécie</span>
-                  <span className="text-base sm:text-xl font-semibold text-gray-900">
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">
                     {animal.especie?.nome || '-'}
                   </span>
                 </div>
                 <div>
+                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Raça</span>
+                  <span className="text-base sm:text-lg font-semibold text-gray-900 truncate block">
+                    {animal.raca?.nome || '-'}
+                  </span>
+                </div>
+                <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Sexo</span>
-                  <span className="text-base sm:text-xl font-semibold text-gray-900">
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">
                     {animal.sexo || '-'}
                   </span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Nascimento</span>
-                  <span className="text-base sm:text-xl font-semibold text-gray-900">
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">
                     {animal.dataNascimento ? formatDate(animal.dataNascimento) : '-'}
                   </span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Idade</span>
-                  <span className="text-base sm:text-xl font-semibold text-gray-900">{idadeDisplay}</span>
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">{idadeDisplay}</span>
                 </div>
                 <div>
                   <span className="block text-xs uppercase text-gray-500 tracking-wide">Peso Atual</span>
-                  <span className="text-base sm:text-xl font-semibold text-gray-900">
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">
                     {animal.peso || '-'} kg
+                  </span>
+                </div>
+              </div>
+
+              {/* Linha 2 — localização e perfil */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5 mt-4 pt-4 border-t border-gray-100">
+                <div>
+                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Baia</span>
+                  <span className="text-base sm:text-lg font-semibold text-gray-900">
+                    {animal.baia || '-'}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Local</span>
+                  <span className="text-base sm:text-lg font-semibold text-gray-900 truncate block">
+                    {animal.local || '-'}
                   </span>
                 </div>
                 <div>

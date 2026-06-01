@@ -25,8 +25,9 @@ const emailService = {
     }
 
     const appUrl      = process.env.APP_URL || 'http://localhost:5173';
-    const approvalUrl = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
-    const rejectUrl   = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
+    const approvalUrl = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
+    const rejectUrl   = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
+
 
     await createTransporter().sendMail({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
@@ -86,8 +87,8 @@ const emailService = {
     }
 
     const appUrl     = process.env.APP_URL || 'http://localhost:5173';
-    const aceitarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=aceitar`;
-    const recusarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=recusar`;
+    const aceitarUrl = `${appUrl}/#/proprietario/aprovar-vinculo?token=${token}&acao=aceitar`;
+    const recusarUrl = `${appUrl}/#/proprietario/aprovar-vinculo?token=${token}&acao=recusar`;
     const loginUrl   = `${appUrl}/login`;
 
     // Bloco de conta nova — exibido apenas quando o proprietário foi criado agora
@@ -199,11 +200,37 @@ const emailService = {
   },
 
   // ── Convite de equipe ─────────────────────────────────────────────────────
-  async enviarConviteEquipe({ email, cargo, token, vetNome, equipeNome }) {
+  async enviarConviteEquipe({ email, cargo, token, vetNome, equipeNome, usuarioCriado = false, senhaInicial = null, especiesNomes = [] }) {
     if (!podeEnviar()) return;
 
     const appUrl     = process.env.APP_URL || 'http://localhost:5173';
-    const conviteUrl = `${appUrl}/equipe/convite/${token}`;
+    const loginUrl   = `${appUrl}/#/login`;
+    const conviteUrl = `${appUrl}/#/equipe/convite/${token}`;
+
+    const blocoCredenciais = usuarioCriado ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px 20px;margin:20px 0;">
+        <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#92400e;">🔐 Credenciais de acesso criadas para você</p>
+        <table style="border-collapse:collapse;width:100%;">
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;width:80px;">E-mail</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${email}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;">Senha</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${senhaInicial}</td>
+          </tr>
+        </table>
+        <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você será obrigado a alterar a senha no primeiro acesso.</p>
+      </div>
+    ` : '';
+
+    const blocoEspecies = especiesNomes.length > 0
+      ? `<div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:14px 20px;margin:16px 0;">
+           <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#065f46;">🐾 Espécies atendidas pela equipe</p>
+           <p style="margin:0;font-size:13px;color:#374151;">Suas espécies já serão configuradas automaticamente:
+             <strong>${especiesNomes.join(', ')}</strong></p>
+         </div>`
+      : '';
 
     await createTransporter().sendMail({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
@@ -216,27 +243,43 @@ const emailService = {
             <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
           </div>
           <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
-            <h2 style="color:#111827;margin-top:0;">Convite de equipe</h2>
+            <h2 style="color:#111827;margin-top:0;">Convite para a equipe ${equipeNome}</h2>
             <p style="color:#374151;line-height:1.6;">
               Olá! Dr(a). <strong>${vetNome}</strong> convidou você para fazer parte da equipe
               <strong>${equipeNome}</strong> no S2Vet como <strong>${cargo}</strong>.
             </p>
-            <div style="text-align:center;margin:32px 0;">
+
+            ${blocoCredenciais}
+
+            ${blocoEspecies}
+
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:20px 0;">
+              <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#166534;">📋 Como aceitar o convite</p>
+              <ol style="margin:0;padding-left:18px;color:#374151;font-size:13px;line-height:2.2;">
+                <li>Acesse a plataforma: <a href="${loginUrl}" style="color:#059669;font-weight:600;">${loginUrl}</a></li>
+                <li>Faça login com o e-mail e senha informados acima</li>
+                <li>Defina uma nova senha quando solicitado</li>
+              </ol>
+              <p style="margin:14px 0 0;font-size:13px;color:#374151;text-align:center;"><strong>Ou</strong></p>
+              <p style="margin:6px 0 0;font-size:12px;color:#6b7280;text-align:center;">Clique no botão abaixo para aceitar o convite</p>
+            </div>
+            <div style="text-align:center;margin:28px 0 20px;">
               <a href="${conviteUrl}"
                  style="background:#059669;color:white;padding:14px 32px;border-radius:8px;
                         text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
                 ✅ Aceitar convite
               </a>
             </div>
-            <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;">
-              Link válido por <strong>7 dias</strong>. Se não reconhece este convite, ignore este e-mail.
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Convite válido por <strong>24 horas</strong>. Se não reconhece este convite, ignore este e-mail.
             </p>
           </div>
         </div>
       `,
     });
 
-    console.log(`[emailService] Convite de equipe enviado → ${email}`);
+    console.log(`[emailService] Convite de equipe enviado → ${email} (usuarioCriado=${usuarioCriado})`);
   },
 
   // ── Solicitação de DESVINCULO para o VET (proprietário quer remover acesso) ──
@@ -244,8 +287,8 @@ const emailService = {
     if (!podeEnviar()) return;
 
     const appUrl      = process.env.APP_URL || 'http://localhost:5173';
-    const acceptUrl   = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
-    const rejectUrl   = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
+    const acceptUrl   = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
+    const rejectUrl   = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
 
     await createTransporter().sendMail({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
@@ -291,8 +334,8 @@ const emailService = {
     if (!podeEnviar()) return;
 
     const appUrl    = process.env.APP_URL || 'http://localhost:5173';
-    const aceitarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=aceitar`;
-    const recusarUrl = `${appUrl}/proprietario/aprovar-vinculo?token=${token}&acao=recusar`;
+    const aceitarUrl = `${appUrl}/#/proprietario/aprovar-vinculo?token=${token}&acao=aceitar`;
+    const recusarUrl = `${appUrl}/#/proprietario/aprovar-vinculo?token=${token}&acao=recusar`;
 
     await createTransporter().sendMail({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
@@ -346,8 +389,8 @@ const emailService = {
     if (!podeEnviar()) return;
 
     const appUrl    = process.env.APP_URL || 'http://localhost:5173';
-    const acceptUrl = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
-    const rejectUrl = `${appUrl}/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
+    const acceptUrl = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=aceitar`;
+    const rejectUrl = `${appUrl}/#/veterinarios/solicitacoes/aprovar?token=${token}&acao=recusar`;
 
     const contatoHtml = [
       proprietarioEmail ? `<p style="margin:4px 0;color:#374151;font-size:14px;"><strong>E-mail:</strong> ${proprietarioEmail}</p>` : '',
