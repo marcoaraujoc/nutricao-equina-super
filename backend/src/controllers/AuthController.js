@@ -93,7 +93,7 @@ const AuthController = {
       }
 
       const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role },
+        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
         SECRET,
         { expiresIn: '7d' }
       );
@@ -211,7 +211,7 @@ const AuthController = {
       }
 
       const newAccessToken = jwt.sign(
-        { id: user.id, email: user.email, role: user.role, fullName: user.fullName },
+        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
         SECRET,
         { expiresIn: '24h' }
       );

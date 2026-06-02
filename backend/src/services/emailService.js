@@ -282,6 +282,90 @@ const emailService = {
     console.log(`[emailService] Convite de equipe enviado → ${email} (usuarioCriado=${usuarioCriado})`);
   },
 
+  // ── Convite ADMIN — Sócio fundador, cria sua própria organização ─────────────
+  async enviarConviteAdmin({ email, token, usuarioCriado = false, senhaInicial = null }) {
+    if (!podeEnviar()) return;
+
+    const appUrl     = process.env.APP_URL || 'http://localhost:5173';
+    const loginUrl   = `${appUrl}/#/login`;
+    const conviteUrl = `${appUrl}/#/equipe/convite/${token}`;
+
+    const blocoCredenciais = usuarioCriado ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px 20px;margin:20px 0;">
+        <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#92400e;">🔐 Credenciais de acesso criadas para você</p>
+        <table style="border-collapse:collapse;width:100%;">
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;width:80px;">E-mail</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${email}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;">Senha</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${senhaInicial}</td>
+          </tr>
+        </table>
+        <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você será obrigado a criar uma nova senha no primeiro acesso.</p>
+      </div>
+    ` : '';
+
+    const blocoGoogle = `
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 20px;margin:16px 0;">
+        <p style="margin:0;font-size:13px;color:#1e40af;">
+          💡 <strong>Tem conta Google?</strong> Você também pode acessar diretamente com o seu e-mail
+          <strong>${email}</strong> pelo botão "Entrar com Google" na tela de login.
+        </p>
+      </div>
+    `;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      email,
+      subject: `[S2Vet] Você foi convidado para acessar a plataforma`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Você foi convidado para o S2Vet!</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Olá! Você foi convidado para acessar o <strong>S2Vet</strong> e criar a sua organização na plataforma.
+              Como sócio, você terá acesso completo para configurar sua equipe, cadastrar animais e gerenciar todo o fluxo clínico.
+            </p>
+
+            ${blocoCredenciais}
+            ${blocoGoogle}
+
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:20px 0;">
+              <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#166534;">📋 Como começar</p>
+              <ol style="margin:0;padding-left:18px;color:#374151;font-size:13px;line-height:2.2;">
+                <li>Acesse a plataforma: <a href="${loginUrl}" style="color:#059669;font-weight:600;">${loginUrl}</a></li>
+                <li>Faça login com e-mail/senha ou com o Google</li>
+                ${usuarioCriado ? '<li>Crie uma nova senha quando solicitado</li>' : ''}
+                <li>Aceite o convite e configure sua organização</li>
+              </ol>
+              <p style="margin:14px 0 6px;font-size:13px;color:#374151;text-align:center;"><strong>Ou acesse diretamente pelo link:</strong></p>
+            </div>
+
+            <div style="text-align:center;margin:28px 0 20px;">
+              <a href="${conviteUrl}"
+                 style="background:#059669;color:white;padding:14px 32px;border-radius:8px;
+                        text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
+                ✅ Acessar o S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Link válido por <strong>24 horas</strong>. Se não reconhece este convite, ignore este e-mail.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    console.log(`[emailService] Convite ADMIN enviado → ${email}`);
+  },
+
   // ── Solicitação de DESVINCULO para o VET (proprietário quer remover acesso) ──
   async enviarSolicitacaoDesvinculo({ vetEmail, vetNome, animalNome, proprietarioNome, token }) {
     if (!podeEnviar()) return;

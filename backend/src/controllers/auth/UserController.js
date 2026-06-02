@@ -16,7 +16,8 @@ class UserController {
 
   async register(req, res) {
     console.log('📥 [Register] Recebido:', req.body);
-    const { fullName, email, password, phone, userType = 'PROPRIETARIO' } = req.body;
+    const { fullName, email: emailRaw, password, phone, userType = 'PROPRIETARIO' } = req.body;
+    const email = (emailRaw ?? '').trim().toLowerCase();
 
     try {
       const existing = await prisma.user.findUnique({ where: { email } });
@@ -37,7 +38,8 @@ class UserController {
   }
 
   async login(req, res) {
-    const { email, password } = req.body;
+    const { email: emailRaw, password } = req.body;
+    const email = (emailRaw ?? '').trim().toLowerCase();
     console.log('📥 [Login] Tentativa:', { email });
 
     try {
@@ -50,7 +52,8 @@ class UserController {
           role:               true,
           userType:           true,
           passwordHash:       true,
-          mustChangePassword: true, // ← NOVO
+          mustChangePassword: true,
+          ativo:              true,
         },
       });
 
@@ -59,11 +62,15 @@ class UserController {
         return res.status(401).json({ error: 'Credenciais inválidas' });
       }
 
+      if (user.ativo === false) {
+        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      }
+
       const match = await bcrypt.compare(password, user.passwordHash);
       if (!match) return res.status(401).json({ error: 'Credenciais inválidas' });
 
       const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role, fullName: user.fullName },
+        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
         SECRET,
         { expiresIn: '24h' }
       );

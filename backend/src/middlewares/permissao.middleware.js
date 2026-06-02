@@ -86,8 +86,8 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return res.status(401).json({ error: 'Não autenticado.' });
       }
 
-      // Proprietários e admins têm controle de acesso próprio nos controllers — bypass aqui
-      if (req.user.userType === 'PROPRIETARIO' || req.user.userType === 'ADMIN') {
+      // ADMIN (role sistêmica) e PROPRIETARIO têm controle de acesso próprio — bypass aqui
+      if (req.user.role === 'ADMIN' || req.user.userType === 'PROPRIETARIO') {
         return next();
       }
 

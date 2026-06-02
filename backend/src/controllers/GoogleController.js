@@ -72,6 +72,10 @@ const GoogleController = {
         },
       });
 
+      if (user.ativo === false) {
+        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      }
+
       console.log(`✅ Usuário Google processado: ${user.email} (ID: ${user.id})`);
 
       const token = jwt.sign(

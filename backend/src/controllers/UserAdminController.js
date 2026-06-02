@@ -20,9 +20,17 @@ const UserAdminController = {
     try {
       const usuarios = await prisma.user.findMany({
         orderBy: { createdAt: 'desc' },
-        select:  SELECT_SEGURO,
+        select:  {
+          ...SELECT_SEGURO,
+          membrosEquipe: { select: { cargo: true }, take: 1, orderBy: { createdAt: 'asc' } },
+        },
       });
-      res.json({ sucesso: true, dados: usuarios });
+      const dados = usuarios.map(u => ({
+        ...u,
+        cargoEquipe: u.membrosEquipe[0]?.cargo ?? null,
+        membrosEquipe: undefined,
+      }));
+      res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('Erro ao listar usuários:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar usuários' });

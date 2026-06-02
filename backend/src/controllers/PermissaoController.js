@@ -2,6 +2,7 @@
 'use strict';
 
 const PermissaoService = require('../services/PermissaoService');
+const prisma = require('../lib/prisma').default;
 
 const PermissaoController = {
 
@@ -125,6 +126,48 @@ const PermissaoController = {
     } catch (err) {
       console.error('[PermissaoController.salvarMatrizPorCargo]', err);
       return res.status(500).json({ sucesso: false, mensagem: err.message });
+    }
+  },
+
+  async criarPerfil(req, res) {
+    try {
+      const equipeId           = Number(req.params.equipeId);
+      const { slug, label, descricao } = req.body;
+
+      if (!slug?.trim() || !label?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'slug e label são obrigatórios.' });
+      }
+
+      // Garante que o usuário pertence à equipe (ADMIN tem acesso irrestrito)
+      if (req.user.role !== 'ADMIN') {
+        const membro = await prisma.membroEquipe.findUnique({
+          where: { equipeId_userId: { equipeId, userId: req.user.id } },
+        });
+        if (!membro) {
+          return res.status(403).json({ sucesso: false, mensagem: 'Você não pertence a esta equipe.' });
+        }
+      }
+
+      const perfil = await PermissaoService.criarPerfil({ equipeId, slug, label, descricao });
+      return res.status(201).json({ sucesso: true, dados: perfil });
+    } catch (err) {
+      console.error('[PermissaoController.criarPerfil]', err);
+      const status = err.message.includes('não podem ser removidos') || err.message.includes('Unique') ? 409 : 500;
+      return res.status(status).json({ sucesso: false, mensagem: err.message });
+    }
+  },
+
+  async deletarPerfil(req, res) {
+    try {
+      const equipeId = Number(req.params.equipeId);
+      const { cargo } = req.params;
+
+      await PermissaoService.deletarPerfil({ equipeId, slug: cargo });
+      return res.json({ sucesso: true });
+    } catch (err) {
+      console.error('[PermissaoController.deletarPerfil]', err);
+      const status = err.message.includes('não podem ser removidos') ? 403 : 500;
+      return res.status(status).json({ sucesso: false, mensagem: err.message });
     }
   },
 

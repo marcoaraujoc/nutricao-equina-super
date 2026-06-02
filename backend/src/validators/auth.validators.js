@@ -7,7 +7,8 @@ const loginRules = [
     .trim()
     .notEmpty().withMessage('E-mail é obrigatório')
     .isEmail().withMessage('E-mail inválido')
-    .isLength({ max: 255 }).withMessage('E-mail muito longo'),
+    .isLength({ max: 255 }).withMessage('E-mail muito longo')
+    .customSanitizer(v => v.toLowerCase()),
   body('password')
     .notEmpty().withMessage('Senha é obrigatória')
     .isLength({ min: 6, max: 128 }).withMessage('Senha deve ter entre 6 e 128 caracteres'),
@@ -22,7 +23,8 @@ const registerRules = [
     .trim()
     .notEmpty().withMessage('E-mail é obrigatório')
     .isEmail().withMessage('E-mail inválido')
-    .isLength({ max: 255 }).withMessage('E-mail muito longo'),
+    .isLength({ max: 255 }).withMessage('E-mail muito longo')
+    .customSanitizer(v => v.toLowerCase()),
   body('password')
     .notEmpty().withMessage('Senha é obrigatória')
     .isLength({ min: 8, max: 128 }).withMessage('Senha deve ter entre 8 e 128 caracteres'),

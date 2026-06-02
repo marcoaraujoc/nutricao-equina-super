@@ -1,4 +1,4 @@
-// src/routes/equipes.js
+﻿// src/routes/equipes.js
 'use strict';
 
 const express             = require('express');
@@ -47,10 +47,21 @@ router.delete('/membros/:membroId',  authenticate, EquipeController.removerMembr
 // ─── Criar equipe avulsa ───────────────────────────────────────────────────────
 router.post('/', authenticate, EquipeController.criarEquipe);
 
+// ─── Convite ADMIN → Sócio (cria empresa+equipe pelo CNPJ) ───────────────────
+router.post('/admin/convidar-socio',  authenticate, EquipeController.convidarSocioAdmin);
+router.get ('/admin/todas-empresas',  authenticate, EquipeController.listarTodasEmpresasAdmin);
+
+// =============================================================================
+// ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO (já declaradas abaixo)
+// ─── ADMIN: remover sócio da equipe e desativar conta ────────────────────────
+
 // =============================================================================
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO
 // =============================================================================
 
+router.patch ('/:equipeId/nome',                        authenticate, EquipeController.renomearEquipe);
+router.delete('/:equipeId/socio/:userId',               authenticate, EquipeController.removerSocioAdmin);
+router.post  ('/:equipeId/convidar',                   authenticate, EquipeController.convidarParaEquipe);
 router.get   ('/:equipeId/membros',                    authenticate, EquipeController.listarMembrosPorEquipe);
 router.delete('/:equipeId/membros/:alvoUserId',        authenticate, EquipeController.removerMembro);
 router.patch ('/:equipeId/membros/:alvoUserId/cargo',  authenticate, EquipeController.alterarCargo);
@@ -61,7 +72,9 @@ router.get   ('/:equipeId/proprietarios',              authenticate, PermissaoCo
 router.put   ('/:equipeId/proprietarios/:alvoUserId',  authenticate, PermissaoController.atualizarPermissoesProprietario);
 router.get   ('/:equipeId/auditoria',                  authenticate, PermissaoController.getAuditoria);
 router.get   ('/:equipeId/perfis',                     authenticate, PermissaoController.getPerfisByEquipe);
+router.post  ('/:equipeId/perfis',                     authenticate, PermissaoController.criarPerfil);
 router.get   ('/:equipeId/perfis/:cargo',              authenticate, PermissaoController.getMatrizPorCargo);
 router.put   ('/:equipeId/perfis/:cargo',              authenticate, PermissaoController.salvarMatrizPorCargo);
+router.delete('/:equipeId/perfis/:cargo',              authenticate, PermissaoController.deletarPerfil);
 
 module.exports = router;
