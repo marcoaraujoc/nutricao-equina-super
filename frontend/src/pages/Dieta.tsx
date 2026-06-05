@@ -8,15 +8,13 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Plus, Pencil, Trash2, Check, X,
-  Search, ToggleLeft, ToggleRight, Printer, AlertTriangle, Share2,
-  Download, ChevronDown,
+  Search, ToggleLeft, ToggleRight, AlertTriangle,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import { gerarHtmlDieta } from '../utils/Dietaprint';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
+import DietaAcoesBar from '../components/DietaAcoesBar';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -25,7 +23,7 @@ type AnimalExtended = Animal & {
   dataNascimento?: string | Date | null;
   idadeAnos?: number | null;
   raca?: { nome: string } | null;
-  user?: { fullName: string; email: string } | null;
+  user?: { fullName: string; email: string; phone?: string | null } | null;
 };
 
 interface PlanoDieta {
@@ -346,7 +344,7 @@ function BottomAddBar({
   alimentos, onAdd, mobile = false,
 }: {
   alimentos: Alimento[];
-  onAdd:     (alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string) => Promise<void>;
+  onAdd:     (alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string, noRefresh?: boolean) => Promise<void>;
   mobile?:   boolean;
 }) {
   const [alimentoId,    setAlimentoId]    = useState('');
@@ -380,7 +378,7 @@ function BottomAddBar({
   }, [periodicidade]);
 
   const resetForm = () => {
-    setAlimentoId(''); setQty(''); setHorario('Manhã'); setUnidade('kg'); setObservacao('');
+    setAlimentoId(''); setPeriodicidade('1x ao dia'); setQty(''); setHorario('Manhã'); setUnidade('kg'); setObservacao('');
   };
 
   const handleAdd = async () => {
@@ -395,8 +393,9 @@ function BottomAddBar({
   };
 
   const handleModalConfirm = async (slots: { horario: string; qty: string; unidade: string }[], obs: string) => {
-    for (const slot of slots) {
-      await onAdd(Number(alimentoId), slot.horario, periodicidade, Number(slot.qty), slot.unidade, obs);
+    for (let i = 0; i < slots.length; i++) {
+      const isLast = i === slots.length - 1;
+      await onAdd(Number(alimentoId), slots[i].horario, periodicidade, Number(slots[i].qty), slots[i].unidade, obs, !isLast);
     }
     resetForm();
     setShowModal(false);
@@ -532,20 +531,8 @@ const Dieta = () => {
   const [pendingCriarPlano,     setPendingCriarPlano]    = useState<{ nome: string; planoAtivoNome: string } | null>(null);
   const [showMobileItems,       setShowMobileItems]       = useState(false);
   const [showModalNovoPlano,    setShowModalNovoPlano]    = useState(false);
-  const [showExportMenu,        setShowExportMenu]        = useState(false);
 
-  const itensRef    = useRef<HTMLDivElement>(null);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showExportMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node))
-        setShowExportMenu(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showExportMenu]);
+  const itensRef = useRef<HTMLDivElement>(null);
 
   // ── Loaders ───────────────────────────────────────────────────────────────
 
@@ -624,6 +611,12 @@ const Dieta = () => {
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
+  // Ao trocar de animal, limpa o plano e itens do anterior para forçar reload
+  useEffect(() => {
+    setPlanoSelecionado(null);
+    setItens([]);
+  }, [effectiveAnimalId]);
+
   useEffect(() => {
     carregarAnimal(); carregarAnimais(); carregarAlimentos();
   }, [effectiveAnimalId]);
@@ -700,6 +693,7 @@ const Dieta = () => {
 
   const handleAddItem = async (
     alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string,
+    noRefresh = false,
   ) => {
     if (!planoSelecionado) { toast.error('Selecione um plano primeiro'); return; }
     const erro = validarItem(alimentoId, periodicidade, horario, itens, alimentos);
@@ -713,7 +707,7 @@ const Dieta = () => {
       });
       toast.success('Alimento adicionado!');
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
-      carregarItens(planoSelecionado.id); carregarPlanos();
+      if (!noRefresh) { carregarItens(planoSelecionado.id); carregarPlanos(); }
     } catch (err) { console.error(err); toast.error('Erro ao adicionar alimento'); throw err; }
   };
 
@@ -767,58 +761,6 @@ const Dieta = () => {
       toast.success('Alimento removido da dieta');
       carregarItens(planoSelecionado.id); carregarPlanos();
     } catch (err) { console.error(err); toast.error('Erro ao excluir alimento'); }
-  };
-
-  const handleCompartilhar = () => {
-    navigator.clipboard.writeText(window.location.href)
-      .then(() => toast.success('Link da dieta copiado!'))
-      .catch(() => toast.error('Não foi possível copiar o link'));
-  };
-
-  const dispararImpressao = () => {
-    if (!planoSelecionado) return;
-
-    const iframe = document.createElement('iframe');
-    Object.assign(iframe.style, {
-      position: 'fixed', top: '-9999px', left: '-9999px',
-      width: '0', height: '0', border: 'none',
-    });
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-    if (!doc) { document.body.removeChild(iframe); return; }
-
-    doc.open();
-    doc.write(gerarHtmlDieta(animal, planoSelecionado, itens, user));
-    doc.close();
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        if (document.body.contains(iframe)) document.body.removeChild(iframe);
-      }, 500);
-    }, 250);
-  };
-
-  const exportarExcelDieta = () => {
-    if (!planoSelecionado || itens.length === 0) {
-      toast.error('Nenhum item na dieta para exportar'); return;
-    }
-    const wb = XLSX.utils.book_new();
-    const headers = ['Alimento', 'Quantidade', 'Unidade', 'Periodicidade', 'Horário'];
-    const rows = itens.map(i => [
-      i.alimento?.nome ?? '—',
-      i.qtdGramasDia,
-      i.unidade,
-      i.periodicidade,
-      i.horario ?? '—',
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [{ wch: 30 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 12 }];
-    XLSX.utils.book_append_sheet(wb, ws, planoSelecionado.nome.slice(0, 31));
-    XLSX.writeFile(wb, `dieta-${animal?.nome ?? 'animal'}-${planoSelecionado.nome}.xlsx`);
-    setShowExportMenu(false);
   };
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -944,33 +886,9 @@ const Dieta = () => {
                   Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
                 </p>
               </div>
-              {planoSelecionado && (
+              {planoSelecionado && animal && (
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={handleCompartilhar}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg text-xs text-gray-600 transition-colors">
-                    <Share2 size={13} /> Compartilhar
-                  </button>
-                  <div className="relative" ref={exportMenuRef}>
-                    <button
-                      onClick={() => setShowExportMenu(v => !v)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 rounded-lg text-xs text-white font-semibold transition-colors">
-                      <Download size={13} /> Exportar <ChevronDown size={11} />
-                    </button>
-                    {showExportMenu && (
-                      <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
-                        <button
-                          onClick={() => { dispararImpressao(); setShowExportMenu(false); }}
-                          className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                          <Printer size={13} /> PDF
-                        </button>
-                        <button
-                          onClick={exportarExcelDieta}
-                          className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                          <Download size={13} /> Excel (.xlsx)
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                  <DietaAcoesBar animal={animal} plano={planoSelecionado} itens={itens} user={user} />
                 </div>
               )}
             </div>
@@ -1122,14 +1040,9 @@ const Dieta = () => {
                     {planoSelecionado?.ativo ? <ToggleRight size={12} /> : <ToggleLeft size={12} />}
                     {planoSelecionado?.ativo ? 'Ativo' : 'Inativo'}
                   </button>
-                  <button onClick={() => { dispararImpressao(); }} title="PDF"
-                    className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
-                    <Printer size={15} />
-                  </button>
-                  <button onClick={exportarExcelDieta} title="Excel"
-                    className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
-                    <Download size={15} />
-                  </button>
+                  {planoSelecionado && animal && (
+                    <DietaAcoesBar animal={animal} plano={planoSelecionado} itens={itens} user={user} compacto />
+                  )}
                 </div>
               </div>
 

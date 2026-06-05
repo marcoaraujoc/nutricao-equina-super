@@ -42,6 +42,9 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
+    // Convites pendentes indicam que o usuário ainda não pertence a uma equipe —
+    // evita 403 no checkPermission antes da aceitação do convite.
+    if (user.pendingInvite) return;
 
     try {
       const [animaisRes, perfilRes] = await Promise.allSettled([
@@ -95,7 +98,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
     } catch (error) {
       console.error('Erro ao carregar dados no context:', error);
     }
-  }, [user?.id]);
+  }, [user?.id, user?.pendingInvite]);
 
   useEffect(() => {
     loadAnimais();

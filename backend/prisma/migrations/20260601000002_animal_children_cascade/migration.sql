@@ -63,12 +63,30 @@ ALTER TABLE "schs2vet"."tb_relatorios_salvos" DROP CONSTRAINT IF EXISTS "tb_rela
 ALTER TABLE "schs2vet"."tb_relatorios_salvos" ADD CONSTRAINT "tb_relatorios_salvos_animalId_fkey"
   FOREIGN KEY ("animalId") REFERENCES "schs2vet"."tb_animais"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- Fatura: animalId já nullable — garantir SET NULL
+-- Fatura: animalId — condicional (pode não existir na shadow DB)
 ALTER TABLE "schs2vet"."tb_faturas" DROP CONSTRAINT IF EXISTS "tb_faturas_animalId_fkey";
-ALTER TABLE "schs2vet"."tb_faturas" ADD CONSTRAINT "tb_faturas_animalId_fkey"
-  FOREIGN KEY ("animalId") REFERENCES "schs2vet"."tb_animais"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'schs2vet' AND table_name = 'tb_faturas' AND column_name = 'animalId'
+  ) THEN
+    ALTER TABLE "schs2vet"."tb_faturas"
+      ADD CONSTRAINT "tb_faturas_animalId_fkey"
+      FOREIGN KEY ("animalId") REFERENCES "schs2vet"."tb_animais"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- FaturaItem: animalId já nullable — garantir SET NULL
+-- FaturaItem: animalId — condicional (coluna adicionada fora de migration)
 ALTER TABLE "schs2vet"."tb_fatura_itens" DROP CONSTRAINT IF EXISTS "tb_fatura_itens_animalId_fkey";
-ALTER TABLE "schs2vet"."tb_fatura_itens" ADD CONSTRAINT "tb_fatura_itens_animalId_fkey"
-  FOREIGN KEY ("animalId") REFERENCES "schs2vet"."tb_animais"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'schs2vet' AND table_name = 'tb_fatura_itens' AND column_name = 'animalId'
+  ) THEN
+    ALTER TABLE "schs2vet"."tb_fatura_itens"
+      ADD CONSTRAINT "tb_fatura_itens_animalId_fkey"
+      FOREIGN KEY ("animalId") REFERENCES "schs2vet"."tb_animais"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;

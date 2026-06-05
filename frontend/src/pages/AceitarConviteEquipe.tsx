@@ -69,15 +69,17 @@ export default function AceitarConviteEquipe() {
 
         {/* Card com detalhes do convite */}
         <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 mb-6 space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Building2 size={15} className="text-emerald-700" />
+          {convite.cargo !== 'SOCIO' && (
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Building2 size={15} className="text-emerald-700" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Equipe</p>
+                <p className="font-semibold text-gray-900 text-sm">{convite.equipeNome}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Equipe</p>
-              <p className="font-semibold text-gray-900 text-sm">{convite.equipeNome}</p>
-            </div>
-          </div>
+          )}
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0">
               <Users2 size={15} className="text-blue-600" />

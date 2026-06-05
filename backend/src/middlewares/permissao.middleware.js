@@ -94,6 +94,23 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
       const equipeId = await resolveEquipeId(req);
 
       if (!equipeId) {
+        // Dono de empresa sem MembroEquipe: tem bypass total (igual a SOCIO)
+        const empresaOwned = await prisma.empresa.findFirst({ where: { ownerId: req.user.id } });
+        if (empresaOwned) {
+          req.permissaoNivel = 'FULL';
+          req.equipeId       = null;
+          req.membroCargo    = 'SOCIO';
+          return next();
+        }
+
+        // Veterinário autônomo (sem equipe e sem empresa): acesso filtrado por VetAnimalSolicitacao no controller
+        if (req.user.userType === 'VETERINARIO') {
+          req.permissaoNivel = 'PROPRIO';
+          req.equipeId       = null;
+          req.membroCargo    = null;
+          return next();
+        }
+
         return res.status(403).json({
           error: 'Nenhuma equipe ativa encontrada. Associe-se a uma equipe.',
         });

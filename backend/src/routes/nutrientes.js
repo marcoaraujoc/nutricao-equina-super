@@ -1,12 +1,13 @@
 const express = require('express');
 const nutrientesController = require('../controllers/NutrientesController');
+const { authenticate } = require('../middlewares/auth');
 
 const router = express.Router();
 
-router.get('/', nutrientesController.listar);
-router.post('/', nutrientesController.criar);
-router.get('/:id', nutrientesController.obterPorId);
-router.put('/:id', nutrientesController.atualizar);
-router.delete('/:id', nutrientesController.excluir);
+router.get('/',     authenticate, nutrientesController.listar);
+router.post('/',    authenticate, nutrientesController.criar);
+router.get('/:id',  authenticate, nutrientesController.obterPorId);
+router.put('/:id',  authenticate, nutrientesController.atualizar);
+router.delete('/:id', authenticate, nutrientesController.excluir);
 
 module.exports = router;

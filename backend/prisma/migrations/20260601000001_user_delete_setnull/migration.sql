@@ -58,10 +58,21 @@ ALTER TABLE "schs2vet"."tb_encaminhamentos_clinicos" DROP CONSTRAINT IF EXISTS "
 ALTER TABLE "schs2vet"."tb_encaminhamentos_clinicos" ADD CONSTRAINT "tb_encaminhamentos_clinicos_veterinarioId_fkey"
   FOREIGN KEY ("veterinarioId") REFERENCES "schs2vet"."users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
--- Fatura: proprietarioId (já nullable, apenas garante onDelete SET NULL)
+-- Fatura: proprietarioId (só recria a FK se a coluna já existir — pode ter sido adicionada fora de migration)
 ALTER TABLE "schs2vet"."tb_faturas" DROP CONSTRAINT IF EXISTS "tb_faturas_proprietarioId_fkey";
-ALTER TABLE "schs2vet"."tb_faturas" ADD CONSTRAINT "tb_faturas_proprietarioId_fkey"
-  FOREIGN KEY ("proprietarioId") REFERENCES "schs2vet"."users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'schs2vet'
+      AND table_name   = 'tb_faturas'
+      AND column_name  = 'proprietarioId'
+  ) THEN
+    ALTER TABLE "schs2vet"."tb_faturas"
+      ADD CONSTRAINT "tb_faturas_proprietarioId_fkey"
+      FOREIGN KEY ("proprietarioId") REFERENCES "schs2vet"."users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
 -- FaturaItem: veterinarioId
 ALTER TABLE "schs2vet"."tb_fatura_itens" ALTER COLUMN "veterinarioId" DROP NOT NULL;

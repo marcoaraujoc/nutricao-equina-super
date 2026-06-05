@@ -5,6 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 const crypto           = require('crypto');
 const emailService     = require('../services/emailService');
 const { getEmpresaIdDoVet } = require('../lib/vetUtils');
+const { garantirFaturaAberta } = require('../services/FaturaService');
 
 const prisma = new PrismaClient();
 
@@ -19,8 +20,8 @@ const gerarExpiracao = (dias = 7) => {
 
 /**
  * Retorna true se o vet PODE receber solicitações (VINCULO/DESVINCULO/TROCA_VET).
- * Regra: só recebe quem é DONO de uma empresa (Empresa.ownerId) OU é vet autônomo
- * (sem nenhum MembroEquipe). Vets convidados (têm MembroEquipe mas não são donos) → false.
+ * Regra: pode quem é DONO de uma empresa (Empresa.ownerId), SÓCIO de uma equipe,
+ * ou vet autônomo (sem nenhum MembroEquipe). VETERINARIO/ESTAGIARIO membros → false.
  */
 async function podeReceberSolicitacoes(vetId) {
   const id = Number(vetId);
@@ -29,9 +30,9 @@ async function podeReceberSolicitacoes(vetId) {
   const empresa = await prisma.empresa.findFirst({ where: { ownerId: id } });
   if (empresa) return true;
 
-  // Membro de uma equipe mas sem empresa própria → convidado → não pode
+  // Membro de equipe: só SÓCIO pode gerenciar vínculos (consistente com criarSolicitacaoPendente)
   const membro = await prisma.membroEquipe.findFirst({ where: { userId: id } });
-  if (membro) return false;
+  if (membro) return membro.cargo === 'SOCIO';
 
   // Vet autônomo (sem equipe e sem empresa ainda) → pode
   return true;
@@ -349,7 +350,7 @@ const VeterinarioController = {
           select: {
             id:   true,
             nome: true,
-            user: { select: { fullName: true, email: true } },
+            user: { select: { id: true, fullName: true, email: true } },
           },
         },
         veterinario:     { select: { id: true, fullName: true, email: true } },
@@ -431,6 +432,7 @@ const VeterinarioController = {
           data:  { empresaId: empId },
         });
       }
+      await garantirFaturaAberta(solicitacao.animal.user?.id);
     }
 
     // TROCA_VET aceita via email: criar VINCULO PENDENTE para o novo vet e notificá-lo
@@ -514,7 +516,7 @@ const VeterinarioController = {
       const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
         where: { id: Number(id), vetUserId },
         include: {
-          animal:          { select: { id: true, nome: true, user: { select: { fullName: true, email: true } } } },
+          animal:          { select: { id: true, nome: true, user: { select: { id: true, fullName: true, email: true } } } },
           novoVeterinario: { select: { id: true, fullName: true, email: true } },
         },
       });
@@ -551,6 +553,7 @@ const VeterinarioController = {
             data:  { empresaId: empId },
           });
         }
+        await garantirFaturaAberta(solicitacao.animal.user?.id);
       }
 
       // Notifica proprietário por email em qualquer recusa
@@ -718,25 +721,35 @@ const VeterinarioController = {
   meusAnimais: async (req, res) => {
     try {
       const vetUserId = req.user.id;
+      const empresaId = req.empresaId ?? null;
 
+      const ANIMAL_INCLUDE = {
+        especie: { select: { id: true, nome: true } },
+        raca:    { select: { id: true, nome: true } },
+        user:    { select: { id: true, fullName: true, email: true } },
+      };
+
+      // Animais vinculados diretamente ao vet (ACEITO)
       const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
         where:   { vetUserId, status: 'ACEITO' },
-        include: {
-          animal: {
-            include: {
-              especie: { select: { id: true, nome: true } },
-              raca:    { select: { id: true, nome: true } },
-              user:    { select: { id: true, fullName: true, email: true } },
-            },
-          },
-        },
+        include: { animal: { include: ANIMAL_INCLUDE } },
         orderBy: { updatedAt: 'desc' },
       });
 
-      res.json({
-        sucesso: true,
-        dados:   solicitacoes.map(s => s.animal),
-      });
+      let animais = solicitacoes.map(s => s.animal).filter(Boolean);
+
+      // Também inclui animais da empresa (visíveis por todos os membros da equipe)
+      if (empresaId) {
+        const idsJaCarregados = new Set(animais.map(a => a.id));
+        const animaisEmpresa  = await prisma.animal.findMany({
+          where:   { empresaId, ativo: true, id: { notIn: [...idsJaCarregados] } },
+          include: ANIMAL_INCLUDE,
+          orderBy: { dataCadastro: 'desc' },
+        });
+        animais = [...animais, ...animaisEmpresa];
+      }
+
+      res.json({ sucesso: true, dados: animais });
     } catch (error) {
       console.error('[VeterinarioController.meusAnimais]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

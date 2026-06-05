@@ -178,6 +178,10 @@ const Animal = () => {
   const [animalEncontrado,  setAnimalEncontrado]  = useState<AnimalEncontrado | null>(null);
   const [statusBuscaAnimal, setStatusBuscaAnimal] = useState<StatusBusca>('idle');
 
+  // ── Busca proprietário por email ───────────────────────────────────────────
+  const [buscandoProprietario,   setBuscandoProprietario]   = useState(false);
+  const [proprietarioExistente,  setProprietarioExistente]  = useState<boolean | null>(null);
+
   // ── Formulário ─────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState<FormData>({
     nome: '', especieId: 0, racaId: null, peso: '',
@@ -409,6 +413,31 @@ const Animal = () => {
     }
   };
 
+  // ── Busca proprietário por email ───────────────────────────────────────────
+  const buscarProprietarioPorEmail = async (email: string) => {
+    if (!isVet || isEditMode || statusBuscaAnimal === 'sem_vet') return;
+    const e = email.trim();
+    if (!e) return;
+    setBuscandoProprietario(true);
+    try {
+      const res = await api.get(`/users/buscar-proprietario?email=${encodeURIComponent(e)}`);
+      if (res.data?.encontrado) {
+        setFormProp(p => ({
+          ...p,
+          nomeCompleto: res.data.fullName ?? '',
+          telefone:     res.data.phone    ?? '',
+        }));
+        setProprietarioExistente(true);
+      } else {
+        setProprietarioExistente(false);
+      }
+    } catch {
+      setProprietarioExistente(false);
+    } finally {
+      setBuscandoProprietario(false);
+    }
+  };
+
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -626,6 +655,7 @@ const Animal = () => {
                       setStatusBuscaAnimal('idle');
                       setAnimalEncontrado(null);
                       setFormProp({ nomeCompleto: '', email: '', telefone: '' });
+                      setProprietarioExistente(null);
                     }
                   }}
                   onBlur={e => isVet && !isEditMode && buscarAnimalExistente(e.target.value)}
@@ -716,20 +746,55 @@ const Animal = () => {
               <div className="pb-4 border-b border-gray-100">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Proprietário</p>
                 <div className="space-y-3">
+                  {/* E-mail primeiro — lookup automático ao sair do campo */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Nome Completo {!isEditMode && <span className="text-red-500">*</span>}
+                      E-mail {!isEditMode && <span className="text-red-500">*</span>}
                     </label>
-                    <input
-                      type="text"
-                      value={formProp.nomeCompleto}
-                      onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
-                      placeholder="Nome do proprietário"
-                      disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
-                      className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
-                    />
+                    <div className="relative">
+                      <input
+                        type="email"
+                        value={formProp.email}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setFormProp(p => ({ ...p, email: v }));
+                          if (proprietarioExistente === true) {
+                            setFormProp(p => ({ ...p, email: v, nomeCompleto: '', telefone: '' }));
+                            setProprietarioExistente(null);
+                          }
+                        }}
+                        onBlur={e => buscarProprietarioPorEmail(e.target.value)}
+                        placeholder="email@exemplo.com"
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                      />
+                      {buscandoProprietario && (
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <RefreshCw size={14} className="animate-spin text-gray-400" />
+                        </span>
+                      )}
+                      {!buscandoProprietario && proprietarioExistente === true && (
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <CheckCircle2 size={14} className="text-emerald-500" />
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  {/* Nome e telefone — preenchidos automaticamente se usuário existir */}
                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Nome Completo {!isEditMode && <span className="text-red-500">*</span>}
+                      </label>
+                      <input
+                        type="text"
+                        value={formProp.nomeCompleto}
+                        onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
+                        placeholder="Nome do proprietário"
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                      />
+                    </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
                       <input
@@ -737,25 +802,27 @@ const Animal = () => {
                         value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: e.target.value }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        E-mail {!isEditMode && <span className="text-red-500">*</span>}
-                      </label>
-                      <input
-                        type="email"
-                        value={formProp.email}
-                        onChange={e => setFormProp(p => ({ ...p, email: e.target.value }))}
-                        placeholder="email@exemplo.com"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                   </div>
-                  {!isEditMode && statusBuscaAnimal === 'nao_encontrado' && (
+                  {!isEditMode && proprietarioExistente === true && (
+                    <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
+                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>Proprietário encontrado. Dados preenchidos automaticamente.</span>
+                    </div>
+                  )}
+                  {!isEditMode && proprietarioExistente === false && statusBuscaAnimal === 'nao_encontrado' && (
+                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
+                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        Proprietário não encontrado. Preencha os dados para enviar o convite.
+                        Senha inicial: <strong>Inicial#001</strong>.
+                      </span>
+                    </div>
+                  )}
+                  {!isEditMode && proprietarioExistente === null && statusBuscaAnimal === 'nao_encontrado' && (
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                       <span>

@@ -1,43 +1,28 @@
 // src/components/PageContainer.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Componente de layout padrão para todas as páginas internas do S2Vet.
-//
-// Uso básico:
-//   <PageContainer>
-//     <h1>Título</h1>
-//     ...conteúdo...
-//   </PageContainer>
-//
-// Com largura customizada (default: 5xl):
-//   <PageContainer maxWidth="7xl">...</PageContainer>
-//
-// Sem padding vertical (ex: páginas que gerenciam o próprio espaçamento):
-//   <PageContainer noPadding>...</PageContainer>
-// ─────────────────────────────────────────────────────────────────────────────
 
 import type { ReactNode } from 'react';
 
 type MaxWidth = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | '6xl' | '7xl' | 'full';
 
 interface PageContainerProps {
-  children:  ReactNode;
-  maxWidth?: MaxWidth;
+  children:   ReactNode;
+  maxWidth?:  MaxWidth;
   noPadding?: boolean;
   className?: string;
 }
 
 const maxWidthMap: Record<MaxWidth, string> = {
-  sm:   'max-w-sm',
-  md:   'max-w-md',
-  lg:   'max-w-lg',
-  xl:   'max-w-xl',
-  '2xl':'max-w-2xl',
-  '3xl':'max-w-3xl',
-  '4xl':'max-w-4xl',
-  '5xl':'max-w-5xl',
-  '6xl':'max-w-6xl',
-  '7xl':'max-w-7xl',
-  full: 'max-w-full',
+  sm:    'max-w-sm',
+  md:    'max-w-md',
+  lg:    'max-w-lg',
+  xl:    'max-w-xl',
+  '2xl': 'max-w-2xl',
+  '3xl': 'max-w-3xl',
+  '4xl': 'max-w-4xl',
+  '5xl': 'max-w-5xl',
+  '6xl': 'max-w-6xl',
+  '7xl': 'max-w-7xl',
+  full:  'max-w-full',
 };
 
 export default function PageContainer({

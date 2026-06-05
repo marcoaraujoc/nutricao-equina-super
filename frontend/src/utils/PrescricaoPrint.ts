@@ -8,6 +8,7 @@ export interface PrintItemPrescricao {
   unidade:          string | null;
   via:              string;
   frequencia:       string;
+  horaInicio:       string | null;
   horariosGerados:  string[] | null;
   duracaoDias:      number;
   observacao:       string | null;
@@ -85,6 +86,22 @@ function fmt(data: string | null | undefined): string {
   });
 }
 
+function fmtDate(data: string | null | undefined): string {
+  if (!data) return '—';
+  const s = data.split('T')[0];
+  const [y, m, d] = s.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function calcDataFim(dataInicio: string, dias: number): string {
+  const d = new Date(dataInicio.split('T')[0] + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + dias - 1);
+  const y  = d.getUTCFullYear();
+  const m  = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dy = String(d.getUTCDate()).padStart(2, '0');
+  return `${dy}/${m}/${y}`;
+}
+
 function labelFrequencia(freq: string, horarios: string[] | null): string {
   const label = POSOLOGIAS[freq] ?? freq;
   if (!horarios || horarios.length === 0) return label;
@@ -113,7 +130,10 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
             <th>Dosagem</th>
             <th>Via</th>
             <th>Frequência / Horários</th>
+            <th>Hora Início</th>
             <th>Duração</th>
+            <th>Dt Início</th>
+            <th>Dt Fim</th>
             <th>Observação</th>
           </tr>
         </thead>
@@ -122,9 +142,12 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
             <tr>
               <td><strong>${esc(i.medicamento)}</strong></td>
               <td>${i.dosagem ? `${esc(i.dosagem)}${i.unidade ? ' ' + esc(i.unidade) : ''}` : '—'}</td>
-              <td>${esc(i.via)}</td>
+              <td>${i.via ? esc(i.via) : '—'}</td>
               <td>${esc(labelFrequencia(i.frequencia, i.horariosGerados))}</td>
+              <td>${i.horaInicio ? esc(i.horaInicio) : '—'}</td>
               <td>${i.duracaoDias} dia${i.duracaoDias !== 1 ? 's' : ''}</td>
+              <td>${fmtDate(i.dataInicio)}</td>
+              <td>${i.dataInicio && i.duracaoDias ? calcDataFim(i.dataInicio, i.duracaoDias) : '—'}</td>
               <td>${i.observacao ? esc(i.observacao) : '—'}</td>
             </tr>
           `).join('')}

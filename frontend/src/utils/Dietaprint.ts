@@ -156,7 +156,10 @@ function buildGroupedHTML(itens: PrintItem[]): string {
 const PRINT_CSS = `
   @page { size: A4; margin: 18mm 20mm; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; }
+  body {
+    font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111;
+    padding: 18mm 20mm;
+  }
 
   .sys-header {
     display: flex; justify-content: space-between; align-items: flex-start;
@@ -214,7 +217,8 @@ const PRINT_CSS = `
   .period-header {
     background: #059669; color: #fff;
     font-size: 9pt; font-weight: 700; letter-spacing: 2pt;
-    text-align: center; padding: 5pt 8pt; text-transform: uppercase;
+    text-align: center; text-transform: uppercase;
+    padding: 6pt 10pt;
   }
   .period-table { width: 100%; border-collapse: collapse; }
   .item-name-cell {
@@ -309,9 +313,6 @@ export function gerarHtmlDieta(
   <div class="sec-title">Plano de Dieta</div>
   <div class="plan-row">
     <span class="plan-name">${plano.nome}</span>
-    <span class="badge ${plano.ativo ? 'badge-on' : 'badge-off'}">
-      ${plano.ativo ? 'Ativo' : 'Inativo'}
-    </span>
   </div>
 
   ${groupedHTML}

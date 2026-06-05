@@ -22,12 +22,21 @@ const UserAdminController = {
         orderBy: { createdAt: 'desc' },
         select:  {
           ...SELECT_SEGURO,
-          membrosEquipe: { select: { cargo: true }, take: 1, orderBy: { createdAt: 'asc' } },
+          membrosEquipe: {
+            select: {
+              cargo: true,
+              equipe: { select: { nome: true, empresa: { select: { nome: true } } } },
+            },
+            take: 1,
+            orderBy: { createdAt: 'asc' },
+          },
         },
       });
       const dados = usuarios.map(u => ({
         ...u,
-        cargoEquipe: u.membrosEquipe[0]?.cargo ?? null,
+        cargoEquipe:   u.membrosEquipe[0]?.cargo                    ?? null,
+        equipeNome:    u.membrosEquipe[0]?.equipe?.nome              ?? null,
+        empresaNome:   u.membrosEquipe[0]?.equipe?.empresa?.nome     ?? null,
         membrosEquipe: undefined,
       }));
       res.json({ sucesso: true, dados });

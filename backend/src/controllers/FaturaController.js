@@ -30,18 +30,63 @@ function mesReferenciaAtual() {
 const FaturaController = {
 
   // GET /proprietarios
-  // Lista todos os proprietários cujos animais estão vinculados ao vet logado,
-  // com resumo da fatura em aberto de cada um.
+  // Lista todos os proprietários cujos animais estão vinculados ao vet logado
+  // OU pertencem à empresa do vet (acesso compartilhado entre sócios da equipe).
+  // Quando chamado por um PROPRIETÁRIO, retorna os próprios dados (ver fatura própria).
   listarProprietarios: async (req, res) => {
-    const vetId = req.user.id;
+    const vetId     = req.user.id;
+    const empresaId = req.empresaId ?? null;
     try {
-      // Busca animais do vet (aceitos via solicitação)
+      // PROPRIETÁRIO visualizando a própria fatura
+      const caller = await prisma.user.findUnique({
+        where:  { id: vetId },
+        select: { userType: true },
+      });
+      if (caller?.userType === 'PROPRIETARIO') {
+        const ANIMAL_SELECT = {
+          id: true, nome: true,
+          especie: { select: { nome: true } },
+          raca:    { select: { nome: true } },
+          photoUrl: true,
+        };
+        const prop = await prisma.user.findUnique({
+          where:  { id: vetId },
+          select: {
+            id: true, fullName: true, email: true, phone: true,
+            animais: { where: { ativo: true }, select: ANIMAL_SELECT },
+            faturas: {
+              where:   { status: { in: ['ABERTA', 'PAGA'] } },
+              orderBy: { criadoEm: 'desc' },
+              take:    5,
+              select:  { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
+            },
+          },
+        });
+        if (!prop) return res.json({ dados: [] });
+        const faturaAberta = prop.faturas.find(f => f.status === 'ABERTA') ?? null;
+        const faturaPaga   = prop.faturas.find(f => f.status === 'PAGA')   ?? null;
+        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? faturaPaga ?? null, faturaPaga, faturas: undefined }];
+        return res.json({ dados });
+      }
+
+      // Proprietários via vínculos diretos do vet
       const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
         where:   { vetUserId: vetId, tipo: 'VINCULO', status: 'ACEITO' },
         include: { animal: { select: { id: true, userId: true } } },
       });
 
-      const proprietarioIds = [...new Set(solicitacoes.map(s => s.animal.userId))];
+      let proprietarioIds = [...new Set(solicitacoes.map(s => s.animal.userId))];
+
+      // Também inclui proprietários via animais vinculados à empresa (todos os sócios veem)
+      if (empresaId) {
+        const animaisEmpresa = await prisma.animal.findMany({
+          where:  { empresaId, ativo: true },
+          select: { userId: true },
+        });
+        const idsEmpresa = animaisEmpresa.map(a => a.userId);
+        proprietarioIds = [...new Set([...proprietarioIds, ...idsEmpresa])];
+      }
+
       if (proprietarioIds.length === 0) return res.json({ dados: [] });
 
       const proprietarios = await prisma.user.findMany({
@@ -67,27 +112,24 @@ const FaturaController = {
         orderBy: { fullName: 'asc' },
       });
 
-      // Para proprietários sem fatura aberta, verificar se há PAGA recente
-      const ids_sem_aberta = proprietarios
-        .filter(p => p.faturas.length === 0)
-        .map(p => p.id);
-
-      const fatuasPagas = ids_sem_aberta.length > 0
+      // Busca a fatura PAGA mais recente para TODOS os proprietários (independente de ter ABERTA)
+      const faturasPagas = proprietarioIds.length > 0
         ? await prisma.fatura.findMany({
-            where: { proprietarioId: { in: ids_sem_aberta }, status: 'PAGA' },
+            where: { proprietarioId: { in: proprietarioIds }, status: 'PAGA' },
             orderBy: { criadoEm: 'desc' },
             select: { id: true, total: true, status: true, mesReferencia: true, proprietarioId: true },
           })
         : [];
 
-      const ultimaFaturaPagaPorProp = fatuasPagas.reduce((acc, f) => {
+      const faturaPagaPorProp = faturasPagas.reduce((acc, f) => {
         if (!acc[f.proprietarioId]) acc[f.proprietarioId] = f;
         return acc;
       }, {});
 
       const dados = proprietarios.map(p => ({
         ...p,
-        faturaAtiva: p.faturas[0] ?? ultimaFaturaPagaPorProp[p.id] ?? null,
+        faturaAtiva: p.faturas[0] ?? faturaPagaPorProp[p.id] ?? null,
+        faturaPaga:  faturaPagaPorProp[p.id] ?? null,
         faturas: undefined,
       }));
 
@@ -98,13 +140,24 @@ const FaturaController = {
     }
   },
 
-  // GET /proprietario/:proprietarioId
-  // Retorna (ou cria) a fatura ABERTA do mês atual para o proprietário.
+  // GET /proprietario/:proprietarioId?faturaId=N
+  // Sem faturaId → retorna (ou cria) a fatura ABERTA do mês atual.
+  // Com faturaId  → retorna a fatura específica pelo ID (sem criar).
   obterFaturaProprietario: async (req, res) => {
     const { proprietarioId } = req.params;
+    const { faturaId }       = req.query;
     const mesRef = mesReferenciaAtual();
 
     try {
+      if (faturaId) {
+        const fatura = await prisma.fatura.findFirst({
+          where:   { id: Number(faturaId), proprietarioId: Number(proprietarioId) },
+          include: FATURA_INCLUDE,
+        });
+        if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
+        return res.json({ dados: fatura });
+      }
+
       let fatura = await prisma.fatura.findFirst({
         where:   { proprietarioId: Number(proprietarioId), status: 'ABERTA' },
         include: FATURA_INCLUDE,

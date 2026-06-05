@@ -5,9 +5,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+import { usePermissoes } from '../hooks/usePermissoes';
 import {
-  DollarSign, Search, ChevronRight, Loader2, Plus, Trash2,
-  Pencil, Check, X, RefreshCw, PawPrint, Receipt,
+  DollarSign, Search, ChevronRight, Loader2, Trash2,
+  Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, AlertCircle, Ban, Share2, Download, Printer, ChevronDown,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/FaturaExport';
@@ -36,21 +38,23 @@ interface Fatura {
   proprietario?: { id: number; fullName: string; email: string; phone?: string };
 }
 
+interface FaturaResumo {
+  id: number; total: number; status: FaturaStatus; mesReferencia?: string;
+}
+
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
   animais: AnimalResumo[];
-  faturaAtiva?: { id: number; total: number; status: FaturaStatus; mesReferencia?: string };
+  faturaAtiva?: FaturaResumo | null;
+  faturaPaga?:  FaturaResumo | null;
 }
 
 // ─── Catálogo de itens comuns ─────────────────────────────────────────────────
 
 const CATALOGO: Array<{ label: string; tipo: ItemTipo; descricao: string; valor: number }> = [
-  { label: 'Consulta Clínica Geral',          tipo: 'ASSISTENCIA',  descricao: 'Consulta Clínica Veterinária Geral',        valor: 150 },
-  { label: 'Consulta de Retorno',             tipo: 'ASSISTENCIA',  descricao: 'Consulta de Retorno',                       valor: 80  },
-  { label: 'Diária UTI Intensiva',            tipo: 'ASSISTENCIA',  descricao: 'Diária de UTM Intensiva Vet',               valor: 350 },
-  { label: 'Hemograma Completo + Bioquímico', tipo: 'ASSISTENCIA',  descricao: 'Hemograma Completo + Bioquímico Sanguíneo', valor: 145 },
-  { label: 'Castração Preventiva',            tipo: 'PROCEDIMENTO', descricao: 'Castração Preventiva',                      valor: 450 },
-  { label: 'Dipirona Sódica Injetável',       tipo: 'MEDICAMENTO',  descricao: 'Dipirona Sódica Injetável 500 mg/mL',       valor: 25  },
+  { label: 'GTA',                     tipo: 'ASSISTENCIA', descricao: 'GTA',                     valor: 0 },
+  { label: 'Assistência Veterinária', tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária',  valor: 0 },
+  { label: 'Atd. Emergencial',        tipo: 'ASSISTENCIA', descricao: 'Atd. Emergencial',         valor: 0 },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -89,23 +93,62 @@ function ItemRow({
   onDelete: (id: number) => void;
   onSave: (id: number, patch: Partial<FaturaItem>) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [desc,    setDesc]    = useState(item.descricao);
-  const [valor,   setValor]   = useState(String(item.valor));
-  const [qty,     setQty]     = useState(String(item.quantidade));
-  const [tipo,    setTipo]    = useState(item.tipo);
-  const [saving,  setSaving]  = useState(false);
+  const fmtNum = (v: number) =>
+    v === 0 ? '' : new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+
+  const parseCents = (raw: string) => parseInt(raw.replace(/\D/g, '') || '0', 10) / 100;
+
+  const [editing,       setEditing]       = useState(false);
+  const [desc,          setDesc]          = useState(item.descricao);
+  const [tipo,          setTipo]          = useState(item.tipo);
+  const [qty,           setQty]           = useState(String(item.quantidade));
+  const [valorUnit,     setValorUnit]     = useState(item.valor);
+  const [valorUnitStr,  setValorUnitStr]  = useState(fmtNum(item.valor));
+  const [valorFinal,    setValorFinal]    = useState(item.valor * item.quantidade);
+  const [valorFinalStr, setValorFinalStr] = useState(fmtNum(item.valor * item.quantidade));
+  const [saving,        setSaving]        = useState(false);
+
+  const handleUnitChange = (raw: string) => {
+    const unit = parseCents(raw);
+    setValorUnit(unit);
+    setValorUnitStr(unit === 0 ? '' : fmtNum(unit));
+    const q = Math.max(1, parseInt(qty) || 1);
+    const final = unit * q;
+    setValorFinal(final);
+    setValorFinalStr(final === 0 ? '' : fmtNum(final));
+  };
+
+  const handleFinalChange = (raw: string) => {
+    const final = parseCents(raw);
+    setValorFinal(final);
+    setValorFinalStr(final === 0 ? '' : fmtNum(final));
+    const q = Math.max(1, parseInt(qty) || 1);
+    const unit = final / q;
+    setValorUnit(unit);
+    setValorUnitStr(unit === 0 ? '' : fmtNum(unit));
+  };
+
+  const handleQtyChange = (raw: string) => {
+    setQty(raw);
+    const q = Math.max(1, parseInt(raw) || 1);
+    const final = valorUnit * q;
+    setValorFinal(final);
+    setValorFinalStr(final === 0 ? '' : fmtNum(final));
+  };
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(item.id, { descricao: desc, valor: Number(valor), quantidade: Number(qty), tipo });
+    await onSave(item.id, { descricao: desc, valor: valorUnit, quantidade: Number(qty), tipo });
     setSaving(false);
     setEditing(false);
   };
 
   const handleCancel = () => {
-    setDesc(item.descricao); setValor(String(item.valor));
-    setQty(String(item.quantidade)); setTipo(item.tipo);
+    setDesc(item.descricao); setTipo(item.tipo);
+    setQty(String(item.quantidade));
+    setValorUnit(item.valor);     setValorUnitStr(fmtNum(item.valor));
+    setValorFinal(item.valor * item.quantidade);
+    setValorFinalStr(fmtNum(item.valor * item.quantidade));
     setEditing(false);
   };
 
@@ -125,14 +168,27 @@ function ItemRow({
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <label className="text-xs text-gray-500">Qtd.</label>
-          <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)}
-            className="w-20 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:border-indigo-400" />
+          <input type="number" min="1" value={qty} onChange={e => handleQtyChange(e.target.value)}
+            className="w-16 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+
           <label className="text-xs text-gray-500">Val. unit.</label>
-          <input type="number" min="0" step="0.01" value={valor} onChange={e => setValor(e.target.value)}
-            className="w-28 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-right focus:outline-none focus:border-indigo-400" />
-          <span className="text-xs text-gray-400">
-            = {formatBRL(Number(valor) * Number(qty))}
-          </span>
+          <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-400 bg-white">
+            <span className="px-1.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-1.5">R$</span>
+            <input type="text" inputMode="decimal" value={valorUnitStr}
+              onChange={e => handleUnitChange(e.target.value)}
+              placeholder="0,00"
+              className="w-24 px-2 py-1.5 text-sm focus:outline-none" />
+          </div>
+
+          <label className="text-xs text-gray-500">Valor final.</label>
+          <div className="flex items-center border border-indigo-300 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500 bg-indigo-50">
+            <span className="px-1.5 text-xs text-indigo-400 bg-indigo-100 border-r border-indigo-200 py-1.5">R$</span>
+            <input type="text" inputMode="decimal" value={valorFinalStr}
+              onChange={e => handleFinalChange(e.target.value)}
+              placeholder="0,00"
+              className="w-28 px-2 py-1.5 text-sm font-semibold text-indigo-700 bg-indigo-50 focus:outline-none" />
+          </div>
+
           <button onClick={handleSave} disabled={saving}
             className="p-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg disabled:opacity-50">
             {saving ? <Loader2 size={13} className="animate-spin"/> : <Check size={13}/>}
@@ -178,10 +234,11 @@ function ItemRow({
 // ─── Painel direito — detalhe da fatura ──────────────────────────────────────
 
 function PainelFatura({
-  prop, onStatusChange,
+  prop, onStatusChange, faturaIdPaga,
 }: {
   prop: ProprietarioItem;
   onStatusChange: () => void;
+  faturaIdPaga?: number;
 }) {
   const [fatura,         setFatura]         = useState<Fatura | null>(null);
   const [loading,        setLoading]        = useState(true);
@@ -212,34 +269,44 @@ function PainelFatura({
     toast.success('CSV gerado');
   };
 
+  const [compartilhando, setCompartilhando] = useState(false);
+
   const handleShare = async () => {
     if (!fatura) return;
+    setCompartilhando(true);
     try {
-      const result = await compartilharFatura(fatura);
-      toast.success(result === 'copied' ? 'Resumo copiado!' : 'Compartilhado');
-    } catch { toast.error('Erro ao compartilhar'); }
+      await compartilharFatura(fatura, prop.animais);
+    } catch {
+      toast.error('Erro ao gerar PDF');
+    } finally {
+      setCompartilhando(false);
+    }
   };
 
   // Formulário de novo item
-  const [novoAnimalId,  setNovoAnimalId]  = useState<string>(prop.animais[0]?.id?.toString() ?? '');
-  const [novoCatIdx,    setNovoCatIdx]    = useState<string>('');
-  const [novoNome,      setNovoNome]      = useState('');
-  const [novoTipo,      setNovoTipo]      = useState<ItemTipo>('ASSISTENCIA');
-  const [novoQty,       setNovoQty]       = useState('1');
-  const [novoValor,     setNovoValor]     = useState('0');
-  const [lancando,      setLancando]      = useState(false);
+  const [novoAnimalId,      setNovoAnimalId]      = useState<string>(prop.animais[0]?.id?.toString() ?? '');
+  const [novoCatIdx,        setNovoCatIdx]        = useState<string>('');
+  const [novoNome,          setNovoNome]          = useState('');
+  const [novoTipo,          setNovoTipo]          = useState<ItemTipo>('ASSISTENCIA');
+  const [novoQty,           setNovoQty]           = useState('1');
+  const [novoValor,         setNovoValor]         = useState('0');
+  const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
+  const [lancando,          setLancando]          = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get(`/clinica/faturas/proprietario/${prop.id}`);
+      const url = faturaIdPaga
+        ? `/clinica/faturas/proprietario/${prop.id}?faturaId=${faturaIdPaga}`
+        : `/clinica/faturas/proprietario/${prop.id}`;
+      const r = await api.get(url);
       setFatura(r.data.dados);
     } catch {
       toast.error('Erro ao carregar fatura');
     } finally {
       setLoading(false);
     }
-  }, [prop.id]);
+  }, [prop.id, faturaIdPaga]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -267,11 +334,23 @@ function PainelFatura({
 
   const handleCatalogoChange = (idx: string) => {
     setNovoCatIdx(idx);
-    if (idx === '') return;
+    if (idx === '') { setNovoNome(''); return; }
     const cat = CATALOGO[Number(idx)];
     setNovoNome(cat.descricao);
     setNovoTipo(cat.tipo);
     setNovoValor(String(cat.valor));
+    setNovoValorDisplay(formatarValorFatura(cat.valor));
+  };
+
+  const formatarValorFatura = (v: number) =>
+    v === 0 ? '' : new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+
+  const handleValorChange = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    const cents  = parseInt(digits || '0', 10);
+    const value  = cents / 100;
+    setNovoValor(String(value));
+    setNovoValorDisplay(value === 0 ? '' : formatarValorFatura(value));
   };
 
   const handleLancar = async () => {
@@ -291,7 +370,7 @@ function PainelFatura({
         total: r.data.totalFatura,
         itens: [...prev.itens, r.data.dados],
       } : prev);
-      setNovoNome(''); setNovoCatIdx(''); setNovoQty('1'); setNovoValor('0');
+      setNovoNome(''); setNovoCatIdx(''); setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
       toast.success('Item lançado');
     } catch { toast.error('Erro ao lançar item'); }
     finally { setLancando(false); }
@@ -334,28 +413,15 @@ function PainelFatura({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
-      {/* Header verde suavizado */}
-      <div className="bg-emerald-600 rounded-2xl p-5 mb-4 flex-shrink-0">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          {/* Info do proprietário */}
-          <div>
-            <p className="text-[10px] font-bold text-emerald-100 uppercase tracking-widest mb-1">Extrato Ativo do Cliente</p>
-            <div className="flex items-center gap-2 mb-1">
-              <Receipt size={15} className="text-emerald-200"/>
-              <h2 className="text-lg font-bold text-white">{prop.fullName}</h2>
-            </div>
-            <p className="text-xs text-emerald-100">
-              Faturamento total do mês:{' '}
-              <span className="font-bold text-white">{formatMes(fatura.mesReferencia) || 'Mês atual'}</span>
-              {' · '}
-              <span className="font-mono">{invoiceRef}</span>
-            </p>
-          </div>
-
-          {/* Ações do header */}
-          <div className="flex items-center gap-2 flex-wrap">
+      {/* Header verde */}
+      <div className="bg-emerald-600 rounded-2xl px-5 py-4 mb-4 flex-shrink-0">
+        {/* Linha 1: label à esquerda, ações à direita */}
+        <div className="flex items-center justify-between gap-3 mb-1">
+          <p className="text-[10px] font-bold text-emerald-100 uppercase tracking-widest">
+            Extrato Ativo do Cliente
+          </p>
+          <div className="flex items-center gap-2">
             <StatusBadge status={fatura.status}/>
-
             {canEdit && (
               <button
                 onClick={() => handleStatus('PAGA')}
@@ -365,17 +431,30 @@ function PainelFatura({
                 Marcar como Pago
               </button>
             )}
-
             <button onClick={carregar} className="p-1.5 text-emerald-100 hover:text-white rounded-lg transition-colors">
               <RefreshCw size={13}/>
             </button>
           </div>
         </div>
 
-        {/* Info de contato */}
-        <div className="mt-3 pt-3 border-t border-emerald-500 flex gap-6 flex-wrap text-xs text-emerald-100">
-          {prop.phone && <span>Fone: <span className="text-white font-medium">{prop.phone}</span></span>}
-          <span>Email: <span className="text-white font-medium">{prop.email}</span></span>
+        {/* Linha 2: nome */}
+        <div className="flex items-center gap-2 mb-1">
+          <Receipt size={15} className="text-emerald-200"/>
+          <h2 className="text-lg font-bold text-white">{prop.fullName}</h2>
+        </div>
+
+        {/* Linha 3: fone/email à esquerda, faturamento à direita */}
+        <div className="flex items-center justify-between gap-3 flex-wrap text-xs text-emerald-100">
+          <div className="flex items-center gap-3">
+            {prop.phone && <span>Fone: <span className="text-white font-medium">{prop.phone}</span></span>}
+            <span>· Email: <span className="text-white font-medium">{prop.email}</span></span>
+          </div>
+          <span>
+            Faturamento total do mês:{' '}
+            <span className="font-bold text-white">{formatMes(fatura.mesReferencia) || 'Mês atual'}</span>
+            {' · '}
+            <span className="font-mono">{invoiceRef}</span>
+          </span>
         </div>
       </div>
 
@@ -392,8 +471,16 @@ function PainelFatura({
         <div className="flex items-center gap-2 flex-shrink-0 ml-4">
           <button
             onClick={handleShare}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs font-semibold transition-colors">
-            <Share2 size={13}/> Compartilhar
+            disabled={compartilhando}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#20BA5A] disabled:opacity-60 text-white rounded-lg text-xs font-semibold transition-colors">
+            {compartilhando ? (
+              <Loader2 size={13} className="animate-spin"/>
+            ) : (
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+              </svg>
+            )}
+            WhatsApp
           </button>
           <div className="relative" ref={exportMenuRef}>
             <button
@@ -435,12 +522,12 @@ function PainelFatura({
                     <img src={animal.photoUrl} alt={animal.nome}
                       className="w-8 h-8 rounded-lg object-cover flex-shrink-0"/>
                   ) : (
-                    <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                      <PawPrint size={14} className="text-indigo-500"/>
+                    <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0 text-indigo-500 text-xs font-bold">
+                      {animal.nome?.[0]?.toUpperCase() ?? '?'}
                     </div>
                   )}
                   <div>
-                    <p className="text-sm font-bold text-gray-900">Prontuário de {animal.nome}</p>
+                    <p className="text-sm font-bold text-gray-900">Fatura de {animal.nome}</p>
                     <p className="text-[10px] text-gray-400">
                       {animal.especie?.nome}{animal.raca?.nome ? ` (${animal.raca.nome})` : ''}
                     </p>
@@ -497,9 +584,9 @@ function PainelFatura({
         {canEdit && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
-              Lançar Novo Item / Cobrança no Prontuário
+              Lançar Novo Item / Cobrança na Fatura
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
               {/* Pet */}
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">
@@ -515,33 +602,16 @@ function PainelFatura({
                   <option value="">Sem animal específico</option>
                 </select>
               </div>
-              {/* Catálogo */}
+              {/* Outros Itens */}
               <div>
-                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Mapear Item do Catálogo</label>
+                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Outros Itens</label>
                 <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                  <option value="">— Escolha um item para preencher —</option>
+                  <option value="">— Selecione um item —</option>
                   {CATALOGO.map((c, i) => (
                     <option key={i} value={i}>{c.label}</option>
                   ))}
                 </select>
-              </div>
-              {/* Tipo + Nome */}
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                  Item Name <span className="text-red-400">*</span>
-                </label>
-                <div className="flex gap-1.5">
-                  <select value={novoTipo} onChange={e => setNovoTipo(e.target.value as ItemTipo)}
-                    className="border border-gray-300 rounded-xl px-2 py-2 text-xs font-semibold focus:outline-none focus:border-indigo-400 bg-white">
-                    <option value="ASSISTENCIA">ASSIST.</option>
-                    <option value="MEDICAMENTO">MEDIC.</option>
-                    <option value="PROCEDIMENTO">PROC.</option>
-                  </select>
-                  <input value={novoNome} onChange={e => setNovoNome(e.target.value)}
-                    placeholder="Ex: Diária de Internação"
-                    className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
-                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
@@ -558,9 +628,13 @@ function PainelFatura({
                 </label>
                 <div className="flex items-center border border-gray-300 rounded-xl overflow-hidden focus-within:border-indigo-400">
                   <span className="px-2.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-2">R$</span>
-                  <input type="number" min="0" step="0.01" value={novoValor}
-                    onChange={e => setNovoValor(e.target.value)}
-                    className="flex-1 px-2.5 py-2 text-sm text-right focus:outline-none"/>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={novoValorDisplay}
+                    onChange={e => handleValorChange(e.target.value)}
+                    placeholder="0,00"
+                    className="flex-1 px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-r-xl"/>
                 </div>
               </div>
               {/* Subtotal preview */}
@@ -575,7 +649,7 @@ function PainelFatura({
                 onClick={handleLancar}
                 disabled={lancando || !novoNome.trim()}
                 className="flex items-center justify-center gap-2 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl transition-colors">
-                {lancando ? <Loader2 size={14} className="animate-spin"/> : <Plus size={14}/>}
+                {lancando ? <Loader2 size={14} className="animate-spin"/> : null}
                 Lançar Cobrança
               </button>
             </div>
@@ -589,9 +663,10 @@ function PainelFatura({
 // ─── Painel esquerdo — lista de proprietários ─────────────────────────────────
 
 function CardProprietario({
-  prop, selecionado, onClick,
+  prop, selecionado, onClick, faturaExibir,
 }: {
   prop: ProprietarioItem; selecionado: boolean; onClick: () => void;
+  faturaExibir?: FaturaResumo | null;
 }) {
   return (
     <button
@@ -608,7 +683,7 @@ function CardProprietario({
           </div>
           <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
         </div>
-        {prop.faturaAtiva && <StatusBadge status={prop.faturaAtiva.status}/>}
+        {faturaExibir && <StatusBadge status={faturaExibir.status}/>}
       </div>
       <div className="flex flex-wrap gap-1 mb-2 pl-9">
         {prop.animais.slice(0, 3).map(a => (
@@ -625,9 +700,9 @@ function CardProprietario({
       </div>
       <div className="flex items-center justify-between pl-9">
         <p className="text-[10px] text-gray-400 truncate">{prop.email}</p>
-        {prop.faturaAtiva && (
+        {faturaExibir && (
           <p className="text-xs font-bold text-gray-700 flex-shrink-0">
-            {formatBRL(prop.faturaAtiva.total)}
+            {formatBRL(faturaExibir.total)}
           </p>
         )}
       </div>
@@ -639,11 +714,14 @@ function CardProprietario({
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function Faturamento() {
+  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [busca,         setBusca]         = useState('');
   const [selecionado,   setSelecionado]   = useState<ProprietarioItem | null>(null);
   const [totalAbertas,  setTotalAbertas]  = useState(0);
+  const [filtroStatus, setFiltroStatus] = useState<'ABERTA' | 'PAGA'>('ABERTA');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -661,53 +739,89 @@ export default function Faturamento() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const filtrados = proprietarios.filter(p =>
-    !busca || p.fullName.toLowerCase().includes(busca.toLowerCase()) ||
-    p.email.toLowerCase().includes(busca.toLowerCase()) ||
-    p.animais.some(a => a.nome.toLowerCase().includes(busca.toLowerCase()))
+  const filtrados = proprietarios.filter(p => {
+    const temAberta = p.faturaAtiva?.status === 'ABERTA';
+    const temPaga   = !!p.faturaPaga;
+    if (filtroStatus === 'ABERTA' && !temAberta) return false;
+    if (filtroStatus === 'PAGA'   && !temPaga)   return false;
+    if (!busca) return true;
+    return (
+      p.fullName.toLowerCase().includes(busca.toLowerCase()) ||
+      p.email.toLowerCase().includes(busca.toLowerCase()) ||
+      p.animais.some(a => a.nome.toLowerCase().includes(busca.toLowerCase()))
+    );
+  });
+
+  if (loadingPerm) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
   );
 
+  if (!podeExecutar('financeiro.faturas.ler')) return null;
+
   return (
-    <PageContainer maxWidth="7xl" noPadding>
-      <div className="flex flex-col h-full px-6 py-6 md:px-10 md:py-8">
+    <PageContainer maxWidth="7xl">
+      <div className="flex flex-col space-y-4">
+        <BotaoVoltar className="mb-6" />
+
         {/* Cabeçalho */}
-        <div className="flex items-center gap-3 mb-4 flex-shrink-0">
-          <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
-            <DollarSign size={20} className="text-amber-700"/>
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-gray-900 uppercase tracking-wide">
-                Módulo Financeiro (Faturamento)
-              </h1>
-              {totalAbertas > 0 && (
-                <span className="text-xs font-bold bg-amber-500 text-white px-2.5 py-0.5 rounded-full">
-                  {totalAbertas} {totalAbertas === 1 ? 'aberta' : 'abertas'}
-                </span>
-              )}
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+              <DollarSign size={20} className="text-amber-700"/>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Faturamento</h1>
+              <p className="text-sm text-gray-500">Faturas e contas conveniadas por proprietário</p>
             </div>
           </div>
-        </div>
-
-        {/* Tab */}
-        <div className="flex gap-1 mb-4 flex-shrink-0">
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border-b-2 border-indigo-600 text-indigo-700 text-sm font-semibold rounded-t-xl shadow-sm">
-            <Receipt size={14}/> Faturamento & Contas Conveniadas
-          </button>
+          {totalAbertas > 0 && (
+            <span className="text-xs font-bold bg-amber-500 text-white px-2.5 py-0.5 rounded-full flex-shrink-0">
+              {totalAbertas} {totalAbertas === 1 ? 'fatura aberta' : 'faturas abertas'}
+            </span>
+          )}
         </div>
 
         {/* Layout split */}
-        <div className="flex gap-5 flex-1 min-h-0 overflow-hidden">
+        <div className="flex gap-5 min-h-[520px] overflow-hidden">
           {/* Painel esquerdo */}
           <div className="w-72 flex-shrink-0 flex flex-col min-h-0">
+            {/* Tab — dentro do painel esquerdo para alinhar com o topo do painel direito */}
+            <div className="flex gap-1 flex-shrink-0 mb-3">
+              <button className="flex items-center gap-2 px-4 py-2 bg-white border-b-2 border-indigo-600 text-indigo-700 text-sm font-semibold rounded-t-xl shadow-sm">
+                <Receipt size={14}/> Faturamento & Contas Conveniadas
+              </button>
+            </div>
             {/* Filtro */}
             <div className="mb-3 flex-shrink-0">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Filtrar Proprietários</p>
-              <div className="relative">
+              <div className="relative mb-2">
                 <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
                 <input value={busca} onChange={e => setBusca(e.target.value)}
                   placeholder="Pesquisar por proprietário, CPF ou pet..."
                   className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"/>
+              </div>
+              {/* Toggle abertas / pagas */}
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setFiltroStatus('ABERTA')}
+                  className={`flex-1 py-1.5 text-[11px] font-semibold rounded-lg transition-colors ${
+                    filtroStatus === 'ABERTA'
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}>
+                  Abertas
+                </button>
+                <button
+                  onClick={() => setFiltroStatus('PAGA')}
+                  className={`flex-1 py-1.5 text-[11px] font-semibold rounded-lg transition-colors ${
+                    filtroStatus === 'PAGA'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}>
+                  Pagas
+                </button>
               </div>
             </div>
 
@@ -719,7 +833,7 @@ export default function Faturamento() {
                 </div>
               ) : filtrados.length === 0 ? (
                 <div className="text-center py-8">
-                  <PawPrint size={28} className="mx-auto text-gray-200 mb-2"/>
+                  <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
                   <p className="text-xs text-gray-400">
                     {busca ? 'Nenhum resultado encontrado.' : 'Nenhum proprietário com animais vinculados.'}
                   </p>
@@ -730,6 +844,7 @@ export default function Faturamento() {
                     key={p.id} prop={p}
                     selecionado={selecionado?.id === p.id}
                     onClick={() => setSelecionado(p)}
+                    faturaExibir={filtroStatus === 'PAGA' ? p.faturaPaga : p.faturaAtiva}
                   />
                 ))
               )}
@@ -748,9 +863,10 @@ export default function Faturamento() {
           {/* Painel direito */}
           {selecionado ? (
             <PainelFatura
-              key={selecionado.id}
+              key={`${selecionado.id}-${filtroStatus}`}
               prop={selecionado}
               onStatusChange={carregar}
+              faturaIdPaga={filtroStatus === 'PAGA' ? selecionado.faturaPaga?.id : undefined}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-white rounded-2xl border border-gray-100 shadow-sm p-8">

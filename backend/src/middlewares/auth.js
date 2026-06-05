@@ -1,8 +1,9 @@
-const jwt = require('jsonwebtoken');
+const jwt   = require('jsonwebtoken');
+const prisma = require('../lib/prisma').default;
 
 const SECRET = process.env.JWT_SECRET;
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
 
@@ -11,6 +12,27 @@ const authenticate = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, SECRET);
     req.user = decoded;
+
+    // Injeta req.empresaId a partir da equipe ativa do usuário.
+    // Permite que todos os controllers filtrem por empresa sem middleware adicional.
+    // Mesma lógica de getEmpresaIdDoVet: MembroEquipe primeiro, depois Empresa.ownerId.
+    try {
+      const membro = await prisma.membroEquipe.findFirst({
+        where:   { userId: decoded.id },
+        include: { equipe: { select: { empresaId: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (membro?.equipe?.empresaId) {
+        req.empresaId = membro.equipe.empresaId;
+      } else {
+        // Fallback: usuário é dono da empresa (Empresa.ownerId) mas pode não ter MembroEquipe
+        const empresa = await prisma.empresa.findFirst({ where: { ownerId: decoded.id } });
+        req.empresaId = empresa?.id ?? null;
+      }
+    } catch {
+      req.empresaId = null;
+    }
+
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Token inválido ou expirado' });

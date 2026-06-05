@@ -96,6 +96,10 @@ async function aplicarOnboardingConvidado(userId, equipeId) {
   await prisma.$transaction(upserts);
 }
 
+const { USER_TYPES_GERENCIADOS } = PermissaoService;
+
+const NIVEL_ORDER = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+
 const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
@@ -1055,15 +1059,105 @@ const EquipeController = {
     }
   },
 
+  // Atribui múltiplos cargos a um membro. As permissões são a união (max nivel) de todos os perfis.
+  alterarCargos: async (req, res) => {
+    try {
+      const equipeId   = Number(req.params.equipeId);
+      const alvoUserId = Number(req.params.alvoUserId);
+      const { cargos } = req.body;
+
+      if (!Array.isArray(cargos) || cargos.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'cargos deve ser um array não-vazio.' });
+      }
+      if (cargos.includes('PROPRIETARIO')) {
+        return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente.' });
+      }
+
+      // ADMIN bypass; Sócio pode alterar mas não pode promover a SÓCIO
+      if (req.user.role !== 'ADMIN') {
+        const membroSolicitante = await prisma.membroEquipe.findUnique({
+          where: { equipeId_userId: { equipeId, userId: req.user.id } },
+          select: { cargo: true },
+        });
+        if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem alterar cargos.' });
+        }
+        if (cargos.includes('SOCIO')) {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+        }
+      }
+
+      // Valida que todos os cargos existem na equipe
+      for (const cargo of cargos) {
+        const perfilExiste = await prisma.perfilEquipe.findUnique({
+          where: { equipeId_slug: { equipeId, slug: cargo } },
+        });
+        if (!perfilExiste) {
+          return res.status(400).json({ sucesso: false, mensagem: `Cargo "${cargo}" não existe nesta equipe.` });
+        }
+      }
+
+      // Cargo primário: SOCIO tem prioridade, senão o primeiro da lista
+      const cargoPrimario = cargos.includes('SOCIO') ? 'SOCIO' : cargos[0];
+
+      // Carrega as matrizes de permissão de todos os cargos e faz a união (nivel máximo)
+      const NIVEL_ORD = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+      const matrizes = await prisma.matrizPerfil.findMany({
+        where: { equipeId, perfilSlug: { in: cargos } },
+      });
+      const mapaUniao = {};
+      for (const m of matrizes) {
+        const atual = mapaUniao[m.moduloSlug];
+        if (atual === undefined || NIVEL_ORD[m.nivel] > NIVEL_ORD[atual]) {
+          mapaUniao[m.moduloSlug] = m.nivel;
+        }
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.membroEquipe.update({
+          where: { equipeId_userId: { equipeId, userId: alvoUserId } },
+          data:  { cargo: cargoPrimario, cargos },
+        });
+        await tx.permissaoMembro.deleteMany({ where: { equipeId, userId: alvoUserId } });
+        if (Object.keys(mapaUniao).length > 0) {
+          await tx.permissaoMembro.createMany({
+            data: Object.entries(mapaUniao).map(([slug, nivel]) => ({
+              equipeId,
+              userId:     alvoUserId,
+              moduloSlug: slug,
+              nivel,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      });
+
+      res.json({ sucesso: true, mensagem: 'Perfis atualizados com sucesso.', cargos, cargoPrimario });
+    } catch (err) {
+      console.error('Erro ao alterar cargos:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   alterarCargo: async (req, res) => {
     try {
       const equipeId   = Number(req.params.equipeId);
       const alvoUserId = Number(req.params.alvoUserId);
       const { cargo }  = req.body;
 
-      const CARGOS_VALIDOS = ['SOCIO', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];
-      if (!CARGOS_VALIDOS.includes(cargo)) {
-        return res.status(400).json({ sucesso: false, mensagem: `Cargo inválido: ${cargo}` });
+      if (!cargo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'cargo é obrigatório.' });
+      }
+
+      // Valida contra PerfilEquipe da equipe (aceita perfis customizados) + restringe PROPRIETARIO
+      const perfilExiste = await prisma.perfilEquipe.findUnique({
+        where: { equipeId_slug: { equipeId, slug: cargo } },
+      });
+      if (!perfilExiste) {
+        return res.status(400).json({ sucesso: false, mensagem: `Cargo "${cargo}" não existe nesta equipe.` });
+      }
+      if (cargo === 'PROPRIETARIO') {
+        return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente — não pode ser concedido como cargo de equipe.' });
       }
 
       // ADMIN tem bypass total; SÓCIO pode alterar cargos mas não pode promover a SÓCIO
@@ -1131,9 +1225,61 @@ const EquipeController = {
   // ── Permissões do usuário logado ─────────────────────────────────────────────
   // Retorna mapa plano { slug: nivel } para o frontend aplicar controle de acesso.
   // Sócio recebe FULL em tudo automaticamente (bypass via flag isSocio).
+  // PROPRIETARIO: lê MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas aos seus animais.
   minhasPermissoes: async (req, res) => {
     try {
       const userId = req.user.id;
+
+      // ── PROPRIETARIO: lê MatrizPerfil das equipes vinculadas aos seus animais ──
+      if (req.user.userType === 'PROPRIETARIO') {
+        const animaisDoOwner = await prisma.animal.findMany({
+          where:    { userId: Number(userId), empresaId: { not: null } },
+          select:   { empresaId: true },
+          distinct: ['empresaId'],
+        });
+
+        const empresaIds = animaisDoOwner.map(a => a.empresaId).filter(Boolean);
+
+        if (empresaIds.length === 0) {
+          return res.json({ sucesso: true, dados: {
+            permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
+            isSocio:       false,
+            temEquipe:     false,
+            isProprietario: true,
+          }});
+        }
+
+        const equipes = await prisma.equipe.findMany({
+          where:  { empresaId: { in: empresaIds } },
+          select: { id: true },
+        });
+        const equipeIds = equipes.map(e => e.id);
+
+        const matrizes = await prisma.matrizPerfil.findMany({
+          where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
+        });
+
+        // União das permissões — toma o nível máximo entre as equipes
+        const mapaMaximo = {};
+        for (const m of matrizes) {
+          const atual = mapaMaximo[m.moduloSlug];
+          if (atual === undefined || NIVEL_ORDER[m.nivel] > NIVEL_ORDER[atual]) {
+            mapaMaximo[m.moduloSlug] = m.nivel;
+          }
+        }
+        mapaMaximo['dashboard.geral.ler'] = mapaMaximo['dashboard.geral.ler'] ?? 'LEITURA';
+
+        const permissoes = Object.fromEntries(
+          Object.entries(mapaMaximo).filter(([, v]) => v !== 'NENHUM')
+        );
+
+        return res.json({ sucesso: true, dados: {
+          permissoes,
+          isSocio:       false,
+          temEquipe:     equipeIds.length > 0,
+          isProprietario: true,
+        }});
+      }
 
       const membro = await prisma.membroEquipe.findFirst({
         where:   { userId },
@@ -1162,6 +1308,46 @@ const EquipeController = {
     } catch (err) {
       console.error('Erro ao buscar permissões:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Permissões globais por UserType (ADMIN) ──────────────────────────────────
+
+  getMatrizGlobalUserType: async (req, res) => {
+    try {
+      if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Acesso restrito a administradores.' });
+      }
+      const { userType } = req.params;
+      if (!USER_TYPES_GERENCIADOS.includes(userType)) {
+        return res.status(400).json({ sucesso: false, mensagem: `UserType inválido: ${userType}` });
+      }
+      const dados = await PermissaoService.getMatrizGlobalUserType({ userType });
+      return res.json({ sucesso: true, dados });
+    } catch (err) {
+      console.error('Erro ao buscar matriz global:', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  salvarMatrizGlobalUserType: async (req, res) => {
+    try {
+      if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Acesso restrito a administradores.' });
+      }
+      const { userType } = req.params;
+      if (!USER_TYPES_GERENCIADOS.includes(userType)) {
+        return res.status(400).json({ sucesso: false, mensagem: `UserType inválido: ${userType}` });
+      }
+      const { permissoes } = req.body;
+      if (!permissoes || typeof permissoes !== 'object') {
+        return res.status(400).json({ sucesso: false, mensagem: 'permissoes é obrigatório.' });
+      }
+      const resultado = await PermissaoService.salvarMatrizGlobalUserType({ userType, permissoes });
+      return res.json({ sucesso: true, dados: resultado, mensagem: `Permissões globais de ${userType} aplicadas em ${resultado.equipesAtualizadas} equipe(s).` });
+    } catch (err) {
+      console.error('Erro ao salvar matriz global:', err);
+      return res.status(500).json({ sucesso: false, mensagem: err.message ?? 'Erro interno' });
     }
   },
 

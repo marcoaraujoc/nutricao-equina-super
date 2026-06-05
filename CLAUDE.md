@@ -1,6 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-05-29
+# Atualizado em: 2026-06-05
 
 ---
 
@@ -26,6 +26,8 @@
 | Financeiro (Faturas) | 🟡 Básico |
 | Gestão de Equipes | ✅ Implementado |
 | Gestão de Empresas | ✅ Implementado |
+| Cadastro / Proprietários | ✅ Implementado |
+| Cadastro / Tratadores | ✅ Implementado |
 | IA / LLM Integration | 🟡 Parcial (Groq integrado) |
 | Auditoria | 🟡 Básico |
 | Admin | 🔲 Planejado |
@@ -183,6 +185,8 @@ NOTA: unique constraint (animalId, vetUserId) — só existe 1 registro por par,
 ### Entidades principais
 ```
 User              → usuários (todos os roles)
+                    Campos extras de proprietário: cpf?, cnpj?, mensalista (Boolean), valorAssistencia (Float?),
+                    frequenciaVisitas (Int? 1-7), isConvidado (Boolean)
 Animal            → animais cadastrados
 Especie / Raca    → taxonomia
 Alimento          → banco de alimentos
@@ -201,6 +205,10 @@ Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, st
 VacinaClinica     → registro de vacinas
 EncaminhamentoClinico → encaminhamentos entre especialistas
 Fatura / FaturaItem → financeiro básico
+                    Fatura: animalId? (legado, nullable desde migration 20260605), proprietarioId?,
+                    mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA)
+                    FaturaItem: animalId? (adicionado migration 20260605), tipo VARCHAR(50), veterinarioId?
+Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
 AuditLog          → log de ações dos usuários
 AiUsageLog        → rastreabilidade de uso de IA
@@ -212,13 +220,99 @@ Empresa           → clínicas/empresas cadastradas
 Equipe            → equipes dentro de uma empresa
 MembroEquipe      → membros de cada equipe
 ConviteEquipe     → convites para entrar em equipes
-ModuloSistema     → catálogo de módulos/submodulos/ações do sistema (slug único, label, ordemExib)
-PermissaoMembro   → permissão por membro+módulo dentro de uma equipe (nivel: LEITURA|ESCRITA|ADMIN)
+ModuloSistema     → catálogo estático de módulos/submodulos/ações (slug único, label, ordemExib)
+                    Populado via seed.js (upsert). Ver tabela completa abaixo.
+PermissaoMembro   → permissão por membro+módulo dentro de uma equipe
+                    nivel: NENHUM|LEITURA|PROPRIO|EQUIPE|FULL
                     unique(equipeId, userId, moduloSlug)
+PerfilEquipe      → perfis/cargos por equipe (SOCIO, VETERINARIO, ESTAGIARIO, PROPRIETARIO + customizados)
+                    PROPRIETARIO é perfil de sistema — não pode ser excluído nem atribuído a membros da equipe
+MatrizPerfil      → template de permissões por perfil — propagado a membros ao entrar/trocar cargo
+                    unique(equipeId, perfilSlug, moduloSlug)
+                    locked: Boolean — true = definido pelo ADMIN global, sócio não pode alterar
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
-PermissaoProprietario → funcionalidades habilitadas por proprietário dentro de uma equipe
-                    unique(equipeId, userId, funcionalidade)
+PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — substituído por MatrizPerfil PROPRIETARIO
 ```
+
+### Catálogo de Módulos do Sistema (ModuloSistema)
+
+Gerenciado em `backend/src/seeds/002_permissoes_padrao.seed.js` e sincronizado via `node backend/seed.js`.
+Ações disponíveis: `ler` (ver), `criar`, `editar` (alterar), `deletar` (excluir), `imprimir`.
+Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass total.
+
+| Módulo | Submódulo | Slug | Ação | VET padrão | EST padrão |
+|---|---|---|---|---|---|
+| cadastro | proprietario | `cadastro.proprietario.ler` | ver | EQUIPE | EQUIPE |
+| cadastro | proprietario | `cadastro.proprietario.criar` | criar | PROPRIO | NENHUM |
+| cadastro | proprietario | `cadastro.proprietario.editar` | alterar | PROPRIO | NENHUM |
+| cadastro | proprietario | `cadastro.proprietario.deletar` | excluir | NENHUM | NENHUM |
+| cadastro | tratador | `cadastro.tratador.ler` | ver | EQUIPE | EQUIPE |
+| cadastro | tratador | `cadastro.tratador.criar` | criar | PROPRIO | NENHUM |
+| cadastro | tratador | `cadastro.tratador.editar` | alterar | PROPRIO | NENHUM |
+| cadastro | tratador | `cadastro.tratador.deletar` | excluir | PROPRIO | NENHUM |
+| dashboard | geral | `dashboard.geral.ler` | ver | EQUIPE | LEITURA |
+| dashboard | geral | `dashboard.geral.imprimir` | imprimir | EQUIPE | NENHUM |
+| animais | animais | `animais.ler` | ver | EQUIPE | EQUIPE |
+| animais | animais | `animais.criar` | criar | EQUIPE | NENHUM |
+| animais | animais | `animais.editar` | alterar | EQUIPE | NENHUM |
+| animais | animais | `animais.deletar` | excluir | PROPRIO | NENHUM |
+| animais | animais | `animais.imprimir` | imprimir | EQUIPE | NENHUM |
+| atendimento | evolucoes | `atendimento.evolucoes.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | evolucoes | `atendimento.evolucoes.criar` | criar | PROPRIO | NENHUM |
+| atendimento | evolucoes | `atendimento.evolucoes.editar` | alterar | PROPRIO | NENHUM |
+| atendimento | evolucoes | `atendimento.evolucoes.deletar` | excluir | PROPRIO | NENHUM |
+| atendimento | evolucoes | `atendimento.evolucoes.imprimir` | imprimir | EQUIPE | NENHUM |
+| atendimento | prescricoes | `atendimento.prescricoes.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | prescricoes | `atendimento.prescricoes.criar` | criar | PROPRIO | NENHUM |
+| atendimento | prescricoes | `atendimento.prescricoes.editar` | alterar | PROPRIO | NENHUM |
+| atendimento | prescricoes | `atendimento.prescricoes.deletar` | excluir | PROPRIO | NENHUM |
+| atendimento | prescricoes | `atendimento.prescricoes.imprimir` | imprimir | PROPRIO | NENHUM |
+| atendimento | exames | `atendimento.exames.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | exames | `atendimento.exames.criar` | criar | PROPRIO | NENHUM |
+| atendimento | exames | `atendimento.exames.editar` | alterar | PROPRIO | NENHUM |
+| atendimento | exames | `atendimento.exames.deletar` | excluir | PROPRIO | NENHUM |
+| atendimento | exames | `atendimento.exames.imprimir` | imprimir | EQUIPE | NENHUM |
+| nutricao | dietas | `nutricao.dietas.ler` | ver | EQUIPE | EQUIPE |
+| nutricao | dietas | `nutricao.dietas.criar` | criar | PROPRIO | NENHUM |
+| nutricao | dietas | `nutricao.dietas.editar` | alterar | PROPRIO | NENHUM |
+| nutricao | dietas | `nutricao.dietas.imprimir` | imprimir | EQUIPE | NENHUM |
+| nutricao | relatorios | `nutricao.relatorios.ler` | ver | EQUIPE | EQUIPE |
+| nutricao | relatorios | `nutricao.relatorios.criar` | criar | PROPRIO | NENHUM |
+| nutricao | relatorios | `nutricao.relatorios.imprimir` | imprimir | EQUIPE | NENHUM |
+| financeiro | faturas | `financeiro.faturas.ler` | ver | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.criar` | criar | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.editar` | alterar | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.imprimir` | imprimir | PROPRIO | NENHUM |
+| equipe | membros | `equipe.membros.ler` | ver | LEITURA | LEITURA |
+| equipe | membros | `equipe.membros.editar` | alterar | NENHUM | NENHUM |
+| farmacia | estoque | `farmacia.estoque.ler` | ver | EQUIPE | EQUIPE |
+| farmacia | estoque | `farmacia.estoque.criar` | criar | PROPRIO | NENHUM |
+| farmacia | estoque | `farmacia.estoque.editar` | alterar | PROPRIO | NENHUM |
+| farmacia | estoque | `farmacia.estoque.deletar` | excluir | PROPRIO | NENHUM |
+| farmacia | estoque | `farmacia.estoque.imprimir` | imprimir | EQUIPE | NENHUM |
+| farmacia | movimentacoes | `farmacia.movimentacoes.ler` | ver | EQUIPE | EQUIPE |
+| farmacia | movimentacoes | `farmacia.movimentacoes.criar` | criar | PROPRIO | NENHUM |
+| farmacia | movimentacoes | `farmacia.movimentacoes.imprimir` | imprimir | EQUIPE | NENHUM |
+| medicamentos | catalogo | `medicamentos.catalogo.ler` | ver | EQUIPE | EQUIPE |
+| medicamentos | catalogo | `medicamentos.catalogo.criar` | criar | NENHUM | NENHUM |
+| medicamentos | catalogo | `medicamentos.catalogo.editar` | alterar | NENHUM | NENHUM |
+| medicamentos | catalogo | `medicamentos.catalogo.deletar` | excluir | NENHUM | NENHUM |
+| medicamentos | catalogo | `medicamentos.catalogo.imprimir` | imprimir | EQUIPE | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.ler` | ver | EQUIPE | EQUIPE |
+| procedimentos | catalogo | `procedimentos.catalogo.criar` | criar | NENHUM | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.editar` | alterar | NENHUM | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.deletar` | excluir | NENHUM | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.imprimir` | imprimir | EQUIPE | NENHUM |
+
+**Notas:**
+- `dietas` não tem `deletar` — soft delete via `ativo` já protegido na camada de service
+- `relatorios` não tem `editar`/`deletar` — relatórios são gerados e imutáveis
+- `equipe.membros` não tem `criar`/`deletar`/`imprimir` — gerenciado pelo fluxo de convites
+- `farmacia.movimentacoes` não tem `editar`/`deletar` — movimentos são imutáveis por auditoria
+- `medicamentos` e `procedimentos`: criar/editar/excluir reservados para ADMIN (catálogo global)
+- Sidebar: Alimentos, Nutrientes e Composição Alimentar ficam no accordion **Nutricional** (apenas ADMIN)
+- Sidebar: Cadastro Pessoal, Pacientes/Animais, Proprietários e Tratadores ficam no sub-accordion **Cadastro** dentro de **Geral**
+- Para re-sincronizar módulos no banco após alterações no seed: `node backend/seed.js`
 
 ### Regras de modelagem
 - `@@schema("schs2vet")` em todos os modelos
@@ -450,7 +544,7 @@ OS: Windows
 Editor: VS Code + Claude Code Extension
 Frontend URL: via Cloudflare Tunnel (HTTPS)
 Backend: localhost:3001
-Banco dev: SQLite / Banco prod: PostgreSQL (schema: schs2vet)
+Banco: PostgreSQL (schema: schs2vet) — dev e prod
 ```
 
 ### Comandos úteis
@@ -462,12 +556,14 @@ cd frontend && npm run dev
 cd backend && npm run dev
 
 # Prisma
-npx prisma migrate dev
+npx prisma migrate dev --name <nome>   # cria + aplica migration (usa shadow DB)
+npx prisma migrate deploy              # aplica migrations pendentes (sem shadow DB — usar após P3006)
+npx prisma migrate resolve --rolled-back <migration_name>  # desmarca migration falha
 npx prisma studio
 npx prisma generate
 
-# Seeds
-node scripts/seed.js
+# Seeds (rodar sempre após nova migration que adiciona módulos)
+node backend/seed.js
 
 # Testes
 cd backend && npm test
@@ -477,10 +573,12 @@ cd backend && npm run test:coverage
 ### ⚠️ Windows — Prisma type resolution
 O Prisma gera o client em `node_modules/.prisma/client/` mas o TypeScript
 resolve via `@prisma/client` que espera o caminho relativo `.prisma/client/`.
-No Windows, o npm **não** cria o symlink automaticamente. Após `npm install`
-ou quando os tipos não resolverem, execute:
+No Windows, o npm **não** cria o symlink automaticamente. Após `npm install`,
+`npx prisma generate` ou quando os tipos não resolverem, execute:
 
 ```powershell
+# Remove pasta real (se existir) e cria junction
+Remove-Item -Recurse -Force "backend\node_modules\@prisma\client\.prisma" -ErrorAction SilentlyContinue
 New-Item -ItemType Junction `
   -Path "backend\node_modules\@prisma\client\.prisma" `
   -Target "backend\node_modules\.prisma"
@@ -534,12 +632,30 @@ New-Item -ItemType Junction `
 - [x] EvolucaoPrint.ts — utilitário de impressão de evoluções clínicas
 - [x] ModuloSistema + PermissaoMembro + AuditoriaPermissao + PermissaoProprietario (migration `20260524`)
 - [x] PermissaoController.js + seeds/002_permissoes_padrao.seed.js
+- [x] RBAC dois níveis: ADMIN global (locked=true em MatrizPerfil, propagado via raw SQL) + Sócio por equipe (locked=false)
+- [x] PROPRIETARIO como perfil do sistema na MatrizPerfil — ações restritas a ler/imprimir; minhasPermissoes lê MatrizPerfil das equipes vinculadas aos animais do proprietário (union de níveis)
+- [x] ControleAcesso.tsx refatorado: TabPermissoesGlobais (ADMIN, UserTypes VETERINARIO/ESTAGIARIO/PROPRIETARIO), TabMatriz com lock icon em itens imutáveis, PROPRIETARIO como perfil SISTEMA na lista, sem TabProprietarios
+- [x] MatrizPerfil.locked (campo Boolean, adicionado via raw SQL — `npx prisma generate` necessário após parar backend)
+- [x] alterarCargo valida contra PerfilEquipe (aceita customizados) — bloqueia PROPRIETARIO como cargo de membro
 - [x] AnimalCard.tsx: campo `tipo` adicionado à interface Solicitacao; lógica de resolução do vet corrigida (DESVINCULO PENDENTE e TROCA_VET PENDENTE → vet ainda ativo; VINCULO PENDENTE → badge âmbar)
 - [x] DESVINCULO aceito: `veterinarioNome` e `veterinarioClinica` limpos em 3 pontos (proprietarioAprovar, responderSolicitacaoVet, cron autoAceitarSolicitacoesPendentes)
 - [x] TROCA_VET: `solicitanteId` incluído no UPDATE branch do upsert em VeterinarioController e server.ts (corrige popup de autorização aparecendo para proprietário errado)
 - [x] TROCA_VET recusa: restaura `{tipo:'VINCULO', status:'ACEITO'}` ao invés de RECUSADO + email ao proprietário notificando recusa — em `responderSolicitacao` e `responderViaEmail`
 - [x] VetDashboard.tsx + AnimaisVet.tsx: toasts diferenciados por tipo ao responder solicitações (ACEITO: toast.success; RECUSADO: toast() com ícone 🔒/🔄/❌ por tipo); try-catch em handleResponderModal
 - [x] useProprietarioNotificacoes: inicialização exclui RECUSADO/CANCELADO do mapa inicial; janela de updatedAt ampliada de 90s para 10min; polling reduzido de 30s para 15s
+- [x] SubModuloEvolucao.tsx: botões Salvar e Finalizar desabilitados enquanto gravacaoAtiva, transcrevendo, ou texto vazio
+- [x] Módulo Cadastro — migration `20260605005109_add_proprietario_tratador_fields`:
+  - User: cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, isConvidado (agora em migration)
+  - Model Tratador (tb_tratadores): nome, telefone, localTrabalho, ativo, empresaId
+  - Fatura: animalId nullable, proprietarioId, mesReferencia (drift aplicado via migration)
+  - FaturaItem: animalId adicionado
+  - MatrizPerfil.locked agora na migration (não mais só via raw SQL)
+- [x] ProprietarioController.js + TratadorController.js + rotas `/api/cadastro/proprietarios` e `/api/cadastro/tratadores`
+- [x] Seeds `cadastro.proprietario.*` e `cadastro.tratador.*` (8 novos slugs, padrões VET/EST/PROP)
+- [x] CadastroProprietario.tsx — CRUD com CPF/CNPJ (validação + máscara), CNPJ auto-fill via BrasilAPI, toggle mensalista → valor assistência, combo frequência de visitas (1-7x/semana), CEP via ViaCEP, mobile-first
+- [x] CadastroTratador.tsx — CRUD simples (nome, telefone, local de trabalho), mobile-first
+- [x] Sidebar: sub-accordion **Cadastro** dentro de GERAL — Cadastro Pessoal + Pacientes + Proprietários + Tratadores
+- [x] Migrations `20260601000001` e `20260601000002` corrigidas com DO $$ IF EXISTS para shadow DB (proprietarioId e animalId adicionados fora de migration)
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -568,6 +684,8 @@ New-Item -ItemType Junction `
 | `EvolucaoController.js` | Prontuário clínico — INCLUDE_PADRAO (veterinario, modificadoPor, midias), `listarPorAnimal`, `obterPorId`, `criar`, `atualizar`, `excluir`, `aprovar`, `salvarTitulo`, `transcrever` (Whisper), `adicionarMidia`, `removerMidia`, `listarResponsaveis` |
 | `PrescricaoController.js` | Prescrições médicas — `listarPorAnimal` (page/limit/tipo/status/busca), `criar` (gera `horariosGerados` via `gerarHorarios()`), `atualizar`, `excluir` (soft), `finalizarTodas` (RASCUNHO→ATIVA + cria FaturaItems em fatura ABERTA) |
 | `PermissaoController.js` | CRUD de permissões por membro/módulo e por proprietário dentro de uma equipe |
+| `ProprietarioController.js` | CRUD de proprietários (userType=PROPRIETARIO) com campos extras: cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas |
+| `TratadorController.js` | CRUD de tratadores (model Tratador) — nome, telefone, localTrabalho |
 | `EquipeController.js` | Equipes, membros, convites |
 | `AlimentoController.js` | Banco de alimentos |
 | `ComposicaoAlimentarController.js` | Composição nutricional por alimento/espécie |
@@ -659,6 +777,17 @@ POST   /                                → criar prescrição (status RASCUNHO,
 PUT    /:id                             → atualizar
 DELETE /:id                             → soft delete
 
+# Cadastro — Proprietários e Tratadores
+GET/POST    /api/cadastro/proprietarios     → ProprietarioController (CRUD userType=PROPRIETARIO)
+GET/PUT     /api/cadastro/proprietarios/:id
+PATCH       /api/cadastro/proprietarios/:id/toggle
+DELETE      /api/cadastro/proprietarios/:id
+
+GET/POST    /api/cadastro/tratadores        → TratadorController (CRUD tb_tratadores)
+GET/PUT     /api/cadastro/tratadores/:id
+PATCH       /api/cadastro/tratadores/:id/toggle
+DELETE      /api/cadastro/tratadores/:id
+
 # Outros prefixos relevantes
 /api/auth          → AuthController (login, refresh, logout)
 /api/users         → UserController (/me, CRUD)
@@ -710,6 +839,8 @@ DELETE /:id                             → soft delete
 | `SubModuloEncaminhamento.tsx` | Encaminhamentos entre especialistas |
 | `AprovarVinculo.tsx` | `/aprovar-vinculo` — vet aprova vínculo via link de email (público) |
 | `AprovarVinculoProprietario.tsx` | `/proprietario/aprovar-vinculo` — proprietário aprova via email (público) |
+| `CadastroProprietario.tsx` | `/cadastro/proprietarios` — CRUD de proprietários com CPF/CNPJ, mensalista, frequência de visitas |
+| `CadastroTratador.tsx` | `/cadastro/tratadores` — CRUD de tratadores (nome, telefone, local de trabalho) |
 | `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
 | `EquipeManager.tsx` | `/equipe-manager` — admin de equipes |
 | `Alimentos.tsx` | `/alimentos` — banco de alimentos |
@@ -817,6 +948,37 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 
 13. VetDashboard/AnimaisVet handleResponder e handleResponderModal: ao recusar, usar toast()
     com ícone (não toast.success) — visual diferente do aceite. VINCULO=❌, DESVINCULO=🔒, TROCA_VET=🔄.
+
+14. MatrizPerfil.locked — campo inicialmente adicionado via raw SQL, agora formalizado na migration
+    `20260605005109_add_proprietario_tratador_fields`. Após `npx prisma generate` o campo está disponível
+    no client tipado. PermissaoService.js ainda usa `$queryRawUnsafe`/`$executeRawUnsafe` — pode migrar
+    para Prisma tipado normalmente após confirmar que o generate foi executado.
+
+15. PROPRIETARIO como perfil: não é MembroEquipe. minhasPermissoes lê MatrizPerfil das equipes vinculadas
+    via Animal.empresaId → Equipe. Permissões usam union (nível máximo entre equipes). PROPRIETARIO não
+    pode ser atribuído como cargo de membro da equipe (bloqueado em alterarCargo).
+
+16. req.empresaId — injetado pelo próprio `authenticate` (auth.js) via MembroEquipe lookup.
+    NÃO é mais necessário adicionar `injectTenant` por rota (middleware tenant.js é redundante mas inofensivo).
+    Se req.empresaId for null, verificarAcessoAnimal cai no check de VetAnimalSolicitacao individual.
+    Sócios de empresa com múltiplos sócios precisam de req.empresaId para acessar animais vinculados a
+    qualquer vet da empresa — sem ele, apenas o vet diretamente vinculado consegue acesso.
+
+17. Migrations shadow DB — colunas adicionadas fora de migration causam P3006 no `prisma migrate dev`.
+    Sintoma: "column X referenced in foreign key constraint does not exist".
+    Fix: envolver o ADD CONSTRAINT em bloco condicional DO $$ BEGIN IF EXISTS (...) THEN ... END IF; END $$.
+    Exemplos corrigidos: `20260601000001` (proprietarioId em tb_faturas) e `20260601000002`
+    (animalId em tb_faturas e tb_fatura_itens). Após corrigir, rodar:
+      npx prisma migrate resolve --rolled-back <migration_name>
+      npx prisma migrate deploy
+
+18. isConvidado — campo agora presente na migration `20260605005109` (ADD COLUMN). UserController.js
+    ainda usa `$queryRawUnsafe` para ler o campo (código legado). Pode ser migrado para Prisma tipado
+    após confirmar que `npx prisma generate` foi executado.
+
+19. CadastroProprietario.tsx usa BrasilAPI pública (brasilapi.com.br/api/cnpj/v1/{cnpj}) para auto-fill
+    de CNPJ — chamada feita direto do frontend (CORS liberado pela API). Nenhum proxy no backend.
+    Falha silenciosa: se a API estiver indisponível, exibe toast informativo e mantém campos editáveis.
 ```
 
 ---

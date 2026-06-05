@@ -205,23 +205,140 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
   URL.revokeObjectURL(url);
 }
 
-// ─── Share ────────────────────────────────────────────────────────────────────
+// ─── WhatsApp — compartilhar PDF ─────────────────────────────────────────────
 
-export async function compartilharFatura(fatura: FaturaMin): Promise<'shared' | 'copied'> {
-  const title = `Fatura INV-${String(fatura.id).padStart(3,'0')} — ${fatura.proprietario?.fullName ?? 'Cliente'}`;
-  const text  = [
-    title,
-    `Mês: ${formatMes(fatura.mesReferencia)}`,
-    `Status: ${fatura.status}`,
-    `Total: ${brl(fatura.total)}`,
-    fatura.proprietario?.email ? `Email: ${fatura.proprietario.email}` : '',
-  ].filter(Boolean).join('\n');
+async function gerarPdfBlob(fatura: FaturaMin, animais: AnimalMin[]): Promise<Blob> {
+  // Renderiza o HTML da fatura em um iframe oculto, captura com html2canvas e gera PDF
+  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+    import('jspdf'),
+    import('html2canvas'),
+  ]);
 
-  if (navigator.share) {
-    await navigator.share({ title, text });
-    return 'shared';
+  const inv   = `INV-${String(fatura.id).padStart(3, '0')}`;
+  const nome  = fatura.proprietario?.fullName ?? 'Cliente';
+
+  // Reutiliza a mesma lógica de HTML de imprimirFatura (simplificada)
+  const animalMap = new Map(animais.map(a => [a.id, a]));
+  const grupos = new Map<string, { nome: string; itens: ItemMin[] }>();
+  for (const item of fatura.itens) {
+    const key = String(item.animalId ?? 'outros');
+    const n   = item.animalId
+      ? (animalMap.get(item.animalId)?.nome ?? `Animal #${item.animalId}`)
+      : 'Outros Lançamentos';
+    if (!grupos.has(key)) grupos.set(key, { nome: n, itens: [] });
+    grupos.get(key)!.itens.push(item);
   }
 
-  await navigator.clipboard.writeText(text);
-  return 'copied';
+  const linhasGrupos = [...grupos.values()].map(g => {
+    const subtotal   = g.itens.reduce((s, i) => s + i.valor * i.quantidade, 0);
+    const linhasItens = g.itens.map(i => `
+      <tr>
+        <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
+        <td>${i.descricao}</td>
+        <td class="center">${i.quantidade}</td>
+        <td class="right">${brl(i.valor)}</td>
+        <td class="right">${brl(i.valor * i.quantidade)}</td>
+      </tr>`).join('');
+    return `
+      <tr class="group-header">
+        <td colspan="4"><strong>${g.nome}</strong></td>
+        <td class="right">Subtotal: ${brl(subtotal)}</td>
+      </tr>${linhasItens}`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:11px;color:#1a1a1a;width:794px;padding:24px}
+    .header{background:#166534;color:#fff;padding:16px 20px;border-radius:8px;margin-bottom:16px}
+    .header h1{font-size:18px;font-weight:700;margin-bottom:2px}
+    .header .sub{font-size:10px;opacity:.8}
+    .header .meta{margin-top:8px;font-size:10px;opacity:.75;display:flex;gap:20px;flex-wrap:wrap}
+    .badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:700;text-transform:uppercase}
+    .badge.assistencia{background:#dbeafe;color:#1d4ed8}
+    .badge.medicamento{background:#ede9fe;color:#6d28d9}
+    .badge.procedimento{background:#d1fae5;color:#065f46}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th{background:#f3f4f6;font-size:9px;text-transform:uppercase;padding:6px 8px;text-align:left;border-bottom:2px solid #e5e7eb}
+    td{padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
+    tr.group-header td{background:#f9fafb;font-size:10px;color:#374151;padding:7px 8px;border-top:2px solid #e5e7eb}
+    .center{text-align:center}.right{text-align:right}
+    .total-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+    .total-box .label{font-size:11px;color:#374151}
+    .total-box .value{font-size:20px;font-weight:800;color:#dc2626}
+    .footer{margin-top:24px;font-size:9px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:8px}
+  </style></head><body>
+  <div class="header">
+    <h1>${nome}</h1>
+    <div class="sub">Fatura Ref: ${inv} · ${formatMes(fatura.mesReferencia)}</div>
+    <div class="meta">
+      ${fatura.proprietario?.phone ? `<span>Fone: ${fatura.proprietario.phone}</span>` : ''}
+      ${fatura.proprietario?.email ? `<span>Email: ${fatura.proprietario.email}</span>` : ''}
+      <span>Status: ${fatura.status}</span>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th style="width:100px">Tipo</th><th>Descrição</th><th class="center" style="width:50px">Qtd.</th><th class="right" style="width:90px">Valor Unit.</th><th class="right" style="width:100px">Subtotal</th></tr></thead>
+    <tbody>${linhasGrupos}</tbody>
+  </table>
+  <div class="total-box">
+    <span class="label">Valor Total da Fatura Única</span>
+    <span class="value">${brl(fatura.total)}</span>
+  </div>
+  <div class="footer">Emitido em ${new Date().toLocaleString('pt-BR')} · S2Vet</div>
+  </body></html>`;
+
+  // Renderiza em div oculta fora da viewport
+  const wrapper = document.createElement('div');
+  Object.assign(wrapper.style, {
+    position: 'fixed', top: '-9999px', left: '-9999px',
+    width: '794px', background: '#fff',
+  });
+  wrapper.innerHTML = html;
+  document.body.appendChild(wrapper);
+
+  try {
+    const canvas = await html2canvas(wrapper, { scale: 1.5, useCORS: true, logging: false });
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const ratio  = canvas.height / canvas.width;
+    const imgH   = pageW * ratio;
+
+    let y = 0;
+    while (y < imgH) {
+      if (y > 0) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, -y, pageW, imgH);
+      y += pageH;
+    }
+
+    return pdf.output('blob');
+  } finally {
+    document.body.removeChild(wrapper);
+  }
+}
+
+export async function compartilharFatura(fatura: FaturaMin, animais: AnimalMin[]) {
+  const inv      = `INV-${String(fatura.id).padStart(3, '0')}`;
+  const nome     = fatura.proprietario?.fullName?.replace(/\s+/g, '-') ?? 'cliente';
+  const fileName = `fatura-${inv}-${nome}.pdf`;
+
+  const blob = await gerarPdfBlob(fatura, animais);
+  const file = new File([blob], fileName, { type: 'application/pdf' });
+
+  // Web Share API com arquivo (funciona no celular — WhatsApp aparece como opção)
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ files: [file], title: `Fatura ${inv}` });
+    return;
+  }
+
+  // Fallback desktop: faz download do PDF
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href    = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
 }

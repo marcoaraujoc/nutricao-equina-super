@@ -6,23 +6,25 @@ import toast from 'react-hot-toast';
 import {
   Users2, Mail, Trash2, ToggleLeft, ToggleRight,
   UserCheck, Loader2, X, Send, Clock, CheckCircle2, XCircle,
-  AlertCircle, ShieldCheck, Pencil, ChevronDown,
+  AlertCircle, ShieldCheck, Pencil, ChevronDown, Check,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import PermissoesModal from '../components/PermissoesModal';
+import PageContainer from '../components/PageContainer';
+import BotaoVoltar   from '../components/BotaoVoltar';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Membro {
   id:        number;
   cargo:     string;
-  ativo?:    boolean;
   createdAt: string;
   user: {
     id:       number;
     fullName: string;
     email:    string;
     userType: string;
+    ativo:    boolean;
   };
   equipe?: { nome: string };
 }
@@ -48,11 +50,16 @@ const CARGO_OPTIONS: { value: string; label: string }[] = [
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const labelCargo = (cargo: string): string => ({
-  VETERINARIO: 'Veterinário', ESTAGIARIO: 'Estagiário',
-  ADMIN: 'Administrador', MEMBRO: 'Membro', PROPRIETARIO: 'Proprietário',
+  SOCIO:        'Sócio',
+  VETERINARIO:  'Veterinário',
+  ESTAGIARIO:   'Estagiário',
+  ADMIN:        'Administrador',
+  MEMBRO:       'Membro',
+  PROPRIETARIO: 'Proprietário',
 } as Record<string,string>)[cargo] ?? cargo;
 
 const badgeCargo = (cargo: string): string => ({
+  SOCIO:        'bg-purple-100 text-purple-700',
   VETERINARIO:  'bg-emerald-100 text-emerald-700',
   ESTAGIARIO:   'bg-blue-100 text-blue-700',
   ADMIN:        'bg-red-100 text-red-700',
@@ -85,15 +92,39 @@ export default function Equipe() {
   const [editNome,          setEditNome]                   = useState('');
   const [editCargoPerfil,   setEditCargoPerfil]            = useState('');
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
+  const [nomeEquipe,        setNomeEquipe]                  = useState('');
+  const [editandoNome,      setEditandoNome]                = useState(false);
+  const [novoNome,          setNovoNome]                    = useState('');
+  const [salvandoNome,      setSalvandoNome]                = useState(false);
 
   const carregarMembros = async () => {
     try {
       const res = await api.get('/equipes/membros');
-      setMembros(res.data?.dados ?? []);
+      const dados = res.data?.dados ?? [];
+      setMembros(dados);
       setEquipeId(res.data?.equipeId ?? null);
       setIsSocio(res.data?.isSocio ?? false);
+      const nome = dados[0]?.equipe?.nome ?? '';
+      setNomeEquipe(nome);
+      setNovoNome(nome);
     } catch { setMembros([]); }
     finally { setLoading(false); }
+  };
+
+  const handleRenomearEquipe = async () => {
+    if (!equipeId || !novoNome.trim() || novoNome.trim() === nomeEquipe) {
+      setEditandoNome(false);
+      return;
+    }
+    setSalvandoNome(true);
+    try {
+      await api.patch(`/equipes/${equipeId}/nome`, { nome: novoNome.trim() });
+      setNomeEquipe(novoNome.trim());
+      setEditandoNome(false);
+      toast.success('Nome da equipe atualizado');
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao renomear equipe');
+    } finally { setSalvandoNome(false); }
   };
 
   useEffect(() => { carregarMembros(); }, []);
@@ -128,7 +159,7 @@ export default function Equipe() {
     setTogglingId(membro.id);
     try {
       await api.patch(`/equipes/membros/${membro.id}/toggle`);
-      toast.success(`${membro.user.fullName} ${membro.ativo === false ? 'ativado' : 'desativado'}`);
+      toast.success(`${membro.user.fullName} ${membro.user.ativo === false ? 'ativado' : 'desativado'}`);
       carregarMembros();
     } catch { toast.error('Erro ao alterar status'); }
     finally { setTogglingId(null); }
@@ -184,23 +215,58 @@ export default function Equipe() {
     } finally { setRemovendoConviteId(null); }
   };
 
-  const membrosAtivos   = membros.filter(m => m.ativo !== false);
-  const membrosInativos = membros.filter(m => m.ativo === false);
+  const membrosAtivos   = membros.filter(m => m.user.ativo !== false);
+  const membrosInativos = membros.filter(m => m.user.ativo === false);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-10">
+    <PageContainer maxWidth="5xl">
+      <BotaoVoltar className="mb-6" />
 
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
             <Users2 size={20} className="text-emerald-700" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Minha Equipe</h1>
-            <p className="text-sm text-gray-500">
+            {editandoNome ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  value={novoNome}
+                  onChange={e => setNovoNome(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRenomearEquipe();
+                    if (e.key === 'Escape') { setNovoNome(nomeEquipe); setEditandoNome(false); }
+                  }}
+                  className="text-xl font-bold text-gray-900 border-b-2 border-emerald-500 bg-transparent outline-none w-56"
+                />
+                <button onClick={handleRenomearEquipe} disabled={salvandoNome}
+                  className="p-1 text-emerald-600 hover:text-emerald-700 disabled:opacity-50">
+                  {salvandoNome ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                </button>
+                <button onClick={() => { setNovoNome(nomeEquipe); setEditandoNome(false); }}
+                  className="p-1 text-gray-400 hover:text-gray-600">
+                  <X size={15} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {nomeEquipe || 'Minha Equipe'}
+                </h1>
+                {isSocio && (
+                  <button onClick={() => setEditandoNome(true)}
+                    title="Renomear equipe"
+                    className="p-1 text-gray-300 hover:text-emerald-600 transition-colors">
+                    <Pencil size={14} />
+                  </button>
+                )}
+              </div>
+            )}
+            <p className="text-sm text-gray-500 mt-0.5">
               {membros.length > 0
                 ? `${membrosAtivos.length} membro${membrosAtivos.length !== 1 ? 's' : ''} ativo${membrosAtivos.length !== 1 ? 's' : ''}`
                 : 'Nenhum membro ainda'}
@@ -234,125 +300,106 @@ export default function Equipe() {
           )}
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="divide-y divide-gray-50">
+            {membros.map(m => {
+              const ativo = m.user.ativo !== false;
+              return (
+                <div key={m.id} className={`flex items-center gap-4 px-5 py-4 transition-colors ${!ativo ? 'opacity-60 bg-gray-50/50' : ''}`}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0 ${
+                    ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    {m.user.fullName?.[0]?.toUpperCase() ?? 'U'}
+                  </div>
 
-          {membrosAtivos.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-50 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Membros ativos — {membrosAtivos.length}</p>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {membrosAtivos.map(m => (
-                  <div key={m.id} className="flex items-center gap-4 px-5 py-4">
-                    <div className="w-10 h-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0">
-                      {m.user.fullName?.[0]?.toUpperCase() ?? 'U'}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className={`font-semibold truncate ${ativo ? 'text-gray-900' : 'text-gray-500'}`}>{m.user.fullName}</p>
+                      {m.user.id === user?.id && (
+                        <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>
+                      )}
+                      {!ativo && (
+                        <span className="text-[10px] font-bold bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full">Inativo</span>
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold text-gray-900 truncate">{m.user.fullName}</p>
-                        {m.user.id === user?.id && (
-                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>
-                        )}
+                    <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                  </div>
+
+                  {/* Cargo editável para Sócio (apenas membros não-sócio) */}
+                  {isSocio && editandoId === m.id ? (
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <div className="relative">
+                        <select value={editCargo} onChange={e => setEditCargo(e.target.value)}
+                          className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 appearance-none pr-6">
+                          {CARGO_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                        </select>
+                        <ChevronDown size={10} className="absolute right-1.5 top-2.5 text-gray-400 pointer-events-none" />
                       </div>
-                      <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                      <button onClick={() => handleSalvarCargo(m)} disabled={salvandoCargo}
+                        className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
+                        {salvandoCargo ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                      </button>
+                      <button onClick={() => setEditandoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                        <X size={12} />
+                      </button>
                     </div>
+                  ) : (
+                    <span
+                      className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        ativo ? badgeCargo(m.cargo) : 'bg-gray-100 text-gray-400'
+                      } ${isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      onClick={isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? () => { setEditandoId(m.id); setEditCargo(m.cargo); } : undefined}
+                      title={isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? 'Clique para editar cargo' : undefined}
+                    >
+                      {labelCargo(m.cargo)}
+                      {isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' && <Pencil size={9} className="opacity-50" />}
+                    </span>
+                  )}
 
-                    {/* Cargo editável para Sócio */}
-                    {isSocio && editandoId === m.id ? (
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <div className="relative">
-                          <select value={editCargo} onChange={e => setEditCargo(e.target.value)}
-                            className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 appearance-none pr-6">
-                            {CARGO_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                          </select>
-                          <ChevronDown size={10} className="absolute right-1.5 top-2.5 text-gray-400 pointer-events-none" />
-                        </div>
-                        <button onClick={() => handleSalvarCargo(m)} disabled={salvandoCargo}
-                          className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
-                          {salvandoCargo ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                        </button>
-                        <button onClick={() => setEditandoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ) : (
-                      <span
-                        className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${badgeCargo(m.cargo)} ${isSocio && m.user.id !== user?.id ? 'cursor-pointer hover:opacity-80' : ''}`}
-                        onClick={isSocio && m.user.id !== user?.id ? () => { setEditandoId(m.id); setEditCargo(m.cargo); } : undefined}
-                        title={isSocio && m.user.id !== user?.id ? 'Clique para editar cargo' : undefined}
-                      >
-                        {labelCargo(m.cargo)}
-                        {isSocio && m.user.id !== user?.id && <Pencil size={9} className="opacity-50" />}
-                      </span>
-                    )}
+                  <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
 
-                    <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
-
-                    <div className="flex items-center gap-1 flex-shrink-0">
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {m.cargo !== 'SOCIO' && (
                       <button
                         onClick={() => { setMembroEditando(m); setEditNome(m.user.fullName); setEditCargoPerfil(m.cargo); }}
                         className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg"
                         title="Editar perfil">
                         <Pencil size={15} />
                       </button>
-                      {m.user.id !== user?.id && (
-                        <>
-                          {isSocio && equipeId && (
-                            <button onClick={() => setPermissoesModal(m)}
-                              className="p-1.5 text-purple-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg" title="Controle de acesso">
-                              <ShieldCheck size={15} />
-                            </button>
-                          )}
-                          <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
-                            className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg" title="Desativar">
-                            {togglingId === m.id ? <Loader2 size={15} className="animate-spin" /> : <ToggleRight size={18} />}
+                    )}
+                    {m.user.id !== user?.id && (
+                      <>
+                        {isSocio && equipeId && m.cargo !== 'SOCIO' && (
+                          <button onClick={() => setPermissoesModal(m)}
+                            className="p-1.5 text-purple-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg" title="Controle de acesso">
+                            <ShieldCheck size={15} />
                           </button>
+                        )}
+                        <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
+                          title={ativo ? 'Desativar' : 'Ativar'}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            ativo
+                              ? 'text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50'
+                              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                          }`}>
+                          {togglingId === m.id
+                            ? <Loader2 size={15} className="animate-spin" />
+                            : ativo ? <ToggleRight size={18} /> : <ToggleLeft size={18} />
+                          }
+                        </button>
+                        {m.cargo !== 'SOCIO' && (
                           <button onClick={() => setConfirmRemover(m)}
                             className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Remover">
                             <Trash2 size={15} />
                           </button>
-                        </>
-                      )}
-                    </div>
+                        )}
+                      </>
+                    )}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {membrosInativos.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden opacity-70">
-              <div className="px-5 py-3 border-b border-gray-50 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Inativos — {membrosInativos.length}</p>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {membrosInativos.map(m => (
-                  <div key={m.id} className="flex items-center gap-4 px-5 py-4">
-                    <div className="w-10 h-10 bg-gray-100 text-gray-400 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0">
-                      {m.user.fullName?.[0]?.toUpperCase() ?? 'U'}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-gray-500 truncate">{m.user.fullName}</p>
-                      <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
-                    </div>
-                    <span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-400">
-                      {labelCargo(m.cargo)}
-                    </span>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
-                        className="p-1.5 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg" title="Reativar">
-                        {togglingId === m.id ? <Loader2 size={15} className="animate-spin" /> : <ToggleLeft size={18} />}
-                      </button>
-                      <button onClick={() => setConfirmRemover(m)}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -573,6 +620,6 @@ export default function Equipe() {
         </div>
       )}
 
-    </div>
+    </PageContainer>
   );
 }

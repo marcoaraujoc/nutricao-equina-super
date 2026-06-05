@@ -8,6 +8,9 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -286,6 +289,9 @@ function ProcedimentoModal({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Procedimentos() {
+  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { user } = useAuth();
+
   const [procedimentos, setProcedimentos] = useState<Procedimento[]>([]);
   const [total,         setTotal]         = useState(0);
   const [loading,       setLoading]       = useState(false);
@@ -331,28 +337,41 @@ export default function Procedimentos() {
     }
   };
 
+  if (loadingPerm) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  const isAdminRole = (user?.role ?? '').toUpperCase() === 'ADMIN';
+  if (!isAdminRole) return null;
+
   return (
     <PageContainer maxWidth="7xl">
-      <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
 
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-gray-100">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Activity size={18} className="text-emerald-600" />
-                <h2 className="text-lg font-bold text-gray-900">Procedimentos Veterinários</h2>
-              </div>
-              <p className="text-sm text-gray-500">Catálogo de procedimentos clínicos</p>
-            </div>
-            <button onClick={abrirNovo}
-              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl transition-colors self-start sm:self-auto">
-              Novo Procedimento
-            </button>
+      <BotaoVoltar className="mb-6" />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+            <Activity size={20} className="text-emerald-700" />
           </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Procedimentos Veterinários</h1>
+            <p className="text-sm text-gray-500">Catálogo de procedimentos clínicos</p>
+          </div>
+        </div>
+        <button onClick={abrirNovo}
+          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl transition-colors flex-shrink-0">
+          Novo Procedimento
+        </button>
+      </div>
 
-          {/* Filtros */}
-          <div className="flex flex-col sm:flex-row gap-3 mt-4">
+      <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+        {/* Filtros */}
+        <div className="px-6 py-5 border-b border-gray-100">
+          <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input

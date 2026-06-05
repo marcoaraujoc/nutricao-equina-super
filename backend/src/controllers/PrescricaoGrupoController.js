@@ -32,69 +32,152 @@ const proximoNumero = async (tx, animalId) => {
   return (ultimo?.numero ?? 0) + 1;
 };
 
-// ─── Helper: deduzir estoque ao finalizar ─────────────────────────────────────
+// ─── Helpers: cálculo, reserva e baixa de estoque ────────────────────────────
 
-// Doses por dia de cada código de frequência
 const DOSES_POR_DIA = {
-  '1xDia':        1,
-  '12em12h':      2,
-  '8em8h':        3,
-  '6em6h':        4,
-  '4em4h':        6,
-  '1em1h':        24,
-  'continuo':     1,
-  'seNecessario': 1,
-  'SOS':          1,
-  '1x2dias':      1 / 2,
-  '1x3dias':      1 / 3,
-  '1xSemana':     1 / 7,
-  '1x21dias':     1 / 21,
-  '1x30dias':     1 / 30,
-  '1x90dias':     1 / 90,
+  '1xDia':        1,    '12em12h':  2,    '8em8h':        3,
+  '6em6h':        4,    '4em4h':    6,    '1em1h':        24,
+  'continuo':     1,    'seNecessario': 1, 'SOS':         1,
+  '1x2dias':      1/2,  '1x3dias':  1/3,  '1xSemana':    1/7,
+  '1x21dias':     1/21, '1x30dias': 1/30, '1x90dias':    1/90,
 };
 
+// Quantidade total do curso — usada tanto para reserva quanto para baixa
 function calcularQuantidadeTotal(item) {
   const qtdPorDose = parseFloat(item.dosagem) || 1;
   const dias       = Math.max(Number(item.duracaoDias) || 1, 1);
-
-  // Dose única: independe de duracaoDias
-  if (item.frequencia === 'agora') return Math.ceil(qtdPorDose);
-
+  if (item.frequencia === 'agora') return qtdPorDose;
   const dosesPorDia = DOSES_POR_DIA[item.frequencia] ?? 1;
-  return Math.ceil(qtdPorDose * dosesPorDia * dias);
+  return qtdPorDose * dosesPorDia * dias;
 }
 
-async function deduzirEstoque(tx, itens, empresaId) {
+// Cria reservas de estoque (não altera qtdEstoque)
+async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
   for (const item of itens) {
-    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId) continue;
-
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     const estoque = await tx.estoqueClinica.findFirst({
-      where: {
-        medicamentoId: item.medicamentoCatId,
-        ...(empresaId ? { empresaId } : { empresaId: null }),
-        ativo: true,
-      },
+      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
     });
-
     if (!estoque) continue;
-
-    const deduzir = calcularQuantidadeTotal(item);
-    const nova    = Math.max(estoque.qtdEstoque - deduzir, 0);
-
-    const descFreq = item.dosagem
-      ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} × ${item.duracaoDias}d = ${deduzir}`
-      : `${item.frequencia} × ${item.duracaoDias}d = ${deduzir}`;
-
-    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: nova } });
-    await tx.movimentoEstoque.create({
-      data: {
-        estoqueId:  estoque.id,
-        tipo:       'SAIDA',
-        quantidade: deduzir,
-        motivo:     `Prescrição: ${descFreq}`,
-      },
+    const quantidade = calcularQuantidadeTotal(item);
+    await tx.reservaEstoque.upsert({
+      where:  { prescricaoGrupoId_estoqueId: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } },
+      update: { quantidade },
+      create: { prescricaoGrupoId: grupoId, estoqueId: estoque.id, animalId, quantidade },
     });
   }
+}
+
+// Consome reservas e dá baixa no estoque (ao executar).
+// Retorna Map<medicamentoCatId, precoPorUnidade> onde precoPorUnidade = valor_embalagem / qtdEstoque.
+// Exemplo: embalagem 500ml a R$50 → 0.10 R$/ml. Fatura: 0.10 × 100ml = R$10 (proporcional).
+async function consumirReservas(tx, grupoId, itens, empresaId) {
+  const precos = new Map(); // medicamentoCatId → preço por unidade de medida (R$/ml, R$/mg, etc.)
+  for (const item of itens) {
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    const estoque = await tx.estoqueClinica.findFirst({
+      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+    });
+    if (!estoque) continue;
+    const deduzir = calcularQuantidadeTotal(item);
+    const nova    = Math.max(estoque.qtdEstoque - deduzir, 0);
+    const desc    = item.dosagem
+      ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} × ${item.duracaoDias}d`
+      : item.frequencia;
+    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: nova } });
+    await tx.movimentoEstoque.create({
+      data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: Math.ceil(deduzir), motivo: `Prescrição executada: ${desc}` },
+    });
+    await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } });
+    // Preço proporcional: divide o valor da embalagem pela quantidade disponível antes da baixa
+    const precoPorUnidade = estoque.qtdEstoque > 0 ? (estoque.valor ?? 0) / estoque.qtdEstoque : 0;
+    precos.set(item.medicamentoCatId, precoPorUnidade);
+  }
+  return precos;
+}
+
+// Libera reservas sem dar baixa (ao cancelar)
+async function liberarReservas(tx, grupoId) {
+  await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId } });
+}
+
+// Verifica estoque real antes de executar — retorna lista de alertas
+// Checa qtdEstoque atual (sem descontar reservas de outros grupos) vs. quantidade necessária
+async function verificarEstoqueParaExecucao(itens, empresaId) {
+  const alertas = [];
+  for (const item of itens) {
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    const estoque = await prisma.estoqueClinica.findFirst({
+      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: { medicamento: { select: { nome: true, unidade: true } } },
+    });
+    const necessario = calcularQuantidadeTotal(item);
+    if (!estoque || estoque.qtdEstoque < necessario) {
+      alertas.push({
+        tipo:          'INSUFICIENTE',
+        medicamento:   item.medicamento,
+        unidade:       estoque?.medicamento?.unidade ?? '',
+        qtdNecessaria: necessario,
+        qtdDisponivel: estoque?.qtdEstoque ?? 0,
+      });
+    }
+  }
+  return alertas;
+}
+
+// Verifica disponibilidade antes de reservar — retorna lista de alertas
+// tipo 'INSUFICIENTE': disponível < necessário (não há estoque livre suficiente)
+// tipo 'ZERADO':       disponível >= necessário mas o estoque livre ficará zerado após a reserva
+async function verificarDisponibilidade(itens, grupoId, empresaId) {
+  const alertas = [];
+  for (const item of itens) {
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    const estoque = await prisma.estoqueClinica.findFirst({
+      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: {
+        medicamento: { select: { nome: true, unidade: true } },
+        reservas: {
+          where: { prescricaoGrupoId: { not: grupoId } },
+          include: { animal: { select: { nome: true } }, prescricaoGrupo: { select: { numero: true } } },
+        },
+      },
+    });
+    if (!estoque) continue;
+    const qtdReservada = estoque.reservas.reduce((s, r) => s + r.quantidade, 0);
+    const disponivel   = estoque.qtdEstoque - qtdReservada;
+    const necessario   = calcularQuantidadeTotal(item);
+    const reservasInfo = estoque.reservas.map(r => ({
+      animalNome:       r.animal.nome,
+      prescricaoNumero: String(r.prescricaoGrupo.numero).padStart(3, '0'),
+      quantidade:       r.quantidade,
+    }));
+
+    if (disponivel < necessario) {
+      alertas.push({
+        tipo:          'INSUFICIENTE',
+        medicamento:   item.medicamento,
+        unidade:       estoque.medicamento.unidade ?? '',
+        qtdNecessaria: necessario,
+        qtdDisponivel: Math.max(disponivel, 0),
+        qtdEstoque:    estoque.qtdEstoque,
+        qtdReservada,
+        reservas:      reservasInfo,
+      });
+    } else if (necessario > 0 && disponivel - necessario < 0.01) {
+      // Estoque livre ficará zerado (ou com menos de 0.01 unidade) após esta reserva
+      alertas.push({
+        tipo:          'ZERADO',
+        medicamento:   item.medicamento,
+        unidade:       estoque.medicamento.unidade ?? '',
+        qtdNecessaria: necessario,
+        qtdDisponivel: disponivel,
+        qtdEstoque:    estoque.qtdEstoque,
+        qtdReservada,
+        reservas:      reservasInfo,
+      });
+    }
+  }
+  return alertas;
 }
 
 // ─── Listar grupos por animal ─────────────────────────────────────────────────
@@ -166,7 +249,7 @@ const criar = async (req, res) => {
           numero,
           animalId:     Number(animalId),
           veterinarioId,
-          empresaId:    empresaId ? Number(empresaId) : null,
+          empresaId:    empresaId ? Number(empresaId) : (req.empresaId ?? null),
           status:       'SALVO',
         },
       });
@@ -189,6 +272,7 @@ const criar = async (req, res) => {
             observacao:         item.observacao        ?? null,
             dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
             status:             'RASCUNHO',
+            medicamentoCliente: item.medicamentoCliente === true,
           },
         });
       }
@@ -214,27 +298,28 @@ const adicionarItem = async (req, res) => {
     if (!grupo)               return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível adicionar itens em prescrições com status SALVO.' });
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
 
     const item = await prisma.prescricao.create({
       data: {
-        animalId:         grupo.animalId,
+        animalId:          grupo.animalId,
         veterinarioId,
         grupoId,
-        medicamentoCatId: medicamentoCatId ? Number(medicamentoCatId) : null,
-        tipo:             tipo             ?? 'MEDICAMENTO',
-        medicamento:      String(medicamento),
-        dosagem:          dosagem          ?? null,
-        unidade:          unidade          ?? null,
-        via:              via              ?? 'Oral',
-        frequencia:       frequencia       ?? '',
-        duracaoDias:      Number(duracaoDias ?? 1),
-        horaInicio:       horaInicio       ?? null,
-        observacao:       observacao       ?? null,
-        dataInicio:       dataInicio ? new Date(dataInicio) : new Date(),
-        status:           'RASCUNHO',
+        medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
+        tipo:              tipo              ?? 'MEDICAMENTO',
+        medicamento:       String(medicamento),
+        dosagem:           dosagem           ?? null,
+        unidade:           unidade           ?? null,
+        via:               via               ?? 'Oral',
+        frequencia:        frequencia        ?? '',
+        duracaoDias:       Number(duracaoDias ?? 1),
+        horaInicio:        horaInicio        ?? null,
+        observacao:        observacao        ?? null,
+        dataInicio:        dataInicio ? new Date(dataInicio) : new Date(),
+        status:            'RASCUNHO',
+        medicamentoCliente: medicamentoCliente === true,
       },
       include: {
         veterinario:    { select: { id: true, fullName: true } },
@@ -263,20 +348,21 @@ const atualizarItem = async (req, res) => {
     if (!item)                           return res.status(404).json({ error: 'Item não encontrado.' });
     if (item.grupo?.status !== 'SALVO')  return res.status(400).json({ error: 'Prescrição finalizada não pode ser editada.' });
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
 
     const data = {};
-    if (tipo              !== undefined) data.tipo             = tipo;
-    if (medicamento       !== undefined) data.medicamento      = String(medicamento);
-    if (medicamentoCatId  !== undefined) data.medicamentoCatId = medicamentoCatId ? Number(medicamentoCatId) : null;
-    if (dosagem           !== undefined) data.dosagem          = dosagem;
-    if (unidade           !== undefined) data.unidade          = unidade;
-    if (via               !== undefined) data.via              = via;
-    if (frequencia        !== undefined) data.frequencia       = frequencia;
-    if (duracaoDias       !== undefined) data.duracaoDias      = Number(duracaoDias);
-    if (horaInicio        !== undefined) data.horaInicio       = horaInicio;
-    if (observacao        !== undefined) data.observacao       = observacao;
-    if (dataInicio        !== undefined) data.dataInicio       = new Date(dataInicio);
+    if (tipo               !== undefined) data.tipo              = tipo;
+    if (medicamento        !== undefined) data.medicamento       = String(medicamento);
+    if (medicamentoCatId   !== undefined) data.medicamentoCatId  = medicamentoCatId ? Number(medicamentoCatId) : null;
+    if (dosagem            !== undefined) data.dosagem           = dosagem;
+    if (unidade            !== undefined) data.unidade           = unidade;
+    if (via                !== undefined) data.via               = via;
+    if (frequencia         !== undefined) data.frequencia        = frequencia;
+    if (duracaoDias        !== undefined) data.duracaoDias       = Number(duracaoDias);
+    if (horaInicio         !== undefined) data.horaInicio        = horaInicio;
+    if (observacao         !== undefined) data.observacao        = observacao;
+    if (dataInicio         !== undefined) data.dataInicio        = new Date(dataInicio);
+    if (medicamentoCliente !== undefined) data.medicamentoCliente = medicamentoCliente === true;
     data.veterinarioId = veterinarioId;
 
     const updated = await prisma.prescricao.update({
@@ -321,62 +407,48 @@ const removerItem = async (req, res) => {
 };
 
 // ─── Finalizar grupo ──────────────────────────────────────────────────────────
-// Transita SALVO→FINALIZADO, deduz estoque, cria FaturaItems
+// SALVO → FINALIZADO. Cria reservas de estoque. Baixa só ao executar.
 
 const finalizar = async (req, res) => {
   try {
-    const grupoId      = Number(req.params.id);
-    const veterinarioId = req.user.id;
+    const grupoId         = Number(req.params.id);
+    const veterinarioId   = req.user.id;
+    const forcarFinalizacao = req.body?.forcarFinalizacao === true;
+
+    // Apenas sócios podem finalizar
+    const membroSocio = await prisma.membroEquipe.findFirst({ where: { userId: veterinarioId, cargo: 'SOCIO' } });
+    if (!membroSocio) return res.status(403).json({ error: 'Apenas sócios podem finalizar prescrições.' });
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
       include: { itens: { where: { ativo: true }, include: { medicamentoCat: true } } },
     });
 
-    if (!grupo)                 return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    if (!grupo)                   return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível finalizar prescrições com status SALVO.' });
     if (grupo.itens.length === 0) return res.status(400).json({ error: 'A prescrição não possui itens ativos.' });
 
+    // empresaId efetivo: prefere o do grupo (persistido), cai no do usuário autenticado
+    const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
+
+    // Verifica disponibilidade de estoque (considera reservas existentes)
+    if (!forcarFinalizacao) {
+      const alertas = await verificarDisponibilidade(grupo.itens, grupoId, empresaIdEfetivo);
+      if (alertas.length > 0) {
+        return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas });
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
-      // Atualiza status dos itens para ATIVA
       await tx.prescricao.updateMany({
         where: { grupoId, ativo: true },
         data:  { status: 'ATIVA', veterinarioId },
       });
-
-      // Atualiza status do grupo para FINALIZADO e responsável
       await tx.prescricaoGrupo.update({
         where: { id: grupoId },
         data:  { status: 'FINALIZADO', veterinarioId },
       });
-
-      // Deduz estoque dos medicamentos
-      await deduzirEstoque(tx, grupo.itens, grupo.empresaId);
-
-      // Cria FaturaItems na fatura ABERTA do animal
-      let fatura = await tx.fatura.findFirst({
-        where: { animalId: grupo.animalId, status: 'ABERTA' },
-      });
-      if (!fatura) {
-        fatura = await tx.fatura.create({ data: { animalId: grupo.animalId, status: 'ABERTA', total: 0 } });
-      }
-
-      for (const item of grupo.itens) {
-        const descricao = item.tipo === 'MEDICAMENTO'
-          ? `${item.medicamento}${item.dosagem ? ` ${item.dosagem}${item.unidade ?? ''}` : ''} — ${item.duracaoDias}d`
-          : item.medicamento;
-
-        await tx.faturaItem.create({
-          data: {
-            faturaId:     fatura.id,
-            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
-            descricao,
-            valor:        0,
-            quantidade:   1,
-            veterinarioId,
-          },
-        });
-      }
+      await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -388,21 +460,42 @@ const finalizar = async (req, res) => {
 };
 
 // ─── Cancelar grupo ───────────────────────────────────────────────────────────
+// Libera reservas de estoque sem dar baixa.
 
 const cancelar = async (req, res) => {
   try {
     const grupoId = Number(req.params.id);
+    const userId  = req.user.id;
+    const motivo  = req.body?.motivo?.trim() ?? null;
 
-    const grupo = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId } });
-    if (!grupo)                     return res.status(404).json({ error: 'Prescrição não encontrada.' });
-    if (grupo.status === 'FINALIZADO') return res.status(400).json({ error: 'Prescrição finalizada não pode ser cancelada.' });
+    // Apenas sócios podem cancelar
+    const membroSocio = await prisma.membroEquipe.findFirst({ where: { userId, cargo: 'SOCIO' } });
+    if (!membroSocio) return res.status(403).json({ error: 'Apenas sócios podem cancelar prescrições.' });
+
+    const grupo = await prisma.prescricaoGrupo.findUnique({
+      where:   { id: grupoId },
+      include: { itens: { where: { ativo: true } } },
+    });
+    if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+
+    if (grupo.status === 'EXECUTADO') {
+      return res.status(400).json({ error: 'Prescrição executada integralmente não pode ser cancelada.', code: 'EXECUTADO' });
+    }
+
+    if (!['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
+      return res.status(400).json({ error: 'Status não permite cancelamento.' });
+    }
 
     await prisma.$transaction(async (tx) => {
+      await liberarReservas(tx, grupoId);
       await tx.prescricao.updateMany({ where: { grupoId, ativo: true }, data: { status: 'CANCELADA' } });
-      await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'CANCELADO' } });
+      await tx.prescricaoGrupo.update({
+        where: { id: grupoId },
+        data:  { status: 'CANCELADO', motivoCancelamento: motivo },
+      });
     });
 
-    return res.json({ dados: { message: 'Prescrição cancelada.' } });
+    return res.json({ dados: { message: 'Prescrição cancelada. Estoque reservado liberado.' } });
   } catch (err) {
     console.error('PrescricaoGrupoController.cancelar:', err);
     return res.status(500).json({ error: 'Erro ao cancelar prescrição.' });
@@ -410,22 +503,81 @@ const cancelar = async (req, res) => {
 };
 
 // ─── Executar grupo ───────────────────────────────────────────────────────────
-// Transita FINALIZADO → EXECUTADO; qualquer perfil autenticado pode executar
+// FINALIZADO → EXECUTADO. Consome reservas, dá baixa no estoque e lança na fatura.
 
 const executar = async (req, res) => {
   try {
-    const grupoId = Number(req.params.id);
+    const grupoId       = Number(req.params.id);
+    const veterinarioId = req.user.id;
 
-    const grupo = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId } });
-    if (!grupo)                       return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    const grupo = await prisma.prescricaoGrupo.findUnique({
+      where:   { id: grupoId },
+      include: { itens: { where: { ativo: true }, include: { medicamentoCat: true } } },
+    });
+    if (!grupo)                        return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'FINALIZADO') return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser marcadas como executadas.' });
 
-    const grupoAtualizado = await prisma.prescricaoGrupo.update({
-      where:   { id: grupoId },
-      data:    { status: 'EXECUTADO' },
-      include: GRUPO_INCLUDE,
+    const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
+
+    const alertasEstoque = await verificarEstoqueParaExecucao(grupo.itens, empresaIdEfetivo);
+    if (alertasEstoque.length > 0) {
+      return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
+    }
+
+    const animal = await prisma.animal.findUnique({ where: { id: grupo.animalId }, select: { userId: true } });
+    const proprietarioId = animal?.userId ?? null;
+    const mesAtual = new Date().toISOString().slice(0, 7);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'EXECUTADO' } });
+
+      // Consome reservas e dá baixa no estoque; retorna preços por medicamento
+      const precos = await consumirReservas(tx, grupoId, grupo.itens, empresaIdEfetivo);
+
+      // Lança na fatura ABERTA do proprietário, separado por animal
+      let fatura = await tx.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' } });
+      if (!fatura) {
+        fatura = await tx.fatura.create({ data: { proprietarioId, mesReferencia: mesAtual, status: 'ABERTA', total: 0 } });
+      }
+
+      let totalIncremento = 0;
+
+      for (const item of grupo.itens) {
+        const qtd            = calcularQuantidadeTotal(item);
+        const qtdArredondada = Math.ceil(qtd);
+        const valorUnitario  = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
+        const dose = item.dosagem
+          ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia} × ${item.duracaoDias}d`
+          : item.frequencia;
+        const descricao = item.tipo === 'MEDICAMENTO'
+          ? `${item.medicamento} — ${dose}`
+          : item.medicamento;
+
+        await tx.faturaItem.create({
+          data: {
+            faturaId:     fatura.id,
+            animalId:     grupo.animalId,
+            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+            descricao,
+            valor:        valorUnitario,
+            quantidade:   qtdArredondada,
+            veterinarioId,
+          },
+        });
+
+        totalIncremento += valorUnitario * qtdArredondada;
+      }
+
+      // Atualiza o total da fatura com os valores lançados
+      if (totalIncremento > 0) {
+        await tx.fatura.update({
+          where: { id: fatura.id },
+          data:  { total: { increment: totalIncremento } },
+        });
+      }
     });
 
+    const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
     return res.json({ dados: { ...grupoAtualizado, numeroFormatado: formatNumero(grupoAtualizado.numero) } });
   } catch (err) {
     console.error('PrescricaoGrupoController.executar:', err);
@@ -468,18 +620,19 @@ const listarParaExecucao = async (req, res) => {
       orderBy: [{ animalId: 'asc' }, { numero: 'asc' }],
     });
 
-    // Hoje à meia-noite local (compara com dataInicio dos itens)
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
+    // Data de hoje em UTC (YYYY-MM-DD) — evita deslocamento de fuso ao comparar com dataInicio
+    const hojeStr = new Date().toISOString().split('T')[0];
+    const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
-    // Mantém apenas grupos onde pelo menos um item tem hoje dentro da janela de tratamento
+    // Mantém apenas grupos onde pelo menos um item cobre hoje
     const dentroJanela = grupos.filter(g =>
       g.itens.some(item => {
-        const inicio = new Date(item.dataInicio);
-        inicio.setHours(0, 0, 0, 0);
-        const fim = new Date(inicio);
-        fim.setDate(fim.getDate() + Math.max(Number(item.duracaoDias) || 1, 1));
-        return inicio <= hoje && hoje < fim;
+        const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
+        const inicio    = new Date(inicioStr + 'T00:00:00Z');
+        const fim       = new Date(inicio);
+        fim.setUTCDate(fim.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
+        const fimStr    = fim.toISOString().split('T')[0];
+        return inicioStr <= hojeStr && hojeStr < fimStr;
       })
     );
 
@@ -487,7 +640,7 @@ const listarParaExecucao = async (req, res) => {
     let resultado = dentroJanela;
     if (busca?.trim()) {
       const q = busca.toLowerCase();
-      resultado = dentroJanela.filter(g =>
+      resultado = grupos.filter(g =>
         g.animal.nome.toLowerCase().includes(q) ||
         (g.animal.baia ?? '').toLowerCase().includes(q) ||
         String(g.numero).padStart(3, '0').includes(q) ||
@@ -495,14 +648,14 @@ const listarParaExecucao = async (req, res) => {
       );
     }
 
-    // Adiciona diaAtual em cada item para exibição frontend
+    // Adiciona diaAtual em cada item para exibição frontend (base UTC)
     const comDia = resultado.map(g => ({
       ...g,
       numeroFormatado: formatNumero(g.numero),
       itens: g.itens.map(item => {
-        const inicio = new Date(item.dataInicio);
-        inicio.setHours(0, 0, 0, 0);
-        const diaAtual = Math.floor((hoje.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
+        const inicio    = new Date(inicioStr + 'T00:00:00Z');
+        const diaAtual  = Math.floor((hoje.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)) + 1;
         return { ...item, diaAtual };
       }),
     }));

@@ -3,9 +3,10 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X } from 'lucide-react';
+import { Pencil, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
@@ -76,11 +77,12 @@ const idadeDisplay = (animal: Animal): string => {
 };
 
 // ─── Card mobile ──────────────────────────────────────────────────────────────
-function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
+function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEditar }: {
   animal:        Animal;
   onDashboard:   () => void;
   onEditar:      () => void;
   onDesvincular: () => void;
+  podeEditar:    boolean;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
@@ -132,16 +134,20 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
           title="Ver detalhes">
           <LayoutDashboard size={15} />
         </button>
-        <button onClick={onEditar}
-          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-          title="Editar">
-          <Pencil size={15} />
-        </button>
-        <button onClick={onDesvincular}
-          className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-          title="Desvincular">
-          <Unlink size={15} />
-        </button>
+        {podeEditar && (
+          <button onClick={onEditar}
+            className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+            title="Editar">
+            <Pencil size={15} />
+          </button>
+        )}
+        {podeEditar && (
+          <button onClick={onDesvincular}
+            className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+            title="Desvincular">
+            <Unlink size={15} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -235,9 +241,11 @@ function SolicitacaoCard({ sol, onResponder }: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
-  const isConvidado                                  = user?.isConvidado === true;
   const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
+  const { podeExecutar, temEquipe }                  = usePermissoes();
+  const podeCriarAnimal                              = podeExecutar('animais.criar');
+  const podeEditarAnimal                             = podeExecutar('animais.editar');
   const navigate                                     = useNavigate();
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
@@ -410,6 +418,9 @@ const AnimaisVet = () => {
     }
   };
 
+  // isConvidado mantido apenas para o VetNotificationModal (vets convidados não veem o modal)
+  const isConvidado = user?.isConvidado === true;
+
   const solicitacoesRecebidas = solicitacoes.filter(
     s => !s.solicitanteId || Number(s.solicitanteId) !== Number(user?.id)
   );
@@ -439,7 +450,7 @@ const AnimaisVet = () => {
             </button>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
           </div>
-          {!isConvidado && (
+          {podeCriarAnimal && (
             <div className="flex gap-2">
               <button
                 onClick={() => setShowBuscarModal(true)}
@@ -461,6 +472,14 @@ const AnimaisVet = () => {
             </div>
           )}
         </div>
+
+        {/* ── Aviso: sem equipe / perfil configurado ─────────────────────── */}
+        {isVet && !temEquipe && (
+          <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 text-sm">
+            <ShieldOff size={16} className="flex-shrink-0" />
+            <span>Você não está associado a nenhuma equipe. Solicite ao administrador que configure seu perfil para liberar as ações.</span>
+          </div>
+        )}
 
         {/* ── Busca ──────────────────────────────────────────────────────── */}
         <div className="flex gap-2">
@@ -548,6 +567,7 @@ const AnimaisVet = () => {
                   onDashboard={() => irParaAnimal(animal)}
                   onEditar={() => irParaEditar(animal)}
                   onDesvincular={() => setAnimalToUnlink(animal)}
+                  podeEditar={podeEditarAnimal}
                 />
               ))}
             </div>
@@ -607,16 +627,20 @@ const AnimaisVet = () => {
                         title="Ver detalhes">
                         <LayoutDashboard size={15} />
                       </button>
-                      <button onClick={() => irParaEditar(animal)}
-                        className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                        title="Editar">
-                        <Pencil size={15} />
-                      </button>
-                      <button onClick={() => setAnimalToUnlink(animal)}
-                        className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                        title="Desvincular">
-                        <Unlink size={15} />
-                      </button>
+                      {podeEditarAnimal && (
+                        <button onClick={() => irParaEditar(animal)}
+                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          title="Editar">
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                      {podeEditarAnimal && (
+                        <button onClick={() => setAnimalToUnlink(animal)}
+                          className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                          title="Desvincular">
+                          <Unlink size={15} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

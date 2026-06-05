@@ -98,7 +98,7 @@ const criar = async (req, res) => {
       const entry = await tx.estoqueClinica.create({
         data: {
           medicamentoId:    Number(medicamentoId),
-          empresaId:        empresaId ? Number(empresaId) : null,
+          empresaId:        empresaId ? Number(empresaId) : (req.empresaId ?? null),
           valor:            Number(valor),
           lote:             lote?.trim() ?? null,
           validade:         validade ? new Date(validade) : null,

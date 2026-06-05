@@ -1,6 +1,7 @@
 // backend/src/controllers/PrescricaoController.js
 
 const prisma = require('../lib/prisma').default;
+const { verificarAcessoAnimal } = require('../lib/animalAccess');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -50,6 +51,10 @@ const PrescricaoController = {
       const { page = 1, limit = 10, tipo, status, busca } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
 
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
       const where = { animalId: Number(animalId), ativo: true };
       if (tipo && tipo !== 'TODOS') where.tipo = tipo;
       if (status) where.status = status;
@@ -89,6 +94,10 @@ const PrescricaoController = {
       if (!animalId || !medicamento || !frequencia) {
         return res.status(400).json({ error: 'animalId, medicamento e frequencia são obrigatórios' });
       }
+
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       const inicio    = dataInicio ? new Date(dataInicio) : new Date();
       const fim       = new Date(inicio.getTime() + Number(duracaoDias) * 86400000);
@@ -138,6 +147,16 @@ const PrescricaoController = {
         observacao, dataInicio,
       } = req.body;
 
+      const prescricaoParaCheck = await prisma.prescricao.findFirst({
+        where:  { id: Number(id), ativo: true },
+        select: { animalId: true },
+      });
+      if (!prescricaoParaCheck) return res.status(404).json({ error: 'Prescrição não encontrada' });
+
+      const acessoUpd = await verificarAcessoAnimal({ animalId: prescricaoParaCheck.animalId, userId: req.user.id, empresaId: req.empresaId });
+      if (acessoUpd === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acessoUpd)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
       const inicio   = dataInicio ? new Date(dataInicio) : undefined;
       const fim      = inicio && duracaoDias
         ? new Date(inicio.getTime() + Number(duracaoDias) * 86400000)
@@ -177,6 +196,16 @@ const PrescricaoController = {
   // DELETE /clinica/prescricoes/:id
   excluir: async (req, res) => {
     try {
+      const prescricaoParaDel = await prisma.prescricao.findFirst({
+        where:  { id: Number(req.params.id), ativo: true },
+        select: { animalId: true },
+      });
+      if (!prescricaoParaDel) return res.status(404).json({ error: 'Prescrição não encontrada' });
+
+      const acessoDel = await verificarAcessoAnimal({ animalId: prescricaoParaDel.animalId, userId: req.user.id, empresaId: req.empresaId });
+      if (acessoDel === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acessoDel)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
       await prisma.prescricao.update({
         where: { id: Number(req.params.id) },
         data:  { ativo: false },
@@ -199,6 +228,11 @@ const PrescricaoController = {
       });
 
       if (!prescricao) return res.status(404).json({ error: 'Prescrição não encontrada' });
+
+      const acessoFin1 = await verificarAcessoAnimal({ animalId: prescricao.animalId, userId: vet.id, empresaId: req.empresaId });
+      if (acessoFin1 === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acessoFin1)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
       if (prescricao.status !== 'RASCUNHO') {
         return res.status(400).json({ error: 'Apenas rascunhos podem ser finalizados' });
       }
@@ -250,6 +284,10 @@ const PrescricaoController = {
     try {
       const { animalId } = req.params;
       const vet = req.user;
+
+      const acessoFin = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId });
+      if (acessoFin === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acessoFin)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       const rascunhos = await prisma.prescricao.findMany({
         where: { animalId: Number(animalId), ativo: true, status: 'RASCUNHO' },

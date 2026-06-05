@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Pencil, Trash2, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
@@ -107,6 +108,10 @@ const MeusAnimais = () => {
   const { user }                                     = useAuth();
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate                                     = useNavigate();
+  const { podeExecutar }                             = usePermissoes();
+  const podeCriarAnimal  = podeExecutar('animais.criar');
+  const podeEditarAnimal = podeExecutar('animais.editar');
+  const podeDeletarAnimal = podeExecutar('animais.deletar');
 
   const [animais,                setAnimais]                = useState<Animal[]>([]);
   const [search,                 setSearch]                 = useState('');
@@ -198,14 +203,16 @@ const MeusAnimais = () => {
         {/* ── Header ────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Animais</h1>
-          <button
-            onClick={() => navigate('/animais')}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
-                       px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
-          >
-            <span className="hidden sm:inline">Novo Animal</span>
-            <span className="sm:hidden">Novo</span>
-          </button>
+          {podeCriarAnimal && (
+            <button
+              onClick={() => navigate('/animais')}
+              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
+                         px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+            >
+              <span className="hidden sm:inline">Novo Animal</span>
+              <span className="sm:hidden">Novo</span>
+            </button>
+          )}
         </div>
 
         {/* ── Busca ──────────────────────────────────────────────────────── */}
@@ -335,14 +342,16 @@ const MeusAnimais = () => {
                       className="flex flex-col sm:flex-row gap-2 flex-shrink-0"
                       onClick={e => e.stopPropagation()}
                     >
-                      <button
-                        onClick={() => handleEdit(animal)}
-                        className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700
-                                   text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
-                      >
-                        <Pencil size={13} />
-                        <span className="hidden sm:inline">Editar</span>
-                      </button>
+                      {podeEditarAnimal && (
+                        <button
+                          onClick={() => handleEdit(animal)}
+                          className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700
+                                     text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                        >
+                          <Pencil size={13} />
+                          <span className="hidden sm:inline">Editar</span>
+                        </button>
+                      )}
 
                       {pendente && solPendente && isVetIniciado(solPendente) && solPendente.tipo === 'DESVINCULO' ? (
                         <>
@@ -397,7 +406,7 @@ const MeusAnimais = () => {
                         </button>
                       ) : null}
 
-                      {!pendente && (
+                      {!pendente && podeDeletarAnimal && (
                         <button
                           onClick={() => setAnimalToDelete(animal)}
                           className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600

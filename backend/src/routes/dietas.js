@@ -1,9 +1,13 @@
 const express = require('express');
 const { PlanoDietaController, DietaItemController } = require('../controllers/DietaController');
+const DietaCompartilharController = require('../controllers/DietaCompartilharController');
 const { authenticate } = require('../middlewares/auth');
 const { checkPermission } = require('../middlewares/permissao.middleware');
 
 const router = express.Router();
+
+// Compartilhar plano de dieta por e-mail (PDF em base64 no body)
+router.post('/compartilhar', authenticate, DietaCompartilharController.compartilhar);
 
 // =============================================================================
 // PLANOS DE DIETA — /api/dietas/planos/...

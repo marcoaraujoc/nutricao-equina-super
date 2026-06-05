@@ -222,6 +222,21 @@ const UserController = {
     }
   },
 
+  buscarProprietarioPorEmail: async (req, res) => {
+    const email = (req.query.email ?? '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: 'E-mail obrigatório' });
+    try {
+      const user = await prisma.user.findUnique({
+        where:  { email },
+        select: { fullName: true, phone: true },
+      });
+      if (!user) return res.json({ encontrado: false });
+      return res.json({ encontrado: true, fullName: user.fullName, phone: user.phone ?? '' });
+    } catch (err) {
+      return res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
 alterarSenha: async (req, res) => {
     const { senhaAtual, novaSenha } = req.body;
 

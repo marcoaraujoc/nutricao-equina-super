@@ -657,6 +657,111 @@ const emailService = {
 
     console.log(`[emailService] Notificação de vínculo enviada → ${vetEmail}`);
   },
+
+  // ── Boas-vindas ao proprietário recém-cadastrado ─────────────────────────────
+  async enviarBoasVindasProprietario({ destinatarioEmail, destinatarioNome, criadoPorNome, senhaInicial }) {
+    if (!podeEnviar()) {
+      console.warn('[emailService] Credenciais não configuradas — e-mail de boas-vindas suprimido');
+      return;
+    }
+    const appUrl   = process.env.APP_URL || 'http://localhost:5173';
+    const loginUrl = `${appUrl}/#/login`;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      destinatarioEmail,
+      subject: '[S2Vet] Sua conta foi criada — bem-vindo(a)!',
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Olá, ${destinatarioNome}!</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Sua conta no S2Vet foi criada por <strong>${criadoPorNome}</strong>.
+              A partir de agora você poderá acompanhar faturas, dietas e evoluções clínicas
+              dos seus animais de forma automática.
+            </p>
+            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px 20px;margin:20px 0;">
+              <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#92400e;">🔐 Seus dados de acesso</p>
+              <table style="border-collapse:collapse;width:100%;">
+                <tr>
+                  <td style="padding:4px 0;font-size:12px;color:#78350f;width:80px;">E-mail</td>
+                  <td style="font-size:13px;font-weight:600;color:#111;">${destinatarioEmail}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;font-size:12px;color:#78350f;">Senha</td>
+                  <td style="font-size:13px;font-weight:600;color:#111;">${senhaInicial}</td>
+                </tr>
+              </table>
+            </div>
+            <p style="color:#374151;font-size:13px;line-height:1.6;">
+              ⚠️ Por segurança, você deverá <strong>alterar sua senha no primeiro acesso</strong>.
+            </p>
+            <div style="text-align:center;margin:28px 0;">
+              <a href="${loginUrl}"
+                style="display:inline-block;background:#059669;color:white;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;">
+                Acessar o S2Vet
+              </a>
+            </div>
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Se não reconhece esta conta, entre em contato com seu veterinário responsável.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Boas-vindas proprietário → ${destinatarioEmail}`);
+  },
+
+  // ── Envio de plano de dieta com PDF anexado ───────────────────────────────
+  async enviarDieta({ emailDestinatario, nomeProprietario, nomeAnimal, planoNome, pdfBase64 }) {
+    if (!podeEnviar()) {
+      console.warn('[emailService] Credenciais não configuradas — e-mail de dieta suprimido');
+      return;
+    }
+
+    const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      emailDestinatario,
+      subject: `[S2Vet] Plano de Dieta — ${nomeAnimal}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Plano de Dieta</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Olá, <strong>${nomeProprietario}</strong>.
+            </p>
+            <p style="color:#374151;line-height:1.6;">
+              Segue o Plano de Dieta <strong>"${planoNome}"</strong> do animal <strong>${nomeAnimal}</strong>.
+            </p>
+            <p style="color:#374151;line-height:1.6;">
+              O documento em PDF está em anexo neste e-mail.
+            </p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;" />
+            <p style="color:#9ca3af;font-size:12px;margin:0;">
+              Gerado pelo S2Vet — Sistema Hospitalar Veterinário
+            </p>
+          </div>
+        </div>
+      `,
+      attachments: [
+        {
+          filename:    `dieta-${nomeAnimal}-${planoNome}.pdf`,
+          content:     pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+  },
 };
 
 module.exports = emailService;

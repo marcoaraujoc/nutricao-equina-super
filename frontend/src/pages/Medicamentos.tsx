@@ -8,6 +8,9 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,15 +43,16 @@ interface FormMedicamento {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const FORMAS = [
-  'Comprimido', 'Cápsula', 'Solução oral', 'Suspensão oral', 'Solução injetável',
-  'Pomada', 'Gel', 'Creme', 'Pó para suspensão', 'Grânulos', 'Drágea',
-  'Ampola', 'Frasco-ampola', 'Bolsa', 'Spray', 'Colírio',
+  'Ampola', 'Bolsa', 'Cápsula', 'Colírio', 'Comprimido', 'Creme',
+  'Drágea', 'Frasco-ampola', 'Gel', 'Grânulos', 'Pasta oral',
+  'Pomada', 'Pó para suspensão', 'Solução injetável', 'Solução oral',
+  'Spray', 'Suspensão oral',
 ];
 
-const UNIDADES_PAD = ['cápsula', 'comprimido', 'dose', 'g', 'gota', 'mcg', 'mg', 'mL', 'UI'];
+const UNIDADES_PAD = ['dose', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
 
 const VIAS_LISTA = [
-  'Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica',
+  'Oral', 'Endovenosa', 'Intramuscular', 'Intravenosa (IV)', 'Intravenosa (IV) lenta', 'Subcutânea', 'Tópica',
   'Retal', 'Nasal', 'Oftálmica', 'Intradérmica', 'Intraperitoneal',
 ];
 
@@ -267,15 +271,11 @@ function MedicamentoModal({
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">UNIDADE *</label>
-              <input
-                type="text" list="unidades-list" value={form.unidade}
-                onChange={e => set('unidade', e.target.value)}
-                placeholder="Ex: mg, mL, UI..."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
-              />
-              <datalist id="unidades-list">
-                {UNIDADES_PAD.map(u => <option key={u} value={u} />)}
-              </datalist>
+              <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                <option value="">Selecione...</option>
+                {UNIDADES_PAD.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
             </div>
           </div>
 
@@ -345,6 +345,9 @@ function MedicamentoModal({
 // ─── Medicamentos page ────────────────────────────────────────────────────────
 
 export default function Medicamentos() {
+  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { user } = useAuth();
+
   const [medicamentos,  setMedicamentos]  = useState<Medicamento[]>([]);
   const [loading,       setLoading]       = useState(false);
   const [total,         setTotal]         = useState(0);
@@ -405,19 +408,33 @@ export default function Medicamentos() {
     } finally { setConfirmDelete(null); }
   };
 
+  if (loadingPerm) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  const isAdminRole = (user?.role ?? '').toUpperCase() === 'ADMIN';
+  if (!isAdminRole) return null;
+
   return (
     <PageContainer maxWidth="7xl">
 
+      <BotaoVoltar className="mb-6" />
+
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Pill size={22} className="text-indigo-600" /> Catálogo de Medicamentos
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">Cadastro global — compartilhado por todas as clínicas</p>
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">
+            <Pill size={20} className="text-indigo-700" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Catálogo de Medicamentos</h1>
+            <p className="text-sm text-gray-500">Cadastro global — compartilhado por todas as clínicas</p>
+          </div>
         </div>
         <button onClick={abrirNovo}
-          className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors flex-shrink-0">
+          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors flex-shrink-0">
           Novo Medicamento
         </button>
       </div>
@@ -443,7 +460,7 @@ export default function Medicamentos() {
             {(['ativos', 'todos'] as const).map(f => (
               <button key={f} onClick={() => setFiltroAtivo(f)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
-                  filtroAtivo === f ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-100'
+                  filtroAtivo === f ? 'bg-emerald-700 text-white' : 'text-gray-500 hover:bg-gray-100'
                 }`}>
                 {f === 'ativos' ? 'Ativos' : 'Todos'}
               </button>

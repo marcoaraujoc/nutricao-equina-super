@@ -40,8 +40,23 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const status = error.response?.status;
+    const method = (error.config?.method ?? '').toLowerCase();
 
-    if (error.response?.status !== 401 || originalRequest?.skipRefreshInterceptor) {
+    // 403 em GET = sem permissão para visualizar — retorna dados nulos silenciosamente
+    // O componente recebe lista vazia (null ?? []) e não exibe toast de erro
+    if (status === 403 && method === 'get') {
+      return Promise.resolve({
+        data: null,
+        status: 403,
+        statusText: 'Forbidden',
+        headers: error.response?.headers ?? {},
+        config: error.config,
+        request: error.request,
+      });
+    }
+
+    if (status !== 401 || originalRequest?.skipRefreshInterceptor) {
       return Promise.reject(error);
     }
 

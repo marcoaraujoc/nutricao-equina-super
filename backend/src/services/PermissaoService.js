@@ -1,10 +1,14 @@
 // backend/src/services/permissao.service.js
 // =============================================================================
 // Service de permissões — lógica de negócio desacoplada do controller.
-// Toda alteração de permissão passa por aqui e gera auditoria automática.
 //
-// Perfis são explícitos em PerfilEquipe + MatrizPerfil.
-// PermissaoMembro = cópia aplicada ao membro no momento da atribuição de cargo.
+// Dois níveis de configuração:
+//  - ADMIN global   → MatrizPerfil.locked=true, propagado a todas as equipes
+//  - Sócio equipe   → MatrizPerfil.locked=false, configurável por equipe
+//
+// Nota: operações com o campo "locked" usam $queryRaw/$executeRawUnsafe porque
+// o Prisma client precisa ser regenerado após a migration que adicionou o campo.
+// Execute `npx prisma generate` após parar o backend para usar o client tipado.
 // =============================================================================
 
 
@@ -12,19 +16,60 @@ const prisma = require('../lib/prisma').default;
 const { NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 
-// Perfis padrão inicializados em cada nova equipe
+const MODULOS_ADMIN_ONLY = ['medicamentos', 'procedimentos'];
+const ACOES_PROPRIETARIO = ['ler', 'imprimir'];
+// SOCIO incluído: ADMIN pode bloquear permissões globais para sócios também
+const USER_TYPES_GERENCIADOS = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'];
+
 const PERFIS_PADRAO = [
-  { slug: 'SOCIO',       label: 'Sócio',       descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
-  { slug: 'VETERINARIO', label: 'Veterinário',  descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
-  { slug: 'ESTAGIARIO',  label: 'Estagiário',   descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.' },
+  { slug: 'SOCIO',        label: 'Sócio',        descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
+  { slug: 'VETERINARIO',  label: 'Veterinário',   descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
+  { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.' },
+  { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo sócio.' },
 ];
+
+// ─── Helpers raw SQL para o campo locked ──────────────────────────────────────
+
+async function getLockedEntries(perfilSlug) {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT "moduloSlug", nivel FROM schs2vet.tb_matriz_perfis WHERE "perfilSlug" = $1 AND locked = true`,
+    perfilSlug
+  );
+  return rows; // [{ moduloSlug, nivel }]
+}
+
+async function getLockedSlugsForEquipe(equipeId, perfilSlug, slugsAlterados) {
+  if (!slugsAlterados.length) return [];
+  const slugList = slugsAlterados.map((_, i) => `$${i + 3}`).join(', ');
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT "moduloSlug" FROM schs2vet.tb_matriz_perfis WHERE "equipeId" = $1 AND "perfilSlug" = $2 AND locked = true AND "moduloSlug" IN (${slugList})`,
+    equipeId, perfilSlug, ...slugsAlterados
+  );
+  return rows.map(r => r.moduloSlug);
+}
+
+async function getMatrizComLocked(equipeId, perfilSlug) {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT "moduloSlug", nivel, locked FROM schs2vet.tb_matriz_perfis WHERE "equipeId" = $1 AND "perfilSlug" = $2`,
+    equipeId, perfilSlug
+  );
+  // locked só é semanticamente relevante quando nivel != NENHUM.
+  // Se havia locked=true+nivel=NENHUM (dados ruins de "revogar tudo"), tratamos como não-bloqueado.
+  return rows.map(r => ({ ...r, locked: r.locked === true && r.nivel !== 'NENHUM' }));
+}
+
+async function upsertComLocked(equipeId, perfilSlug, moduloSlug, nivel, locked) {
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO schs2vet.tb_matriz_perfis ("equipeId", "perfilSlug", "moduloSlug", nivel, locked)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT ("equipeId", "perfilSlug", "moduloSlug")
+     DO UPDATE SET nivel = EXCLUDED.nivel, locked = EXCLUDED.locked`,
+    equipeId, perfilSlug, moduloSlug, nivel, locked
+  );
+}
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
 
-/**
- * Garante que os perfis padrão existam na equipe. Cria se necessário.
- * Chamado no primeiro acesso a getPerfisByEquipe quando a equipe é nova.
- */
 async function garantirPerfisPadrao(equipeId) {
   const existentes = await prisma.perfilEquipe.findMany({
     where: { equipeId },
@@ -39,35 +84,24 @@ async function garantirPerfisPadrao(equipeId) {
       data: { equipeId, slug: perfil.slug, label: perfil.label, descricao: perfil.descricao },
     });
 
-    // Sócio não tem matriz configurável — bypass total no middleware
-    if (perfil.slug === 'SOCIO') continue;
+    const defaults    = PERMISSOES_PADRAO[perfil.slug] ?? {};
+    const modulos     = await prisma.moduloSistema.findMany({ select: { slug: true } });
+    const lockedGlobais = await getLockedEntries(perfil.slug);
+    const mapaLocked  = Object.fromEntries(lockedGlobais.map(l => [l.moduloSlug, l.nivel]));
 
-    const defaults = PERMISSOES_PADRAO[perfil.slug] ?? {};
-    const modulos  = await prisma.moduloSistema.findMany({ select: { slug: true } });
-
-    const dados = modulos.map(m => ({
-      equipeId,
-      perfilSlug: perfil.slug,
-      moduloSlug: m.slug,
-      nivel:      defaults[m.slug] ?? 'NENHUM',
-    }));
-
-    if (dados.length > 0) {
-      await prisma.matrizPerfil.createMany({ data: dados, skipDuplicates: true });
+    for (const m of modulos) {
+      const nivel  = mapaLocked[m.slug] ?? defaults[m.slug] ?? 'NENHUM';
+      const locked = !!mapaLocked[m.slug];
+      await upsertComLocked(equipeId, perfil.slug, m.slug, nivel, locked);
     }
   }
 }
 
 // ─── Aplicar permissões padrão ────────────────────────────────────────────────
 
-/**
- * Aplica a matriz do perfil ao membro ao entrar na equipe ou trocar de cargo.
- * Prioridade: MatrizPerfil (BD) > PERMISSOES_PADRAO (seed) > NENHUM.
- */
 async function aplicarPermissoesPadrao({ equipeId, userId, cargo, atualizadoPor }) {
-  if (cargo === 'SOCIO') return; // Sócio tem bypass — sem entradas na tabela
+  if (cargo === 'SOCIO') return;
 
-  // Busca matriz do perfil no banco
   const matrizBD = await prisma.matrizPerfil.findMany({
     where: { equipeId, perfilSlug: cargo },
   });
@@ -76,7 +110,6 @@ async function aplicarPermissoesPadrao({ equipeId, userId, cargo, atualizadoPor 
   if (matrizBD.length > 0) {
     mapa = Object.fromEntries(matrizBD.map(m => [m.moduloSlug, m.nivel]));
   } else {
-    // Fallback: seed hardcoded (VETERINARIO/ESTAGIARIO legado)
     mapa = PERMISSOES_PADRAO[cargo] ?? {};
   }
 
@@ -96,10 +129,6 @@ async function aplicarPermissoesPadrao({ equipeId, userId, cargo, atualizadoPor 
 
 // ─── CRUD de Perfis ───────────────────────────────────────────────────────────
 
-/**
- * Lista os perfis de uma equipe com contagem de membros e resumo de permissões.
- * Auto-inicializa os perfis padrão na primeira chamada.
- */
 async function getPerfisByEquipe({ equipeId }) {
   await garantirPerfisPadrao(equipeId);
 
@@ -112,9 +141,7 @@ async function getPerfisByEquipe({ equipeId }) {
       where:  { equipeId },
       select: { userId: true, cargo: true },
     }),
-    prisma.matrizPerfil.findMany({
-      where: { equipeId },
-    }),
+    prisma.matrizPerfil.findMany({ where: { equipeId } }),
   ]);
 
   const contagemPorCargo = {};
@@ -138,43 +165,49 @@ async function getPerfisByEquipe({ equipeId }) {
   });
 }
 
-/**
- * Retorna a matriz de permissões de um perfil agrupada por módulo/submódulo.
- */
 async function getMatrizPorCargo({ equipeId, cargo }) {
   await garantirPerfisPadrao(equipeId);
 
+  // SOCIO vê todos os módulos (inclui admin-only); demais excluem catálogos admin-only
+  const whereModulos = cargo !== 'SOCIO' ? { modulo: { notIn: MODULOS_ADMIN_ONLY } } : {};
+
   const [modulos, matrizBD] = await Promise.all([
-    prisma.moduloSistema.findMany({ orderBy: { ordemExib: 'asc' } }),
-    prisma.matrizPerfil.findMany({ where: { equipeId, perfilSlug: cargo } }),
+    prisma.moduloSistema.findMany({ where: whereModulos, orderBy: { ordemExib: 'asc' } }),
+    getMatrizComLocked(equipeId, cargo),
   ]);
 
-  const mapa = matrizBD.length > 0
-    ? Object.fromEntries(matrizBD.map(m => [m.moduloSlug, m.nivel]))
-    : (PERMISSOES_PADRAO[cargo] ?? {});
+  const mapaEntradas = Object.fromEntries(matrizBD.map(m => [m.moduloSlug, m]));
+  const defaults     = PERMISSOES_PADRAO[cargo] ?? {};
 
   const totalMembros = await prisma.membroEquipe.count({ where: { equipeId, cargo } });
 
   const agrupado = {};
   for (const mod of modulos) {
-    if (!agrupado[mod.modulo])                    agrupado[mod.modulo] = {};
-    if (!agrupado[mod.modulo][mod.submodulo])     agrupado[mod.modulo][mod.submodulo] = [];
+    if (!agrupado[mod.modulo])                  agrupado[mod.modulo] = {};
+    if (!agrupado[mod.modulo][mod.submodulo])   agrupado[mod.modulo][mod.submodulo] = [];
+    const entrada = mapaEntradas[mod.slug];
     agrupado[mod.modulo][mod.submodulo].push({
-      slug:  mod.slug,
-      acao:  mod.acao,
-      label: mod.label,
-      nivel: mapa[mod.slug] ?? 'NENHUM',
+      slug:   mod.slug,
+      acao:   mod.acao,
+      label:  mod.label,
+      nivel:  entrada ? entrada.nivel : (defaults[mod.slug] ?? 'NENHUM'),
+      locked: entrada?.locked === true,
     });
   }
 
   return { cargo, totalMembros, matriz: agrupado };
 }
 
-/**
- * Salva a matriz de um perfil e propaga para todos os membros com aquele cargo.
- */
-async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPorId, atualizadoPorNome, ipOrigem }) {
-  // 1. Upsert na MatrizPerfil (template)
+async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPorId, atualizadoPorNome, ipOrigem, bypassLocked = false }) {
+  if (!bypassLocked) {
+    const slugsAlterados  = Object.keys(permissoes);
+    const slugsLocked     = await getLockedSlugsForEquipe(equipeId, cargo, slugsAlterados);
+    if (slugsLocked.length > 0) {
+      throw new Error(`As permissões a seguir foram definidas pelo administrador e não podem ser alteradas: ${slugsLocked.join(', ')}`);
+    }
+  }
+
+  // Upsert na MatrizPerfil — omite locked (preserva o valor existente no banco)
   const upserts = Object.entries(permissoes).map(([moduloSlug, nivel]) =>
     prisma.matrizPerfil.upsert({
       where:  { equipeId_perfilSlug_moduloSlug: { equipeId, perfilSlug: cargo, moduloSlug } },
@@ -184,7 +217,9 @@ async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPor
   );
   await prisma.$transaction(upserts);
 
-  // 2. Propaga para todos os membros atuais com esse cargo
+  // SOCIO tem bypass total — não mantém PermissaoMembro; apenas a MatrizPerfil é informacional
+  if (cargo === 'SOCIO') return { membros: 0, alteracoes: 0 };
+
   const membros = await prisma.membroEquipe.findMany({ where: { equipeId, cargo } });
   let totalAlteracoes = 0;
   for (const membro of membros) {
@@ -202,9 +237,6 @@ async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPor
   return { membros: membros.length, alteracoes: totalAlteracoes };
 }
 
-/**
- * Cria um novo perfil em uma equipe com matriz inicial vazia (tudo NENHUM).
- */
 async function criarPerfil({ equipeId, slug, label, descricao }) {
   const slugNorm = slug.trim().toUpperCase().replace(/\s+/g, '_');
 
@@ -212,7 +244,6 @@ async function criarPerfil({ equipeId, slug, label, descricao }) {
     data: { equipeId, slug: slugNorm, label: label.trim(), descricao: descricao?.trim() ?? null },
   });
 
-  // Inicializa todos os módulos com NENHUM
   const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
   if (modulos.length > 0) {
     await prisma.matrizPerfil.createMany({
@@ -224,36 +255,115 @@ async function criarPerfil({ equipeId, slug, label, descricao }) {
   return perfil;
 }
 
-/**
- * Remove um perfil e sua matriz (cascade). Não afeta membros existentes.
- */
 async function deletarPerfil({ equipeId, slug }) {
-  const PROTEGIDOS = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO'];
+  const PROTEGIDOS = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'];
   if (PROTEGIDOS.includes(slug)) {
     throw new Error('Perfis padrão do sistema não podem ser removidos.');
   }
   await prisma.perfilEquipe.delete({ where: { equipeId_slug: { equipeId, slug } } });
 }
 
-// ─── Permissões por membro ────────────────────────────────────────────────────
+// ─── Permissões globais por UserType (ADMIN) ──────────────────────────────────
 
-/**
- * Retorna a matriz completa de permissões de um membro em uma equipe.
- */
-async function getPermissoesMembro({ equipeId, userId }) {
-  const [modulos, permissoes] = await Promise.all([
-    prisma.moduloSistema.findMany({ orderBy: { ordemExib: 'asc' } }),
-    prisma.permissaoMembro.findMany({ where: { equipeId, userId } }),
-  ]);
+async function getMatrizGlobalUserType({ userType }) {
+  if (!USER_TYPES_GERENCIADOS.includes(userType)) {
+    throw new Error(`UserType inválido para gestão global: ${userType}`);
+  }
 
-  const mapaPermissoes = Object.fromEntries(
-    permissoes.map((p) => [p.moduloSlug, p.nivel])
-  );
+  // SOCIO vê todos os módulos (inclui admin-only); demais excluem catálogos admin-only
+  const whereModulos = userType !== 'SOCIO' ? { modulo: { notIn: MODULOS_ADMIN_ONLY } } : {};
+
+  const modulos = await prisma.moduloSistema.findMany({
+    where:   whereModulos,
+    orderBy: { ordemExib: 'asc' },
+  });
+
+  // Busca entradas locked globais para este userType (de qualquer equipe)
+  const lockedGlobais       = await getLockedEntries(userType);
+  const configuracaoExistente = lockedGlobais.length > 0;
+  const mapa = configuracaoExistente
+    ? Object.fromEntries(lockedGlobais.map(m => [m.moduloSlug, m.nivel]))
+    : (PERMISSOES_PADRAO[userType] ?? {});
 
   const agrupado = {};
   for (const mod of modulos) {
-    if (!agrupado[mod.modulo])                    agrupado[mod.modulo] = {};
-    if (!agrupado[mod.modulo][mod.submodulo])     agrupado[mod.modulo][mod.submodulo] = [];
+    if (!agrupado[mod.modulo])                  agrupado[mod.modulo] = {};
+    if (!agrupado[mod.modulo][mod.submodulo])   agrupado[mod.modulo][mod.submodulo] = [];
+    agrupado[mod.modulo][mod.submodulo].push({
+      slug:  mod.slug,
+      acao:  mod.acao,
+      label: mod.label,
+      nivel: mapa[mod.slug] ?? 'NENHUM',
+    });
+  }
+
+  return { userType, configuracaoExistente, matriz: agrupado };
+}
+
+async function salvarMatrizGlobalUserType({ userType, permissoes }) {
+  if (!USER_TYPES_GERENCIADOS.includes(userType)) {
+    throw new Error(`UserType inválido para gestão global: ${userType}`);
+  }
+
+  const equipes = await prisma.equipe.findMany({ select: { id: true } });
+
+  let equipesAtualizadas = 0;
+  let membrosAtualizados = 0;
+
+  for (const equipe of equipes) {
+    const perfilExiste = await prisma.perfilEquipe.findUnique({
+      where:  { equipeId_slug: { equipeId: equipe.id, slug: userType } },
+      select: { slug: true },
+    });
+    if (!perfilExiste) continue;
+
+    // locked=true só quando a permissão foi realmente concedida (nivel != NENHUM)
+    for (const [moduloSlug, nivel] of Object.entries(permissoes)) {
+      await upsertComLocked(equipe.id, userType, moduloSlug, nivel, nivel !== 'NENHUM');
+    }
+    equipesAtualizadas++;
+
+    // Propaga para PermissaoMembro (exceto PROPRIETARIO e SOCIO — ambos têm bypass ou sem registros)
+    if (userType !== 'PROPRIETARIO' && userType !== 'SOCIO') {
+      const membros = await prisma.membroEquipe.findMany({
+        where:  { equipeId: equipe.id, cargo: userType },
+        select: { userId: true },
+      });
+      const agora = new Date();
+      for (const membro of membros) {
+        const membroUpserts = Object.entries(permissoes).map(([moduloSlug, nivel]) =>
+          prisma.permissaoMembro.upsert({
+            where:  { equipeId_userId_moduloSlug: { equipeId: equipe.id, userId: membro.userId, moduloSlug } },
+            update: { nivel, updatedAt: agora },
+            create: { equipeId: equipe.id, userId: membro.userId, moduloSlug, nivel, atualizadoPor: 0 },
+          })
+        );
+        await prisma.$transaction(membroUpserts);
+        membrosAtualizados++;
+      }
+    }
+  }
+
+  return { equipesAtualizadas, membrosAtualizados };
+}
+
+// ─── Permissões por membro ────────────────────────────────────────────────────
+
+async function getPermissoesMembro({ equipeId, userId }) {
+  const [modulos, permissoes] = await Promise.all([
+    prisma.moduloSistema.findMany({
+      where:   { modulo: { notIn: MODULOS_ADMIN_ONLY } },
+      orderBy: { ordemExib: 'asc' },
+    }),
+    prisma.permissaoMembro.findMany({ where: { equipeId, userId } }),
+  ]);
+
+  const mapaPermissoes = Object.fromEntries(permissoes.map(p => [p.moduloSlug, p.nivel]));
+
+  const agrupado = {};
+  for (const mod of modulos) {
+    if (!agrupado[mod.modulo])                  agrupado[mod.modulo] = {};
+    if (!agrupado[mod.modulo][mod.submodulo])   agrupado[mod.modulo][mod.submodulo] = [];
     agrupado[mod.modulo][mod.submodulo].push({
       slug:  mod.slug,
       acao:  mod.acao,
@@ -265,17 +375,7 @@ async function getPermissoesMembro({ equipeId, userId }) {
   return agrupado;
 }
 
-/**
- * Atualiza um ou mais níveis de permissão para um membro específico.
- */
-async function atualizarPermissoes({
-  equipeId,
-  alvoUserId,
-  alteracoes,
-  atualizadoPorId,
-  atualizadoPorNome,
-  ipOrigem,
-}) {
+async function atualizarPermissoes({ equipeId, alvoUserId, alteracoes, atualizadoPorId, atualizadoPorNome, ipOrigem }) {
   const [alvoUser, equipe] = await Promise.all([
     prisma.user.findUnique({ where: { id: alvoUserId }, select: { fullName: true, email: true } }),
     prisma.equipe.findUnique({ where: { id: equipeId }, select: { nome: true } }),
@@ -294,22 +394,18 @@ async function atualizarPermissoes({
   const permissoesAtuaisQuemAltera = await prisma.permissaoMembro.findMany({
     where: { equipeId, userId: atualizadoPorId, moduloSlug: { in: slugs } },
   });
-  const mapaQuemAltera = Object.fromEntries(
-    permissoesAtuaisQuemAltera.map((p) => [p.moduloSlug, p.nivel])
-  );
+  const mapaQuemAltera = Object.fromEntries(permissoesAtuaisQuemAltera.map(p => [p.moduloSlug, p.nivel]));
 
   const permissoesAlvo = await prisma.permissaoMembro.findMany({
     where: { equipeId, userId: alvoUserId, moduloSlug: { in: slugs } },
   });
-  const mapaAlvo = Object.fromEntries(
-    permissoesAlvo.map((p) => [p.moduloSlug, p.nivel])
-  );
+  const mapaAlvo = Object.fromEntries(permissoesAlvo.map(p => [p.moduloSlug, p.nivel]));
 
   const modulos = await prisma.moduloSistema.findMany({
-    where: { slug: { in: slugs } },
+    where:  { slug: { in: slugs } },
     select: { slug: true, label: true },
   });
-  const mapaLabels = Object.fromEntries(modulos.map((m) => [m.slug, m.label]));
+  const mapaLabels = Object.fromEntries(modulos.map(m => [m.slug, m.label]));
 
   const upserts    = [];
   const auditorias = [];
@@ -317,12 +413,10 @@ async function atualizarPermissoes({
 
   for (const [moduloSlug, novoNivel] of Object.entries(alteracoes)) {
     const nivelQuemAltera = mapaQuemAltera[moduloSlug] ?? 'NENHUM';
-    const isSocioContext  = permissoesAtuaisQuemAltera.length === 0; // sócios não têm entradas
+    const isSocioContext  = permissoesAtuaisQuemAltera.length === 0;
 
     if (!isSocioContext && NIVEL_ORDINAL[novoNivel] > NIVEL_ORDINAL[nivelQuemAltera]) {
-      throw new Error(
-        `Você não pode conceder "${novoNivel}" em "${moduloSlug}". Seu nível atual é "${nivelQuemAltera}".`
-      );
+      throw new Error(`Você não pode conceder "${novoNivel}" em "${moduloSlug}". Seu nível atual é "${nivelQuemAltera}".`);
     }
 
     const nivelAnterior = mapaAlvo[moduloSlug] ?? null;
@@ -337,18 +431,12 @@ async function atualizarPermissoes({
     );
 
     auditorias.push({
-      equipeId,
-      equipeNome:      equipe.nome,
-      alvoUserId,
-      alvoUserNome:    alvoUser.fullName,
-      alvoUserEmail:   alvoUser.email,
-      moduloSlug,
-      moduloLabel:     mapaLabels[moduloSlug] ?? moduloSlug,
-      nivelAnterior,
-      nivelNovo:       novoNivel,
-      alteradoPorId:   atualizadoPorId,
-      alteradoPorNome: atualizadoPorNome,
-      ipOrigem:        ipOrigem ?? null,
+      equipeId, equipeNome: equipe.nome, alvoUserId,
+      alvoUserNome: alvoUser.fullName, alvoUserEmail: alvoUser.email,
+      moduloSlug, moduloLabel: mapaLabels[moduloSlug] ?? moduloSlug,
+      nivelAnterior, nivelNovo: novoNivel,
+      alteradoPorId: atualizadoPorId, alteradoPorNome: atualizadoPorNome,
+      ipOrigem: ipOrigem ?? null,
     });
   }
 
@@ -369,16 +457,13 @@ async function getAuditoriaPermissoes({ equipeId, page = 1, limit = 30 }) {
   const [total, registros] = await Promise.all([
     prisma.auditoriaPermissao.count({ where: { equipeId } }),
     prisma.auditoriaPermissao.findMany({
-      where:   { equipeId },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take:    limit,
+      where: { equipeId }, orderBy: { createdAt: 'desc' }, skip, take: limit,
     }),
   ]);
   return { total, page, limit, registros };
 }
 
-// ─── Permissões de proprietário ───────────────────────────────────────────────
+// ─── Permissões de proprietário (legado — mantido para compatibilidade) ────────
 
 async function atualizarPermissoesProprietario({ equipeId, alvoUserId, funcionalidades, atualizadoPor }) {
   const upserts = Object.entries(funcionalidades).map(([funcionalidade, habilitado]) =>
@@ -394,23 +479,18 @@ async function atualizarPermissoesProprietario({ equipeId, alvoUserId, funcional
 
 async function getPermissoesProprietarios({ equipeId }) {
   const animais = await prisma.animal.findMany({
-    where:  { user: { animais: { some: {} } } },
-    select: { userId: true, user: { select: { id: true, fullName: true, email: true } } },
+    where:    { user: { animais: { some: {} } } },
+    select:   { userId: true, user: { select: { id: true, fullName: true, email: true } } },
     distinct: ['userId'],
   });
-
   const permissoes = await prisma.permissaoProprietario.findMany({ where: { equipeId } });
-
   const mapaPermissoes = {};
   for (const p of permissoes) {
     if (!mapaPermissoes[p.userId]) mapaPermissoes[p.userId] = {};
     mapaPermissoes[p.userId][p.funcionalidade] = p.habilitado;
   }
-
-  return animais.map((a) => ({
-    userId:     a.user.id,
-    fullName:   a.user.fullName,
-    email:      a.user.email,
+  return animais.map(a => ({
+    userId: a.user.id, fullName: a.user.fullName, email: a.user.email,
     permissoes: mapaPermissoes[a.user.id] ?? {},
   }));
 }
@@ -427,4 +507,7 @@ module.exports = {
   salvarMatrizPorCargo,
   criarPerfil,
   deletarPerfil,
+  getMatrizGlobalUserType,
+  salvarMatrizGlobalUserType,
+  USER_TYPES_GERENCIADOS,
 };

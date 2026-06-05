@@ -11,6 +11,8 @@ import prisma from './lib/prisma';
 const requestIdMiddleware = require('./middlewares/requestId');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getEmpresaIdDoVet } = require('./lib/vetUtils');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { garantirFaturaAberta } = require('./services/FaturaService');
 
 // Fuso horário padrão — garante que new Date() e operações de data usem America/Sao_Paulo
 process.env.TZ = 'America/Sao_Paulo';
@@ -73,8 +75,8 @@ app.use(cors({
   maxAge: 3600,
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // Rate limiting geral: 200 req/min por IP
 const limiter = rateLimit({
@@ -143,6 +145,12 @@ const farmaciaRoutes           = require('./routes/farmacia');
 const medicamentosRoutes       = require('./routes/medicamentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const procedimentosRoutes      = require('./routes/procedimentos');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const proprietariosRoutes      = require('./routes/proprietarios');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const tratadoresRoutes         = require('./routes/tratadores');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const fornecedoresRoutes       = require('./routes/fornecedores');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -168,6 +176,9 @@ app.use('/api/relatorio',             relatorioRoutes);
 app.use('/api/farmacia',              farmaciaRoutes);
 app.use('/api/medicamentos',          medicamentosRoutes);
 app.use('/api/procedimentos',         procedimentosRoutes);
+app.use('/api/cadastro/proprietarios', proprietariosRoutes);
+app.use('/api/cadastro/tratadores',   tratadoresRoutes);
+app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
 
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -266,7 +277,7 @@ async function autoAceitarSolicitacoesPendentes() {
       where:  { status: 'PENDENTE', updatedAt: { lt: corte } },
       select: {
         id: true, animalId: true, vetUserId: true, tipo: true, novoVetUserId: true, solicitanteId: true,
-        animal:          { select: { nome: true } },
+        animal:          { select: { nome: true, userId: true } },
         veterinario:     { select: { fullName: true, email: true } },
         novoVeterinario: { select: { id: true, fullName: true, email: true } },
       },
@@ -300,6 +311,7 @@ async function autoAceitarSolicitacoesPendentes() {
               data:  { empresaId: empId },
             });
           }
+          if (s.animal.userId) await garantirFaturaAberta(s.animal.userId);
         }
       }
     }

@@ -2,7 +2,7 @@
 // Shell clínico — delega cada sub-aba ao seu módulo dedicado
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -323,11 +323,22 @@ function SeletorAnimalInteligente({ animais, animalAtual, onSelecionar }: {
   );
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function tabFromPath(pathname: string): SubModulo {
+  if (pathname.includes('/prescricao'))     return 'prescricao';
+  if (pathname.includes('/vacina'))         return 'vacina';
+  if (pathname.includes('/exames'))         return 'exames';
+  if (pathname.includes('/encaminhamento')) return 'encaminhamento';
+  return 'evolucao';
+}
+
 // ─── Atendimento ──────────────────────────────────────────────────────────────
 
 const Atendimento = () => {
   const { setSelectedAnimal, selectedAnimal } = useSelectedAnimal();
   const navigate                              = useNavigate();
+  const location                              = useLocation();
   const { animalId: animalIdParam }           = useParams<{ animalId?: string }>();
 
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
@@ -336,8 +347,13 @@ const Atendimento = () => {
   const [todosAnimais,  setTodosAnimais]  = useState<AnimalExtended[]>([]);
   const [fatura,        setFatura]        = useState<Fatura | null>(null);
   const [loadingFatura, setLoadingFatura] = useState(true);
-  const [activeTab,     setActiveTab]     = useState<SubModulo>('evolucao');
+  const [activeTab,     setActiveTab]     = useState<SubModulo>(() => tabFromPath(location.pathname));
   const [showFaturaM,   setShowFaturaM]   = useState(false);
+
+  // Sincroniza aba quando o usuário navega pelo Sidebar
+  useEffect(() => {
+    setActiveTab(tabFromPath(location.pathname));
+  }, [location.pathname]);
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -445,52 +461,62 @@ const Atendimento = () => {
       {/* ── Desktop ── */}
       <div className="hidden md:flex gap-4 items-start mt-4">
         <div className="flex-1 min-w-0">
-          <SubMenuClinico activeTab={activeTab} onChange={setActiveTab} />
+          <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
+                navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+              }} />
           <div className="bg-white rounded-b-2xl rounded-tr-2xl border border-gray-100 shadow-sm min-h-96 overflow-hidden">
             {renderSubModulo()}
           </div>
         </div>
-        <div className="w-72 flex-shrink-0 sticky top-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
-            style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
-            <FaturaPanel
-              fatura={fatura}
-              onRemover={handleRemoverItemFatura}
-              onAtualizarValor={handleAtualizarValorFatura}
-              loading={loadingFatura}
-            />
+        {activeTab !== 'evolucao' && (
+          <div className="w-72 flex-shrink-0 sticky top-4">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
+              style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
+              <FaturaPanel
+                fatura={fatura}
+                onRemover={handleRemoverItemFatura}
+                onAtualizarValor={handleAtualizarValorFatura}
+                loading={loadingFatura}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ── Mobile ── */}
       <div className="md:hidden mt-4">
-        <SubMenuClinico activeTab={activeTab} onChange={setActiveTab} />
+        <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
+                navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+              }} />
         <div className="bg-white rounded-b-2xl border border-gray-100 shadow-sm overflow-hidden">
           {renderSubModulo()}
         </div>
-        <button onClick={() => setShowFaturaM(true)}
-          className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">
-          <ReceiptText size={16} />
-          {formatCurrency(fatura?.total ?? 0)}
-        </button>
-        {showFaturaM && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowFaturaM(false)}>
-            <div className="bg-white rounded-t-2xl w-full max-h-[75vh] flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
-                <span className="font-bold text-gray-900 text-sm">Fatura</span>
-                <button onClick={() => setShowFaturaM(false)} className="p-1 text-gray-400"><X size={18} /></button>
+        {activeTab !== 'evolucao' && (
+          <>
+            <button onClick={() => setShowFaturaM(true)}
+              className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">
+              <ReceiptText size={16} />
+              {formatCurrency(fatura?.total ?? 0)}
+            </button>
+            {showFaturaM && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowFaturaM(false)}>
+                <div className="bg-white rounded-t-2xl w-full max-h-[75vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
+                    <span className="font-bold text-gray-900 text-sm">Fatura</span>
+                    <button onClick={() => setShowFaturaM(false)} className="p-1 text-gray-400"><X size={18} /></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    <FaturaPanel
+                      fatura={fatura}
+                      onRemover={handleRemoverItemFatura}
+                      onAtualizarValor={handleAtualizarValorFatura}
+                      loading={loadingFatura}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="flex-1 overflow-y-auto">
-                <FaturaPanel
-                  fatura={fatura}
-                  onRemover={handleRemoverItemFatura}
-                  onAtualizarValor={handleAtualizarValorFatura}
-                  loading={loadingFatura}
-                />
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </div>
 

@@ -6,10 +6,12 @@ import {
   Eye, Printer, X, Link,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { imprimirPrescricao } from '../utils/PrescricaoPrint';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -163,14 +165,22 @@ function AnimalAvatar({ animal, size = 'md' }: {
 
 // ─── ModalExecucao ────────────────────────────────────────────────────────────
 
+interface AlertaEstoque {
+  medicamento: string;
+  unidade: string;
+  qtdNecessaria: number;
+  qtdDisponivel: number;
+}
+
 function ModalExecucao({
   grupo, onClose,
 }: {
   grupo: GrupoExecucao;
   onClose: () => void;
 }) {
-  const [execMap, setExecMap] = useState<ExecMap>(() => getExecMap(grupo.id));
-  const [salvando, setSalvando] = useState(false);
+  const [execMap,      setExecMap]      = useState<ExecMap>(() => getExecMap(grupo.id));
+  const [salvando,     setSalvando]     = useState(false);
+  const [erroEstoque,  setErroEstoque]  = useState<AlertaEstoque[]>([]);
 
   // Itens dentro da janela de tratamento de hoje
   const itensDoDia = grupo.itens.filter(
@@ -197,6 +207,7 @@ function ModalExecucao({
   const handleToggle = (item: ItemExecucao, activeIdx: number) => {
     if (activeIdx < 0) return;
     if (isSlotDone(execMap, item.id, activeIdx)) return;
+    setErroEstoque([]);
     setExecMap(prev => toggleSlot(grupo.id, prev, item.id, activeIdx));
   };
 
@@ -225,8 +236,12 @@ function ModalExecucao({
       markDoneToday(grupo.id);
       onClose();
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error ?? 'Erro ao finalizar');
+      const e = err as { response?: { status?: number; data?: { error?: string; erro?: string; alertas?: AlertaEstoque[] } } };
+      if (e?.response?.status === 409 && e?.response?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
+        setErroEstoque(e.response.data?.alertas ?? []);
+      } else {
+        toast.error(e?.response?.data?.error ?? 'Erro ao finalizar');
+      }
     } finally {
       setSalvando(false);
     }
@@ -361,6 +376,18 @@ function ModalExecucao({
           ))}
         </div>
 
+        {/* Erro de estoque */}
+        {erroEstoque.length > 0 && (
+          <div className="mx-4 mb-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 space-y-1">
+            <p className="font-semibold">Estoque insuficiente para executar:</p>
+            {erroEstoque.map((a, i) => (
+              <p key={i}>
+                • {a.medicamento}: disponível {a.qtdDisponivel.toFixed(1)}{a.unidade ? ` ${a.unidade}` : ''} / necessário {a.qtdNecessaria.toFixed(1)}{a.unidade ? ` ${a.unidade}` : ''}
+              </p>
+            ))}
+          </div>
+        )}
+
         {/* Rodapé */}
         <div className="px-4 pt-2 pb-4 border-t border-gray-100 flex-shrink-0">
           <button
@@ -473,7 +500,9 @@ function LinhaGrupo({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ExecucaoPrescricao() {
-  const { user }                = useAuth();
+  const { user }                               = useAuth();
+  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+
   const [grupos,   setGrupos]   = useState<GrupoExecucao[]>([]);
   const [loading,  setLoading]  = useState(false);
   const [busca,    setBusca]    = useState('');
@@ -509,19 +538,33 @@ export default function ExecucaoPrescricao() {
         );
       }) : () => true);
 
+  if (loadingPerm) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  if (!podeExecutar('atendimento.prescricoes.ler')) return null;
+
   return (
-    <PageContainer maxWidth="full" noPadding>
-      <div className="px-4 py-4 md:px-8 md:py-6 space-y-4">
+    <PageContainer maxWidth="7xl">
+      <div className="space-y-5">
+
+        <BotaoVoltar className="mb-6" />
 
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <ClipboardList className="text-emerald-600" size={22} />
-              <h1 className="text-xl font-bold text-gray-900">Execução de Prescrições</h1>
-              <span className="text-xs font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Plantão Ativo</span>
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <ClipboardList size={20} className="text-emerald-700" />
             </div>
-            <p className="text-sm text-gray-500 mt-0.5">Administração de medicamentos e procedimentos do turno.</p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">Execução de Prescrições</h1>
+                <span className="text-xs font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Plantão Ativo</span>
+              </div>
+              <p className="text-sm text-gray-500">Administração de medicamentos e procedimentos do turno.</p>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs flex-shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />

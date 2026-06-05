@@ -7,6 +7,7 @@ import axios from 'axios';
 import {
   Pencil, Trash2,
   ToggleLeft, ToggleRight, X, AlertCircle,
+  Building2, Users2,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { formatDate as formatarDataBR } from '../utils/dateUtils';
@@ -20,6 +21,9 @@ interface Usuario {
   phone: string | null;
   role: string;
   userType: string;
+  cargoEquipe: string | null;
+  equipeNome: string | null;
+  empresaNome: string | null;
   ativo: boolean;
   createdAt: string;
   cep: string | null;
@@ -255,7 +259,7 @@ const Usuarios = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="max-w-6xl mx-auto px-4">
+      <div className="max-w-7xl mx-auto px-4">
 
         <BotaoVoltar className="mb-4 mt-6" />
 
@@ -297,6 +301,7 @@ const Usuarios = () => {
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">E-mail</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Perfil</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Tipo</th>
+                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Empresa/Equipe</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Cidade/UF</th>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Cadastro</th>
                   <th className="text-center px-6 py-4 text-sm font-medium text-gray-500">Status</th>
@@ -306,7 +311,7 @@ const Usuarios = () => {
               <tbody>
                 {filtrados.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-gray-400">
+                    <td colSpan={9} className="px-6 py-12 text-center text-gray-400">
                       Nenhum usuário encontrado.
                     </td>
                   </tr>
@@ -319,7 +324,20 @@ const Usuarios = () => {
                         u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
                       }`}>{labelRole(u.role)}</span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{labelUserType(u.userType)}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">
+                      {u.cargoEquipe === 'SOCIO'
+                        ? <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">Sócio</span>
+                        : labelUserType(u.userType)}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {u.cargoEquipe === 'SOCIO' ? (
+                        u.empresaNome
+                          ? <span className="flex items-center gap-1 text-xs text-gray-500"><Building2 size={11} className="text-indigo-500 flex-shrink-0" />{u.empresaNome}</span>
+                          : '—'
+                      ) : u.equipeNome ? (
+                        <span className="flex items-center gap-1 text-xs text-gray-500"><Users2 size={11} className="text-gray-400 flex-shrink-0" />{u.equipeNome}</span>
+                      ) : '—'}
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {u.cidade ? `${u.cidade}${u.estado ? `/${u.estado}` : ''}` : '—'}
                     </td>

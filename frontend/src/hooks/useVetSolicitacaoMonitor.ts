@@ -19,9 +19,9 @@ export function useVetSolicitacaoMonitor(): void {
 
   const role          = (user?.role     ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
-  // Só monitorar solicitações para vets sócios ou autônomos — nunca para convidados
-  const isVet         = (role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO')
-                        && !user?.isConvidado;
+  // Backend controla quem pode receber solicitações (podeReceberSolicitacoes).
+  // SÓCIO convidado tem isConvidado=true mas ainda pode gerenciar vínculos.
+  const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
 
   const buscar = useCallback(async () => {
     try {

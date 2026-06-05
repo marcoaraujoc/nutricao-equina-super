@@ -30,17 +30,21 @@ interface UsePermissoesResult {
   recarregar:    () => void;
 }
 
-const ROLES_SEM_EQUIPE = ['ADMIN', 'PROPRIETARIO'];
+// ADMIN tem bypass total via podeExecutar.
+// PROPRIETARIO carrega permissões reais do backend (Dashboard sempre + grants do vet/empresa).
+const ROLES_SEM_EQUIPE = ['ADMIN'];
 
 export function usePermissoes(): UsePermissoesResult {
   const { user } = useAuth();
-  const [permissoes, setPermissoes] = useState<PermissaoMap>({});
-  const [isSocio,    setIsSocio]    = useState(false);
-  const [temEquipe,  setTemEquipe]  = useState(false);
-  const [loading,    setLoading]    = useState(false);
 
   const userType = (user?.userType ?? '').toUpperCase();
   const precisaCarregar = user && !ROLES_SEM_EQUIPE.includes(userType);
+
+  const [permissoes, setPermissoes] = useState<PermissaoMap>({});
+  const [isSocio,    setIsSocio]    = useState(false);
+  const [temEquipe,  setTemEquipe]  = useState(false);
+  // Começa true quando há permissões reais a carregar — evita flash de "sem acesso"
+  const [loading,    setLoading]    = useState(() => !!precisaCarregar);
 
   const carregar = useCallback(async () => {
     if (!precisaCarregar) {
@@ -67,9 +71,11 @@ export function usePermissoes(): UsePermissoesResult {
 
   const podeExecutar = useCallback((slug: string, nivelMinimo: Nivel = 'LEITURA'): boolean => {
     if (isSocio) return true;
+    if (userType === 'ADMIN') return true;
+    // PROPRIETARIO e demais: verifica o mapa retornado pelo backend
     const nivelAtual = permissoes[slug] ?? 'NENHUM';
     return NIVEL_ORDINAL[nivelAtual] >= NIVEL_ORDINAL[nivelMinimo];
-  }, [isSocio, permissoes]);
+  }, [isSocio, permissoes, userType]);
 
   return { permissoes, isSocio, temEquipe, loading, podeExecutar, recarregar: carregar };
 }

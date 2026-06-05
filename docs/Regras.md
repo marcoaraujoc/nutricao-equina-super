@@ -1,0 +1,774 @@
+Veterinário Principal - marcoaraujoc@gmail.com
+Veterinário Secundário - pattycs01@gmail.com
+Dermatologista - dudaaraujocs@gmail.com
+Proprietario1 - pizzariadonportinari@gmail.com
+Proprietario2 - claudioaraujocs51@gmail.com
+Proprietario3 - marcodudinhacs@gmail.com
+Proprietario3 - proprietario1
+
+- Tela de Cadastro de Animais:
+    - Se veterinário:
+            - Independente de ser ou não o primeiro Login:
+                - Ao cadastrar o Animal:
+                    - Se o Animal já existir e estiver sendo cuidado por outro veterinário, precisa informar que esse animaljá está sob cuidados e não deve permitir o cadastro
+                    - Se o Animal já existir e não tiver veterinário. O sistema carrega o nome, email e telefone do proprietário, encaminha e-mail pedindo autorização mas o cadastro só é efetivado após a autorização do proprietário.
+                    - Se o Animal não existir e o usuário também não existir, o veterinário deverá informar o nome, email e telefone do proprietário, deverá ser criada a entrada do usuário com a senha Inicial_001 expirada para troca no primeiro login e após isso dada a autorização para o veterinário mas o cadastro só é efetivado após a autorização do proprietário.
+- Na tela de Animais deverá ter o campo de local do Animal.
+            
+## Contexto:
+Estado Atual do Projeto
+S2Vet é uma plataforma hospitalar veterinária modular, atualmente com foco em nutrição equina. Stack: React 18 + TypeScript + Vite + Tailwind + Node.js + Express + Prisma + PostgreSQL (SQLite em dev).
+
+Infraestrutura e Deploy
+
+Frontend rodando via Cloudflare Tunnel (domínio temporário *.trycloudflare.com) para desenvolvimento com HTTPS real
+Backend em Node.js/Express na porta 3001
+Proxy Vite configurado: /api → http://localhost:3001
+vite.config.ts com allowedHosts: true e host: true
+
+
+Autenticação
+
+JWT com refresh via /api/users/me (enriquecimento de perfil)
+Google OAuth migrado de <GoogleLogin> para useGoogleLogin com prompt: 'select_account' — força seletor de contas, remove "Continuar como X"
+GoogleController.js aceita dois fluxos: credential (ID token) e access_token (userinfo via googleapis)
+AuthContext enriquece o token com fullName, userType, mustChangePassword via /api/users/me
+RBAC: ADMIN, VETERINARIO, PROPRIETARIO, ESTAGIARIO
+
+
+Layout e Navegação
+Problema resolvido: páginas ultrapassavam o viewport (desktop e mobile).
+Solução aplicada:
+
+index.html: height: 100% em html, body, #root
+index.css: sem overflow: hidden no body — páginas públicas precisam rolar livremente
+App.tsx: shell com h-full overflow-hidden + <main> com overflow-y-auto pt-16 md:pt-0
+PageContainer.tsx — novo componente padrão para todas as páginas internas:
+
+tsx<PageContainer maxWidth="7xl">  // default
+<PageContainer maxWidth="5xl">  // páginas menores
+<PageContainer noPadding>       // controle manual
+Padding padrão: px-6 py-6 md:px-10 md:py-8
+Sidebar:
+
+Hamburguer mobile fixed top-6 left-6 z-50
+Fonte padronizada: text-sm em todos os itens (navLink, navLinkBadge, moduleButton, subLink)
+Footer com avatar, nome, email e badge de role
+
+
+Componentes Criados/Atualizados
+ComponenteStatusObservaçãoPageContainer.tsx✅ NovoWrapper padrão de todas as páginasSidebar.tsx✅ AtualizadoFont size unificado em text-smLogin.tsx✅ AtualizadoGoogle OAuth com seletor forçado, layout mobile-first sem scrollVetDashboard.tsx✅ AtualizadoMobile: cards / Desktop: tabela, usa PageContainerAnimaisVet.tsx✅ AtualizadoMobile: cards / Desktop: tabela, usa PageContainerMeusAnimais.tsx✅ AtualizadoCards responsivos, usa PageContainerAnimal.tsx✅ AtualizadoCompressão de imagem (canvas, max 1200px, 82% qualidade), regra de equipe (vetDaMinhaEquipe)Exames.tsx✅ AtualizadoUsa PageContainerAtendimento.tsx✅ AtualizadoUsa PageContainer, busca por texto nas evoluçõesDieta.tsx✅ AtualizadoUsa PageContainerRelatorioNutricional.tsx✅ AtualizadoUsa PageContainer
+
+Backend — Alterações Relevantes
+AnimalController.js — buscarPorNome:
+
+Retorna vetDaMinhaEquipe: boolean — verifica se o vet do animal pertence à mesma equipe do vet logado
+Lógica: consulta EquipeMembro para cruzar equipes
+
+EvolucaoController.js — listarPorAnimal:
+
+Aceita query param busca — filtra por texto com contains + insensitive
+
+GoogleController.js:
+
+Aceita credential (ID token JWT) ou access_token (busca userinfo na API do Google)
+
+UserController.js:
+
+/api/users/me retorna fullName, userType, mustChangePassword, photoUrl
+JWT inclui fullName no payload
+
+
+Regras de Negócio Implementadas
+Vínculo animal-veterinário:
+
+Vet busca animal por nome → verifica se tem vet
+Se temVet = false → pode vincular (solicita aprovação ao proprietário por email)
+Se temVet = true e vetDaMinhaEquipe = true → informa que já está com a equipe, bloqueia
+Se temVet = true e vet de outra equipe → bloqueia com mensagem de erro
+
+Upload de fotos:
+
+Compressão via Canvas antes do upload: máx 1200px de largura, qualidade 82%, saída JPEG
+Preview imediato + atualização após compressão
+
+
+Padrões de Código Ativos
+
+Todas as alterações comunicadas com antes/depois + 1 linha de contexto acima e abaixo
+Páginas usam PageContainer — sem min-h-screen nas páginas internas
+Mobile-first: cards no mobile, tabela no desktop (md:hidden / hidden md:block)
+Sem hardcode de texto — preparado para i18n
+TypeScript strict — sem any desnecessário
+
+PRISMA:
+// =============================================================================
+// S2Vet — Prisma Schema
+// Provider : PostgreSQL
+// Schema   : schs2vet
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["schs2vet"]
+}
+
+// =============================================================================
+// USUÁRIOS
+// =============================================================================
+
+model User {
+  id                   Int       @id @default(autoincrement())
+  fullName             String    @db.VarChar(255)
+  email                String    @unique @db.VarChar(255)
+  passwordHash         String    @db.VarChar(255)
+  phone                String?   @db.VarChar(30)
+  role                 String    @default("USER") @db.VarChar(50)
+  userType             String    @default("PROPRIETARIO") @db.VarChar(50)
+  cep                  String?   @db.VarChar(10)
+  endereco             String?   @db.VarChar(255)
+  complemento          String?   @db.VarChar(100)
+  bairro               String?   @db.VarChar(100)
+  cidade               String?   @db.VarChar(100)
+  estado               String?   @db.VarChar(2)
+  createdAt            DateTime  @default(now())
+  ativo                Boolean   @default(true)
+  resetPasswordToken   String?   @unique @db.VarChar(255)
+  resetPasswordExpires DateTime?
+  mustChangePassword  Boolean  @default(false)
+
+  animais              Animal[]
+  auditLogs            AuditLog[]
+  dietasCriadas        Dieta[]                @relation("CriadorDieta")
+  dietasModificadas    Dieta[]                @relation("ModificadorDieta")
+  evolucoesCriadas     EvolucaoClinica[]      @relation("EvolucaoVeterinario")
+  evolucoesModificadas EvolucaoClinica[]      @relation("EvolucaoModificadoPor")
+  prescricoes          Prescricao[]           @relation("PrescricaoVeterinario")
+  vacinas              VacinaClinica[]        @relation("VacinaVeterinario")
+  encaminhamentos      EncaminhamentoClinico[] @relation("EncaminhamentoVeterinario")
+  examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
+  faturaItens          FaturaItem[]           @relation("FaturaItemVet")
+  aiUsageLogs          AiUsageLog[]
+  vetPerfil            VetPerfil?
+  vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
+  empresasOwner        Empresa[]              @relation("EmpresaOwner")
+  membrosEquipe        MembroEquipe[]
+
+  @@map("users")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// ANIMAIS
+// =============================================================================
+
+model Animal {
+  id                 Int      @id @default(autoincrement())
+  nome               String   @db.Text
+  peso               Float
+  dataNascimento     DateTime?
+  sexo               String   @db.Text
+  photoUrl           String?  @db.Text
+  dataCadastro       DateTime @default(now())
+  ativo              Boolean  @default(true)
+  especieId          Int
+  racaId             Int?
+  userId             Int
+  categoriaAnimal    String?  @db.VarChar(100)
+  tipoExercicio      String?  @db.VarChar(100)
+  veterinarioNome    String?  @db.VarChar(255)
+  veterinarioClinica String?  @db.VarChar(255)
+  local              String?  @db.VarChar(255)
+  idadeAnos          Int?
+
+  especie         Especie              @relation(fields: [especieId], references: [id])
+  raca            Raca?                @relation(fields: [racaId],    references: [id])
+  user            User                 @relation(fields: [userId],    references: [id], onDelete: Cascade)
+  dietas          Dieta[]
+  exames          ExameNutricional[]
+  ocorrencias     OcorrenciaSaude[]
+  planosDieta     PlanoDieta[]
+  relatorios      RelatorioSalvo[]
+  evolucoes       EvolucaoClinica[]      @relation("AnimalEvolucoes")
+  prescricoes     Prescricao[]           @relation("AnimalPrescricoes")
+  vacinas         VacinaClinica[]        @relation("AnimalVacinas")
+  encaminhamentos EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
+  examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
+  faturas         Fatura[]               @relation("AnimalFaturas")
+  solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
+
+  @@index([especieId])
+  @@index([racaId])
+  @@index([userId])
+  @@map("tb_animais")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// ESPÉCIES E RAÇAS
+// =============================================================================
+
+model Especie {
+  id            Int                  @id @default(autoincrement())
+  nome          String               @db.Text
+  animais       Animal[]
+  composicoes   ComposicaoAlimento[]
+  racas         Raca[]
+  exigenciasNRC ExigenciasNRC[]
+  vetEspecies   VetEspecie[]
+
+  @@map("tb_especies")
+  @@schema("schs2vet")
+}
+
+model Raca {
+  id        Int      @id @default(autoincrement())
+  nome      String   @db.Text
+  especieId Int
+  animais   Animal[]
+  especie   Especie  @relation(fields: [especieId], references: [id])
+
+  @@index([especieId])
+  @@map("tb_racas")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// DIETAS E PLANOS
+// =============================================================================
+
+model PlanoDieta {
+  id          Int      @id @default(autoincrement())
+  animalId    Int
+  nome        String   @db.VarChar(255)
+  ativo       Boolean  @default(true)
+  dataCriacao DateTime @default(now())
+
+  animal Animal  @relation(fields: [animalId], references: [id])
+  itens  Dieta[]
+
+  @@map("tb_planos_dieta")
+  @@schema("schs2vet")
+}
+
+model Dieta {
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  alimentoId    Int
+  qtdGramasDia  Float
+  periodicidade String?   @db.Text
+  unidade       String?   @db.Text
+  dataInicio    DateTime  @default(now())
+  dataFim       DateTime?
+  horario       String?   @db.Text
+  observacao    String?   @db.Text
+  dataCriacao   DateTime  @default(now())
+  dataAlteracao DateTime  @updatedAt
+  criadopor     Int
+  modificadopor Int
+  planoDietaId  Int?
+
+  plano           PlanoDieta? @relation(fields: [planoDietaId],  references: [id])
+  alimento        Alimento    @relation(fields: [alimentoId],    references: [id])
+  animal          Animal      @relation(fields: [animalId],      references: [id])
+  userCriador     User        @relation("CriadorDieta",     fields: [criadopor],     references: [id])
+  userModificador User        @relation("ModificadorDieta", fields: [modificadopor], references: [id])
+
+  @@index([alimentoId])
+  @@index([animalId])
+  @@index([criadopor])
+  @@index([modificadopor])
+  @@map("tb_dieta")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// ALIMENTOS E NUTRIENTES
+// =============================================================================
+
+model Alimento {
+  id          Int                  @id @default(autoincrement())
+  nome        String               @db.Text
+  categoria   String               @db.Text
+  fabricante  String?              @db.Text
+  forma       String?              @db.Text
+  ativo       Boolean              @default(true)
+  composicoes ComposicaoAlimento[]
+  dietas      Dieta[]
+
+  @@map("tb_alimentos")
+  @@schema("schs2vet")
+}
+
+model Nutriente {
+  id            Int                  @id @default(autoincrement())
+  nome          String               @db.Text
+  categoria     String               @db.Text
+  unidadePadrao String               @db.Text
+  composicoes   ComposicaoAlimento[]
+  exames        ExameNutricional[]
+  exigenciasNRC ExigenciasNRC[]
+
+  @@map("tb_nutrientes")
+  @@schema("schs2vet")
+}
+
+model ComposicaoAlimento {
+  id          Int       @id @default(autoincrement())
+  alimentoId  Int
+  nutrienteId Int
+  especieId   Int?
+  valorPorKg  Float
+  base        String    @default("Seca") @db.VarChar(50)
+
+  alimento  Alimento  @relation(fields: [alimentoId],  references: [id])
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie   Especie?  @relation(fields: [especieId],   references: [id])
+
+  @@unique([alimentoId, nutrienteId])
+  @@index([nutrienteId])
+  @@index([especieId])
+  @@map("tb_composicao_alimento")
+  @@schema("schs2vet")
+}
+
+model ExigenciasNRC {
+  id              Int       @id @default(autoincrement())
+  nutrienteId     Int
+  peso            Int
+  categoriaAnimal String?   @db.VarChar(100)
+  tipoExercicio   String    @db.VarChar(100)
+  valorExigido    Float
+  unidade         String?   @db.VarChar(20)
+  fonte           String?   @db.VarChar(100)
+  especieId       Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+  especie   Especie?  @relation(fields: [especieId],   references: [id])
+
+  @@unique([nutrienteId, peso, categoriaAnimal, tipoExercicio])
+  @@index([nutrienteId])
+  @@index([especieId])
+  @@map("tb_exigencias_nrc")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// EXAMES
+// =============================================================================
+
+model ExameNutricional {
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  nutrienteId     Int
+  dataExame       DateTime
+  valorEncontrado Float
+  unidade         String    @db.Text
+  valorMinRef     Float?
+  valorMaxRef     Float?
+  observacao      String?   @db.Text
+  arquivoUrl      String?   @db.Text
+
+  animal    Animal    @relation(fields: [animalId],    references: [id])
+  nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
+
+  @@index([animalId])
+  @@index([nutrienteId])
+  @@map("tb_exames_nutricionais")
+  @@schema("schs2vet")
+}
+
+model ExameClinico {
+  id              Int       @id @default(autoincrement())
+  animalId        Int
+  veterinarioId   Int
+  tipo            String
+  descricao       String
+  status          String    @default("SOLICITADO")
+  resultado       String?   @db.Text
+  dataSolicitacao DateTime  @default(now())
+  dataResultado   DateTime?
+  arquivoUrl      String?
+  observacao      String?   @db.Text
+  ativo           Boolean   @default(true)
+
+  animal      Animal @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id])
+  veterinario User   @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id])
+
+  @@map("tb_exames_clinicos")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// OCORRÊNCIAS DE SAÚDE
+// =============================================================================
+
+model OcorrenciaSaude {
+  id          Int       @id @default(autoincrement())
+  animalId    Int
+  dataInicio  DateTime
+  dataFim     DateTime?
+  problema    String    @db.Text
+  tratamento  String?   @db.Text
+  responsavel String?   @db.Text
+
+  animal Animal @relation(fields: [animalId], references: [id])
+
+  @@index([animalId])
+  @@map("tb_ocorrencias_saude")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// CLÍNICA — EVOLUÇÕES, PRESCRIÇÕES, VACINAS, ENCAMINHAMENTOS
+// =============================================================================
+
+model EvolucaoClinica {
+  id                    Int       @id @default(autoincrement())
+  animalId              Int
+  veterinarioId         Int
+  modificadoPorId       Int?
+  especialidade         String
+  status                String    @default("EM_ANDAMENTO")
+  texto                 String    @db.Text
+  dataInicio            DateTime  @default(now())
+  dataFim               DateTime?
+  dataModificacao       DateTime?
+  ativo                 Boolean   @default(true)
+  justificativaExclusao String?   @db.Text
+  aprovado              Boolean   @default(true)
+
+  animal        Animal @relation("AnimalEvolucoes",      fields: [animalId],        references: [id])
+  veterinario   User   @relation("EvolucaoVeterinario",  fields: [veterinarioId],   references: [id])
+  modificadoPor User?  @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id])
+
+  @@map("tb_evolucoes_clinicas")
+  @@schema("schs2vet")
+}
+
+model Prescricao {
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  veterinarioId Int
+  medicamento   String
+  dose          String
+  frequencia    String
+  duracao       String
+  via           String    @default("oral")
+  observacao    String?   @db.Text
+  dataInicio    DateTime  @default(now())
+  dataFim       DateTime?
+  ativo         Boolean   @default(true)
+  aprovado      Boolean   @default(true)
+
+  animal      Animal @relation("AnimalPrescricoes",     fields: [animalId],      references: [id])
+  veterinario User   @relation("PrescricaoVeterinario", fields: [veterinarioId], references: [id])
+
+  @@map("tb_prescricoes")
+  @@schema("schs2vet")
+}
+
+model VacinaClinica {
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  veterinarioId Int
+  nome          String
+  lote          String?
+  fabricante    String?
+  dataAplicacao DateTime  @default(now())
+  dataReforco   DateTime?
+  observacao    String?   @db.Text
+  ativo         Boolean   @default(true)
+
+  animal      Animal @relation("AnimalVacinas",      fields: [animalId],        references: [id])
+  veterinario User   @relation("VacinaVeterinario",  fields: [veterinarioId],   references: [id])
+
+  @@map("tb_vacinas_clinicas")
+  @@schema("schs2vet")
+}
+
+model EncaminhamentoClinico {
+  id                 Int      @id @default(autoincrement())
+  animalId           Int
+  veterinarioId      Int
+  especialidade      String
+  motivo             String   @db.Text
+  veterinarioDestino String?
+  clinicaDestino     String?
+  urgencia           String   @default("NORMAL")
+  status             String   @default("PENDENTE")
+  dataEncaminhamento DateTime @default(now())
+  observacao         String?  @db.Text
+  ativo              Boolean  @default(true)
+
+  animal      Animal @relation("AnimalEncaminhamentos",      fields: [animalId],      references: [id])
+  veterinario User   @relation("EncaminhamentoVeterinario",  fields: [veterinarioId], references: [id])
+
+  @@map("tb_encaminhamentos_clinicos")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// FINANCEIRO
+// =============================================================================
+
+model Fatura {
+  id       Int          @id @default(autoincrement())
+  animalId Int
+  total    Float        @default(0)
+  status   String       @default("ABERTA")
+  criadoEm DateTime     @default(now())
+  itens    FaturaItem[]
+
+  animal Animal @relation("AnimalFaturas", fields: [animalId], references: [id])
+
+  @@map("tb_faturas")
+  @@schema("schs2vet")
+}
+
+model FaturaItem {
+  id            Int      @id @default(autoincrement())
+  faturaId      Int
+  tipo          String
+  descricao     String
+  valor         Float    @default(0)
+  quantidade    Int      @default(1)
+  veterinarioId Int
+  criadoEm      DateTime @default(now())
+
+  fatura      Fatura @relation(fields: [faturaId],      references: [id])
+  veterinario User   @relation("FaturaItemVet", fields: [veterinarioId], references: [id])
+
+  @@map("tb_fatura_itens")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// RELATÓRIOS
+// =============================================================================
+
+model RelatorioSalvo {
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  planoDietaId   Int?
+  payload        String   @db.Text
+  fonteCalculo   String   @db.VarChar(50)
+  pesoCalculado  Float?
+  categoriaUsada String?  @db.VarChar(100)
+  especieNome    String?  @db.VarChar(100)
+  geradoEm       DateTime @default(now())
+
+  animal Animal @relation(fields: [animalId], references: [id])
+
+  @@index([animalId])
+  @@index([geradoEm])
+  @@map("tb_relatorios_salvos")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// AUDITORIA E IA
+// =============================================================================
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  userName  String   @db.Text
+  email     String   @db.Text
+  action    String   @db.Text
+  timestamp DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("tb_audit_logs")
+  @@schema("schs2vet")
+}
+
+model AiUsageLog {
+  id           Int      @id @default(autoincrement())
+  createdAt    DateTime @default(now())
+  operacao     String
+  modelo       String
+  provedor     String   @default("groq")
+  tokensEntrada Int
+  tokensSaida  Int
+  tokensTotal  Int
+  custoUsd     Float
+  latenciaMs   Int
+  userId       Int?
+  animalId     Int?
+  sucesso      Boolean  @default(true)
+  erroMensagem String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([operacao])
+  @@map("tb_ai_usage_logs")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// VETERINÁRIO — PERFIL, ESPÉCIES, SUBESPECIALIDADES
+// =============================================================================
+
+model VetPerfil {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  crmv      String?  @unique @db.VarChar(20)
+  bio       String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  especies          VetEspecie[]
+  subespecialidades VetSubespecialidade[]
+
+  @@map("tb_vet_perfil")
+  @@schema("schs2vet")
+}
+
+model VetEspecie {
+  id          Int @id @default(autoincrement())
+  vetPerfilId Int
+  especieId   Int
+
+  vetPerfil VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
+  especie   Especie   @relation(fields: [especieId],   references: [id], onDelete: Cascade)
+
+  @@unique([vetPerfilId, especieId])
+  @@map("tb_vet_especies")
+  @@schema("schs2vet")
+}
+
+model VetSubespecialidade {
+  id          Int      @id @default(autoincrement())
+  vetPerfilId Int
+  nome        String   @db.VarChar(100)
+  createdAt   DateTime @default(now())
+
+  vetPerfil VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
+
+  @@map("tb_vet_subespecialidades")
+  @@schema("schs2vet")
+}
+
+model VetAnimalSolicitacao {
+  id            Int       @id @default(autoincrement())
+  animalId      Int
+  vetUserId     Int
+  status        String    @default("PENDENTE")
+  mensagem      String?   @db.Text
+  approvalToken String?   @unique @db.VarChar(64)
+  expiresAt     DateTime?
+  solicitanteId Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  animal      Animal @relation("AnimalSolicitacoes", fields: [animalId],  references: [id], onDelete: Cascade)
+  veterinario User   @relation("VetSolicitacoes",    fields: [vetUserId], references: [id], onDelete: Cascade)
+
+  @@unique([animalId, vetUserId])
+  @@index([approvalToken])
+  @@map("tb_vet_animal_solicitacoes")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// EMPRESA E EQUIPES
+// =============================================================================
+
+model Empresa {
+  id        Int      @id @default(autoincrement())
+  nome      String
+  cnpj      String?  @unique
+  telefone  String?
+  endereco  String?
+  ownerId   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User     @relation("EmpresaOwner", fields: [ownerId], references: [id])
+  equipes Equipe[]
+
+  @@map("tb_empresas")
+  @@schema("schs2vet")
+}
+
+model Equipe {
+  id        Int             @id @default(autoincrement())
+  nome      String
+  empresaId Int
+  createdAt DateTime        @default(now())
+
+  empresa  Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  membros  MembroEquipe[]
+  convites ConviteEquipe[]
+
+  @@map("tb_equipes")
+  @@schema("schs2vet")
+}
+
+model MembroEquipe {
+  id        Int      @id @default(autoincrement())
+  equipeId  Int
+  userId    Int
+  cargo     String
+  createdAt DateTime @default(now())
+
+  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+
+  @@unique([equipeId, userId])
+  @@map("tb_membros_equipe")
+  @@schema("schs2vet")
+}
+
+model ConviteEquipe {
+  id        Int      @id @default(autoincrement())
+  equipeId  Int
+  email     String
+  cargo     String
+  token     String   @unique @default(uuid())
+  status    String   @default("PENDENTE")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+
+  @@map("tb_convites_equipe")
+  @@schema("schs2vet")
+}
+
+
+Mòdulo Administração
+- Sub-Módulo Minha Equipe:
+    - O Veterinário pode não ter ou ter um ou mais sócios
+    - O veterinário ou um dos sócios precisam dar o aval das evoluções.
+    - Quem receber o convite terá o direito de aprovar ou recusar o convite
+    - Caso seja convidado um veterinário com uma especialidade (Radiologista, Oftalmologista, etc), ele terá o mesmo poder de um veterinário não sócio mas poderá fechar a evolução dele, nesse fechamento deverá ser informado a quantidade de sessões ou imagens e o valor que deverá ser cobrado do cliente
+    -  A tela de nova evolução deverá ter a opção de incluir documento, vídeo, ou imagem,(sempre colocando no menor formato mas sem perder a qualidade)
+    - Pensei em uma tela de administração de permissão algo bem visual, dando permissão ao veterinário principal "brincar" com as permissões somente dentro da equipe dele, mas especificamente algo do tipo, uma página para criar a equipe e a outra para dar as permissões, por padrão todos entrarão somente com permissão de leitura, fora os veterinários sócios que terão por padrão permissão dull dentro da equipe deles.
+    - Na outra página pensei em algo por sub-módulo por exemplo, na página de atendimento tem evolução, prescrição, encaminhamento, etc, teria como se fosse uma matriz relacionando a função de cada membro da equipe com parte do sistema, informando se ele tem permissão full (pode fazer tudo até dos demais membros), permissão de alteração somente da parte que criou, leitura, etc. 
+    - Nessa página tb deverá ter uma sessão só para os proprietários para que ela possa selecionar qual proprietário pode fazer o que. Por Padrão o proprietário só pode visualizar os módulos dele, não pode fazer nenhuma alteração.
+    - A idéia é liberar funcionalidades para o proprietário sob demanda.
+    - A ideia é dar autonomia para o Veterinário Sócio, imagina o sistema ganhar proporção e eu ter que ficar administrando permissionamento.
+    - Também preciso de uma auditoria de quem e o que foi mudado nessas permissões.
+Avalie se isso é uma prática de mercado e se tem alguma falha de segurança. Lembra que isso precisa ser feito para uma pessoa que não tem conhecimento de internet e verdadeiro pânico de tecnologia.
+
+   - Somenete o Veterinário Responsável e/ou o sócio podem fechar as evoluções
+    - Os estagiários só poderão ver as evoluções mas nenhuma outra função
+    - Os demais veterinários que não são responsáveis ou sócios, podem incluir, alterar e excluir as evoluções eclusivas deles mas nunca finalizar
+    - O veterinário responsável deverá ter o poder de promover um veterinário á responsável de forma termporária ou definitiva
+    - Todo mundo que o veterinário responsável ou sócio incluir na equipe deverá receber um e-mail com a senha Inicial#001 e terá que alterar no primeiro login.
+ 

@@ -9,7 +9,7 @@ import {
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
   Share2, FileText, CheckCircle2, Loader2, WifiOff,
   Calendar, User, Filter, Search, Eye, Ban, Paperclip,
-  Image, Film, Volume2, Lock,
+  Image, Film, Volume2, Lock, CheckSquare,
 } from 'lucide-react';
 import { imprimirEvolucao } from '../utils/EvolucaoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -182,15 +182,16 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
 
 // ─── ViewEvolucaoModal ────────────────────────────────────────────────────────
 
-function ViewEvolucaoModal({ ev, animal, onClose, onEditar, onImprimir }: {
+function ViewEvolucaoModal({ ev, animal, isSocio, onClose, onEditar, onImprimir }: {
   ev:         EvolucaoItem;
   animal:     AnimalInfo | null;
+  isSocio:    boolean;
   onClose:    () => void;
   onEditar?:  () => void;
   onImprimir: () => void;
 }) {
-  const editavel  = ev.status === 'EM_ANDAMENTO';
-  const bloqueado = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
+  const editavel  = ev.status === 'EM_ANDAMENTO' || (ev.status === 'FINALIZADA' && isSocio);
+  const bloqueado = (ev.status === 'FINALIZADA' && !isSocio) || ev.status === 'CANCELADA';
   const midias    = ev.midias ?? [];
 
   return (
@@ -271,7 +272,7 @@ function ViewEvolucaoModal({ ev, animal, onClose, onEditar, onImprimir }: {
             <div className="flex-1 flex items-center justify-center gap-1.5">
               <Lock size={12} className="text-gray-400" />
               <span className="text-xs text-gray-400 italic">
-                {ev.status === 'FINALIZADA' ? 'Finalizada — somente leitura' : 'Cancelada — somente leitura'}
+                {ev.status === 'FINALIZADA' ? 'Finalizada — edição restrita a sócios' : 'Cancelada — somente leitura'}
               </span>
             </div>
           )}
@@ -611,31 +612,19 @@ function NovaEvolucaoModal({
                   <button onClick={() => onFormChange('texto', '')}
                     className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
-                {!showRecordAgain && !transcrevendo && (
+                {!showRecordAgain && !transcrevendo && !gravacaoAtiva && (
                   mobile ? (
                     <button
-                      onTouchStart={e => { e.preventDefault(); if (!gravacaoAtiva) iniciarGravacao(); }}
+                      onTouchStart={e => { e.preventDefault(); iniciarGravacao(); }}
                       onTouchEnd={e => { e.preventDefault(); if (gravacaoAtiva) pararGravacao(); }}
                       onContextMenu={e => e.preventDefault()}
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium select-none transition-all ${
-                        gravacaoAtiva
-                          ? 'bg-red-100 text-red-700 ring-2 ring-red-300 animate-pulse'
-                          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                      }`}>
-                      {gravacaoAtiva
-                        ? <><Square size={11} /> Solte para encerrar</>
-                        : <><Mic size={11} /> Segurar para gravar</>}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium select-none transition-all bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
+                      <Mic size={11} /> Segurar para gravar
                     </button>
                   ) : (
-                    <button onClick={gravacaoAtiva ? pararGravacao : iniciarGravacao}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
-                        gravacaoAtiva
-                          ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                      }`}>
-                      {gravacaoAtiva
-                        ? <><MicOff size={11} /> Encerrar gravação</>
-                        : <><Mic size={11} /> Iniciar fala</>}
+                    <button onClick={iniciarGravacao}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
+                      <Mic size={11} /> Iniciar fala
                     </button>
                   )
                 )}
@@ -668,7 +657,7 @@ function NovaEvolucaoModal({
                 {!mobile && (
                   <button onClick={pararGravacao}
                     className="flex items-center gap-1 px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold flex-shrink-0">
-                    <MicOff size={11} /> Encerrar
+                    <MicOff size={11} /> Encerrar Gravação
                   </button>
                 )}
               </div>
@@ -676,17 +665,11 @@ function NovaEvolucaoModal({
 
             {showRecordAgain && !gravacaoAtiva && !transcrevendo && (
               <div className="mt-2 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
-                <p className="text-xs font-semibold text-emerald-800 mb-2">Áudio transcrito. Deseja gravar mais?</p>
-                <div className="flex gap-2">
-                  <button onClick={() => { setShowRecordAgain(false); iniciarGravacao(); }}
-                    className="flex-1 flex items-center justify-center gap-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
-                    <Mic size={12} /> Sim, gravar mais
-                  </button>
-                  <button onClick={() => setShowRecordAgain(false)}
-                    className="flex-1 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs font-medium">
-                    Não, usar este texto
-                  </button>
-                </div>
+                <p className="text-xs font-semibold text-emerald-800 mb-2">Deseja continuar Gravando?</p>
+                <button onClick={() => { setShowRecordAgain(false); iniciarGravacao(); }}
+                  className="w-full flex items-center justify-center gap-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
+                  <Mic size={12} /> Sim, continuar gravando
+                </button>
               </div>
             )}
           </div>
@@ -759,12 +742,12 @@ function NovaEvolucaoModal({
             className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancelar
           </button>
-          <button onClick={onSalvar} disabled={desativado}
+          <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
             className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-700 disabled:text-gray-400 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
             {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
             {saving && !interpretando ? 'Salvando…' : 'Salvar'}
           </button>
-          <button onClick={onFinalizar} disabled={desativado || !form.texto.trim()}
+          <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
             className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
             {interpretando && <Loader2 size={13} className="animate-spin" />}
             {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar ✓'}
@@ -1012,6 +995,23 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     } finally { setSavingCancelamento(false); }
   };
 
+  const handleFinalizarDireto = async (ev: EvolucaoItem) => {
+    if (!confirm(`Finalizar a evolução "${ev.titulo ?? ev.especialidade}"?`)) return;
+    setSavingEv(true);
+    try {
+      await api.put(`/clinica/evolucoes/${ev.id}`, {
+        especialidade: ev.especialidade,
+        texto:         ev.texto,
+        status:        'FINALIZADA',
+      });
+      toast.success('Evolução finalizada');
+      carregarEvolucoes();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      toast.error(msg ?? 'Erro ao finalizar evolução');
+    } finally { setSavingEv(false); }
+  };
+
   const handleRemoverMidia = async (evolucaoId: number, midiaId: number) => {
     try {
       await api.delete(`/clinica/evolucoes/${evolucaoId}/midias/${midiaId}`);
@@ -1125,6 +1125,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             <DateInputBR
               value={filtroDataFim}
               onChange={v => { setFiltroDataFim(v); setPage(1); }}
+              placeholder="DD/MM/YYYY"
               className="w-28"
               inputClassName="text-xs"
             />
@@ -1187,7 +1188,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -1196,14 +1197,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 const bloqueado   = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
                 const eProprioAutor = ev.veterinarioId === userId;
 
-                // Nível de permissão para editar/excluir desta evolução
-                const nivelEditar  = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar']  ?? 'NENHUM');
-                const nivelDeletar = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.deletar'] ?? 'NENHUM');
+                // Nível de permissão para editar/excluir/finalizar desta evolução
+                const nivelEditar    = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
+                const nivelDeletar   = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
+                const nivelFinalizar = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
 
                 const podeEditarEsta  = nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' ||
                   (nivelEditar  === 'PROPRIO' && eProprioAutor);
                 const podeExcluir    = emAndamento && (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' ||
                   (nivelDeletar === 'PROPRIO' && eProprioAutor));
+                const podeFinalizarEsta = emAndamento && (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' ||
+                  (nivelFinalizar === 'PROPRIO' && eProprioAutor));
                 const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
@@ -1254,7 +1258,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     </td>
 
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-start gap-1">
 
                         {podeAprovar && (
                           <button onClick={() => handleAprovar(ev.id)} title="Aprovar"
@@ -1269,9 +1273,16 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         </button>
 
                         {emAndamento && podeEditarEsta && (
-                          <button onClick={() => abrirEdicao(ev)} title="Editar"
+                          <button onClick={() => abrirEdicao(ev)} title="Alterar"
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Pencil size={14} />
+                          </button>
+                        )}
+
+                        {podeFinalizarEsta && (
+                          <button onClick={() => handleFinalizarDireto(ev)} title="Finalizar"
+                            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+                            <CheckSquare size={14} />
                           </button>
                         )}
 
@@ -1283,7 +1294,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         )}
 
                         {emAndamento && podeExcluir && (
-                          <button onClick={() => setDeletingEv(ev)} title="Excluir"
+                          <button onClick={() => setDeletingEv(ev)} title="Apagar"
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                             <Trash2 size={14} />
                           </button>
@@ -1332,12 +1343,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <ViewEvolucaoModal
           ev={viewingEv}
           animal={animal}
+          isSocio={isSocio}
           onClose={() => setViewingEv(null)}
           onEditar={(() => {
             const nivelEd = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
             const podeEd  = nivelEd === 'FULL' || nivelEd === 'EQUIPE' ||
               (nivelEd === 'PROPRIO' && viewingEv.veterinarioId === userId);
-            return viewingEv.status === 'EM_ANDAMENTO' && podeEd ? () => abrirEdicao(viewingEv) : undefined;
+            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (viewingEv.status === 'FINALIZADA' && isSocio));
+            return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
           })()}
           onImprimir={() => handleImprimir(viewingEv)}
         />

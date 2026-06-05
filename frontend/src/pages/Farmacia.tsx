@@ -3,8 +3,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 import {
   AlertTriangle, Lock, Plus, Pencil, Trash2,
   Search, RefreshCw, X, BarChart2, Package, Calendar,
@@ -96,9 +98,28 @@ function ChartMovimentos({ movimentos }: { movimentos: MovimentoEstoque[] }) {
   );
 }
 
+// ─── Helper: extrai volume numérico de nome ou apresentação do medicamento ────
+// Ex: "Catófos 500 ml" → 500  |  "Frasco 1L" → 1  |  "Pen 10.000 UI" → 10000
+
+function extrairVolume(med: Medicamento): number | null {
+  for (const texto of [med.apresentacao, med.nome]) {
+    if (!texto) continue;
+    // Tenta casar o número seguido da unidade do catálogo (case-insensitive)
+    const reUnidade = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*${med.unidade}`, 'i');
+    const m1 = texto.match(reUnidade);
+    if (m1) return parseFloat(m1[1].replace(',', '.'));
+    // Fallback: qualquer número seguido de unidade farmacêutica comum
+    const m2 = texto.match(/(\d+(?:[.,]\d+)?)\s*(?:mL|ml|ML|L(?!\w)|g(?!\w)|mg|mcg|UI|un)/);
+    if (m2) return parseFloat(m2[1].replace(',', '.'));
+  }
+  return null;
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Farmacia() {
+  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+
   const [itens,       setItens]       = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
   const [meta,        setMeta]        = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
@@ -116,6 +137,7 @@ export default function Farmacia() {
   const [loadingMov,      setLoadingMov]      = useState(false);
   const [confirmExcluir,  setConfirmExcluir]  = useState<EstoqueItem | null>(null);
   const [valorStr,        setValorStr]        = useState('');
+  const [frascos,         setFrascos]         = useState<number | ''>('');
 
   // ── Busca medicamento selecionado ─────────────────────────────────────────
 
@@ -123,6 +145,11 @@ export default function Farmacia() {
   const estoqueExistente = !editandoId && form.medicamentoId
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
+
+  // Volume por embalagem detectado automaticamente do nome/apresentação
+  const volDetectado  = medSelecionado ? extrairVolume(medSelecionado) : null;
+  // Rótulo do tipo de embalagem (primeira palavra da apresentação: "frasco", "ampola", etc.)
+  const tipoEmbalagem = medSelecionado?.apresentacao?.match(/^([A-Za-zÀ-ÿ]+)/i)?.[1]?.toLowerCase() ?? 'unidade';
   const hoje = (() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -165,6 +192,9 @@ export default function Farmacia() {
   }, [busca, filtroTab]);
 
   useEffect(() => { carregarEstoque(); }, [carregarEstoque]);
+
+  // Reseta frascos ao trocar de medicamento
+  useEffect(() => { setFrascos(''); }, [form.medicamentoId]);
 
   // ── Filtro local ──────────────────────────────────────────────────────────
 
@@ -224,7 +254,13 @@ export default function Farmacia() {
     setModalFormAberto(true);
   };
 
-  const limparForm = () => { setForm({ ...FORM_VAZIO }); setValorStr(''); setEditandoId(null); setModalFormAberto(false); };
+  const limparForm = () => {
+    setForm({ ...FORM_VAZIO });
+    setValorStr('');
+    setEditandoId(null);
+    setModalFormAberto(false);
+    setFrascos('');
+  };
 
   const salvar = async () => {
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
@@ -310,19 +346,30 @@ export default function Farmacia() {
     inativos:    '',
   };
 
+  if (loadingPerm) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  if (!podeExecutar('farmacia.estoque.ler')) return null;
+
   return (
-    <PageContainer maxWidth="full" noPadding>
-      <div className="px-4 py-4 md:px-8 md:py-6 space-y-4">
+    <PageContainer maxWidth="7xl">
+      <div className="space-y-5">
+
+        <BotaoVoltar className="mb-6" />
 
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Package className="text-emerald-600" size={22} />
-              <h1 className="text-xl font-bold text-gray-900">Estoque da Clínica</h1>
-              <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Por Clínica</span>
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <Package size={20} className="text-emerald-700" />
             </div>
-            <p className="text-sm text-gray-500 mt-0.5">Entradas, saídas e níveis de reposição por estabelecimento.</p>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Estoque da Clínica</h1>
+              <p className="text-sm text-gray-500">Entradas, saídas e níveis de reposição por estabelecimento.</p>
+            </div>
           </div>
         </div>
 
@@ -516,8 +563,8 @@ export default function Farmacia() {
               )}
 
               {/* Valor + Lote + Validade */}
-              <div className={`grid gap-3 ${estoqueExistente ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                {!estoqueExistente && (
+              {!estoqueExistente && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Valor (R$)</label>
                     <input type="text" inputMode="decimal" value={valorStr}
@@ -525,43 +572,91 @@ export default function Farmacia() {
                       placeholder="0,00"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
-                )}
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
-                  <input type="text" value={form.lote}
-                    onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
-                    placeholder="Ex: LOT2024"
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
+                    <input type="text" value={form.lote}
+                      onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
+                      placeholder="Ex: LOT2024"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
+                    <DateInputBR
+                      value={form.validade}
+                      onChange={v => setForm(f => ({ ...f, validade: v }))}
+                      min={hoje}
+                      className="border border-gray-300 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
-                  <DateInputBR
-                    value={form.validade}
-                    onChange={v => setForm(f => ({ ...f, validade: v }))}
-                    min={hoje}
-                    className="border border-gray-300 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500"
-                  />
+              )}
+              {estoqueExistente && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
+                    <input type="text" value={form.lote}
+                      onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
+                      placeholder="Ex: LOT2024"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
+                    <DateInputBR
+                      value={form.validade}
+                      onChange={v => setForm(f => ({ ...f, validade: v }))}
+                      min={hoje}
+                      className="border border-gray-300 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* Quantidade + Estoque Mínimo + Alarmante */}
+              {/* Quantidade + Mínimo + Alarmante */}
               <div className={`grid gap-3 ${estoqueExistente ? 'grid-cols-1' : 'grid-cols-3'}`}>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Quantidade <span className="text-red-500">*</span>
+                    {volDetectado
+                      ? <>Qtd <span className="text-gray-400 font-normal capitalize">({tipoEmbalagem}s)</span></>
+                      : <>Qtd {medSelecionado && <span className="text-gray-400 font-normal">({medSelecionado.unidade})</span>}</>
+                    }
+                    {' '}<span className="text-red-500">*</span>
                   </label>
-                  <input type="number" min={0}
+                  <input
+                    type="number" min={0}
                     disabled={!!editandoId}
-                    value={form.qtdEstoque === 0 ? '' : form.qtdEstoque}
-                    onChange={(e) => setForm((f) => ({ ...f, qtdEstoque: e.target.value === '' ? 0 : Number(e.target.value) }))}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                    value={volDetectado ? (frascos === '' ? '' : frascos) : (form.qtdEstoque === 0 ? '' : form.qtdEstoque)}
+                    onChange={e => {
+                      const n = e.target.value === '' ? '' : Number(e.target.value);
+                      if (volDetectado) {
+                        setFrascos(n);
+                        setForm(f => ({ ...f, qtdEstoque: n !== '' && Number(n) > 0 ? Number(n) * volDetectado : 0 }));
+                      } else {
+                        setFrascos('');
+                        setForm(f => ({ ...f, qtdEstoque: n === '' ? 0 : Number(n) }));
+                      }
+                    }}
+                    placeholder={volDetectado ? `Nº de ${tipoEmbalagem}s` : '0'}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                  {volDetectado && (
+                    <p className="text-[11px] text-gray-400 mt-1 leading-tight">
+                      1 {tipoEmbalagem} = {volDetectado.toLocaleString('pt-BR')} {medSelecionado!.unidade}
+                      {frascos !== '' && Number(frascos) > 0 && (
+                        <><br /><b className="text-emerald-700">
+                          = {(Number(frascos) * volDetectado).toLocaleString('pt-BR')} {medSelecionado!.unidade}
+                        </b></>
+                      )}
+                    </p>
+                  )}
                   {editandoId && <p className="text-[10px] text-gray-400 mt-1">Use "Ajuste de Estoque" para alterar.</p>}
                 </div>
+
                 {!estoqueExistente && (
                   <>
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Mínimo (vermelho)
+                        <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                        Mínimo <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
                       </label>
                       <input type="number" min={0} value={form.estoqueMinimo}
                         onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: Number(e.target.value) }))}
@@ -569,7 +664,8 @@ export default function Farmacia() {
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Alarmante (amarelo)
+                        <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                        Alarmante <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
                       </label>
                       <input type="number" min={0} value={form.estoqueAlarmante}
                         onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: Number(e.target.value) }))}

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -10,6 +11,7 @@ import {
   Unlink, Search, Pencil, LayoutDashboard,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar   from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -237,11 +239,12 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function VetDashboard() {
-  const { user }              = useAuth();
-  const isConvidado           = user?.isConvidado === true;
-  const isVet                 = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
-  const { setSelectedAnimal } = useSelectedAnimal();
-  const navigate              = useNavigate();
+  const { user }                              = useAuth();
+  const isConvidado                           = user?.isConvidado === true;
+  const isVet                                 = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
+  const { setSelectedAnimal }                 = useSelectedAnimal();
+  const navigate                              = useNavigate();
+  const { podeExecutar, temEquipe, isSocio, loading: loadingPerm } = usePermissoes();
 
   const [meusAnimais,    setMeusAnimais]    = useState<AnimalResumido[]>([]);
   const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
@@ -332,13 +335,15 @@ export default function VetDashboard() {
       : (a.user?.fullName ?? '').toLowerCase().includes(termo);
   });
 
-  if (loading) return (
+  if (loading || loadingPerm) return (
     <PageContainer>
       <div className="flex items-center justify-center py-20">
         <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
       </div>
     </PageContainer>
   );
+
+  if (temEquipe && !podeExecutar('dashboard.geral.ler')) return null;
 
   const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
     const sol = solicitacoes.find(s => s.id === id);
@@ -369,7 +374,7 @@ export default function VetDashboard() {
 
   return (
     <>
-      {user?.id && !isConvidado && (
+      {user?.id && (isSocio || !isConvidado) && (
         <VetNotificationModal
           solicitations={solicitacoes as SolicitacaoNotif[]}
           vetId={Number(user.id)}
@@ -378,6 +383,7 @@ export default function VetDashboard() {
         />
       )}
       <PageContainer maxWidth="7xl">
+      <BotaoVoltar className="mb-6" />
       <div className="space-y-5">
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
@@ -402,7 +408,7 @@ export default function VetDashboard() {
                 </span>
               </div>
             )}
-            {!isConvidado && (
+            {(isSocio || !isConvidado) && (
               <button onClick={() => navigate('/animais')}
                 className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
                            px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
@@ -566,11 +572,11 @@ export default function VetDashboard() {
               Nenhum animal sob sua responsabilidade
             </h2>
             <p className="text-gray-500 text-sm mb-6">
-              {isConvidado
+              {isConvidado && !isSocio
                 ? 'Aguarde a atribuição de pacientes pelo responsável da equipe.'
                 : 'Cadastre um paciente ou aguarde solicitações de vínculo.'}
             </p>
-            {!isConvidado && (
+            {(isSocio || !isConvidado) && (
               <button onClick={() => navigate('/animais')}
                 className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
                            text-white px-6 py-3 rounded-2xl font-semibold transition-colors">

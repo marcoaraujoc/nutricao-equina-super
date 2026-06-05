@@ -40,6 +40,11 @@ model User {
   mustChangePassword   Boolean   @default(false)
   isConvidado          Boolean   @default(false)
   refreshToken         String?   @db.VarChar(512)
+  cpf               String?  @db.VarChar(14)
+  cnpj              String?  @db.VarChar(18)
+  mensalista        Boolean  @default(false)
+  valorAssistencia  Float?
+  frequenciaVisitas Int?
 
   animais              Animal[]
   auditLogs            AuditLog[]
@@ -111,6 +116,7 @@ model Animal {
   faturas         Fatura[]               @relation("AnimalFaturas")
   faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
   solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
+  reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
 
   @@index([especieId])
   @@index([racaId])
@@ -406,6 +412,7 @@ model Prescricao {
   dataFim             DateTime?
   ativo               Boolean   @default(true)
   aprovado            Boolean   @default(true)
+  medicamentoCliente  Boolean   @default(false)
 
   animal           Animal           @relation("AnimalPrescricoes",     fields: [animalId],         references: [id], onDelete: Cascade)
   veterinario      User?            @relation("PrescricaoVeterinario", fields: [veterinarioId],    references: [id], onDelete: SetNull)
@@ -426,7 +433,8 @@ model PrescricaoGrupo {
   animalId        Int
   veterinarioId   Int?
   empresaId       Int?
-  status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO
+  status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
+  motivoCancelamento String? @db.Text
   finalizadoPorId Int?
   finalizadoEm    DateTime?
   executadoPorId  Int?
@@ -434,11 +442,12 @@ model PrescricaoGrupo {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  animal        Animal       @relation("AnimalPrescricaoGrupos", fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario   User?        @relation("PrescricaoGrupoVet",     fields: [veterinarioId],   references: [id], onDelete: SetNull)
-  finalizadoPor User?        @relation("PrescricaoGrupoFinaliza", fields: [finalizadoPorId], references: [id], onDelete: SetNull)
-  executadoPor  User?        @relation("PrescricaoGrupoExecuta",  fields: [executadoPorId],  references: [id], onDelete: SetNull)
-  itens         Prescricao[] @relation("GrupoPrescricoes")
+  animal        Animal           @relation("AnimalPrescricaoGrupos",  fields: [animalId],        references: [id], onDelete: Cascade)
+  veterinario   User?            @relation("PrescricaoGrupoVet",      fields: [veterinarioId],   references: [id], onDelete: SetNull)
+  finalizadoPor User?            @relation("PrescricaoGrupoFinaliza",  fields: [finalizadoPorId], references: [id], onDelete: SetNull)
+  executadoPor  User?            @relation("PrescricaoGrupoExecuta",   fields: [executadoPorId],  references: [id], onDelete: SetNull)
+  itens         Prescricao[]     @relation("GrupoPrescricoes")
+  reservas      ReservaEstoque[] @relation("GrupoReservas")
 
   @@unique([animalId, numero])
   @@index([animalId])
@@ -709,10 +718,11 @@ model Empresa {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner   User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  equipes Equipe[]
-  animais Animal[]         @relation("EmpresaAnimais")
-  estoques EstoqueClinica[] @relation("EmpresaEstoque")
+  owner     User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  equipes   Equipe[]
+  animais   Animal[]         @relation("EmpresaAnimais")
+  estoques  EstoqueClinica[] @relation("EmpresaEstoque")
+  tratadores Tratador[]      @relation("EmpresaTratadores")
 
   @@map("tb_empresas")
   @@schema("schs2vet")
@@ -740,6 +750,7 @@ model MembroEquipe {
   equipeId  Int
   userId    Int
   cargo     String
+  cargos    String[] @default([])
   createdAt DateTime @default(now())
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
@@ -856,11 +867,12 @@ model PerfilEquipe {
 // Matriz de permissões template por perfil — independente de membros.
 // Quando um membro é adicionado/tem cargo alterado, essa matriz é copiada para PermissaoMembro.
 model MatrizPerfil {
-  id         Int    @id @default(autoincrement())
+  id         Int     @id @default(autoincrement())
   equipeId   Int
-  perfilSlug String @db.VarChar(50)
-  moduloSlug String @db.VarChar(100)
-  nivel      String @default("NENHUM") @db.VarChar(20)
+  perfilSlug String  @db.VarChar(50)
+  moduloSlug String  @db.VarChar(100)
+  nivel      String  @default("NENHUM") @db.VarChar(20)
+  locked     Boolean @default(false)
 
   perfil PerfilEquipe  @relation(fields: [equipeId, perfilSlug], references: [equipeId, slug], onDelete: Cascade)
   modulo ModuloSistema @relation(fields: [moduloSlug],           references: [slug])
@@ -982,6 +994,7 @@ model EstoqueClinica {
   medicamento Medicamento      @relation(fields: [medicamentoId], references: [id])
   empresa     Empresa?         @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: SetNull)
   movimentos  MovimentoEstoque[]
+  reservas    ReservaEstoque[] @relation("EstoqueReservas")
 
   @@index([medicamentoId])
   @@index([empresaId])
@@ -1004,5 +1017,45 @@ model MovimentoEstoque {
   @@index([estoqueId])
   @@index([createdAt])
   @@map("tb_movimentos_estoque")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// CADASTRO — TRATADOR
+// =============================================================================
+
+model Tratador {
+  id            Int      @id @default(autoincrement())
+  nome          String   @db.VarChar(255)
+  telefone      String?  @db.VarChar(30)
+  localTrabalho String?  @db.VarChar(255)
+  ativo         Boolean  @default(true)
+  empresaId     Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  empresa Empresa? @relation("EmpresaTratadores", fields: [empresaId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId])
+  @@map("tb_tratadores")
+  @@schema("schs2vet")
+}
+
+// Reservas de estoque vinculadas a prescrições finalizadas (aguardando execução)
+model ReservaEstoque {
+  id                Int      @id @default(autoincrement())
+  estoqueId         Int
+  prescricaoGrupoId Int
+  animalId          Int
+  quantidade        Float
+  criadoEm          DateTime @default(now())
+
+  estoque         EstoqueClinica  @relation("EstoqueReservas",  fields: [estoqueId],         references: [id], onDelete: Cascade)
+  prescricaoGrupo PrescricaoGrupo @relation("GrupoReservas",   fields: [prescricaoGrupoId], references: [id], onDelete: Cascade)
+  animal          Animal          @relation("AnimalReservas",  fields: [animalId],          references: [id], onDelete: Cascade)
+
+  @@unique([prescricaoGrupoId, estoqueId])
+  @@index([estoqueId])
+  @@map("tb_reservas_estoque")
   @@schema("schs2vet")
 }

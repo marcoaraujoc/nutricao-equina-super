@@ -9,17 +9,34 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
-import { imprimirPrescricaoVet, type VetPrintAnimal } from '../utils/VetPrint';
+import { usePermissoes } from '../hooks/usePermissoes';
+import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
 import DateInputBR from '../components/DateInputBR';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface AlertaEstoque {
+  tipo:          'INSUFICIENTE' | 'ZERADO';
+  medicamento:   string;
+  unidade:       string;
+  qtdNecessaria: number;
+  qtdDisponivel: number;
+  qtdEstoque:    number;
+  qtdReservada:  number;
+  reservas: { animalNome: string; prescricaoNumero: string; quantidade: number }[];
+}
+
 type TipoItem    = 'MEDICAMENTO' | 'PROCEDIMENTO';
-type StatusGrupo = 'SALVO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO';
+type StatusGrupo = 'SALVO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELADO_PARCIALMENTE';
 
 interface MedicamentoCat {
   id: number; nome: string; formaFarmaceutica: string;
   unidade: string; vias: { via: string }[];
+}
+
+interface EstoqueItem {
+  medicamentoId: number;
+  qtdEstoque: number;
 }
 
 interface ItemGrupo {
@@ -31,11 +48,13 @@ interface ItemGrupo {
   unidade: string | null;
   via: string;
   frequencia: string;
-  horaInicio: string | null;
-  duracaoDias: number;
-  dataInicio: string;
-  observacao: string | null;
-  veterinario: { id: number; fullName: string };
+  horaInicio:        string | null;
+  horariosGerados:   string[] | null;
+  duracaoDias:       number;
+  dataInicio:        string;
+  observacao:        string | null;
+  veterinario:       { id: number; fullName: string };
+  medicamentoCliente: boolean;
 }
 
 interface PrescricaoGrupo {
@@ -51,22 +70,23 @@ interface PrescricaoGrupo {
 }
 
 interface FormItem {
-  tipo:             TipoItem;
-  medicamento:      string;
-  medicamentoCatId: number | null;
-  dosagem:          string;
-  unidade:          string;
-  via:              string;
-  frequencia:       string;
-  horaInicio:       string;
-  duracaoDias:      number | '';
-  dataInicio:       string;
-  observacao:       string;
+  tipo:               TipoItem;
+  medicamento:        string;
+  medicamentoCatId:   number | null;
+  dosagem:            string;
+  unidade:            string;
+  via:                string;
+  frequencia:         string;
+  horaInicio:         string;
+  duracaoDias:        number | '';
+  dataInicio:         string;
+  observacao:         string;
+  medicamentoCliente: boolean;
 }
 
 interface Props {
   animalId:           number;
-  animal?:            VetPrintAnimal | null;
+  animal?:            PrintAnimalPrescricao | null;
   onFaturaAtualizada: () => void;
 }
 
@@ -92,20 +112,22 @@ const POSOLOGIAS = [
 ] as const;
 
 const VIAS     = ['Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica', 'Retal', 'Nasal', 'Oftálmica'];
-const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'mcg', 'mg', 'mL', 'UI'];
+const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
 
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
-  SALVO:      { label: 'Salvo',      cls: 'bg-amber-100 text-amber-700'     },
-  FINALIZADO: { label: 'Finalizado', cls: 'bg-emerald-100 text-emerald-700' },
-  EXECUTADO:  { label: 'Executado',  cls: 'bg-blue-100 text-blue-700'       },
-  CANCELADO:  { label: 'Cancelado',  cls: 'bg-red-100 text-red-700'         },
+  SALVO:                { label: 'Salvo',               cls: 'bg-amber-100 text-amber-700'    },
+  FINALIZADO:           { label: 'Finalizado',          cls: 'bg-emerald-100 text-emerald-700' },
+  EXECUTADO:            { label: 'Executado',           cls: 'bg-blue-100 text-blue-700'      },
+  CANCELADO:            { label: 'Cancelado',           cls: 'bg-red-100 text-red-700'        },
+  CANCELADO_PARCIALMENTE: { label: 'Cancel. Parcial',  cls: 'bg-orange-100 text-orange-700'  },
 };
 
-const FORM_VAZIO: FormItem = {
+const FORM_VAZIO = (): FormItem => ({
   tipo: 'MEDICAMENTO', medicamento: '', medicamentoCatId: null,
   dosagem: '', unidade: '', via: '', frequencia: '',
-  horaInicio: '', duracaoDias: '', dataInicio: '', observacao: '',
-};
+  horaInicio: '', duracaoDias: '', dataInicio: new Date().toISOString().split('T')[0],
+  observacao: '', medicamentoCliente: false,
+});
 
 const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? v;
 
@@ -115,52 +137,147 @@ const formatarData = (d: string | null) => {
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 };
 
-function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: VetPrintAnimal | null) {
-  imprimirPrescricaoVet(
-    animal ?? null,
-    { fullName: grupo.veterinario.fullName },
-    grupo.numeroFormatado,
-    grupo.itens.map(i => ({
-      tipo:        i.tipo,
-      medicamento: i.medicamento,
-      dosagem:     i.dosagem,
-      unidade:     i.unidade,
-      via:         i.via,
-      frequencia:  i.frequencia,
-      duracaoDias: i.duracaoDias,
-      dataInicio:  i.dataInicio,
-      observacao:  i.observacao,
+function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null) {
+  imprimirPrescricaoPrint({
+    numero:          grupo.numero,
+    numeroFormatado: grupo.numeroFormatado,
+    status:          grupo.status,
+    finalizadoEm:    null,
+    finalizadoPor:   null,
+    executadoPor:    null,
+    veterinario:     { fullName: grupo.veterinario.fullName },
+    animal:          animal ?? { nome: '—', photoUrl: null, peso: null, baia: null, especie: null, raca: null },
+    itens:           grupo.itens.map(i => ({
+      id:              i.id,
+      tipo:            i.tipo,
+      medicamento:     i.medicamento,
+      dosagem:         i.dosagem,
+      unidade:         i.unidade,
+      via:             i.via,
+      frequencia:      i.frequencia,
+      horaInicio:      i.horaInicio,
+      horariosGerados: i.horariosGerados,
+      duracaoDias:     i.duracaoDias,
+      observacao:      i.observacao,
+      dataInicio:      i.dataInicio,
     })),
-    grupo.createdAt,
+  });
+}
+
+// ─── AlertaEstoqueModal ───────────────────────────────────────────────────────
+
+function AlertaEstoqueModal({
+  alertas, loading, onContinuar, onCancelar,
+}: {
+  alertas:    AlertaEstoque[];
+  loading:    boolean;
+  onContinuar: () => void;
+  onCancelar:  () => void;
+}) {
+  const temInsuficiente = alertas.some(a => a.tipo === 'INSUFICIENTE');
+
+  const titulo    = temInsuficiente ? 'Estoque Insuficiente' : 'Estoque Ficará Zerado';
+  const subtitulo = temInsuficiente
+    ? 'Não existe estoque disponível suficiente para esta prescrição'
+    : 'Ao executar esta prescrição, o estoque disponível ficará zerado';
+  const headerCls = temInsuficiente
+    ? 'border-orange-100 bg-orange-50 rounded-t-2xl'
+    : 'border-amber-100 bg-amber-50 rounded-t-2xl';
+  const titleCls  = temInsuficiente ? 'text-orange-800' : 'text-amber-800';
+  const subCls    = temInsuficiente ? 'text-orange-600' : 'text-amber-600';
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+      <div className={`bg-white rounded-2xl shadow-xl w-full max-w-lg border ${temInsuficiente ? 'border-orange-200' : 'border-amber-200'}`}>
+        <div className={`flex items-center gap-3 px-5 py-4 border-b ${headerCls}`}>
+          <span className="text-2xl">⚠️</span>
+          <div>
+            <p className={`font-bold text-sm ${titleCls}`}>{titulo}</p>
+            <p className={`text-xs ${subCls}`}>{subtitulo}</p>
+          </div>
+        </div>
+
+        <div className="px-5 py-4 space-y-4 max-h-80 overflow-y-auto">
+          {alertas.map((a, i) => {
+            const isInsuf = a.tipo === 'INSUFICIENTE';
+            return (
+              <div key={i} className={`border rounded-xl p-3 ${isInsuf ? 'border-orange-200 bg-orange-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
+                <p className="font-semibold text-gray-800 text-sm">{a.medicamento}</p>
+                <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs text-gray-600">
+                  <span>Em estoque: <b>{a.qtdEstoque} {a.unidade}</b></span>
+                  <span>Reservado: <b className="text-orange-600">{a.qtdReservada.toFixed(2)} {a.unidade}</b></span>
+                  <span>Disponível: <b className={isInsuf ? 'text-red-600' : 'text-amber-600'}>
+                    {a.qtdDisponivel.toFixed(2)} {a.unidade}
+                  </b></span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Necessário nesta prescrição: <b>{a.qtdNecessaria.toFixed(2)} {a.unidade}</b>
+                </p>
+                {a.reservas.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase">Reservado por:</p>
+                    {a.reservas.map((r, j) => (
+                      <p key={j} className="text-xs text-gray-600">
+                        · <b>{r.animalNome}</b> — Prescrição #{r.prescricaoNumero} ({r.quantidade.toFixed(2)} {a.unidade})
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button onClick={onCancelar}
+            className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
+            Cancelar
+          </button>
+          <button onClick={onContinuar} disabled={loading}
+            className="px-5 py-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5">
+            {loading && <Loader2 size={13} className="animate-spin" />}
+            Continuar mesmo assim
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 // ─── GrupoModal ───────────────────────────────────────────────────────────────
 
 interface GrupoModalProps {
-  animalId:  number;
-  animal?:   VetPrintAnimal | null;
-  grupo:     PrescricaoGrupo | null; // null = creating new
-  canEdit:   boolean;
-  onClose:   () => void;
-  onSaved:   () => void;
+  animalId:             number;
+  animal?:              PrintAnimalPrescricao | null;
+  grupo:                PrescricaoGrupo | null; // null = creating new
+  canEdit:              boolean;
+  canFinalizarCancelar: boolean;
+  onClose:              () => void;
+  onSaved:              () => void;
 }
 
-function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: GrupoModalProps) {
+function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, onClose, onSaved }: GrupoModalProps) {
   const isCreate   = !grupo;
   const isReadOnly = grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO' || grupo?.status === 'CANCELADO';
   // Abre diretamente na "segunda tela" (form visível) quando editando uma prescrição SALVA
   const openWithForm = !isCreate && !isReadOnly && canEdit;
 
-  const [form,             setForm]             = useState<FormItem>(FORM_VAZIO);
+  const [form,             setForm]             = useState<FormItem>(FORM_VAZIO());
   const [localItens,       setLocalItens]       = useState<FormItem[]>([]);
   const [editingLocalIdx,  setEditingLocalIdx]  = useState<number | null>(null);
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
   const [medicamentos,     setMedicamentos]     = useState<MedicamentoCat[]>([]);
+  const [estoqueMap,       setEstoqueMap]       = useState<Map<number, number>>(new Map());
   const [saving,           setSaving]           = useState(false);
   const [finalizing,       setFinalizing]       = useState(false);
-  const [showAddForm,   setShowAddForm]   = useState(openWithForm);
+  const [alertaEstoque,    setAlertaEstoque]    = useState<AlertaEstoque[] | null>(null);
+  const [showAddForm,      setShowAddForm]      = useState(openWithForm);
+  const [showMedDropdown,  setShowMedDropdown]  = useState(false);
+  const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string }[]>([]);
+  const [showProcDropdown, setShowProcDropdown] = useState(false);
+  const [draggedIdx,       setDraggedIdx]       = useState<number | null>(null);
+  const [dragOverIdx,      setDragOverIdx]      = useState<number | null>(null);
   // Rascunhos independentes: preserva os valores de cada aba ao trocar de tipo
   const formBackupsRef = useRef<Partial<Record<TipoItem, FormItem>>>({});
 
@@ -171,25 +288,49 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
     if (newTipo === form.tipo) return;
     formBackupsRef.current[form.tipo] = { ...form };
     const backup = formBackupsRef.current[newTipo];
-    setForm(backup ? { ...backup } : { ...FORM_VAZIO, tipo: newTipo });
+    setForm(backup ? { ...backup } : { ...FORM_VAZIO(), tipo: newTipo });
   };
 
   const resetForm = () => {
     formBackupsRef.current = {};
-    setForm(FORM_VAZIO);
+    setForm(FORM_VAZIO());
   };
 
   // Limpa apenas o tipo que acabou de ser inserido; preserva o backup do outro tipo
   const clearCurrentType = () => {
     const tipo = form.tipo;
     delete formBackupsRef.current[tipo];
-    setForm({ ...FORM_VAZIO, tipo });
+    setForm({ ...FORM_VAZIO(), tipo });
   };
 
-  // Load catalog on mount
+  const handleReorder = (from: number, to: number) => {
+    if (from === to) return;
+    const move = <T,>(arr: T[]): T[] => {
+      const next = [...arr];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    };
+    if (isCreate) setLocalItens(move);
+    else          setServerItens(move);
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  };
+
+  // Load catalogs on mount
   useEffect(() => {
     api.get('/medicamentos?limit=500&ativo=true').then(r => {
       setMedicamentos(r.data.dados ?? []);
+    }).catch(() => {});
+    api.get('/procedimentos?limit=500&ativo=true').then(r => {
+      const lista: { id: number; nome: string }[] = r.data.dados ?? [];
+      setProcedimentos(lista.map(p => ({ id: p.id, nome: p.nome })));
+    }).catch(() => {});
+    api.get('/farmacia/estoque?limit=1000&ativo=true').then(r => {
+      const itens: EstoqueItem[] = r.data.dados ?? [];
+      const map = new Map<number, number>();
+      itens.forEach(e => map.set(e.medicamentoId, e.qtdEstoque));
+      setEstoqueMap(map);
     }).catch(() => {});
   }, []);
 
@@ -280,17 +421,18 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
   const handleEditarServer = (item: ItemGrupo) => {
     setShowAddForm(false);
     setForm({
-      tipo:             item.tipo,
-      medicamento:      item.medicamento,
-      medicamentoCatId: item.medicamentoCatId,
-      dosagem:          item.dosagem ?? '',
-      unidade:          item.unidade ?? '',
-      via:              item.via,
-      frequencia:       item.frequencia,
-      horaInicio:       item.horaInicio ?? '',
-      duracaoDias:      item.duracaoDias,
-      dataInicio:       item.dataInicio?.split('T')[0] ?? '',
-      observacao:       item.observacao ?? '',
+      tipo:               item.tipo,
+      medicamento:        item.medicamento,
+      medicamentoCatId:   item.medicamentoCatId,
+      dosagem:            item.dosagem ?? '',
+      unidade:            item.unidade ?? '',
+      via:                item.via,
+      frequencia:         item.frequencia,
+      horaInicio:         item.horaInicio ?? '',
+      duracaoDias:        item.duracaoDias,
+      dataInicio:         item.dataInicio?.split('T')[0] ?? '',
+      observacao:         item.observacao ?? '',
+      medicamentoCliente: item.medicamentoCliente,
     });
     setEditingServerId(item.id);
   };
@@ -333,26 +475,43 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
 
   // ── Finalizar ───────────────────────────────────────────────────────────────
 
-  const handleFinalizar = async () => {
+  const executarFinalizacao = async (forcar = false) => {
     setFinalizing(true);
     try {
+      let grupoId = grupo?.id;
       if (isCreate) {
         const itens = formEstaVazio() ? localItens : [...localItens, form];
         if (itens.length === 0) { toast.error('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
         const res = await api.post('/clinica/prescricoes/grupos', { animalId, itens });
-        await api.post(`/clinica/prescricoes/grupos/${res.data.dados.id}/finalizar`);
-      } else {
-        await api.post(`/clinica/prescricoes/grupos/${grupo!.id}/finalizar`);
+        grupoId = res.data.dados.id;
       }
+      await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
+      setAlertaEstoque(null);
       toast.success('Prescrição finalizada');
       onSaved(); onClose();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao finalizar prescrição');
+      const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
+      if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
+        setAlertaEstoque(resp.data.alertas ?? []);
+      } else {
+        toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+      }
     } finally { setFinalizing(false); }
   };
 
+  const handleFinalizar = () => executarFinalizacao(false);
+
+  if (alertaEstoque) {
+    return (
+      <AlertaEstoqueModal
+        alertas={alertaEstoque}
+        loading={finalizing}
+        onContinuar={() => executarFinalizacao(true)}
+        onCancelar={() => setAlertaEstoque(null)}
+      />
+    );
+  }
 
   const isMed           = form.tipo === 'MEDICAMENTO';
   const medCatalogo     = form.medicamentoCatId
@@ -422,7 +581,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
                   (['MEDICAMENTO', 'PROCEDIMENTO'] as TipoItem[]).map(t => (
                     <button key={t} onClick={() => switchTipo(t)}
                       className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
-                        form.tipo === t ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                        form.tipo === t ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
                       }`}>
                       {t === 'MEDICAMENTO' ? <Pill size={11} /> : <Activity size={11} />}
                       {t === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
@@ -436,49 +595,111 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
                 <label className="block text-xs text-gray-500 mb-1">
                   {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
                 </label>
-                {isMed && medicamentos.length > 0 ? (
-                  <>
-                    <input
-                      list="med-datalist"
-                      type="text"
-                      value={form.medicamento}
-                      onChange={e => {
-                        const val = e.target.value;
-                        set('medicamento', val);
-                        const match = medicamentos.find(m => m.nome === val);
-                        if (match) {
-                          setForm(prev => ({
-                            ...prev,
-                            medicamento:      match.nome,
-                            medicamentoCatId: match.id,
-                            unidade:          match.unidade,
-                            via:              match.vias[0]?.via ?? prev.via,
-                          }));
-                        } else {
-                          set('medicamentoCatId', null);
-                        }
-                      }}
-                      placeholder="Buscar ou digitar medicamento..."
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                    />
-                    <datalist id="med-datalist">
-                      {medicamentos.map(m => (
-                        <option key={m.id} value={m.nome}>{m.formaFarmaceutica}</option>
-                      ))}
-                    </datalist>
-                  </>
-                ) : (
-                  <div className="relative">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                    <input
-                      type="text" value={form.medicamento}
-                      onChange={e => set('medicamento', e.target.value)}
-                      placeholder={isMed ? 'Nome do medicamento...' : 'Nome do procedimento...'}
-                      className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                )}
+                <div className="relative">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={form.medicamento}
+                    onChange={e => {
+                      set('medicamento', e.target.value);
+                      set('medicamentoCatId', null);
+                      if (isMed) setShowMedDropdown(true);
+                      else       setShowProcDropdown(true);
+                    }}
+                    onFocus={() => {
+                      if (isMed) setShowMedDropdown(true);
+                      else       setShowProcDropdown(true);
+                    }}
+                    onBlur={() => setTimeout(() => {
+                      setShowMedDropdown(false);
+                      setShowProcDropdown(false);
+                    }, 150)}
+                    placeholder={isMed ? 'Buscar medicamento...' : 'Buscar procedimento...'}
+                    className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                  />
+                  {/* Dropdown medicamentos */}
+                  {isMed && showMedDropdown && (
+                    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                      {medicamentos
+                        .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                        .slice(0, 40)
+                        .map(m => {
+                          const qtd = estoqueMap.get(m.id) ?? 0;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onMouseDown={() => {
+                                setForm(prev => ({
+                                  ...prev,
+                                  medicamento:      m.nome,
+                                  medicamentoCatId: m.id,
+                                  unidade:          m.unidade,
+                                  via:              m.vias[0]?.via ?? prev.via,
+                                }));
+                                setShowMedDropdown(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
+                              <span className="font-medium">{m.nome}</span>
+                              {m.formaFarmaceutica && (
+                                <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
+                              )}
+                              {qtd > 0 && (
+                                <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                                  Em estoque
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                        <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
+                      )}
+                    </div>
+                  )}
+                  {/* Dropdown procedimentos */}
+                  {!isMed && showProcDropdown && (
+                    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                      {procedimentos
+                        .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                        .slice(0, 40)
+                        .map(p => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onMouseDown={() => {
+                              set('medicamento', p.nome);
+                              setShowProcDropdown(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
+                            <span className="font-medium">{p.nome}</span>
+                          </button>
+                        ))}
+                      {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                        <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Medicamento Cliente */}
+              {isMed && (
+                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                  <input
+                    type="checkbox"
+                    checked={form.medicamentoCliente}
+                    onChange={e => set('medicamentoCliente', e.target.checked)}
+                    className="w-4 h-4 rounded accent-emerald-600 cursor-pointer"
+                  />
+                  <span className="text-sm text-gray-700 font-medium">Medicamento do Cliente</span>
+                  {form.medicamentoCliente && (
+                    <span className="text-[11px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
+                      Sem baixa no estoque
+                    </span>
+                  )}
+                </label>
+              )}
 
               {/* Dosagem + Via */}
               {isMed && (
@@ -589,13 +810,24 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
                           unidade={item.unidade}
                           via={item.via}
                           frequencia={item.frequencia}
+                          horaInicio={item.horaInicio}
+                          duracaoDias={item.duracaoDias}
+                          dataInicio={item.dataInicio}
+                          observacao={item.observacao}
+                          medicamentoCliente={item.medicamentoCliente}
                           isEditing={editingLocalIdx === idx}
                           canEdit={canEdit}
                           onEdit={() => handleEditarLocal(idx)}
                           onRemove={() => handleRemoverLocal(idx)}
+                          isDragging={draggedIdx === idx}
+                          isDragOver={dragOverIdx === idx}
+                          onDragStart={() => setDraggedIdx(idx)}
+                          onDragOver={e => { e.preventDefault(); setDragOverIdx(idx); }}
+                          onDrop={() => handleReorder(draggedIdx ?? idx, idx)}
+                          onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
                         />
                       ))
-                    : serverItens.map(item => (
+                    : serverItens.map((item, idx) => (
                         <ItemRow
                           key={item.id}
                           label={item.medicamento}
@@ -604,10 +836,21 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
                           unidade={item.unidade}
                           via={item.via}
                           frequencia={item.frequencia}
+                          horaInicio={item.horaInicio}
+                          duracaoDias={item.duracaoDias}
+                          dataInicio={item.dataInicio}
+                          observacao={item.observacao}
+                          medicamentoCliente={item.medicamentoCliente}
                           isEditing={editingServerId === item.id}
                           canEdit={canEdit && !isReadOnly}
                           onEdit={() => handleEditarServer(item)}
                           onRemove={() => handleRemoverServer(item.id)}
+                          isDragging={draggedIdx === idx}
+                          isDragOver={dragOverIdx === idx}
+                          onDragStart={() => setDraggedIdx(idx)}
+                          onDragOver={e => { e.preventDefault(); setDragOverIdx(idx); }}
+                          onDrop={() => handleReorder(draggedIdx ?? idx, idx)}
+                          onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
                         />
                       ))
                   }
@@ -630,7 +873,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
 
             {/* Inserir item — só edit mode SALVO, quando o form está fechado */}
             {!isCreate && canEdit && !isReadOnly && !showItemForm && (
-              <button onClick={() => { setShowAddForm(true); setForm(FORM_VAZIO); }}
+              <button onClick={() => { setShowAddForm(true); setForm(FORM_VAZIO()); }}
                 className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Inserir
               </button>
@@ -652,7 +895,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
             )}
 
             {/* Finalizar */}
-            {canEdit && !isReadOnly && (
+            {canEdit && canFinalizarCancelar && !isReadOnly && (
               <button onClick={handleFinalizar} disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
                 className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                 {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
@@ -668,34 +911,84 @@ function GrupoModal({ animalId, animal, grupo, canEdit, onClose, onSaved }: Grup
 
 // ─── ItemRow ──────────────────────────────────────────────────────────────────
 
+function calcDataFim(dataInicio: string, dias: number | ''): string {
+  if (!dataInicio || !dias) return '';
+  const d = new Date(dataInicio.split('T')[0] + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + Number(dias) - 1);
+  const y  = d.getUTCFullYear();
+  const m  = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dy = String(d.getUTCDate()).padStart(2, '0');
+  return `${dy}/${m}/${y}`;
+}
+
+function InfoChip({ label, value }: { label: string; value: string | null | undefined }) {
+  if (!value) return null;
+  return (
+    <span className="text-[10px] text-gray-500 whitespace-nowrap">
+      <span className="text-gray-400 mr-0.5">{label}</span>{value}
+    </span>
+  );
+}
+
 function ItemRow({
   label, tipo, dosagem, unidade, via, frequencia,
+  horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente,
   isEditing, canEdit, onEdit, onRemove,
+  isDragging, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   label: string; tipo: TipoItem;
   dosagem: string | null; unidade: string | null; via: string; frequencia: string;
+  horaInicio?: string | null; duracaoDias?: number | ''; dataInicio?: string; observacao?: string | null;
+  medicamentoCliente?: boolean;
   isEditing: boolean; canEdit: boolean;
   onEdit: () => void; onRemove: () => void;
+  isDragging?: boolean; isDragOver?: boolean;
+  onDragStart?: () => void; onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: () => void; onDragEnd?: () => void;
 }) {
-  const isMed = tipo === 'MEDICAMENTO';
+  const isMed  = tipo === 'MEDICAMENTO';
+  const dtFim  = dataInicio && duracaoDias ? calcDataFim(dataInicio, duracaoDias) : '';
+  const dtIni  = dataInicio ? formatarData(dataInicio) : '';
+
   return (
-    <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-colors ${
-      isEditing ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-gray-50'
-    }`}>
+    <div
+      draggable={canEdit && !!onDragStart}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-colors ${canEdit && onDragStart ? 'cursor-grab active:cursor-grabbing' : ''} ${
+        isDragOver   ? 'border-emerald-400 bg-emerald-50 scale-[1.01]' :
+        isDragging   ? 'opacity-40 border-dashed border-emerald-300' :
+        isEditing    ? 'border-emerald-300 bg-emerald-50' :
+                       'border-gray-100 bg-gray-50'
+      }`}>
       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${
         isMed ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
       }`}>
         {isMed ? <Pill size={9} /> : <Activity size={9} />}
         {isMed ? 'Med' : 'Proc'}
       </span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-800 truncate">{label}</p>
-        <p className="text-[10px] text-gray-500">
-          {isMed && dosagem ? `${dosagem}${unidade ? ' '+unidade : ''}` : ''}
-          {isMed && via ? ` • ${via}` : ''}
-          {' • '}{labelPosologia(frequencia)}
-        </p>
+
+      <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="text-sm font-semibold text-gray-800">{label}</span>
+        {medicamentoCliente && (
+          <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+            Cliente
+          </span>
+        )}
+        {isMed && dosagem && (
+          <InfoChip label="Dose:" value={`${dosagem}${unidade ? ' '+unidade : ''}`} />
+        )}
+        {isMed && via    && <InfoChip label="Via:" value={via} />}
+        <InfoChip label="Freq:" value={labelPosologia(frequencia)} />
+        {horaInicio      && <InfoChip label="Hora:" value={horaInicio} />}
+        {duracaoDias     && <InfoChip label="Dur:" value={`${duracaoDias}d`} />}
+        {dtIni           && <InfoChip label="Início:" value={dtIni} />}
+        {dtFim           && <InfoChip label="Fim:" value={dtFim} />}
+        {observacao      && <InfoChip label="Obs:" value={observacao} />}
       </div>
+
       {canEdit && (
         <div className="flex items-center gap-1 flex-shrink-0">
           <button onClick={onEdit}
@@ -712,9 +1005,15 @@ function ItemRow({
   );
 }
 
-// ─── ConfirmExclusao ──────────────────────────────────────────────────────────
+// ─── CancelarModal ────────────────────────────────────────────────────────────
 
-function ConfirmExclusao({ onConfirmar, onCancelar }: { onConfirmar: () => void; onCancelar: () => void }) {
+function CancelarModal({
+  onConfirmar, onCancelar,
+}: {
+  onConfirmar: (motivo: string) => void;
+  onCancelar:  () => void;
+}) {
+  const [motivo, setMotivo] = useState('');
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border border-gray-100">
@@ -723,16 +1022,26 @@ function ConfirmExclusao({ onConfirmar, onCancelar }: { onConfirmar: () => void;
             <Trash2 size={18} className="text-red-600" />
           </div>
           <div>
-            <h3 className="font-bold text-gray-900">Remover prescrição</h3>
-            <p className="text-xs text-gray-500">Esta ação não pode ser desfeita.</p>
+            <h3 className="font-bold text-gray-900">Cancelar prescrição</h3>
+            <p className="text-xs text-gray-500">A prescrição ficará no histórico como cancelada.</p>
           </div>
+        </div>
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-gray-700 mb-1">Motivo do cancelamento</label>
+          <textarea
+            value={motivo}
+            onChange={e => setMotivo(e.target.value)}
+            rows={3}
+            placeholder="Informe o motivo..."
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-red-300"
+          />
         </div>
         <div className="flex gap-3">
           <button onClick={onCancelar} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
-            Cancelar
+            Voltar
           </button>
-          <button onClick={onConfirmar} className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold">
-            Confirmar
+          <button onClick={() => onConfirmar(motivo)} className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold">
+            Confirmar cancelamento
           </button>
         </div>
       </div>
@@ -744,17 +1053,21 @@ function ConfirmExclusao({ onConfirmar, onCancelar }: { onConfirmar: () => void;
 
 export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
+  const { isSocio } = usePermissoes();
   const canEdit = user?.userType !== 'ESTAGIARIO';
+  const canFinalizarCancelar = isSocio;
 
-  const [grupos,       setGrupos]       = useState<PrescricaoGrupo[]>([]);
-  const [loading,      setLoading]      = useState(false);
-  const [total,        setTotal]        = useState(0);
-  const [salvos,       setSalvos]       = useState(0);
-  const [page,         setPage]         = useState(1);
-  const [limit]                         = useState(20);
-  const [showModal,    setShowModal]    = useState(false);
-  const [editingGrupo, setEditingGrupo] = useState<PrescricaoGrupo | null>(null);
-  const [deletingId,   setDeletingId]   = useState<number | null>(null);
+  const [grupos,           setGrupos]           = useState<PrescricaoGrupo[]>([]);
+  const [loading,          setLoading]          = useState(false);
+  const [total,            setTotal]            = useState(0);
+  const [salvos,           setSalvos]           = useState(0);
+  const [page,             setPage]             = useState(1);
+  const [limit]                                 = useState(20);
+  const [showModal,        setShowModal]        = useState(false);
+  const [editingGrupo,     setEditingGrupo]     = useState<PrescricaoGrupo | null>(null);
+  const [deletingId,       setDeletingId]       = useState<number | null>(null);
+  const [alertaDireto,     setAlertaDireto]     = useState<{ grupoId: number; alertas: AlertaEstoque[] } | null>(null);
+  const [loadingForceDireto, setLoadingForceDireto] = useState(false);
 
   const totalPaginas = Math.ceil(total / limit);
 
@@ -773,18 +1086,55 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const abrirNovo = () => { setEditingGrupo(null); setShowModal(true); };
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowModal(true); };
+
+  const handleFinalizarDireto = async (grupoId: number) => {
+    try {
+      await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`);
+      toast.success('Prescrição finalizada');
+      carregar();
+      onFaturaAtualizada();
+    } catch (err: unknown) {
+      const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
+      if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
+        setAlertaDireto({ grupoId, alertas: resp.data.alertas ?? [] });
+      } else {
+        toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+      }
+    }
+  };
+
+  const handleForcarFinalizacaoDireto = async () => {
+    if (!alertaDireto) return;
+    setLoadingForceDireto(true);
+    try {
+      await api.post(`/clinica/prescricoes/grupos/${alertaDireto.grupoId}/finalizar`, { forcarFinalizacao: true });
+      setAlertaDireto(null);
+      toast.success('Prescrição finalizada');
+      carregar();
+      onFaturaAtualizada();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao finalizar prescrição');
+    } finally {
+      setLoadingForceDireto(false);
+    }
+  };
   const fecharModal = () => { setShowModal(false); setEditingGrupo(null); };
   const onSaved = () => { carregar(); onFaturaAtualizada(); };
 
-  const handleExcluirCancelar = async () => {
+  const handleExcluirCancelar = async (motivo: string) => {
     if (deletingId === null) return;
     try {
-      await api.post(`/clinica/prescricoes/grupos/${deletingId}/cancelar`);
+      await api.post(`/clinica/prescricoes/grupos/${deletingId}/cancelar`, { motivo });
       toast.success('Prescrição cancelada');
       carregar();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao cancelar prescrição');
+      const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
+      if (data?.code === 'EXECUTADO') {
+        toast.error('Esta prescrição já foi executada integralmente e não pode ser cancelada.');
+      } else {
+        toast.error(data?.error ?? 'Erro ao cancelar prescrição');
+      }
     } finally { setDeletingId(null); }
   };
 
@@ -825,7 +1175,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           {canEdit && <p className="text-xs text-gray-300 mt-1">Use "Nova Prescrição" para criar</p>}
         </div>
         {showModal && (
-          <GrupoModal animalId={animalId} animal={animal} grupo={editingGrupo} canEdit={canEdit} onClose={fecharModal} onSaved={onSaved} />
+          <GrupoModal animalId={animalId} animal={animal} grupo={editingGrupo} canEdit={canEdit} canFinalizarCancelar={canFinalizarCancelar} onClose={fecharModal} onSaved={onSaved} />
         )}
       </>
     );
@@ -854,6 +1204,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             {grupos.map(g => {
               const isViewOnly = g.status !== 'SALVO';
               const editavel   = g.status === 'SALVO' && canEdit;
+              const cancelavel = ['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar;
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
@@ -886,13 +1237,19 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                         className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                         {isViewOnly ? <Eye size={13} /> : <Pencil size={13} />}
                       </button>
+                      {editavel && canFinalizarCancelar && (
+                        <button onClick={() => handleFinalizarDireto(g.id)} title="Finalizar prescrição"
+                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                          <CheckCircle2 size={13} />
+                        </button>
+                      )}
                       {g.status === 'FINALIZADO' && (
                         <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
                           className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
                           <Printer size={13} />
                         </button>
                       )}
-                      {editavel && (
+                      {cancelavel && (
                         <button onClick={() => setDeletingId(g.id)} title="Cancelar prescrição"
                           className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                           <Trash2 size={13} />
@@ -933,7 +1290,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <Printer size={11} /> Imprimir
                 </button>
               )}
-              {g.status === 'SALVO' && canEdit && (
+              {['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (
                 <button onClick={() => setDeletingId(g.id)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                   <Trash2 size={11} /> Cancelar
@@ -967,7 +1324,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         <GrupoModal animalId={animalId} animal={animal} grupo={editingGrupo} canEdit={canEdit} onClose={fecharModal} onSaved={onSaved} />
       )}
       {deletingId !== null && (
-        <ConfirmExclusao onConfirmar={handleExcluirCancelar} onCancelar={() => setDeletingId(null)} />
+        <CancelarModal onConfirmar={handleExcluirCancelar} onCancelar={() => setDeletingId(null)} />
+      )}
+      {alertaDireto && (
+        <AlertaEstoqueModal
+          alertas={alertaDireto.alertas}
+          loading={loadingForceDireto}
+          onContinuar={handleForcarFinalizacaoDireto}
+          onCancelar={() => setAlertaDireto(null)}
+        />
       )}
     </>
   );

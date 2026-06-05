@@ -8,7 +8,8 @@ const { authenticate, authorize } = require('../middlewares/auth');
 const router = express.Router();
 
 // Self-management (qualquer usuário autenticado)
-router.get   ('/me',        authenticate, UserController.getMe);
+router.get   ('/me',                authenticate, UserController.getMe);
+router.get   ('/buscar-proprietario', authenticate, UserController.buscarProprietarioPorEmail);
 router.put   ('/me',        authenticate, UserController.updateMe);
 router.patch ('/me/senha',  authenticate, UserController.alterarSenha);
 

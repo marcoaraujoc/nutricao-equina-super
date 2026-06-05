@@ -51,6 +51,10 @@ router.post('/', authenticate, EquipeController.criarEquipe);
 router.post('/admin/convidar-socio',  authenticate, EquipeController.convidarSocioAdmin);
 router.get ('/admin/todas-empresas',  authenticate, EquipeController.listarTodasEmpresasAdmin);
 
+// ─── Permissões globais por UserType (somente ADMIN) ─────────────────────────
+router.get('/admin/global/usertype/:userType', authenticate, EquipeController.getMatrizGlobalUserType);
+router.put('/admin/global/usertype/:userType', authenticate, EquipeController.salvarMatrizGlobalUserType);
+
 // =============================================================================
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO (já declaradas abaixo)
 // ─── ADMIN: remover sócio da equipe e desativar conta ────────────────────────
@@ -65,6 +69,7 @@ router.post  ('/:equipeId/convidar',                   authenticate, EquipeContr
 router.get   ('/:equipeId/membros',                    authenticate, EquipeController.listarMembrosPorEquipe);
 router.delete('/:equipeId/membros/:alvoUserId',        authenticate, EquipeController.removerMembro);
 router.patch ('/:equipeId/membros/:alvoUserId/cargo',  authenticate, EquipeController.alterarCargo);
+router.patch ('/:equipeId/membros/:alvoUserId/cargos', authenticate, EquipeController.alterarCargos);
 router.delete('/:equipeId/convites/:conviteId',        authenticate, EquipeController.cancelarConvite);
 router.get   ('/:equipeId/permissoes/:membroUserId',   authenticate, PermissaoController.getPermissoesMembro);
 router.put   ('/:equipeId/permissoes/:membroUserId',   authenticate, PermissaoController.atualizarPermissoes);

@@ -14,11 +14,14 @@ import AlterarSenhaObrigatoria from './pages/AlterarSenhaObrigatoria';
 import AceitarConviteEquipe   from './pages/AceitarConviteEquipe';
 
 // Pages — Gerais
-import Login           from './pages/Login';
-import Register        from './pages/Register';
-import Dashboard       from './pages/Dashboard';
-import CadastroPessoal from './pages/CadastroPessoal';
-import ResetPassword   from './pages/ResetPassword';
+import Login                from './pages/Login';
+import Register             from './pages/Register';
+import Dashboard            from './pages/Dashboard';
+import CadastroPessoal      from './pages/CadastroPessoal';
+import ResetPassword        from './pages/ResetPassword';
+import CadastroProprietario from './pages/CadastroProprietario';
+import CadastroTratador     from './pages/CadastroTratador';
+import CadastroFornecedor   from './pages/CadastroFornecedor';
 
 // Pages — Animais
 import Animal      from './pages/Animal';
@@ -121,6 +124,11 @@ function App() {
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
+
+                          {/* Cadastro */}
+                          <Route path="/cadastro/proprietarios" element={<CadastroProprietario />} />
+                          <Route path="/cadastro/tratadores"    element={<CadastroTratador />} />
+                          <Route path="/cadastro/fornecedores"  element={<CadastroFornecedor />} />
 
                           {/* Animais */}
                           <Route path="/meus-animais"  element={<MeusAnimais />} />

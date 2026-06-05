@@ -10,7 +10,9 @@ import {
   FileText, ArrowLeft, Sun, Sunset, Moon, Sparkles, CheckCircle2,
 } from 'lucide-react';
 import api from '../services/api';
-import VetDashboard from './VetDashboard';
+import VetDashboard    from './VetDashboard';
+import PageContainer   from '../components/PageContainer';
+import BotaoVoltar     from '../components/BotaoVoltar';
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -258,26 +260,24 @@ const Dashboard = () => {
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimais(lista);
 
-      // Membros convidados não passam pelo onboarding
-      if (isConvidado) {
+      // ADMIN e membros convidados não passam pelo onboarding
+      if (isConvidado || role === 'ADMIN') {
         setObPhase(null);
       } else {
         const ob = getOB();
         if (!ob) {
-          try {
-            const perfilRes      = await api.get('/users/me');
-            const perfil         = perfilRes.data;
-            const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
-
-            if (perfilCompleto && lista.length > 0) {
-              setObPhase(null);
-            } else if (perfilCompleto && perfil?.userType === 'VETERINARIO') {
-              setObPhase(null);
-            } else {
+          // Usuário com animais ou veterinário → onboarding já concluído
+          if (lista.length > 0 || user?.userType === 'VETERINARIO') {
+            setObPhase(null);
+          } else {
+            try {
+              const perfilRes      = await api.get('/users/me');
+              const perfil         = perfilRes.data;
+              const perfilCompleto = !!(perfil?.phone && perfil?.fullName?.trim());
+              setObPhase(perfilCompleto ? 'need_animal' : 'greeting');
+            } catch {
               setObPhase('greeting');
             }
-          } catch {
-            setObPhase('greeting');
           }
         } else if (ob === 'a') {
           setObPhase(lista.length === 0 ? 'need_animal' : 'welcome');
@@ -328,7 +328,9 @@ const Dashboard = () => {
 
   // ── Estado vazio ──────────────────────────────────────────────────────────
   if (animais.length === 0) return (
-    <div className="max-w-2xl mx-auto text-center py-20">
+    <PageContainer>
+      <BotaoVoltar className="mb-6" />
+      <div className="max-w-2xl mx-auto text-center py-20">
       <div className="w-20 h-20 bg-gray-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
         <Plus size={36} className="text-gray-400" />
       </div>
@@ -348,22 +350,33 @@ const Dashboard = () => {
         </>
       )}
     </div>
+    </PageContainer>
   );
 
   // ── Animal único → mostra direto ──────────────────────────────────────────
-  if (animais.length === 1) return <AnimalDashboard animal={animais[0]} onNavigate={navigate} />;
+  if (animais.length === 1) return (
+    <PageContainer maxWidth="7xl">
+      <BotaoVoltar className="mb-6" />
+      <AnimalDashboard animal={animais[0]} onNavigate={navigate} />
+    </PageContainer>
+  );
 
   // ── Animal selecionado na lista ───────────────────────────────────────────
   if (animalSelecionado) return (
-    <AnimalDashboard
-      animal={animalSelecionado}
-      onNavigate={navigate}
-      onBack={() => setAnimalSelecionado(null)} />
+    <PageContainer maxWidth="7xl">
+      <BotaoVoltar className="mb-6" />
+      <AnimalDashboard
+        animal={animalSelecionado}
+        onNavigate={navigate}
+        onBack={() => setAnimalSelecionado(null)} />
+    </PageContainer>
   );
 
   // ── Lista de animais ──────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="7xl">
+      <BotaoVoltar className="mb-6" />
+      <div className="space-y-6">
       <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
         {isConvidado ? 'Animais da Clínica' : 'Meus Animais'}
       </h1>
@@ -410,6 +423,7 @@ const Dashboard = () => {
         ))}
       </div>
     </div>
+    </PageContainer>
   );
 };
 

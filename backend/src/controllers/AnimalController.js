@@ -6,6 +6,8 @@ const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const { storage }      = require('../storage');
 const { getEmpresaIdDoVet } = require('../lib/vetUtils');
+const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { garantirFaturaAberta } = require('../services/FaturaService');
 
 const prisma = require('../lib/prisma').default;
 
@@ -68,13 +70,16 @@ const criarSolicitacaoPendente = async ({
   });
   if (!vet) throw new Error(`Veterinário id=${novoVetIdNum} não encontrado`);
 
-  // Só envia se o vet for dono de uma empresa OU vet autônomo (sem equipe).
-  // Vets convidados (MembroEquipe sem ser ownerId) não recebem VINCULO/DESVINCULO/TROCA_VET.
+  // Permite: dono de empresa, SÓCIO de equipe, ou vet autônomo (sem equipe).
+  // Bloqueia: VETERINARIO/ESTAGIARIO membros de equipe — eles não gerenciam vínculos diretamente.
   const empresaDoVet = await prisma.empresa.findFirst({ where: { ownerId: novoVetIdNum } });
   if (!empresaDoVet) {
     const membroDoVet = await prisma.membroEquipe.findFirst({ where: { userId: novoVetIdNum } });
-    if (membroDoVet) {
-      throw new Error('Solicitações só podem ser enviadas ao veterinário responsável pela clínica.');
+    if (membroDoVet && membroDoVet.cargo !== 'SOCIO') {
+      const err = new Error('VET_MEMBRO_SEM_RESPONSABILIDADE');
+      err.cargo = membroDoVet.cargo;
+      err.vetNome = vet.fullName;
+      throw err;
     }
   }
 
@@ -354,6 +359,7 @@ class AnimalController {
               data:  { empresaId: empId },
             });
           }
+          await garantirFaturaAberta(solicitacao.animal.userId);
         } else {
           // Recusa: limpa o vet responsável do animal
           await prisma.animal.update({
@@ -435,7 +441,9 @@ class AnimalController {
       if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
 
       const { userType, role } = await obterUserType(userId);
-      const isAdmin = role === 'ADMIN';
+      // PROPRIETARIO sempre vê apenas seus próprios animais, independente do role.
+      // Somente usuários sem userType proprietário e com role ADMIN têm acesso global.
+      const isAdmin = role === 'ADMIN' && userType !== 'PROPRIETARIO';
 
       const isMembroEquipe = !!req.empresaId && !isAdmin;
 
@@ -447,14 +455,18 @@ class AnimalController {
 
       const where = isAdmin
         ? {}
-        : userType === 'VETERINARIO'
-          // Vet com empresa: OR(empresaId, próprias solicitações) — cobre vets convidados e o sócio
-          ? isMembroEquipe
-            ? { OR: [{ empresaId: req.empresaId }, vetSolicitacoesWhere] }
-            : vetSolicitacoesWhere
-          : isMembroEquipe
-            ? { empresaId: req.empresaId }
-            : { userId: Number(userId) };
+        // PROPRIETARIO: sempre isolado pelo próprio userId — nunca vaza para outros donos
+        : userType === 'PROPRIETARIO'
+          ? { userId: Number(userId) }
+          : userType === 'VETERINARIO'
+            // Vet com empresa: OR(empresaId, próprias solicitações) — cobre vets convidados e sócio
+            ? isMembroEquipe
+              ? { OR: [{ empresaId: req.empresaId }, vetSolicitacoesWhere] }
+              : vetSolicitacoesWhere
+            // ESTAGIARIO: vê os animais da empresa onde está
+            : isMembroEquipe
+              ? { empresaId: req.empresaId }
+              : {};
 
       const animais = await prisma.animal.findMany({
         where,
@@ -483,28 +495,11 @@ class AnimalController {
       });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
 
-      // Vets só podem visualizar o animal após aprovação (ACEITO)
-      const userId = req.user?.id;
-      if (userId) {
-        const { userType, role } = await obterUserType(userId);
-        if (userType === 'VETERINARIO' && role !== 'ADMIN') {
-          const isOwner = animal.userId === Number(userId);
-          if (!isOwner) {
-            const aceito = await prisma.vetAnimalSolicitacao.findFirst({
-              where: {
-                animalId: id, vetUserId: Number(userId),
-                OR: [
-                  { tipo: 'VINCULO',    status: 'ACEITO'   },
-                  { tipo: 'DESVINCULO', status: 'PENDENTE' },
-                  { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-                ],
-              },
-            });
-            if (!aceito) {
-              return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
-            }
-          }
-        }
+      // Controle de acesso centralizado — cobre PROPRIETARIO, empresa (sócios), e vínculo direto
+      if (req.user?.id) {
+        const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId });
+        if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+        if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
 
       res.json({ sucesso: true, dados: animal });
@@ -529,8 +524,9 @@ class AnimalController {
     if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
 
     try {
-      const { userType } = await obterUserType(req.user.id);
-      const isVet = userType === 'VETERINARIO';
+      const { userType, role } = await obterUserType(req.user.id);
+      const isVet             = userType === 'VETERINARIO';
+      const isAdminCriando    = role === 'ADMIN' && userType !== 'PROPRIETARIO';
 
       // Busca nome completo do vet no banco (não está no JWT)
       const vetLogado = await prisma.user.findUnique({
@@ -608,7 +604,8 @@ class AnimalController {
       let proprietarioEmailParaEmail = null;
       let isNewProprietario = false;
 
-            if (proprietarioId) {
+            // Somente ADMIN pode redirecionar a criação para outro proprietário
+            if (proprietarioId && isAdminCriando) {
               targetUserId = Number(proprietarioId);
               const prop = await prisma.user.findUnique({
                 where:  { id: Number(proprietarioId) },
@@ -657,17 +654,25 @@ class AnimalController {
       const criadoParaSiMesmo = isVet && Number(targetUserId) === Number(req.user.id);
       const vetEmpresaId = criadoParaSiMesmo ? await getEmpresaIdDoVet(req.user.id) : null;
 
-      // Validação de baia: única por empresa (ou por proprietário quando sem empresa)
+      // Validação de baia: única por (local + empresa/proprietário).
+      // Mesmo número de baia é permitido em locais distintos.
       if (baia?.trim()) {
-        const scopeBaia = vetEmpresaId
+        const scopeBaia  = vetEmpresaId
           ? { empresaId: vetEmpresaId }
           : { userId: Number(targetUserId) };
+        const localNorm  = local?.trim() || null;
         const baiaOcupada = await prisma.animal.findFirst({
-          where: { baia: { equals: baia.trim(), mode: 'insensitive' }, ativo: true, ...scopeBaia },
+          where: {
+            baia:  { equals: baia.trim(), mode: 'insensitive' },
+            local: localNorm ? { equals: localNorm, mode: 'insensitive' } : null,
+            ativo: true,
+            ...scopeBaia,
+          },
           select: { nome: true },
         });
         if (baiaOcupada) {
-          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}" já está ocupada por ${baiaOcupada.nome}` });
+          const localLabel = localNorm ? ` (${localNorm})` : '';
+          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${baiaOcupada.nome}` });
         }
       }
 
@@ -696,8 +701,9 @@ class AnimalController {
         if (criadoParaSiMesmo) {
           // Vet criando animal para si mesmo → ACEITO direto (empresaId já incluído no create)
           await prisma.vetAnimalSolicitacao.create({
-            data: { animalId: animal.id, vetUserId: Number(req.user.id), status: 'ACEITO' },
+            data: { animalId: animal.id, vetUserId: Number(req.user.id), tipo: 'VINCULO', status: 'ACEITO' },
           });
+          await garantirFaturaAberta(Number(targetUserId));
         } else {
           // Vet criando para um proprietário → PENDENTE + email ao proprietário
           const tokenVinculo  = gerarToken();
@@ -750,6 +756,12 @@ class AnimalController {
       res.status(201).json({ sucesso: true, dados: animal });
     } catch (error) {
       console.error('[AnimalController.criar]', error);
+      if (error.message === 'VET_MEMBRO_SEM_RESPONSABILIDADE') {
+        return res.status(400).json({
+          sucesso: false,
+          mensagem: `O veterinário "${error.vetNome}" tem cargo ${error.cargo} na equipe e não pode ser vinculado diretamente como responsável. Selecione um veterinário SÓCIO ou o proprietário da clínica.`,
+        });
+      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao criar animal' });
     }
   }
@@ -770,6 +782,10 @@ class AnimalController {
     if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
 
     try {
+      const acessoAtu = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId });
+      if (acessoAtu === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acessoAtu)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
       const especie  = await prisma.especie.findUnique({ where: { id: Number(especieId) } });
       const isEquino = especie && (
         especie.nome.toLowerCase().includes('equino') ||
@@ -799,15 +815,23 @@ class AnimalController {
       });
 
       if (baia?.trim()) {
-        const scopeBaia = animalAtual?.empresaId
+        const scopeBaia   = animalAtual?.empresaId
           ? { empresaId: animalAtual.empresaId }
           : { userId: animalAtual?.userId };
+        const localNorm   = local?.trim() || null;
         const baiaOcupada = await prisma.animal.findFirst({
-          where: { baia: { equals: baia.trim(), mode: 'insensitive' }, ativo: true, id: { not: animalId }, ...scopeBaia },
+          where: {
+            baia:  { equals: baia.trim(), mode: 'insensitive' },
+            local: localNorm ? { equals: localNorm, mode: 'insensitive' } : null,
+            ativo: true,
+            id:    { not: animalId },
+            ...scopeBaia,
+          },
           select: { nome: true },
         });
         if (baiaOcupada) {
-          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}" já está ocupada por ${baiaOcupada.nome}` });
+          const localLabel = localNorm ? ` (${localNorm})` : '';
+          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${baiaOcupada.nome}` });
         }
       }
 
@@ -877,6 +901,12 @@ class AnimalController {
       res.json({ sucesso: true, dados: animalAtualizado });
     } catch (error) {
       console.error('[AnimalController.atualizar]', error);
+      if (error.message === 'VET_MEMBRO_SEM_RESPONSABILIDADE') {
+        return res.status(400).json({
+          sucesso: false,
+          mensagem: `O veterinário "${error.vetNome}" tem cargo ${error.cargo} na equipe e não pode ser vinculado diretamente como responsável. Selecione um veterinário SÓCIO ou o proprietário da clínica.`,
+        });
+      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao atualizar animal' });
     }
   }
@@ -886,6 +916,10 @@ class AnimalController {
   async excluir(req, res) {
     const animalId = Number(req.params.id);
     try {
+      const acessoExc = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId });
+      if (acessoExc === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acessoExc)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
       await prisma.dieta.deleteMany({ where: { animalId } });
       await prisma.planoDieta.deleteMany({ where: { animalId } });
       await prisma.vetAnimalSolicitacao.deleteMany({ where: { animalId } });
@@ -908,9 +942,11 @@ class AnimalController {
     try {
       await prisma.vetAnimalSolicitacao.upsert({
         where:  { animalId_vetUserId: { animalId: Number(animalId), vetUserId: Number(vetUserId) } },
-        create: { animalId: Number(animalId), vetUserId: Number(vetUserId), status: 'ACEITO' },
-        update: { status: 'ACEITO', approvalToken: null, expiresAt: null },
+        create: { animalId: Number(animalId), vetUserId: Number(vetUserId), tipo: 'VINCULO', status: 'ACEITO' },
+        update: { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null },
       });
+      const animalDados = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true } });
+      await garantirFaturaAberta(animalDados?.userId);
       res.json({ sucesso: true, mensagem: 'Vínculo criado com sucesso' });
     } catch (error) {
       console.error('[AnimalController.vincularVet]', error);
@@ -1062,6 +1098,7 @@ class AnimalController {
               data:  { empresaId: empId },
             });
           }
+          await garantirFaturaAberta(proprietarioId);
         } else {
           await prisma.animal.update({
             where: { id: solicitacao.animalId },
@@ -1114,7 +1151,6 @@ class AnimalController {
       });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
 
-      // Busca o vínculo ativo deste vet com o animal
       const solAtiva = await prisma.vetAnimalSolicitacao.findFirst({
         where: {
           animalId, vetUserId,
