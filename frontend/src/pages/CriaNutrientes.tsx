@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import axios from 'axios';
+import api from '../services/api';
 import { ArrowLeft } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 const CriaNutrientes = () => {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
@@ -24,7 +22,7 @@ const CriaNutrientes = () => {
     const loadData = async () => {
       if (isEditMode && id) {
         try {
-          const res = await axios.get(`/api/nutrientes/${id}`);
+          const res = await api.get(`/nutrientes/${id}`);
           const n = res.data;
           setFormData({ nome: n.nome, categoria: n.categoria, unidadePadrao: n.unidadePadrao });
         } catch (error) {
@@ -41,10 +39,10 @@ const CriaNutrientes = () => {
     setSubmitting(true);
     try {
       if (isEditMode) {
-        await axios.put(`/api/nutrientes/${id}`, formData);
+        await api.put(`/nutrientes/${id}`, formData);
         alert('Nutriente atualizado com sucesso!');
       } else {
-        await axios.post('/api/nutrientes', formData);
+        await api.post('/nutrientes', formData);
         alert('Nutriente cadastrado com sucesso!');
       }
       navigate('/nutrientes');

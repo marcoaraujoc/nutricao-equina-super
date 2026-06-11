@@ -8,11 +8,12 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
-export type Nivel = 'NENHUM' | 'LEITURA' | 'PROPRIO' | 'EQUIPE' | 'FULL';
+export type Nivel = 'NENHUM' | 'LEITURA' | 'PROPRIO' | 'EQUIPE' | 'FULL' | 'NEGADO';
 
 export type PermissaoMap = Record<string, Nivel>;
 
 const NIVEL_ORDINAL: Record<Nivel, number> = {
+  NEGADO:  -1, // bloqueio explícito — nunca satisfaz nenhum nível mínimo
   NENHUM:  0,
   LEITURA: 1,
   PROPRIO: 2,
@@ -32,13 +33,14 @@ interface UsePermissoesResult {
 
 // ADMIN tem bypass total via podeExecutar.
 // PROPRIETARIO carrega permissões reais do backend (Dashboard sempre + grants do vet/empresa).
-const ROLES_SEM_EQUIPE = ['ADMIN'];
 
 export function usePermissoes(): UsePermissoesResult {
   const { user } = useAuth();
 
-  const userType = (user?.userType ?? '').toUpperCase();
-  const precisaCarregar = user && !ROLES_SEM_EQUIPE.includes(userType);
+  const userType  = (user?.userType ?? '').toUpperCase();
+  const userRole  = (user?.role     ?? '').toUpperCase();
+  const isAdminUser = userType === 'ADMIN' || userRole === 'ADMIN';
+  const precisaCarregar = user && !isAdminUser;
 
   const [permissoes, setPermissoes] = useState<PermissaoMap>({});
   const [isSocio,    setIsSocio]    = useState(false);
@@ -70,12 +72,11 @@ export function usePermissoes(): UsePermissoesResult {
   useEffect(() => { carregar(); }, [carregar]);
 
   const podeExecutar = useCallback((slug: string, nivelMinimo: Nivel = 'LEITURA'): boolean => {
-    if (isSocio) return true;
-    if (userType === 'ADMIN') return true;
+    if (isSocio || isAdminUser) return true;
     // PROPRIETARIO e demais: verifica o mapa retornado pelo backend
     const nivelAtual = permissoes[slug] ?? 'NENHUM';
     return NIVEL_ORDINAL[nivelAtual] >= NIVEL_ORDINAL[nivelMinimo];
-  }, [isSocio, permissoes, userType]);
+  }, [isSocio, isAdminUser, permissoes]);
 
   return { permissoes, isSocio, temEquipe, loading, podeExecutar, recarregar: carregar };
 }

@@ -1,4 +1,4 @@
-﻿// src/pages/Usuarios.tsx
+// src/pages/Usuarios.tsx
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
@@ -6,10 +6,11 @@ import toast from 'react-hot-toast';
 import axios from 'axios';
 import {
   Pencil, Trash2,
-  ToggleLeft, ToggleRight, X, AlertCircle,
+  ToggleLeft, ToggleRight,
   Building2, Users2,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import { formatDate as formatarDataBR } from '../utils/dateUtils';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -34,49 +35,39 @@ interface Usuario {
   estado: string | null;
 }
 
-interface FormUsuario {
-  fullName: string;
-  email: string;
-  phone: string;
-  role: string;
-  userType: string;
-  senha: string;
-  ativo: boolean;
-  cep: string;
-  endereco: string;
-  complemento: string;
-  bairro: string;
-  cidade: string;
-  estado: string;
-}
-
-const FORM_INICIAL: FormUsuario = {
-  fullName: '', email: '', phone: '', role: 'USER',
-  userType: 'PROPRIETARIO', senha: '', ativo: true,
-  cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
-};
-
 const ROLES = [
   { value: 'USER',  label: 'Usuário'         },
   { value: 'ADMIN', label: 'Administrador'   },
 ];
 
 const USER_TYPES = [
-  { value: 'PROPRIETARIO', label: 'Proprietário' },
-  { value: 'VETERINARIO',  label: 'Veterinário'  },
+  { value: 'PROPRIETARIO', label: 'Proprietário'  },
+  { value: 'VETERINARIO',  label: 'Veterinário'   },
+  { value: 'ESTAGIARIO',   label: 'Estagiário'    },
+  { value: 'FORNECEDOR',   label: 'Fornecedor'    },
   { value: 'ADMIN',        label: 'Administrador' },
 ];
 
-const ESTADOS_BR = [
-  'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA',
-  'MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN',
-  'RS','RO','RR','SC','SP','SE','TO',
-];
+// Perfil de acesso (select do formulário) → userType persistido
+const PERFIL_TO_USERTYPE: Record<string, string> = {
+  VETERINARIO:  'VETERINARIO',
+  ESTAGIARIO:   'ESTAGIARIO',
+  PRESTADOR:    'FORNECEDOR',
+  SOCIO:        'VETERINARIO',
+  PROPRIETARIO: 'PROPRIETARIO',
+  ADMIN:        'ADMIN',
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const labelRole     = (r: string) => ROLES.find(x => x.value === r)?.label     ?? r;
 const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label ?? t;
+
+// userType/cargo do usuário → valor do select "Perfil de acesso"
+const perfilDoUsuario = (u: Usuario): string =>
+  u.cargoEquipe === 'SOCIO' ? 'SOCIO'
+  : u.userType === 'FORNECEDOR' ? 'PRESTADOR'
+  : u.userType;
 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
@@ -86,11 +77,9 @@ const Usuarios = () => {
   const [search,      setSearch]      = useState('');
   const [filtroAtivo, setFiltroAtivo] = useState<'todos' | 'ativos' | 'inativos'>('todos');
   const [modalAberto, setModalAberto] = useState(false);
-  const [editandoId,  setEditandoId]  = useState<number | null>(null);
-  const [form,        setForm]        = useState<FormUsuario>(FORM_INICIAL);
+  const [editando,    setEditando]    = useState<Usuario | null>(null);
   const [salvando,    setSalvando]    = useState(false);
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
-  const [abaModal,    setAbaModal]    = useState<'dados' | 'endereco'>('dados');
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
@@ -124,94 +113,49 @@ const Usuarios = () => {
   // ── Modal ─────────────────────────────────────────────────────────────────
 
   const abrirNovo = () => {
-    setEditandoId(null);
-    setForm(FORM_INICIAL);
-    setAbaModal('dados');
+    setEditando(null);
     setModalAberto(true);
   };
 
   const abrirEditar = (u: Usuario) => {
-    setEditandoId(u.id);
-    setForm({
-      fullName:    u.fullName,
-      email:       u.email,
-      phone:       u.phone       ?? '',
-      role:        u.role,
-      userType:    u.userType,
-      senha:       '',
-      ativo:       u.ativo,
-      cep:         u.cep         ?? '',
-      endereco:    u.endereco    ?? '',
-      complemento: u.complemento ?? '',
-      bairro:      u.bairro      ?? '',
-      cidade:      u.cidade      ?? '',
-      estado:      u.estado      ?? '',
-    });
-    setAbaModal('dados');
+    setEditando(u);
     setModalAberto(true);
   };
 
   const fecharModal = () => {
     setModalAberto(false);
-    setEditandoId(null);
-    setForm(FORM_INICIAL);
-  };
-
-  const set = (field: keyof FormUsuario, value: string | boolean) =>
-    setForm(prev => ({ ...prev, [field]: value }));
-
-  // ── Busca CEP ─────────────────────────────────────────────────────────────
-
-  const buscarCep = async () => {
-    const cep = form.cep.replace(/\D/g, '');
-    if (cep.length !== 8) { toast.error('CEP inválido'); return; }
-    try {
-      const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-      const data = await res.json();
-      if (data.erro) { toast.error('CEP não encontrado'); return; }
-      setForm(prev => ({
-        ...prev,
-        endereco: data.logradouro ?? '',
-        bairro:   data.bairro    ?? '',
-        cidade:   data.localidade ?? '',
-        estado:   data.uf        ?? '',
-      }));
-    } catch {
-      toast.error('Erro ao buscar CEP');
-    }
+    setEditando(null);
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
-  const handleSubmit = async () => {
-    if (!form.fullName.trim()) { toast.error('Informe o nome');   return; }
-    if (!form.email.trim())    { toast.error('Informe o e-mail'); return; }
-    if (!editandoId && !form.senha) { toast.error('Informe a senha'); return; }
-
+  const handleSubmit = async (values: UsuarioFormValues) => {
     setSalvando(true);
     try {
+      // Sem senha na criação: o backend aplica a padrão (Inicial_001)
+      // com troca obrigatória no primeiro acesso.
       const payload: Record<string, unknown> = {
-        fullName:    form.fullName.trim(),
-        email:       form.email.trim(),
-        phone:       form.phone.trim()       || null,
-        role:        form.role,
-        userType:    form.userType,
-        ativo:       form.ativo,
-        cep:         form.cep.trim()         || null,
-        endereco:    form.endereco.trim()    || null,
-        complemento: form.complemento.trim() || null,
-        bairro:      form.bairro.trim()      || null,
-        cidade:      form.cidade.trim()      || null,
-        estado:      form.estado.trim()      || null,
+        fullName:    values.fullName,
+        email:       values.email,
+        phone:       values.phone,
+        role:        editando?.role ?? 'USER',
+        userType:    PERFIL_TO_USERTYPE[values.perfil] ?? values.perfil,
+        ativo:       values.ativo,
+        cep:         values.cep.trim()         || null,
+        endereco:    values.endereco.trim()    || null,
+        complemento: values.complemento.trim() || null,
+        bairro:      values.bairro.trim()      || null,
+        cidade:      values.cidade.trim()      || null,
+        estado:      values.estado.trim()      || null,
       };
-      if (form.senha) payload.senha = form.senha;
+      if (editando && values.senha) payload.senha = values.senha;
 
-      if (editandoId) {
-        await api.put(`/users/${editandoId}`, payload);
+      if (editando) {
+        await api.put(`/users/${editando.id}`, payload);
         toast.success('Usuário atualizado!');
       } else {
         await api.post('/users', payload);
-        toast.success('Usuário criado!');
+        toast.success('Usuário criado — e-mail de boas-vindas enviado');
       }
       fecharModal();
       carregarUsuarios();
@@ -251,10 +195,6 @@ const Usuarios = () => {
     }
   };
 
-  const inputClass  = 'w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900 focus:outline-none focus:border-emerald-600 text-sm bg-white';
-  const selectClass = 'w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-gray-900 focus:outline-none focus:border-emerald-600 text-sm bg-white';
-  const labelClass  = 'block text-xs font-medium text-gray-600 mb-1';
-
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -293,8 +233,8 @@ const Usuarios = () => {
         {loading ? (
           <p className="text-center text-gray-500 py-12">Carregando...</p>
         ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
+            <table className="w-full min-w-[960px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nome</th>
@@ -382,176 +322,27 @@ const Usuarios = () => {
 
       {/* ── Modal criar / editar ─────────────────────────────────────────────── */}
       {modalAberto && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-md w-full max-w-lg overflow-hidden">
-
-            {/* Header */}
-            <div className="bg-emerald-700 text-white px-6 py-5 flex items-center justify-between">
-              <h2 className="text-lg font-bold">
-                {editandoId ? 'Editar Usuário' : 'Novo Usuário'}
-              </h2>
-              <button onClick={fecharModal} className="hover:opacity-70 transition-opacity">
-                <X size={22} />
-              </button>
-            </div>
-
-            {/* Abas */}
-            <div className="flex border-b border-gray-100">
-              {(['dados','endereco'] as const).map(aba => (
-                <button key={aba} onClick={() => setAbaModal(aba)}
-                  className={`flex-1 py-3 text-sm font-medium capitalize transition-colors ${
-                    abaModal === aba
-                      ? 'border-b-2 border-emerald-600 text-emerald-700'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}>
-                  {aba === 'dados' ? 'Dados pessoais' : 'Endereço'}
-                </button>
-              ))}
-            </div>
-
-            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-
-              {/* ── Aba: Dados pessoais ────────────────────────────────────── */}
-              {abaModal === 'dados' && (
-                <>
-                  <div>
-                    <label className={labelClass}>Nome completo <span className="text-red-400">*</span></label>
-                    <input type="text" value={form.fullName}
-                      onChange={e => set('fullName', e.target.value)}
-                      placeholder="Nome do usuário" className={inputClass} />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>E-mail <span className="text-red-400">*</span></label>
-                    <input type="email" value={form.email}
-                      onChange={e => set('email', e.target.value)}
-                      placeholder="email@exemplo.com" className={inputClass} />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Telefone</label>
-                    <input type="text" value={form.phone}
-                      onChange={e => set('phone', e.target.value)}
-                      placeholder="(00) 00000-0000" className={inputClass} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelClass}>Perfil de acesso</label>
-                      <select value={form.role} onChange={e => set('role', e.target.value)} className={selectClass}>
-                        {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Tipo de usuário</label>
-                      <select value={form.userType} onChange={e => set('userType', e.target.value)} className={selectClass}>
-                        {USER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>
-                      {editandoId ? 'Nova senha (deixe em branco para manter)' : 'Senha *'}
-                    </label>
-                    <input type="password" value={form.senha}
-                      onChange={e => set('senha', e.target.value)}
-                      placeholder={editandoId ? 'Nova senha...' : 'Senha inicial'}
-                      className={inputClass} />
-                    {editandoId && (
-                      <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
-                        <AlertCircle size={12} />
-                        Deixe em branco para não alterar a senha atual.
-                      </div>
-                    )}
-                  </div>
-
-                  {editandoId && (
-                    <div className="flex items-center gap-3 pt-1">
-                      <input type="checkbox" id="ativo-modal" checked={form.ativo}
-                        onChange={e => set('ativo', e.target.checked)}
-                        className="w-4 h-4 accent-emerald-600" />
-                      <label htmlFor="ativo-modal" className="text-sm font-medium text-gray-700">
-                        Usuário ativo
-                      </label>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* ── Aba: Endereço ─────────────────────────────────────────── */}
-              {abaModal === 'endereco' && (
-                <>
-                  {/* CEP com busca automática */}
-                  <div>
-                    <label className={labelClass}>CEP</label>
-                    <div className="flex gap-2">
-                      <input type="text" value={form.cep}
-                        onChange={e => set('cep', e.target.value)}
-                        onBlur={buscarCep}
-                        placeholder="00000-000"
-                        className={`${inputClass} flex-1`} />
-                      <button onClick={buscarCep}
-                        className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm rounded-2xl font-medium transition-colors flex-shrink-0">
-                        Buscar
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Endereço</label>
-                    <input type="text" value={form.endereco}
-                      onChange={e => set('endereco', e.target.value)}
-                      placeholder="Rua, Avenida..." className={inputClass} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelClass}>Complemento</label>
-                      <input type="text" value={form.complemento}
-                        onChange={e => set('complemento', e.target.value)}
-                        placeholder="Apto, Sala..." className={inputClass} />
-                    </div>
-                    <div>
-                      <label className={labelClass}>Bairro</label>
-                      <input type="text" value={form.bairro}
-                        onChange={e => set('bairro', e.target.value)}
-                        placeholder="Bairro" className={inputClass} />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelClass}>Cidade</label>
-                      <input type="text" value={form.cidade}
-                        onChange={e => set('cidade', e.target.value)}
-                        placeholder="Cidade" className={inputClass} />
-                    </div>
-                    <div>
-                      <label className={labelClass}>Estado</label>
-                      <select value={form.estado} onChange={e => set('estado', e.target.value)} className={selectClass}>
-                        <option value="">UF</option>
-                        {ESTADOS_BR.map(uf => <option key={uf} value={uf}>{uf}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
-              <button onClick={fecharModal}
-                className="flex-1 py-3 border border-gray-300 rounded-2xl text-gray-700 font-medium hover:bg-gray-50 transition-colors text-sm">
-                Cancelar
-              </button>
-              <button onClick={handleSubmit} disabled={salvando}
-                className="flex-1 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white rounded-2xl font-semibold transition-colors text-sm">
-                {salvando ? 'Salvando...' : editandoId ? 'Atualizar' : 'Criar Usuário'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <UsuarioFormModal
+          titulo={editando ? 'Editar Usuário' : 'Novo Usuário'}
+          modoEdicao={!!editando}
+          permitirSenha={!!editando}
+          salvando={salvando}
+          onClose={fecharModal}
+          onSubmit={handleSubmit}
+          initial={editando ? {
+            fullName:    editando.fullName,
+            email:       editando.email,
+            phone:       editando.phone       ?? '',
+            perfil:      perfilDoUsuario(editando),
+            ativo:       editando.ativo,
+            cep:         editando.cep         ?? '',
+            endereco:    editando.endereco    ?? '',
+            complemento: editando.complemento ?? '',
+            bairro:      editando.bairro      ?? '',
+            cidade:      editando.cidade      ?? '',
+            estado:      editando.estado      ?? '',
+          } : undefined}
+        />
       )}
 
       {/* ── Modal exclusão ───────────────────────────────────────────────────── */}

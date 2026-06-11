@@ -16,7 +16,7 @@ import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA';
+type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA';
 type ItemTipo     = 'ASSISTENCIA' | 'MEDICAMENTO' | 'PROCEDIMENTO';
 
 interface AnimalResumo {
@@ -80,6 +80,7 @@ const TIPO_COR: Record<string, string> = {
 function StatusBadge({ status }: { status: FaturaStatus }) {
   if (status === 'PAGA')      return <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full"><CheckCircle2 size={11}/> PAGO</span>;
   if (status === 'CANCELADA') return <span className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full"><Ban size={11}/> CANCELADA</span>;
+  if (status === 'FECHADA')   return <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full"><X size={11}/> FECHADA</span>;
   return <span className="flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full"><AlertCircle size={11}/> ABERTO</span>;
 }
 
@@ -240,6 +241,13 @@ function PainelFatura({
   onStatusChange: () => void;
   faturaIdPaga?: number;
 }) {
+  const { podeExecutar, isSocio } = usePermissoes();
+  const podeEditar  = isSocio || podeExecutar('financeiro.faturas.editar');
+  const podeLancar  = isSocio || podeExecutar('financeiro.faturas.lancar');
+  const podeFechar  = isSocio || podeExecutar('financeiro.faturas.fechar');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+
   const [fatura,         setFatura]         = useState<Fatura | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [salvando,       setSalvando]       = useState(false);
@@ -311,6 +319,7 @@ function PainelFatura({
   useEffect(() => { carregar(); }, [carregar]);
 
   const handleDeleteItem = async (itemId: number) => {
+    if (!podeEditar) { semPermissao('remover item da fatura'); return; }
     try {
       const r = await api.delete(`/clinica/faturas/itens/${itemId}`);
       setFatura(prev => prev ? {
@@ -322,6 +331,7 @@ function PainelFatura({
   };
 
   const handleSaveItem = async (itemId: number, patch: Partial<FaturaItem>) => {
+    if (!podeEditar) { semPermissao('editar item da fatura'); return; }
     try {
       const r = await api.put(`/clinica/faturas/itens/${itemId}`, patch);
       setFatura(prev => prev ? {
@@ -354,6 +364,7 @@ function PainelFatura({
   };
 
   const handleLancar = async () => {
+    if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
     if (!fatura) return;
     if (!novoNome.trim()) { toast.error('Informe a descrição do item'); return; }
     setLancando(true);
@@ -377,12 +388,19 @@ function PainelFatura({
   };
 
   const handleStatus = async (status: FaturaStatus) => {
+    if (status === 'FECHADA' && !podeFechar) { semPermissao('fechar fatura'); return; }
+    if (status !== 'FECHADA' && !podeEditar) { semPermissao('alterar status da fatura'); return; }
     if (!fatura) return;
     setSalvando(true);
     try {
       const r = await api.patch(`/clinica/faturas/${fatura.id}/status`, { status });
       setFatura(r.data.dados);
-      toast.success(status === 'PAGA' ? 'Fatura marcada como paga' : 'Status atualizado');
+      const MSG: Partial<Record<FaturaStatus, string>> = {
+        PAGA:    'Fatura marcada como paga',
+        FECHADA: 'Fatura fechada — itens bloqueados para edição',
+        ABERTA:  'Fatura reaberta',
+      };
+      toast.success(MSG[status] ?? 'Status atualizado');
       onStatusChange();
     } catch { toast.error('Erro ao atualizar status'); }
     finally { setSalvando(false); }
@@ -423,13 +441,40 @@ function PainelFatura({
           <div className="flex items-center gap-2">
             <StatusBadge status={fatura.status}/>
             {canEdit && (
-              <button
-                onClick={() => handleStatus('PAGA')}
-                disabled={salvando}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/30">
-                {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>}
-                Marcar como Pago
-              </button>
+              <>
+                <button
+                  onClick={() => handleStatus('FECHADA')}
+                  disabled={salvando}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/20">
+                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <X size={11}/>}
+                  Fechar Fatura
+                </button>
+                <button
+                  onClick={() => handleStatus('PAGA')}
+                  disabled={salvando}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/30">
+                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>}
+                  Marcar como Pago
+                </button>
+              </>
+            )}
+            {fatura?.status === 'FECHADA' && (
+              <>
+                <button
+                  onClick={() => handleStatus('ABERTA')}
+                  disabled={salvando}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/20">
+                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>}
+                  Reabrir
+                </button>
+                <button
+                  onClick={() => handleStatus('PAGA')}
+                  disabled={salvando}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/30">
+                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>}
+                  Marcar como Pago
+                </button>
+              </>
             )}
             <button onClick={carregar} className="p-1.5 text-emerald-100 hover:text-white rounded-lg transition-colors">
               <RefreshCw size={13}/>
@@ -714,7 +759,7 @@ function CardProprietario({
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function Faturamento() {
-  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
 
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -737,7 +782,7 @@ export default function Faturamento() {
     }
   }, []);
 
-  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
   const filtrados = proprietarios.filter(p => {
     const temAberta = p.faturaAtiva?.status === 'ABERTA';

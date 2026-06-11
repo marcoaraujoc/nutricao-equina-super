@@ -424,11 +424,15 @@ function LinhaGrupo({
   onExecutar,
   onVer,
   onImprimir,
+  podeExecutarAcao,
+  podeImprimir,
 }: {
   g: GrupoExecucao;
   onExecutar: () => void;
   onVer: () => void;
   onImprimir: () => void;
+  podeExecutarAcao: boolean;
+  podeImprimir: boolean;
 }) {
   const { animal } = g;
   const lbaia      = labelBaia(animal.especie?.nome);
@@ -477,21 +481,25 @@ function LinhaGrupo({
 
       {/* Ações */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
-        <button
-          onClick={onExecutar}
-          className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors">
-          Executar
-        </button>
+        {podeExecutarAcao && (
+          <button
+            onClick={onExecutar}
+            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors">
+            Executar
+          </button>
+        )}
         <button onClick={onVer}
           className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg hover:bg-gray-50 transition-colors">
           <Eye size={14} />
         </button>
-        <button
-          onClick={onImprimir}
-          title="Imprimir prescricao"
-          className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
-          <Printer size={14} />
-        </button>
+        {podeImprimir && (
+          <button
+            onClick={onImprimir}
+            title="Imprimir prescricao"
+            className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
+            <Printer size={14} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -501,7 +509,11 @@ function LinhaGrupo({
 
 export default function ExecucaoPrescricao() {
   const { user }                               = useAuth();
-  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
+  const podeExecutarAcao = isSocio || podeExecutar('enfermagem.prescricao.executar');
+  const podeImprimir     = isSocio || podeExecutar('enfermagem.prescricao.imprimir');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [grupos,   setGrupos]   = useState<GrupoExecucao[]>([]);
   const [loading,  setLoading]  = useState(false);
@@ -523,7 +535,7 @@ export default function ExecucaoPrescricao() {
     }
   }, []);
 
-  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
   // Filtro local — o backend já filtra busca mas permite filtrar sem ir ao servidor
   const filtrados = grupos
@@ -544,7 +556,7 @@ export default function ExecucaoPrescricao() {
     </div>
   );
 
-  if (!podeExecutar('atendimento.prescricoes.ler')) return null;
+  if (!podeExecutar('enfermagem.prescricao.ler')) return null;
 
   return (
     <PageContainer maxWidth="7xl">
@@ -605,9 +617,11 @@ export default function ExecucaoPrescricao() {
               <LinhaGrupo
                 key={g.id}
                 g={g}
-                onExecutar={() => setModal(g)}
+                onExecutar={() => podeExecutarAcao ? setModal(g) : semPermissao('executar prescrição')}
                 onVer={() => setModal(g)}
-                onImprimir={() => imprimirPrescricao(g)}
+                onImprimir={() => podeImprimir ? imprimirPrescricao(g) : semPermissao('imprimir prescrição')}
+                podeExecutarAcao={podeExecutarAcao}
+                podeImprimir={podeImprimir}
               />
             ))}
           </div>

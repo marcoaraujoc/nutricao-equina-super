@@ -5,11 +5,12 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Pencil, Trash2, Search, Loader2, X, Users,
-  ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Eye, EyeOff,
+  Building2, User as UserIcon,
+  Phone, MapPin, BadgeCheck, AlertCircle, Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -68,15 +69,8 @@ function mascaraCEP(v: string): string {
   return v.replace(/\D/g, '').slice(0, 8).replace(/(\d{5})(\d{1,3})$/, '$1-$2');
 }
 
-// Valida senha: >=8 chars, maiúscula, minúscula, número, especial (exceto @ e .)
-function validarSenha(s: string): string | null {
-  if (s.length < 8)                   return 'Mínimo 8 caracteres';
-  if (!/[A-Z]/.test(s))               return 'Necessita letra maiúscula';
-  if (!/[a-z]/.test(s))               return 'Necessita letra minúscula';
-  if (!/[0-9]/.test(s))               return 'Necessita número';
-  if (!/[^A-Za-z0-9@.]/.test(s))      return 'Necessita caractere especial (ex: ! # $ %)';
-  return null;
-}
+// Senha padrão de novos cadastros — troca obrigatória no primeiro acesso
+const SENHA_PADRAO_INICIAL = 'Inicial_001';
 
 // Formata valor monetário sempre com decimais visíveis
 function formatarMoeda(v: string): string {
@@ -118,7 +112,6 @@ interface FormProp {
   fullName:          string;
   email:             string;
   phone:             string;
-  senha:             string;
   tipoDoc:           TipoDoc;
   cpf:               string;
   cnpj:              string;
@@ -134,7 +127,7 @@ interface FormProp {
 }
 
 const FORM_INICIAL: FormProp = {
-  fullName: '', email: '', phone: '', senha: '',
+  fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
   mensalista: false, valorAssistencia: '', frequenciaVisitas: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
@@ -166,9 +159,12 @@ function ModalProprietario({
   const [buscandoCNPJ,  setBuscandoCNPJ]  = useState(false);
   const [docError,      setDocError]      = useState('');
   const [buscandoCEP,   setBuscandoCEP]   = useState(false);
-  const [mostrarSenha,  setMostrarSenha]  = useState(false);
-  const [senhaErro,     setSenhaErro]     = useState('');
   const cnpjTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTipoDoc = (tipo: TipoDoc) => {
+    setDocError('');
+    onFormChange({ tipoDoc: tipo, cpf: '', cnpj: '' });
+  };
 
   const docNums = (form.tipoDoc === 'cpf' ? form.cpf : form.cnpj).replace(/\D/g, '');
   const docValido = form.tipoDoc === 'cpf'
@@ -238,11 +234,6 @@ function ModalProprietario({
     finally { setBuscandoCEP(false); }
   };
 
-  const handleSenha = (v: string) => {
-    onFormChange({ senha: v });
-    setSenhaErro(v ? (validarSenha(v) ?? '') : '');
-  };
-
   const handleValorChange = (v: string) => {
     // Remove tudo que não for dígito
     const digits = v.replace(/\D/g, '');
@@ -276,7 +267,7 @@ function ModalProprietario({
             <div className="flex gap-2 mb-3">
               {(['cpf', 'cnpj'] as TipoDoc[]).map(tipo => (
                 <button key={tipo}
-                  onClick={() => onFormChange({ tipoDoc: tipo, cpf: '', cnpj: '' })}
+                  onClick={() => handleTipoDoc(tipo)}
                   className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border transition-colors ${
                     form.tipoDoc === tipo
                       ? 'bg-emerald-700 text-white border-emerald-700'
@@ -350,31 +341,14 @@ function ModalProprietario({
               </div>
               {!editando && (
                 <div className="sm:col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">Senha *</label>
-                  <div className="relative">
-                    <input
-                      type={mostrarSenha ? 'text' : 'password'}
-                      value={form.senha}
-                      onChange={e => handleSenha(e.target.value)}
-                      placeholder="Mín. 8 chars, maiúscula, número, especial"
-                      className={`${inputCls} pr-10 ${senhaErro ? 'border-red-300' : form.senha && !senhaErro ? 'border-emerald-400' : ''}`}
-                    />
-                    <button type="button"
-                      onClick={() => setMostrarSenha(p => !p)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                      {mostrarSenha ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
+                  <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">
+                    <Info size={12} className="flex-shrink-0 mt-0.5" />
+                    <span>
+                      A senha inicial é a padrão <strong>{SENHA_PADRAO_INICIAL}</strong> —
+                      o proprietário receberá um e-mail de boas-vindas e deverá
+                      alterá-la no primeiro acesso.
+                    </span>
                   </div>
-                  {senhaErro && (
-                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                      <AlertCircle size={11} /> {senhaErro}
-                    </p>
-                  )}
-                  {form.senha && !senhaErro && (
-                    <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
-                      <BadgeCheck size={11} /> Senha válida
-                    </p>
-                  )}
                 </div>
               )}
             </div>
@@ -387,7 +361,7 @@ function ModalProprietario({
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">CEP *</label>
+                <label className="block text-xs text-gray-500 mb-1">CEP</label>
                 <div className="relative">
                   <input value={form.cep}
                     onChange={e => {
@@ -396,15 +370,15 @@ function ModalProprietario({
                       if (v.replace(/\D/g, '').length === 8) buscarCEP(v);
                     }}
                     placeholder="00000-000"
-                    className={`${inputReqCls(form.cep)} pr-8`}
+                    className={`${inputCls} pr-8`}
                   />
                   {buscandoCEP && <Loader2 size={12} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
                 </div>
               </div>
               <div className="sm:col-span-2">
-                <label className="block text-xs text-gray-500 mb-1">Endereço *</label>
+                <label className="block text-xs text-gray-500 mb-1">Endereço</label>
                 <input value={form.endereco} onChange={e => onFormChange({ endereco: e.target.value })}
-                  placeholder="Rua, av., rodovia..." className={inputReqCls(form.endereco)} />
+                  placeholder="Rua, av., rodovia..." className={inputCls} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Complemento</label>
@@ -412,19 +386,19 @@ function ModalProprietario({
                   placeholder="Apto, sala..." className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Bairro *</label>
+                <label className="block text-xs text-gray-500 mb-1">Bairro</label>
                 <input value={form.bairro} onChange={e => onFormChange({ bairro: e.target.value })}
-                  className={inputReqCls(form.bairro)} />
+                  className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Cidade *</label>
+                <label className="block text-xs text-gray-500 mb-1">Cidade</label>
                 <input value={form.cidade} onChange={e => onFormChange({ cidade: e.target.value })}
-                  className={inputReqCls(form.cidade)} />
+                  className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Estado *</label>
+                <label className="block text-xs text-gray-500 mb-1">Estado</label>
                 <input value={form.estado} onChange={e => onFormChange({ estado: e.target.value.toUpperCase().slice(0, 2) })}
-                  placeholder="SP" maxLength={2} className={inputReqCls(form.estado)} />
+                  placeholder="SP" maxLength={2} className={inputCls} />
               </div>
             </div>
           </section>
@@ -497,11 +471,16 @@ function ModalProprietario({
 // ─── Página ───────────────────────────────────────────────────────────────────
 
 export default function CadastroProprietario() {
-  const { podeExecutar, isSocio } = usePermissoes();
+  const { user }    = useAuth();
+  const isAdmin     = user?.role === 'ADMIN';
+  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
 
   const podeCriar   = isSocio || podeExecutar('cadastro.proprietario.criar');
   const podeEditar  = isSocio || podeExecutar('cadastro.proprietario.editar');
-  const podeDeletar = isSocio || podeExecutar('cadastro.proprietario.deletar');
+  const podeRemover = isSocio || podeExecutar('cadastro.proprietario.deletar');
+
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -522,7 +501,7 @@ export default function CadastroProprietario() {
     finally { setLoading(false); }
   }, [busca]);
 
-  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
   const abrirNovo = () => {
     setEditando(null);
@@ -536,7 +515,6 @@ export default function CadastroProprietario() {
       fullName:          p.fullName,
       email:             p.email,
       phone:             p.phone ? mascaraTelefone(p.phone.replace(/\D/g, '')) : '',
-      senha:             '',
       tipoDoc:           p.cnpj ? 'cnpj' : 'cpf',
       cpf:               p.cpf  ? mascaraCPF(p.cpf.replace(/\D/g, ''))   : '',
       cnpj:              p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g, '')) : '',
@@ -561,28 +539,16 @@ export default function CadastroProprietario() {
     setForm(prev => ({ ...prev, ...updates }));
 
   const handleSalvar = async () => {
+    if (editando && !podeEditar) { semPermissao('alterar proprietário'); return; }
+    if (!editando && !podeCriar) { semPermissao('criar proprietário'); return; }
     if (!form.fullName.trim())      { toast.error('Nome é obrigatório'); return; }
     if (!form.email.trim())         { toast.error('E-mail é obrigatório'); return; }
     if (!form.phone.trim())         { toast.error('Telefone é obrigatório'); return; }
-    if (!form.cep.trim())           { toast.error('CEP é obrigatório'); return; }
-    if (!form.endereco.trim())      { toast.error('Endereço é obrigatório'); return; }
-    if (!form.bairro.trim())        { toast.error('Bairro é obrigatório'); return; }
-    if (!form.cidade.trim())        { toast.error('Cidade é obrigatória'); return; }
-    if (!form.estado.trim())        { toast.error('Estado é obrigatório'); return; }
     if (!form.frequenciaVisitas)    { toast.error('Frequência de visitas é obrigatória'); return; }
 
-    if (!editando) {
-      if (!form.senha) { toast.error('Senha é obrigatória'); return; }
-      const senhaErr = validarSenha(form.senha);
-      if (senhaErr) { toast.error(senhaErr); return; }
-    }
-
-    if (form.tipoDoc === 'cpf' && form.cpf.replace(/\D/g, '').length > 0) {
-      if (!validarCPF(form.cpf)) { toast.error('CPF inválido'); return; }
-    }
-    if (form.tipoDoc === 'cnpj' && form.cnpj.replace(/\D/g, '').length > 0) {
-      if (!validarCNPJ(form.cnpj)) { toast.error('CNPJ inválido'); return; }
-    }
+    // Documento é opcional, mas se preenchido precisa ser válido
+    if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { toast.error('CPF inválido'); return; }
+    if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { toast.error('CNPJ inválido'); return; }
     if (form.mensalista && !form.valorAssistencia) {
       toast.error('Informe o valor da assistência veterinária'); return;
     }
@@ -592,8 +558,6 @@ export default function CadastroProprietario() {
       fullName:          form.fullName,
       email:             form.email,
       phone:             form.phone  || null,
-      ...(!editando ? { senha: form.senha } : {}),
-      ...(editando && form.senha ? { senha: form.senha } : {}),
       cpf:               form.tipoDoc === 'cpf'  && form.cpf.trim()  ? form.cpf  : null,
       cnpj:              form.tipoDoc === 'cnpj' && form.cnpj.trim() ? form.cnpj : null,
       mensalista:        form.mensalista,
@@ -623,21 +587,19 @@ export default function CadastroProprietario() {
     } finally { setSaving(false); }
   };
 
-  const handleToggle = async (p: Proprietario) => {
-    try {
-      await api.patch(`/cadastro/proprietarios/${p.id}/toggle`);
-      toast.success(p.ativo ? 'Proprietário inativado' : 'Proprietário ativado');
-      carregar();
-    } catch { toast.error('Erro ao alternar status'); }
-  };
-
-  const handleExcluir = async (p: Proprietario) => {
-    if (!confirm(`Inativar o proprietário "${p.fullName}"?`)) return;
+  const handleRemoverDaEmpresa = async (p: Proprietario) => {
+    if (!podeRemover) { semPermissao('remover proprietário da empresa'); return; }
+    if (!confirm(
+      `Remover "${p.fullName}" da empresa?\n\nTodos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista.\n\nEle continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
+    )) return;
     try {
       await api.delete(`/cadastro/proprietarios/${p.id}`);
-      toast.success('Proprietário inativado');
+      toast.success(`Proprietário removido da empresa`);
       carregar();
-    } catch { toast.error('Erro ao inativar'); }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      toast.error(msg ?? 'Erro ao remover proprietário');
+    }
   };
 
   const labelDoc = (p: Proprietario) => {
@@ -645,6 +607,21 @@ export default function CadastroProprietario() {
     if (p.cpf)  return p.cpf;
     return <span className="text-gray-300">—</span>;
   };
+
+  if (loadingPerms) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  if (!podeExecutar('cadastro.proprietario.ler')) return (
+    <PageContainer maxWidth="7xl">
+      <div className="text-center py-16">
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500">Você não tem permissão para visualizar proprietários.</p>
+      </div>
+    </PageContainer>
+  );
 
   return (
     <PageContainer maxWidth="7xl">
@@ -683,19 +660,13 @@ export default function CadastroProprietario() {
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <Users size={40} className="mb-3" />
           <p className="text-sm text-gray-400">Nenhum proprietário encontrado</p>
-          {podeCriar && (
-            <button onClick={abrirNovo}
-              className="mt-4 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 transition-colors">
-              Novo Proprietário
-            </button>
-          )}
         </div>
       ) : (
         <>
           {/* Mobile — cards */}
           <div className="md:hidden space-y-3">
             {proprietarios.map(p => (
-              <div key={p.id} className={`bg-white rounded-2xl border p-4 shadow-sm ${!p.ativo ? 'opacity-60' : 'border-gray-100'}`}>
+              <div key={p.id} className={`bg-white rounded-2xl border p-4 shadow-sm ${isAdmin && !p.ativo ? 'opacity-60' : 'border-gray-100'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-gray-900 truncate">{p.fullName}</p>
@@ -713,28 +684,23 @@ export default function CadastroProprietario() {
                       )}
                     </div>
                   </div>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                    {p.ativo ? 'Ativo' : 'Inativo'}
-                  </span>
+                  {isAdmin && (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                      {p.ativo ? 'Ativo' : 'Inativo'}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                   {podeEditar && (
-                    <>
-                      <button onClick={() => abrirEdicao(p)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        <Pencil size={11} /> Editar
-                      </button>
-                      <button onClick={() => handleToggle(p)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        {p.ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />}
-                        {p.ativo ? 'Inativar' : 'Ativar'}
-                      </button>
-                    </>
+                    <button onClick={() => abrirEdicao(p)}
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                      <Pencil size={11} /> Editar
+                    </button>
                   )}
-                  {podeDeletar && (
-                    <button onClick={() => handleExcluir(p)}
-                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={13} />
+                  {podeRemover && (
+                    <button onClick={() => handleRemoverDaEmpresa(p)}
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-red-100 rounded-lg text-xs text-red-500 hover:bg-red-50 transition-colors">
+                      <Trash2 size={11} /> Remover da empresa
                     </button>
                   )}
                 </div>
@@ -752,13 +718,13 @@ export default function CadastroProprietario() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cidade</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Contrato</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  {isAdmin && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>}
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {proprietarios.map(p => (
-                  <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${!p.ativo ? 'opacity-60' : ''}`}>
+                  <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${isAdmin && !p.ativo ? 'opacity-60' : ''}`}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{p.fullName}</p>
                       <p className="text-xs text-gray-400 truncate max-w-[200px]">{p.email}</p>
@@ -783,27 +749,23 @@ export default function CadastroProprietario() {
                         {!p.mensalista && !p.frequenciaVisitas && <span className="text-gray-300 text-xs">—</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                        {p.ativo ? 'Ativo' : 'Inativo'}
-                      </span>
-                    </td>
+                    {isAdmin && (
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                          {p.ativo ? 'Ativo' : 'Inativo'}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         {podeEditar && (
-                          <>
-                            <button onClick={() => abrirEdicao(p)} title="Editar"
-                              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                              <Pencil size={14} />
-                            </button>
-                            <button onClick={() => handleToggle(p)} title={p.ativo ? 'Inativar' : 'Ativar'}
-                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                              {p.ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />}
-                            </button>
-                          </>
+                          <button onClick={() => abrirEdicao(p)} title="Editar"
+                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <Pencil size={14} />
+                          </button>
                         )}
-                        {podeDeletar && (
-                          <button onClick={() => handleExcluir(p)} title="Inativar"
+                        {podeRemover && (
+                          <button onClick={() => handleRemoverDaEmpresa(p)} title="Remover da empresa"
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                             <Trash2 size={14} />
                           </button>

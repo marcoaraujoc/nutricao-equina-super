@@ -199,6 +199,86 @@ const emailService = {
     });
   },
 
+  // ── Cadastro de animal com notificação ao proprietário ───────────────────────
+  // isNewUser=true → exibe bloco de credenciais (conta criada agora)
+  // isNewUser=false → email informativo para conta já existente
+  async enviarVinculoInformativo({ proprietarioEmail, proprietarioNome, animalNome, vetNome, isNewUser = false, senhaInicial = null }) {
+    if (!podeEnviar()) return;
+
+    const appUrl   = process.env.APP_URL || 'http://localhost:5173';
+    const loginUrl = `${appUrl}/#/login`;
+
+    const blocoCredenciais = isNewUser && senhaInicial ? `
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:20px 24px;margin:24px 0;">
+        <p style="margin:0 0 14px;font-weight:700;color:#166534;font-size:15px;">🔐 Seus dados de acesso</p>
+        <table style="border-collapse:collapse;width:100%;font-size:14px;">
+          <tr>
+            <td style="padding:6px 0;color:#374151;width:60px;font-weight:500;">E-mail</td>
+            <td style="padding:6px 0;color:#111827;font-weight:600;">${proprietarioEmail}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#374151;font-weight:500;">Senha</td>
+            <td style="padding:6px 0;">
+              <code style="background:#dcfce7;color:#166534;padding:3px 10px;border-radius:4px;
+                           font-size:14px;font-weight:700;letter-spacing:0.5px;">${senhaInicial}</code>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:14px 0 0;font-size:13px;color:#dc2626;font-weight:500;">
+          ⚠️ Por segurança, você deverá alterar sua senha no primeiro acesso.
+        </p>
+      </div>
+    ` : '';
+
+    const assuntoEmail = isNewUser
+      ? `[S2Vet] Sua conta foi criada — ${animalNome} cadastrado`
+      : `[S2Vet] ${animalNome} foi cadastrado em sua conta`;
+
+    const corpoPrincipal = isNewUser
+      ? `Sua conta no S2Vet foi criada por <strong>${vetNome}</strong>. A partir de agora você
+         poderá acompanhar faturas, dietas e evoluções clínicas dos seus animais de forma automática.`
+      : `Dr(a). <strong>${vetNome}</strong> cadastrou o animal <strong>${animalNome}</strong>
+         no S2Vet. A partir de agora você poderá acompanhar faturas, dietas e evoluções clínicas
+         deste animal na plataforma.`;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      proprietarioEmail,
+      subject: assuntoEmail,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="color:#374151;font-size:16px;line-height:1.6;margin-top:0;">
+              Olá, <strong>${proprietarioNome}</strong>!
+            </p>
+            <p style="color:#374151;line-height:1.6;">${corpoPrincipal}</p>
+            ${blocoCredenciais}
+            <div style="background:white;border:1px solid #d1fae5;border-radius:10px;padding:16px 20px;margin:20px 0;">
+              <p style="margin:0;font-size:13px;color:#6b7280;">🐾 Animal cadastrado</p>
+              <p style="margin:4px 0 0;font-size:17px;font-weight:700;color:#065f46;">${animalNome}</p>
+            </div>
+            <div style="margin-top:24px;text-align:center;">
+              <a href="${loginUrl}"
+                 style="background:#059669;color:white;padding:12px 28px;border-radius:8px;
+                        text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+                Acessar o S2Vet →
+              </a>
+            </div>
+            <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px;">
+              Se não reconhece esta ação, entre em contato com o suporte.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    console.log(`[emailService] Notificação informativa enviada → ${proprietarioEmail}`);
+  },
+
   // ── Convite de equipe ─────────────────────────────────────────────────────
   async enviarConviteEquipe({ email, cargo, token, vetNome, equipeNome, usuarioCriado = false, senhaInicial = null, especiesNomes = [] }) {
     if (!podeEnviar()) return;
@@ -220,15 +300,14 @@ const emailService = {
             <td style="font-size:13px;font-weight:600;color:#111;">${senhaInicial}</td>
           </tr>
         </table>
-        <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você será obrigado a alterar a senha no primeiro acesso.</p>
+        <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você precisa alterar a senha no primeiro acesso.</p>
       </div>
     ` : '';
 
     const blocoEspecies = especiesNomes.length > 0
       ? `<div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:14px 20px;margin:16px 0;">
            <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#065f46;">🐾 Espécies atendidas pela equipe</p>
-           <p style="margin:0;font-size:13px;color:#374151;">Suas espécies já serão configuradas automaticamente:
-             <strong>${especiesNomes.join(', ')}</strong></p>
+           <p style="margin:0;font-size:13px;color:#374151;">A equipe <strong>${equipeNome}</strong> atende somente as espécies <strong>${especiesNomes.join(', ')}</strong></p>
          </div>`
       : '';
 
@@ -658,6 +737,48 @@ const emailService = {
     console.log(`[emailService] Notificação de vínculo enviada → ${vetEmail}`);
   },
 
+  // ── Notificação para sócios — autorização de vínculo concedida ───────────────
+  async notificarSociosAutorizacaoConcedida({ socioEmail, socioNome, animalNome, proprietarioNome, vetNome }) {
+    if (!podeEnviar()) return;
+    const appUrl = process.env.APP_URL || 'http://localhost:5173';
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      socioEmail,
+      subject: `[S2Vet] Autorização concedida — ${animalNome}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">✅ Autorização concedida</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Olá, <strong>${socioNome}</strong>.<br/>
+              O(a) proprietário(a) <strong>${proprietarioNome}</strong> autorizou o(a) Dr(a).
+              <strong>${vetNome}</strong> como responsável pelo animal <strong>${animalNome}</strong>.
+            </p>
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:20px 0;">
+              <p style="margin:0;font-size:13px;color:#166534;">
+                O animal <strong>${animalNome}</strong> agora está liberado para atendimentos e cuidados clínicos.
+              </p>
+            </div>
+            <div style="text-align:center;margin:28px 0 20px;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:14px 32px;border-radius:8px;
+                     text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
+                Acessar o S2Vet
+              </a>
+            </div>
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Este é um e-mail automático. Não responda a esta mensagem.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Notificação de autorização enviada → ${socioEmail}`);
+  },
+
   // ── Boas-vindas ao proprietário recém-cadastrado ─────────────────────────────
   async enviarBoasVindasProprietario({ destinatarioEmail, destinatarioNome, criadoPorNome, senhaInicial }) {
     if (!podeEnviar()) {
@@ -761,6 +882,78 @@ const emailService = {
         },
       ],
     });
+  },
+
+  // ── Inclusão direta de membro na equipe (sem fluxo de aceite) ────────────────
+  async enviarInclusaoEquipe({ email, cargo, vetNome, equipeNome, usuarioCriado = false, senhaInicial = null, especiesNomes = [] }) {
+    if (!podeEnviar()) return;
+
+    const appUrl   = process.env.APP_URL || 'http://localhost:5173';
+    const loginUrl = `${appUrl}/#/login`;
+
+    const blocoCredenciais = usuarioCriado ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px 20px;margin:20px 0;">
+        <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#92400e;">🔐 Credenciais de acesso criadas para você</p>
+        <table style="border-collapse:collapse;width:100%;">
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;width:80px;">E-mail</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${email}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#78350f;">Senha</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${senhaInicial}</td>
+          </tr>
+        </table>
+        <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você precisa alterar a senha no primeiro acesso.</p>
+      </div>
+    ` : '';
+
+    const blocoEspecies = especiesNomes.length > 0
+      ? `<div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:14px 20px;margin:16px 0;">
+           <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#065f46;">🐾 Espécies atendidas pela equipe</p>
+           <p style="margin:0;font-size:13px;color:#374151;">A equipe <strong>${equipeNome}</strong> atende somente as espécies <strong>${especiesNomes.join(', ')}</strong></p>
+         </div>`
+      : '';
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      email,
+      subject: `[S2Vet] Você foi adicionado à equipe — ${equipeNome}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Você foi adicionado à equipe ${equipeNome}</h2>
+            <p style="color:#374151;line-height:1.6;">
+              Olá! <strong>${vetNome}</strong> adicionou você à equipe
+              <strong>${equipeNome}</strong> no S2Vet como <strong>${cargo}</strong>.
+              Você já pode acessar a plataforma.
+            </p>
+
+            ${blocoCredenciais}
+
+            ${blocoEspecies}
+
+            <div style="text-align:center;margin:28px 0 20px;">
+              <a href="${loginUrl}"
+                 style="background:#059669;color:white;padding:14px 32px;border-radius:8px;
+                        text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
+                Acessar S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Se não reconhece este e-mail, entre em contato com o suporte.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    console.log(`[emailService] Inclusão de equipe notificada → ${email} (usuarioCriado=${usuarioCriado})`);
   },
 };
 

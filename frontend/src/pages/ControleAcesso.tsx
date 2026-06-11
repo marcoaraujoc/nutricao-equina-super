@@ -11,7 +11,7 @@
 //   2. Profissionais       — membros da equipe
 //   3. Logs de Auditoria
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -19,19 +19,21 @@ import {
   CheckSquare, Check, Loader2,
   Trash2, UserCheck, ShieldCheck, ShieldX,
   Search, Eye, CheckCircle2, XCircle,
-  Stethoscope, Apple,
+  Stethoscope, Apple, Clock,
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil,
+  Lock, Globe, Pencil, Ban, Mail, Wrench,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import { useAuth } from '../contexts/AuthContext';
+import { isValidEmail } from '../utils/validators';
+import FieldError, { inputErrCls } from '../components/FieldError';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-type Nivel = 'NENHUM' | 'LEITURA' | 'PROPRIO' | 'EQUIPE' | 'FULL';
+type Nivel = 'NENHUM' | 'LEITURA' | 'PROPRIO' | 'EQUIPE' | 'FULL' | 'NEGADO';
 
 interface AcaoItem {
   slug:   string;
@@ -57,7 +59,7 @@ interface Membro {
   cargos?:   string[];
   ativo?:    boolean;
   createdAt: string;
-  user: { id: number; fullName: string; email: string; userType: string };
+  user: { id: number; fullName: string; email: string; userType: string; ativo?: boolean };
 }
 
 interface ProprietarioEquipe {
@@ -82,6 +84,7 @@ interface AdminEquipe {
 interface AdminEmpresa {
   id:      number;
   nome:    string;
+  cnpj:    string | null;
   equipes: AdminEquipe[];
 }
 
@@ -99,13 +102,56 @@ interface LogAuditoria {
   createdAt:       string;
 }
 
+// ─── Utilitários CPF / CNPJ ──────────────────────────────────────────────────
+
+function validarCPF(cpf: string): boolean {
+  const n = cpf.replace(/\D/g, '');
+  if (n.length !== 11 || /^(\d)\1+$/.test(n)) return false;
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += Number(n[i]) * (10 - i);
+  let r = (s * 10) % 11; if (r >= 10) r = 0;
+  if (r !== Number(n[9])) return false;
+  s = 0;
+  for (let i = 0; i < 10; i++) s += Number(n[i]) * (11 - i);
+  r = (s * 10) % 11; if (r >= 10) r = 0;
+  return r === Number(n[10]);
+}
+
+function validarCNPJ(cnpj: string): boolean {
+  const n = cnpj.replace(/\D/g, '');
+  if (n.length !== 14 || /^(\d)\1+$/.test(n)) return false;
+  const calc = (s: string, w: number[]) => {
+    const r = w.reduce((acc, v, i) => acc + Number(s[i]) * v, 0) % 11;
+    return r < 2 ? 0 : 11 - r;
+  };
+  const w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  return calc(n, w1) === Number(n[12]) && calc(n, w2) === Number(n[13]);
+}
+
+function mascaraCPF(v: string): string {
+  return v.replace(/\D/g, '').slice(0, 11)
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/(\d{3})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3-$4');
+}
+
+function mascaraCNPJ(v: string): string {
+  return v.replace(/\D/g, '').slice(0, 14)
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/(\d{2})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3/$4')
+    .replace(/(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})(\d)/, '$1.$2.$3/$4-$5');
+}
+
 // ─── Constantes estáticas ─────────────────────────────────────────────────────
 
 const CARGO_INFO: Record<string, { label: string; desc: string; cor: string; tipo?: string }> = {
-  SOCIO:        { label: 'Sócio',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple', tipo: 'SISTEMA' },
-  VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo e gerência de prontuários, exames e triagem de pacientes.',      cor: 'emerald' },
-  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.',      cor: 'blue' },
-  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo sócio da equipe.',          cor: 'amber', tipo: 'SISTEMA' },
+  SOCIO:        { label: 'Sócio',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple',  tipo: 'SISTEMA' },
+  VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.',                 cor: 'emerald', tipo: 'SISTEMA' },
+  PRESTADOR:    { label: 'Prestador',    desc: 'Prestador de serviços. Acesso configurável pelo sócio da equipe.',                       cor: 'teal',    tipo: 'SISTEMA' },
+  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.',      cor: 'blue',    tipo: 'SISTEMA' },
+  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo sócio.',                   cor: 'amber',   tipo: 'SISTEMA' },
   ADMIN:        { label: 'Administrador',desc: 'Gerência operacional e suporte técnico. Acesso amplo sem permissões financeiras.',        cor: 'red' },
   MEMBRO:       { label: 'Membro',       desc: 'Membro da equipe com acesso básico configurável.',                                       cor: 'gray' },
 };
@@ -122,8 +168,11 @@ const USER_TYPE_INFO: Record<UserTypeGerenciado, { label: string; desc: string; 
 
 const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   dashboard:      { label: 'Dashboard',            icon: <LayoutDashboard size={14} /> },
+  cadastro:       { label: 'Cadastro',             icon: <Users2          size={14} /> },
   animais:        { label: 'Animais & Pacientes',  icon: <PawPrint        size={14} /> },
-  atendimento:    { label: 'Clínica',              icon: <Stethoscope     size={14} /> },
+  atendimento:    { label: 'Clínica / Atendimento',icon: <Stethoscope     size={14} /> },
+  enfermagem:     { label: 'Enfermagem',           icon: <Activity        size={14} /> },
+  exames:         { label: 'Exames',               icon: <FlaskConical    size={14} /> },
   nutricao:       { label: 'Nutrição',             icon: <Apple           size={14} /> },
   financeiro:     { label: 'Financeiro',           icon: <DollarSign      size={14} /> },
   equipe:         { label: 'Equipe & Acessos',     icon: <Users           size={14} /> },
@@ -133,26 +182,35 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
 };
 
 const SUBMODULO_LABEL: Record<string, string> = {
-  geral:          'Visão Geral',
-  animais:        'Animais & Pacientes',
-  evolucoes:      'Evolução',
-  prescricoes:    'Prescrições',
-  exames:         'Exames & Laudos',
-  dietas:         'Planos de Dieta',
-  relatorios:     'Relatórios Nutricionais',
-  faturas:        'Faturas',
-  membros:        'Equipe & Acessos',
-  estoque:        'Estoque de Medicamentos',
-  movimentacoes:  'Movimentações de Estoque',
-  catalogo:       'Catálogo',
+  geral:              'Visão Geral',
+  animais:            'Animais & Pacientes',
+  proprietario:       'Proprietários',
+  tratador:           'Tratadores',
+  fornecedor:         'Fornecedores',
+  evolucoes:          'Evolução Clínica',
+  prescricoes:        'Prescrições',
+  vacinas:            'Vacinas',
+  encaminhamentos:    'Encaminhamentos',
+  exames:             'Exames & Laudos',
+  prescricao:         'Execução de Prescrição',
+  laboratorial:       'Exames Laboratoriais',
+  imagem:             'Exames de Imagem',
+  dietas:             'Planos de Dieta',
+  relatorios:         'Relatórios Nutricionais',
+  faturas:            'Faturas',
+  membros:            'Equipe & Acessos',
+  estoque:            'Estoque de Medicamentos',
+  movimentacoes:      'Movimentações de Estoque',
+  catalogo:           'Catálogo',
 };
 
 const ACAO_COLS: Array<{ acao: string; label: string; icon?: React.ReactNode }> = [
-  { acao: 'ler',      label: 'VER'      },
-  { acao: 'criar',    label: 'CRIAR'    },
-  { acao: 'editar',   label: 'ALTERAR'  },
-  { acao: 'deletar',  label: 'EXCLUIR'  },
-  { acao: 'imprimir', label: 'IMPRIMIR', icon: <Printer size={9} /> },
+  { acao: 'ler',       label: 'VER'        },
+  { acao: 'criar',     label: 'CRIAR'      },
+  { acao: 'editar',    label: 'ALTERAR'    },
+  { acao: 'deletar',   label: 'EXCLUIR'    },
+  { acao: 'finalizar', label: 'FINALIZAR'  },
+  { acao: 'imprimir',  label: 'IMPRIMIR', icon: <Printer size={9} /> },
 ];
 
 const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';
@@ -160,7 +218,8 @@ const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';
 const badgeCargo = (cargo: string) =>
   ({ VETERINARIO: 'bg-emerald-100 text-emerald-700', ESTAGIARIO: 'bg-blue-100 text-blue-700',
      ADMIN: 'bg-red-100 text-red-700', MEMBRO: 'bg-gray-100 text-gray-600',
-     SOCIO: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
+     SOCIO: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
+     PRESTADOR: 'bg-teal-100 text-teal-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
 
 // ─── Utilitário ───────────────────────────────────────────────────────────────
 
@@ -174,6 +233,7 @@ function todosPermissoesNivel(matriz: MatrizAgrupada, nivel: Nivel): Record<stri
 
 // ─── Componente: checkbox de permissão ───────────────────────────────────────
 
+// 3 estados: NENHUM (não conceder) → EQUIPE (conceder) → NEGADO (negar explicitamente)
 function PermCheck({ nivel, onChange, locked }: { nivel: Nivel; onChange: (n: Nivel) => void; locked?: boolean }) {
   if (locked) {
     return (
@@ -181,16 +241,37 @@ function PermCheck({ nivel, onChange, locked }: { nivel: Nivel; onChange: (n: Ni
         title="Permissão definida pelo administrador do sistema — não pode ser alterada"
         className="w-5 h-5 rounded-md flex items-center justify-center bg-slate-100 border border-slate-200 cursor-not-allowed"
       >
-        {nivel !== 'NENHUM'
+        {nivel !== 'NENHUM' && nivel !== 'NEGADO'
           ? <Lock size={9} className="text-slate-400" />
           : <Lock size={9} className="text-slate-300" />}
       </div>
     );
   }
+
+  const handleClick = () => {
+    if (nivel === 'NENHUM')  return onChange(NIVEL_DEFAULT_ATIVO);
+    if (nivel === 'NEGADO')  return onChange('NENHUM');
+    // concedido (LEITURA/PROPRIO/EQUIPE/FULL) → NEGADO
+    return onChange('NEGADO');
+  };
+
+  if (nivel === 'NEGADO') {
+    return (
+      <button
+        onClick={handleClick}
+        title="Negado — clique para limpar"
+        className="w-5 h-5 rounded-md flex items-center justify-center transition-all flex-shrink-0 bg-red-500 hover:bg-red-600 shadow-sm"
+      >
+        <Ban size={11} strokeWidth={3} className="text-white" />
+      </button>
+    );
+  }
+
   const ativo = nivel !== 'NENHUM';
   return (
     <button
-      onClick={() => onChange(ativo ? 'NENHUM' : NIVEL_DEFAULT_ATIVO)}
+      onClick={handleClick}
+      title={ativo ? 'Concedido — clique para negar' : 'Não concedido — clique para conceder'}
       className={`w-5 h-5 rounded-md flex items-center justify-center transition-all flex-shrink-0
         ${ativo ? 'bg-emerald-500 hover:bg-emerald-600 shadow-sm' : 'border-2 border-gray-300 hover:border-emerald-400 bg-white'}`}
     >
@@ -770,7 +851,11 @@ function TabPermissoesGlobais() {
 // ABA — Gerenciar Profissionais
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; isSocio: boolean; isAdmin?: boolean }) {
+function TabProfissionais({ equipeId, isSocio, isAdmin }: {
+  equipeId: number;
+  isSocio:  boolean;
+  isAdmin?: boolean;
+}) {
   const { user }             = useAuth();
   const [membros,  setMembros]  = useState<Membro[]>([]);
   const [loading,  setLoading]  = useState(true);
@@ -782,13 +867,94 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [proprietarios,  setProprietarios]  = useState<ProprietarioEquipe[]>([]);
 
-  const [showConvite,       setShowConvite]       = useState(false);
-  const [conviteNome,       setConviteNome]       = useState('');
-  const [conviteEmail,      setConviteEmail]      = useState('');
-  const [conviteCargo,      setConviteCargo]      = useState('VETERINARIO');
-  const [conviteEmpresa,    setConviteEmpresa]    = useState('');
-  const [conviteCnpj,       setConviteCnpj]       = useState('');
-  const [enviandoConvite,   setEnviandoConvite]   = useState(false);
+  interface ConviteEnviado {
+    id:        number;
+    email:     string;
+    cargo:     string;
+    status:    'PENDENTE' | 'ACEITO' | 'RECUSADO' | 'CANCELADO';
+    createdAt: string;
+    expiresAt: string;
+    equipe?:   { nome: string; empresa?: { nome: string } };
+  }
+  const [convitesEnviados,   setConvitesEnviados]   = useState<ConviteEnviado[]>([]);
+  const [loadingConvites,    setLoadingConvites]    = useState(false);
+
+  const [showConvite,     setShowConvite]     = useState(false);
+  const [conviteNome,     setConviteNome]     = useState('');
+  const [conviteEmail,    setConviteEmail]    = useState('');
+  const [conviteCargo,    setConviteCargo]    = useState('VETERINARIO');
+  const [conviteTipoDoc,  setConviteTipoDoc]  = useState<'CNPJ' | 'CPF'>('CNPJ');
+  const [conviteDoc,      setConviteDoc]      = useState('');
+  const [conviteDocErro,  setConviteDocErro]  = useState('');
+  const [conviteEmailErro,setConviteEmailErro]= useState('');
+  const [conviteNomeErro, setConviteNomeErro] = useState('');
+  const [conviteEspecies, setConviteEspecies] = useState<number[]>([]);
+  const [buscandoCnpj,    setBuscandoCnpj]    = useState(false);
+  const [enviandoConvite, setEnviandoConvite] = useState(false);
+  const cnpjTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Combobox: texto digitado para equipe (CPF) ou empresa (CNPJ)
+  const [comboInput,        setComboInput]        = useState('');
+  const [showComboDropdown, setShowComboDropdown] = useState(false);
+  const [selecionadoId,     setSelecionadoId]     = useState<number | null>(null);
+  const [comboErro,         setComboErro]         = useState('');
+  const comboRef = useRef<HTMLDivElement>(null);
+
+  const [especies,             setEspecies]             = useState<{ id: number; nome: string }[]>([]);
+  const [loadingEspecies,      setLoadingEspecies]      = useState(false);
+  const [especiesEquipe,       setEspeciesEquipe]       = useState<{ id: number; nome: string }[]>([]);
+  const [loadingEspeciesEquipe,setLoadingEspeciesEquipe]= useState(false);
+
+  const [empresasDisponiveis, setEmpresasDisponiveis] = useState<AdminEmpresa[]>([]);
+  const [loadingEmpresas,     setLoadingEmpresas]     = useState(false);
+
+  // Equipes de empresas sem CNPJ (espaço pessoal CPF) — modo CPF
+  const equipesAdmin = empresasDisponiveis
+    .filter(e => e.cnpj == null)
+    .flatMap(e => e.equipes.map(eq => ({ id: eq.id, nome: eq.nome, empresaNome: e.nome })));
+  // Filtra por texto digitado; CNPJ mode mostra só empresas com CNPJ, CPF mode só sem CNPJ
+  const comboOpcoes = conviteTipoDoc === 'CNPJ'
+    ? empresasDisponiveis
+        .filter(e => e.cnpj != null)
+        .filter(e => !comboInput || e.nome.toLowerCase().includes(comboInput.toLowerCase()) ||
+          (e.cnpj ?? '').includes(comboInput.replace(/\D/g, '')))
+    : equipesAdmin.filter(eq =>
+        !comboInput || eq.nome.toLowerCase().includes(comboInput.toLowerCase()) ||
+        eq.empresaNome.toLowerCase().includes(comboInput.toLowerCase()));
+
+  // Se não há seleção e há texto digitado → será criado novo
+  const criandoNovo = !selecionadoId && !!comboInput.trim();
+
+  const carregarEmpresasDisponiveis = async () => {
+    setLoadingEmpresas(true);
+    try {
+      const res = await api.get('/equipes/admin/todas-empresas');
+      setEmpresasDisponiveis(res.data?.dados ?? []);
+    } catch { /* silencioso */ }
+    finally { setLoadingEmpresas(false); }
+  };
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    setLoadingEspecies(true);
+    api.get('/especies')
+      .then(r => setEspecies(r.data ?? []))
+      .catch(() => {})
+      .finally(() => setLoadingEspecies(false));
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!selecionadoId) { setEspeciesEquipe([]); return; }
+    setLoadingEspeciesEquipe(true);
+    const url = conviteTipoDoc === 'CNPJ'
+      ? `/equipes/empresa/${selecionadoId}/especies`
+      : `/equipes/${selecionadoId}/especies`;
+    api.get(url)
+      .then(r => setEspeciesEquipe(r.data?.dados ?? []))
+      .catch(() => setEspeciesEquipe([]))
+      .finally(() => setLoadingEspeciesEquipe(false));
+  }, [selecionadoId, conviteTipoDoc]);
+
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
   const [adminEmpresas,    setAdminEmpresas]    = useState<AdminEmpresa[]>([]);
 
@@ -814,6 +980,16 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
       }
     } catch { toast.error('Erro ao carregar membros'); }
     finally  { setLoading(false); }
+
+    if (isAdmin || isSocio) {
+      setLoadingConvites(true);
+      api.get('/equipes/convites')
+        .then(r => setConvitesEnviados(
+          (r.data?.dados ?? []).filter((c: ConviteEnviado) => c.status === 'PENDENTE' || c.status === 'ACEITO')
+        ))
+        .catch(() => {})
+        .finally(() => setLoadingConvites(false));
+    }
   }, [equipeId, isAdmin, isSocio]);
 
   const carregarPerfis = useCallback(async () => {
@@ -831,19 +1007,109 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
   useEffect(() => { carregar(); }, [carregar]);
   useEffect(() => { if (isAdmin || isSocio) carregarPerfis(); }, [carregarPerfis, isAdmin, isSocio]);
 
+  const resetConviteForm = () => {
+    setConviteNome('');
+    setConviteEmail('');
+    setConviteDoc('');
+    setConviteDocErro('');
+    setConviteEmailErro('');
+    setConviteNomeErro('');
+    setConviteTipoDoc('CNPJ');
+    setConviteEspecies([]);
+    setEspeciesEquipe([]);
+    setComboInput('');
+    setSelecionadoId(null);
+    setShowComboDropdown(false);
+    setComboErro('');
+    setBuscandoCnpj(false);
+    if (cnpjTimerRef.current) clearTimeout(cnpjTimerRef.current);
+  };
+
+  const handleDoc = (raw: string) => {
+    setConviteDocErro('');
+    if (conviteTipoDoc === 'CPF') {
+      setConviteDoc(mascaraCPF(raw));
+    } else {
+      const masked = mascaraCNPJ(raw);
+      setConviteDoc(masked);
+      const nums = raw.replace(/\D/g, '');
+      if (nums.length === 14 && validarCNPJ(masked)) {
+        if (cnpjTimerRef.current) clearTimeout(cnpjTimerRef.current);
+        cnpjTimerRef.current = setTimeout(async () => {
+          setBuscandoCnpj(true);
+          try {
+            const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${nums}`);
+            if (r.ok) {
+              const d = await r.json();
+              const razao = d.razao_social ?? d.nome_fantasia ?? '';
+              if (razao) { setComboInput(razao); setSelecionadoId(null); }
+            }
+          } catch { /* silencioso */ } finally { setBuscandoCnpj(false); }
+        }, 400);
+      }
+    }
+  };
+
   const handleConvidar = async () => {
-    if (!conviteEmail.trim()) { toast.error('Informe o e-mail'); return; }
-    if (isAdmin && !conviteEmpresa.trim()) { toast.error('Informe o nome da empresa'); return; }
-    if (isAdmin && !conviteCnpj.trim())    { toast.error('Informe o CNPJ'); return; }
+    setConviteEmailErro('');
+    setConviteNomeErro('');
+    setConviteDocErro('');
+
+    let hasError = false;
+
+    if (!conviteEmail.trim()) {
+      setConviteEmailErro('E-mail é obrigatório'); hasError = true;
+    } else if (!isValidEmail(conviteEmail)) {
+      setConviteEmailErro('E-mail inválido'); hasError = true;
+    }
+
+    if (isAdmin) {
+      if (!comboInput.trim()) { setComboErro(conviteTipoDoc === 'CNPJ' ? 'Informe a empresa' : 'Informe a equipe'); hasError = true; }
+
+      if (conviteTipoDoc === 'CNPJ') {
+        if (!conviteNome.trim()) { setConviteNomeErro('Nome do profissional é obrigatório'); hasError = true; }
+        if (criandoNovo) {
+          const nums = conviteDoc.replace(/\D/g, '');
+          if (nums.length !== 14 || !validarCNPJ(conviteDoc)) { setConviteDocErro('CNPJ inválido'); hasError = true; }
+        }
+      }
+      if (conviteTipoDoc === 'CPF') {
+        const nums = conviteDoc.replace(/\D/g, '');
+        if (nums.length !== 11 || !validarCPF(conviteDoc)) { setConviteDocErro('CPF inválido'); hasError = true; }
+        if (!conviteNome.trim()) { setConviteNomeErro('Nome é obrigatório'); hasError = true; }
+      }
+    }
+
+    if (hasError) return;
+
     setEnviandoConvite(true);
     try {
       if (isAdmin) {
-        await api.post('/equipes/admin/convidar-socio', {
+        const payload: Record<string, unknown> = {
           email:       conviteEmail.trim(),
-          fullName:    conviteNome.trim() || undefined,
-          empresaNome: conviteEmpresa.trim(),
-          cnpj:        conviteCnpj.trim(),
-        });
+          especiesIds: selecionadoId ? especiesEquipe.map(e => e.id) : conviteEspecies,
+        };
+        if (conviteTipoDoc === 'CNPJ') {
+          payload.fullName = conviteNome.trim();
+          if (selecionadoId) {
+            const emp = empresasDisponiveis.find(e => e.id === selecionadoId);
+            payload.empresaId   = selecionadoId;
+            payload.empresaNome = emp?.nome ?? comboInput.trim();
+          } else {
+            payload.cnpj        = conviteDoc.trim();
+            payload.empresaNome = comboInput.trim();
+          }
+        } else {
+          payload.cpf      = conviteDoc.trim();
+          payload.fullName = conviteNome.trim();
+          payload.empresaNome = conviteNome.trim();
+          if (selecionadoId) {
+            payload.equipeId = selecionadoId;
+          } else {
+            payload.nomeEquipe = comboInput.trim();
+          }
+        }
+        await api.post('/equipes/admin/convidar-socio', payload);
       } else {
         await api.post(`/equipes/${equipeId}/convidar`, {
           email:    conviteEmail.trim(),
@@ -853,10 +1119,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
       }
       toast.success('Convite enviado por e-mail');
       setShowConvite(false);
-      setConviteNome('');
-      setConviteEmail('');
-      setConviteEmpresa('');
-      setConviteCnpj('');
+      resetConviteForm();
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
@@ -940,17 +1203,36 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
           <p className="text-xs text-gray-400 mt-0.5">Cadastre a equipe e atribua perfis de acesso</p>
         </div>
         {(isSocio || isAdmin) && (
-          <button
-            onClick={() => {
-              setConviteCargo(isAdmin ? 'SOCIO' : 'VETERINARIO');
-              setConviteNome(''); setConviteEmail(''); setConviteEmpresa(''); setConviteCnpj('');
-              setShowConvite(true);
-              if (!isAdmin) carregarPerfis();
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors"
-          >
-            <Plus size={14} /> {isAdmin ? 'Convidar Sócio' : 'Convidar Profissional'}
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {!isAdmin && (
+              <button
+                onClick={() => {
+                  setConviteCargo('PROPRIETARIO');
+                  resetConviteForm();
+                  setShowConvite(true);
+                  carregarPerfis();
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition-colors"
+              >
+                <Plus size={14} /> Incluir Cliente
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setConviteCargo(isAdmin ? 'SOCIO' : 'VETERINARIO');
+                resetConviteForm();
+                setShowConvite(true);
+                if (isAdmin) {
+                  carregarEmpresasDisponiveis();
+                } else {
+                  carregarPerfis();
+                }
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors"
+            >
+              <Plus size={14} /> {isAdmin ? 'Convidar Sócio' : 'Incluir Membro'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -993,10 +1275,10 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
                             <Building2 size={11} /><span>{emp.nome}</span>
                           </div>
                           <span className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${
-                            ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
+                            ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                            {ativo ? 'Ativo' : 'Inativo'}
+                            <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                            {ativo ? 'Ativo' : 'Desativado'}
                           </span>
                           <button
                             onClick={() => setAdminConfirmDel({ membro: m, equipeId: eq.id, empresaNome: emp.nome })}
@@ -1021,10 +1303,10 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
                             {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
                           </span>
                           <span className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${
-                            ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
+                            ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                            {ativo ? 'Ativo' : 'Inativo'}
+                            <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                            {ativo ? 'Ativo' : 'Desativado'}
                           </span>
                         </div>
                       );
@@ -1117,10 +1399,10 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
                         </td>
                         <td className="px-5 py-3.5">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            m.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
+                            m.user?.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${m.ativo !== false ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                            {m.ativo !== false ? 'Ativo' : 'Inativo'}
+                            <span className={`w-1.5 h-1.5 rounded-full ${m.user?.ativo !== false ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                            {m.user?.ativo !== false ? 'Ativo' : 'Desativado'}
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-right">
@@ -1163,6 +1445,65 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
         </>
       )}
 
+      {/* Seção — Convites enviados */}
+      {(isAdmin || isSocio) && (
+        <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div>
+              <p className="font-bold text-gray-900">Convites Enviados</p>
+              <p className="text-xs text-gray-400 mt-0.5">Pendentes e aceitos</p>
+            </div>
+            {loadingConvites && <Loader2 size={14} className="animate-spin text-indigo-400" />}
+          </div>
+          {convitesEnviados.length === 0 && !loadingConvites ? (
+            <div className="px-5 py-8 text-center text-sm text-gray-400">Nenhum convite enviado ainda.</div>
+          ) : (
+            <div className="divide-y divide-gray-50">
+              {convitesEnviados.map(c => {
+                const pendente = c.status === 'PENDENTE';
+                const expirado = pendente && new Date(c.expiresAt) < new Date();
+                return (
+                  <div key={c.id} className="px-5 py-3.5 flex items-center gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{c.email}</p>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c.cargo)}`}>
+                          {(CARGO_INFO[c.cargo]?.label ?? c.cargo).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        {c.equipe && (
+                          <span className="text-[11px] text-gray-400 truncate">
+                            {c.equipe.empresa?.nome ?? c.equipe.nome}
+                            {c.equipe.empresa && ` · ${c.equipe.nome}`}
+                          </span>
+                        )}
+                        <span className="text-[11px] text-gray-300">·</span>
+                        <span className="text-[11px] text-gray-400">
+                          Enviado em {new Date(c.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' })}
+                          {' às '}
+                          {new Date(c.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}
+                        </span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${
+                      expirado         ? 'bg-red-50 text-red-600'      :
+                      pendente         ? 'bg-amber-50 text-amber-700'  :
+                      /* ACEITO */       'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      {expirado  ? <XCircle size={11} />      :
+                       pendente  ? <Clock size={11} />         :
+                                   <CheckCircle2 size={11} />}
+                      {expirado ? 'Expirado' : pendente ? 'Pendente' : 'Aceito'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Modal — Convidar */}
       {showConvite && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1173,11 +1514,13 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
                   <Plus size={16} className="text-indigo-600" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-gray-900">Convidar Profissional</h2>
+                  <h2 className="text-base font-bold text-gray-900">
+                    {isAdmin ? 'Convidar Sócio' : conviteCargo === 'PROPRIETARIO' ? 'Incluir Cliente' : 'Incluir Membro'}
+                  </h2>
                   <p className="text-xs text-gray-400">Um e-mail de convite será enviado</p>
                 </div>
               </div>
-              <button onClick={() => setShowConvite(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+              <button onClick={() => { setShowConvite(false); resetConviteForm(); }} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
                 <X size={16} />
               </button>
             </div>
@@ -1185,70 +1528,306 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: { equipeId: number; is
             <div className="space-y-4">
               {isAdmin && (
                 <>
+                  {/* Tipo de documento */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      Nome da empresa <span className="text-red-500">*</span>
+                      Tipo de documento <span className="text-red-500">*</span>
                     </label>
-                    <input value={conviteEmpresa} onChange={e => setConviteEmpresa(e.target.value)}
-                      placeholder="Ex: Clínica Veterinária São Bento"
-                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
-                    <p className="text-[11px] text-gray-400 mt-1">Se o CNPJ já estiver cadastrado, o sócio será adicionado à empresa existente.</p>
+                    <div className="flex rounded-xl border border-gray-300 overflow-hidden">
+                      {(['CNPJ', 'CPF'] as const).map(tipo => (
+                        <button key={tipo} type="button"
+                          onClick={() => {
+                            setConviteTipoDoc(tipo);
+                            setConviteDoc(''); setConviteDocErro('');
+                            setConviteNome(''); setConviteNomeErro('');
+                            setComboInput(''); setSelecionadoId(null);
+                            setShowComboDropdown(false); setComboErro('');
+                            setBuscandoCnpj(false);
+                            if (cnpjTimerRef.current) clearTimeout(cnpjTimerRef.current);
+                          }}
+                          className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${conviteTipoDoc === tipo ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
+                          {tipo}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">CNPJ <span className="text-red-500">*</span></label>
-                    <input value={conviteCnpj} onChange={e => setConviteCnpj(e.target.value)}
-                      placeholder="00.000.000/0000-00"
-                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+
+                  {/* CNPJ — primeiro campo no modo CNPJ */}
+                  {conviteTipoDoc === 'CNPJ' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                        CNPJ <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          value={conviteDoc}
+                          onChange={e => { setConviteDocErro(''); handleDoc(e.target.value); }}
+                          placeholder="00.000.000/0000-00"
+                          className={inputErrCls(!!conviteDocErro) + ' pr-10'}
+                        />
+                        {buscandoCnpj && (
+                          <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-indigo-400" />
+                        )}
+                      </div>
+                      <FieldError message={conviteDocErro} />
+                      {!conviteDocErro && <p className="text-[11px] text-gray-400 mt-1">Nome da empresa preenchido automaticamente ao digitar CNPJ válido.</p>}
+                    </div>
+                  )}
+
+                  {/* Combobox: Equipe (CPF) ou Empresa (CNPJ) */}
+                  <div ref={comboRef} className="relative">
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                      {conviteTipoDoc === 'CNPJ' ? 'Empresa' : 'Equipe'}
+                      {selecionadoId ? (
+                        <span className="ml-1.5 text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full">existente</span>
+                      ) : criandoNovo ? (
+                        <span className="ml-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">nova</span>
+                      ) : null}
+                    </label>
+                    <input
+                      value={comboInput}
+                      onChange={e => {
+                        setComboErro('');
+                        setComboInput(e.target.value);
+                        setSelecionadoId(null);
+                        setShowComboDropdown(true);
+                      }}
+                      onFocus={() => setShowComboDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowComboDropdown(false), 150)}
+                      placeholder={conviteTipoDoc === 'CNPJ' ? 'Selecione ou digite uma empresa...' : 'Selecione ou digite uma equipe...'}
+                      className={inputErrCls(!!comboErro)}
+                      autoComplete="off"
+                    />
+                    <FieldError message={comboErro} />
+                    {criandoNovo && !comboErro && (
+                      <p className="text-[11px] text-emerald-600 mt-1">
+                        {conviteTipoDoc === 'CNPJ' ? `Empresa "${comboInput}" será criada` : `Equipe "${comboInput}" será criada`}
+                      </p>
+                    )}
+
+                    {/* Dropdown */}
+                    {showComboDropdown && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden max-h-52 overflow-y-auto">
+                        {loadingEmpresas ? (
+                          <div className="flex items-center gap-2 px-3 py-3 text-xs text-gray-400">
+                            <Loader2 size={12} className="animate-spin" /> Carregando...
+                          </div>
+                        ) : comboOpcoes.length === 0 && !comboInput ? (
+                          <div className="px-3 py-3 text-xs text-gray-400">
+                            Nenhum{conviteTipoDoc === 'CNPJ' ? 'a empresa' : 'a equipe'} cadastrada. Digite para criar.
+                          </div>
+                        ) : (
+                          <>
+                            {comboOpcoes.length > 0 && (
+                              <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide bg-gray-50 border-b border-gray-100">
+                                Selecione a {conviteTipoDoc === 'CNPJ' ? 'Empresa' : 'Equipe'}
+                              </div>
+                            )}
+                            {comboOpcoes.map(item => (
+                              <button key={item.id} type="button"
+                                onMouseDown={() => {
+                                  setComboInput(item.nome);
+                                  setSelecionadoId(item.id);
+                                  setShowComboDropdown(false);
+                                  setComboErro('');
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-indigo-50 transition-colors">
+                                <span className="flex-1 min-w-0">
+                                  <span className="block text-sm font-medium text-gray-800 truncate">{item.nome}</span>
+                                  {'empresaNome' in item && (item as { empresaNome: string }).empresaNome && (
+                                    <span className="block text-[10px] text-gray-400">{(item as { empresaNome: string }).empresaNome}</span>
+                                  )}
+                                  {'cnpj' in item && (item as { cnpj?: string | null }).cnpj && (
+                                    <span className="block text-[10px] text-gray-400">CNPJ: {(item as { cnpj: string }).cnpj}</span>
+                                  )}
+                                </span>
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
+
+                  {/* Nome do profissional — sempre no modo CNPJ */}
+                  {conviteTipoDoc === 'CNPJ' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                        Nome do profissional <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        value={conviteNome}
+                        onChange={e => { setConviteNomeErro(''); setConviteNome(e.target.value); }}
+                        placeholder="Ex: Dr. João da Silva"
+                        className={inputErrCls(!!conviteNomeErro)}
+                      />
+                      <FieldError message={conviteNomeErro} />
+                    </div>
+                  )}
+
+                  {/* CPF + Nome — sempre para modo CPF */}
+                  {conviteTipoDoc === 'CPF' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          CPF <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          value={conviteDoc}
+                          onChange={e => { setConviteDocErro(''); handleDoc(e.target.value); }}
+                          placeholder="000.000.000-00"
+                          className={inputErrCls(!!conviteDocErro)}
+                        />
+                        <FieldError message={conviteDocErro} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Nome <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          value={conviteNome}
+                          onChange={e => { setConviteNomeErro(''); setConviteNome(e.target.value); }}
+                          placeholder="Ex: João da Silva"
+                          className={inputErrCls(!!conviteNomeErro)}
+                        />
+                        <FieldError message={conviteNomeErro} />
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome completo</label>
-                <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Ex: João da Silva"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
-              </div>
+              {!isAdmin && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome completo</label>
+                  <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Ex: João da Silva"
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
-                <input type="email" value={conviteEmail} onChange={e => setConviteEmail(e.target.value)}
+                <input type="email" value={conviteEmail}
+                  onChange={e => { setConviteEmailErro(''); setConviteEmail(e.target.value); }}
                   onKeyDown={e => e.key === 'Enter' && handleConvidar()}
                   placeholder="profissional@clinica.com"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                  className={inputErrCls(!!conviteEmailErro)} />
+                <FieldError message={conviteEmailErro} />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
-                {isAdmin ? (
-                  <div className="flex items-center gap-2 px-4 py-2.5 border border-purple-200 bg-purple-50 rounded-xl">
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">SÓCIO</span>
-                    <span className="text-sm text-purple-700">Acesso total irrestrito à equipe</span>
-                  </div>
-                ) : (
-                  <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-white">
-                    {perfisDisponiveis.length > 0
-                      ? perfisDisponiveis.map(p => (
-                          <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
-                        ))
-                      : Object.entries(CARGO_INFO)
-                          .filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO')
-                          .map(([c, info]) => (
-                            <option key={c} value={c}>{info.label.toUpperCase()}</option>
+              {isAdmin && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Espécies atendidas
+                    {selecionadoId ? (
+                      <span className="ml-1.5 text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">da equipe</span>
+                    ) : (
+                      <span className="text-gray-400 font-normal ml-1">(opcional)</span>
+                    )}
+                  </label>
+                  {selecionadoId ? (
+                    loadingEspeciesEquipe ? (
+                      <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                        <Loader2 size={12} className="animate-spin" /> Carregando espécies...
+                      </div>
+                    ) : especiesEquipe.length === 0 ? (
+                      <p className="text-xs text-gray-400">Nenhuma espécie cadastrada nesta equipe.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {especiesEquipe.map(esp => (
+                          <span
+                            key={esp.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-medium"
+                          >
+                            <Check size={12} strokeWidth={3} className="text-emerald-500" />
+                            {esp.nome}
+                            <Lock size={10} className="text-emerald-400 ml-0.5" />
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  ) : loadingEspecies ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                      <Loader2 size={12} className="animate-spin" /> Carregando espécies...
+                    </div>
+                  ) : especies.length === 0 ? (
+                    <p className="text-xs text-gray-400">Nenhuma espécie cadastrada.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {especies.map(esp => {
+                        const selecionada = conviteEspecies.includes(esp.id);
+                        return (
+                          <button
+                            key={esp.id}
+                            type="button"
+                            onClick={() =>
+                              setConviteEspecies(prev =>
+                                selecionada ? prev.filter(id => id !== esp.id) : [...prev, esp.id]
+                              )
+                            }
+                            className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm text-left transition-colors ${
+                              selecionada
+                                ? 'bg-emerald-50 border-emerald-400 text-emerald-800 font-medium'
+                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                            }`}
+                          >
+                            <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border ${
+                              selecionada ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+                            }`}>
+                              {selecionada && <Check size={10} strokeWidth={3} className="text-white" />}
+                            </span>
+                            {esp.nome}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {conviteCargo === 'PROPRIETARIO' ? (
+                <div className="flex items-center gap-2 px-4 py-2.5 border border-amber-200 bg-amber-50 rounded-xl">
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">PROPRIETÁRIO</span>
+                  <span className="text-sm text-amber-700">Acesso de cliente — permissões configuráveis pelo sócio</span>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
+                  {isAdmin ? (
+                    <div className="flex items-center gap-2 px-4 py-2.5 border border-purple-200 bg-purple-50 rounded-xl">
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">SÓCIO</span>
+                      <span className="text-sm text-purple-700">Acesso total irrestrito à equipe</span>
+                    </div>
+                  ) : (
+                    <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
+                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-white">
+                      {perfisDisponiveis.length > 0
+                        ? perfisDisponiveis.filter(p => p.slug !== 'PROPRIETARIO').map(p => (
+                            <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
                           ))
-                    }
-                  </select>
-                )}
-              </div>
+                        : Object.entries(CARGO_INFO)
+                            .filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO')
+                            .map(([c, info]) => (
+                              <option key={c} value={c}>{info.label.toUpperCase()}</option>
+                            ))
+                      }
+                    </select>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-xs text-blue-700">
                 <Shield size={12} className="flex-shrink-0 mt-0.5" />
-                <span>O profissional receberá um e-mail com o link de acesso e uma senha temporária.</span>
+                <span>
+                  {conviteCargo === 'PROPRIETARIO'
+                    ? 'O cliente receberá um e-mail com o link de acesso para cadastrar seus animais.'
+                    : 'O profissional receberá um e-mail com o link de acesso e uma senha temporária.'}
+                </span>
               </div>
             </div>
 
             <div className="flex gap-3 mt-5">
-              <button onClick={() => setShowConvite(false)} disabled={enviandoConvite}
+              <button onClick={() => { setShowConvite(false); resetConviteForm(); }} disabled={enviandoConvite}
                 className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
                 Cancelar
               </button>
@@ -1574,17 +2153,631 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ABA — Equipe (membros profissionais: Veterinário, Estagiário, Prestador)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface Fornecedor { id: number; fullName: string; email: string; phone?: string }
+
+function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }) {
+  const { user }       = useAuth();
+  const [membros,      setMembros]      = useState<Membro[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [busca,        setBusca]        = useState('');
+  const [filtroCargo,  setFiltroCargo]  = useState('');
+  const [confirmDel,   setConfirmDel]   = useState<Membro | null>(null);
+  const [removendo,    setRemovendo]    = useState<number | null>(null);
+  const [alterandoCargo, setAlterandoCargo] = useState<number | null>(null);
+  const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
+  const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
+
+  // Modal de inclusão
+  const [showModal,      setShowModal]      = useState(false);
+  const [passo,          setPasso]          = useState<1 | 2>(1); // 1=selecionar tipo, 2=preencher dados
+  const [tipoSel,        setTipoSel]        = useState<'VETERINARIO' | 'ESTAGIARIO' | 'PRESTADOR' | null>(null);
+  const [conviteNome,    setConviteNome]    = useState('');
+  const [conviteEmail,   setConviteEmail]   = useState('');
+  const [conviteCargo,   setConviteCargo]   = useState('VETERINARIO');
+  const [emailErro,      setEmailErro]      = useState('');
+  const [enviando,       setEnviando]       = useState(false);
+
+  // Fornecedores (para tipo PRESTADOR)
+  const [fornecedores,        setFornecedores]        = useState<Fornecedor[]>([]);
+  const [loadingFornecedores, setLoadingFornecedores] = useState(false);
+  const [buscaFornecedor,     setBuscaFornecedor]     = useState('');
+  const [fornecedorSel,       setFornecedorSel]       = useState<Fornecedor | null>(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/equipes/membros?equipeId=${equipeId}`);
+      // Filtra PROPRIETARIO e ADMIN — exibe só profissionais da equipe
+      const todos: Membro[] = res.data?.dados ?? [];
+      setMembros(todos.filter(m => m.cargo !== 'PROPRIETARIO' && m.user.userType !== 'ADMIN' && m.user.userType !== 'PROPRIETARIO'));
+    } catch { toast.error('Erro ao carregar membros'); }
+    finally  { setLoading(false); }
+  }, [equipeId]);
+
+  const carregarPerfis = useCallback(async () => {
+    try {
+      const res = await api.get(`/equipes/${equipeId}/perfis`);
+      const lista = (res.data.dados ?? []) as Array<{ cargo: string; label?: string }>;
+      setPerfisDisponiveis(lista.filter(p => p.cargo !== 'SOCIO' && p.cargo !== 'PROPRIETARIO').map(p => ({ slug: p.cargo, label: p.label ?? p.cargo })));
+    } catch { /* silencioso */ }
+  }, [equipeId]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (isSocio) carregarPerfis(); }, [carregarPerfis, isSocio]);
+
+  const abrirModal = () => {
+    setPasso(1); setTipoSel(null); setConviteNome(''); setConviteEmail(''); setEmailErro('');
+    setFornecedorSel(null); setBuscaFornecedor(''); setFornecedores([]);
+    setShowModal(true);
+  };
+
+  const selecionarTipo = async (tipo: 'VETERINARIO' | 'ESTAGIARIO' | 'PRESTADOR') => {
+    setTipoSel(tipo);
+    setConviteCargo(tipo);
+    if (tipo === 'PRESTADOR') {
+      setLoadingFornecedores(true);
+      try {
+        const res = await api.get(`/equipes/${equipeId}/fornecedores`);
+        setFornecedores(res.data?.dados ?? []);
+      } catch { toast.error('Erro ao carregar fornecedores'); }
+      finally { setLoadingFornecedores(false); }
+    }
+    setPasso(2);
+  };
+
+  const handleEnviar = async () => {
+    setEmailErro('');
+    const email = tipoSel === 'PRESTADOR' ? fornecedorSel?.email ?? '' : conviteEmail.trim();
+    if (!email) { setEmailErro('Selecione um prestador ou informe o e-mail'); return; }
+    if (tipoSel !== 'PRESTADOR' && !isValidEmail(email)) { setEmailErro('E-mail inválido'); return; }
+
+    setEnviando(true);
+    try {
+      await api.post(`/equipes/${equipeId}/convidar`, {
+        email,
+        fullName: tipoSel === 'PRESTADOR' ? fornecedorSel?.fullName : (conviteNome.trim() || undefined),
+        cargo:    conviteCargo,
+      });
+      toast.success('Convite enviado por e-mail');
+      setShowModal(false);
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
+      toast.error(msg);
+    } finally { setEnviando(false); }
+  };
+
+  const handleAlterarCargo = async (membro: Membro, novoCargo: string) => {
+    setAlterandoCargo(membro.id);
+    try {
+      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: novoCargo });
+      toast.success('Cargo atualizado');
+      carregar();
+    } catch { toast.error('Erro ao alterar cargo'); }
+    finally  { setAlterandoCargo(null); }
+  };
+
+  const handleSalvarCargos = async (cargosNovos: string[]) => {
+    if (!editandoCargos) return;
+    setAlterandoCargo(editandoCargos.membroId);
+    try {
+      await api.patch(`/equipes/${equipeId}/membros/${editandoCargos.userId}/cargos`, { cargos: cargosNovos });
+      toast.success('Perfis atualizados');
+      setEditandoCargos(null);
+      carregar();
+    } catch { toast.error('Erro ao atualizar perfis'); }
+    finally  { setAlterandoCargo(null); }
+  };
+
+  const handleRemover = async () => {
+    if (!confirmDel) return;
+    setRemovendo(confirmDel.id);
+    try {
+      await api.delete(`/equipes/membros/${confirmDel.id}`);
+      toast.success(`${confirmDel.user.fullName} removido`);
+      setConfirmDel(null);
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover';
+      toast.error(msg);
+    } finally { setRemovendo(null); }
+  };
+
+  const filtrados = membros.filter(m => {
+    const buscaOk = !busca || m.user.fullName.toLowerCase().includes(busca.toLowerCase()) || m.user.email.toLowerCase().includes(busca.toLowerCase());
+    const cargoOk = !filtroCargo || m.cargo === filtroCargo;
+    return buscaOk && cargoOk;
+  });
+
+  const fornecedoresFiltrados = fornecedores.filter(f =>
+    !buscaFornecedor || f.fullName.toLowerCase().includes(buscaFornecedor.toLowerCase()) || f.email.toLowerCase().includes(buscaFornecedor.toLowerCase())
+  );
+
+  const TIPOS_MEMBRO = [
+    { id: 'VETERINARIO' as const, label: 'Veterinário',  icon: <Stethoscope size={20} className="text-emerald-600" />, cor: 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100' },
+    { id: 'ESTAGIARIO'  as const, label: 'Estagiário',   icon: <Users size={20} className="text-blue-600" />,          cor: 'border-blue-200 bg-blue-50 hover:bg-blue-100' },
+    { id: 'PRESTADOR'   as const, label: 'Fornecedor / Prestador', icon: <Wrench size={20} className="text-teal-600" />, cor: 'border-teal-200 bg-teal-50 hover:bg-teal-100' },
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="font-bold text-gray-900">Equipe ({membros.length})</p>
+          <p className="text-xs text-gray-400 mt-0.5">Veterinários, estagiários e prestadores de serviço</p>
+        </div>
+        {isSocio && (
+          <button onClick={abrirModal}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors">
+            <Plus size={14} /> Incluir Membro
+          </button>
+        )}
+      </div>
+
+      <div className="px-5 py-3 border-b border-gray-50 flex gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-48">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar por nome ou e-mail..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-400" />
+        </div>
+        <select value={filtroCargo} onChange={e => setFiltroCargo(e.target.value)}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none focus:border-indigo-400 bg-white">
+          <option value="">Todos os Perfis</option>
+          {[...new Set(membros.map(m => m.cargo))].sort().map(c => (
+            <option key={c} value={c}>{CARGO_INFO[c]?.label ?? c}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+      ) : filtrados.length === 0 ? (
+        <div className="py-12 text-center text-sm text-gray-400">Nenhum membro encontrado.</div>
+      ) : (
+        <>
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Profissional</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfil Ativo</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Status</th>
+                  <th className="px-5 py-3 text-right text-[11px] font-bold text-gray-400 uppercase tracking-wider">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filtrados.map(m => (
+                  <tr key={m.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          {m.user.fullName?.[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-semibold text-gray-900">{m.user.fullName}</p>
+                            {m.user.id === user?.id && <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">Você</span>}
+                          </div>
+                          <p className="text-xs text-gray-400">{m.user.email}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      {isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
+                            <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
+                              {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
+                            </span>
+                          ))}
+                          {alterandoCargo === m.id
+                            ? <Loader2 size={12} className="animate-spin text-indigo-400" />
+                            : (
+                              <button onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
+                                className="p-0.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded transition-colors" title="Editar perfis">
+                                <Pencil size={11} />
+                              </button>
+                            )
+                          }
+                        </div>
+                      ) : (
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-bold ${badgeCargo(m.cargo)}`}>
+                          {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${m.user?.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${m.user?.ativo !== false ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                        {m.user?.ativo !== false ? 'Ativo' : 'Desativado'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                        <button onClick={() => setConfirmDel(m)} title="Remover membro"
+                          className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="md:hidden divide-y divide-gray-50">
+            {filtrados.map(m => (
+              <div key={m.id} className="px-4 py-3.5 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                  {m.user.fullName?.[0]?.toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
+                  <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
+                  {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
+                </span>
+                {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                  <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Modal — Incluir Membro */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-indigo-100 rounded-xl flex items-center justify-center">
+                  <Plus size={16} className="text-indigo-600" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-gray-900">
+                    {passo === 1 ? 'Incluir Membro' : `Convidar ${tipoSel === 'PRESTADOR' ? 'Prestador' : tipoSel === 'ESTAGIARIO' ? 'Estagiário' : 'Veterinário'}`}
+                  </h2>
+                  <p className="text-xs text-gray-400">{passo === 1 ? 'Selecione o tipo de membro' : 'Um e-mail de convite será enviado'}</p>
+                </div>
+              </div>
+              <button onClick={() => setShowModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"><X size={16} /></button>
+            </div>
+
+            {passo === 1 ? (
+              <div className="space-y-3">
+                {TIPOS_MEMBRO.map(t => (
+                  <button key={t.id} onClick={() => selecionarTipo(t.id)}
+                    className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all ${t.cor}`}>
+                    <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-sm flex-shrink-0">
+                      {t.icon}
+                    </div>
+                    <div className="text-left">
+                      <p className="font-bold text-gray-900 text-sm">{t.label}</p>
+                      <p className="text-xs text-gray-500">{CARGO_INFO[t.id]?.desc}</p>
+                    </div>
+                    <ChevronRight size={16} className="ml-auto text-gray-400 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            ) : tipoSel === 'PRESTADOR' ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecionar prestador de serviço</label>
+                  <div className="relative mb-2">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input value={buscaFornecedor} onChange={e => setBuscaFornecedor(e.target.value)}
+                      placeholder="Buscar por nome ou e-mail..."
+                      className="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:border-indigo-500" />
+                  </div>
+                  {loadingFornecedores ? (
+                    <div className="flex justify-center py-4"><Loader2 size={18} className="animate-spin text-indigo-500" /></div>
+                  ) : fornecedoresFiltrados.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">
+                      {fornecedores.length === 0 ? 'Nenhum prestador cadastrado. Acesse Cadastro → Fornecedores.' : 'Nenhum resultado.'}
+                    </p>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto space-y-1.5 border border-gray-200 rounded-xl p-2">
+                      {fornecedoresFiltrados.map(f => (
+                        <button key={f.id} onClick={() => setFornecedorSel(f)}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${fornecedorSel?.id === f.id ? 'bg-teal-50 border border-teal-300' : 'hover:bg-gray-50 border border-transparent'}`}>
+                          <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                            {f.fullName?.[0]?.toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{f.fullName}</p>
+                            <p className="text-xs text-gray-400 truncate">{f.email}</p>
+                          </div>
+                          {fornecedorSel?.id === f.id && <Check size={14} className="text-teal-600 flex-shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome completo</label>
+                  <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Ex: João da Silva"
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
+                  <input type="email" value={conviteEmail} onChange={e => { setEmailErro(''); setConviteEmail(e.target.value); }}
+                    placeholder="profissional@clinica.com"
+                    className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none ${emailErro ? 'border-red-400' : 'border-gray-300 focus:border-indigo-500'}`} />
+                  {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
+                  <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
+                    {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO').map(([c, info]) => ({ slug: c, label: info.label }))).map(p => (
+                      <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => { if (passo === 2) setPasso(1); else setShowModal(false); }}
+                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">
+                {passo === 2 ? 'Voltar' : 'Cancelar'}
+              </button>
+              {passo === 2 && (
+                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'PRESTADOR' && !fornecedorSel)}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
+                  {enviando ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
+                  Enviar Convite
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal — Confirmar remoção */}
+      {confirmDel && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
+            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Trash2 size={22} className="text-red-500" />
+            </div>
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Remover membro?</h2>
+            <p className="text-sm text-gray-500 mb-4"><strong className="text-gray-700">{confirmDel.user.fullName}</strong> perderá acesso à equipe.</p>
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setConfirmDel(null)} className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm hover:bg-gray-50">Cancelar</button>
+              <button onClick={handleRemover} disabled={removendo !== null}
+                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-2xl text-sm font-semibold disabled:opacity-60">
+                {removendo !== null ? 'Removendo...' : 'Remover'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editandoCargos && (
+        <EditarCargosModal
+          atual={editandoCargos.atual}
+          perfisDisponiveis={perfisDisponiveis}
+          onSalvar={handleSalvarCargos}
+          onFechar={() => setEditandoCargos(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ABA — Proprietários (clientes vinculados à equipe)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function TabProprietarios({ equipeId }: { equipeId: number }) {
+  const [proprietarios, setProprietarios] = useState<ProprietarioEquipe[]>([]);
+  const [loading,       setLoading]       = useState(true);
+  const [busca,         setBusca]         = useState('');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/equipes/${equipeId}/proprietarios`);
+      setProprietarios(res.data?.dados ?? []);
+    } catch { toast.error('Erro ao carregar proprietários'); }
+    finally  { setLoading(false); }
+  }, [equipeId]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const filtrados = proprietarios.filter(p =>
+    !busca || p.fullName.toLowerCase().includes(busca.toLowerCase()) || p.email.toLowerCase().includes(busca.toLowerCase())
+  );
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="font-bold text-gray-900">Proprietários ({proprietarios.length})</p>
+          <p className="text-xs text-gray-400 mt-0.5">Clientes com animais vinculados à equipe</p>
+        </div>
+        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-lg transition-colors">
+          <RefreshCw size={14} />
+        </button>
+      </div>
+
+      <div className="px-5 py-3 border-b border-gray-50">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar proprietário..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-400" />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+      ) : filtrados.length === 0 ? (
+        <div className="py-12 text-center">
+          <UserCheck size={32} className="mx-auto mb-3 text-gray-200" />
+          <p className="text-sm text-gray-400">Nenhum proprietário encontrado.</p>
+          <p className="text-xs text-gray-400 mt-1">Proprietários aparecem aqui quando vinculam animais à equipe.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-50">
+          {filtrados.map(p => (
+            <div key={p.userId} className="px-5 py-3.5 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                {p.fullName?.[0]?.toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">{p.fullName}</p>
+                <p className="text-xs text-gray-400">{p.email}</p>
+              </div>
+              <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold ${badgeCargo('PROPRIETARIO')}`}>
+                PROPRIETÁRIO
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ABA — Convites
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ConviteItem {
+  id:        number;
+  email:     string;
+  cargo:     string;
+  status:    'PENDENTE' | 'ACEITO' | 'RECUSADO' | 'CANCELADO';
+  createdAt: string;
+  expiresAt: string;
+  equipe?:   { nome: string; empresa?: { nome: string } };
+}
+
+function TabConvites({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }) {
+  const [convites,  setConvites]  = useState<ConviteItem[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [cancelando, setCancelando] = useState<number | null>(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/equipes/convites');
+      setConvites(res.data?.dados ?? []);
+    } catch { toast.error('Erro ao carregar convites'); }
+    finally  { setLoading(false); }
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const handleCancelar = async (conviteId: number) => {
+    setCancelando(conviteId);
+    try {
+      await api.delete(`/equipes/${equipeId}/convites/${conviteId}`);
+      toast.success('Convite cancelado');
+      carregar();
+    } catch { toast.error('Erro ao cancelar convite'); }
+    finally  { setCancelando(null); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+          <p className="font-bold text-gray-900">Convites Enviados</p>
+          <p className="text-xs text-gray-400 mt-0.5">Pendentes, aceitos e cancelados</p>
+        </div>
+        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-lg transition-colors">
+          {loading ? <Loader2 size={14} className="animate-spin text-indigo-400" /> : <RefreshCw size={14} />}
+        </button>
+      </div>
+
+      {convites.length === 0 && !loading ? (
+        <div className="px-5 py-12 text-center">
+          <Mail size={32} className="mx-auto mb-3 text-gray-200" />
+          <p className="text-sm text-gray-400">Nenhum convite enviado ainda.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-50">
+          {convites.map(c => {
+            const pendente = c.status === 'PENDENTE';
+            const expirado = pendente && new Date(c.expiresAt) < new Date();
+            return (
+              <div key={c.id} className="px-5 py-3.5 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{c.email}</p>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c.cargo)}`}>
+                      {(CARGO_INFO[c.cargo]?.label ?? c.cargo).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    {c.equipe && (
+                      <span className="text-[11px] text-gray-400 truncate">
+                        {c.equipe.empresa?.nome ?? c.equipe.nome}
+                        {c.equipe.empresa && ` · ${c.equipe.nome}`}
+                      </span>
+                    )}
+                    <span className="text-[11px] text-gray-300">·</span>
+                    <span className="text-[11px] text-gray-400">
+                      {new Date(c.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' })}
+                    </span>
+                  </div>
+                </div>
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${
+                  expirado         ? 'bg-red-50 text-red-600'      :
+                  pendente         ? 'bg-amber-50 text-amber-700'  :
+                  c.status === 'ACEITO' ? 'bg-emerald-50 text-emerald-700' :
+                                     'bg-gray-100 text-gray-500'
+                }`}>
+                  {expirado  ? <XCircle size={11} />      :
+                   pendente  ? <Clock size={11} />         :
+                   c.status === 'ACEITO' ? <CheckCircle2 size={11} /> :
+                               <XCircle size={11} />}
+                  {expirado ? 'Expirado' : pendente ? 'Pendente' : c.status === 'ACEITO' ? 'Aceito' : 'Cancelado/Recusado'}
+                </span>
+                {pendente && !expirado && isSocio && (
+                  <button onClick={() => handleCancelar(c.id)} disabled={cancelando === c.id}
+                    className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Cancelar convite">
+                    {cancelando === c.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // COMPONENTE PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface EquipeOpcao {
   id:          number;
   nome:        string;
+  empresaId:   number;
   empresaNome: string;
 }
 
 type AbaAdmin = 'globais' | 'profissionais' | 'auditoria';
-type AbaSocio = 'matriz' | 'profissionais' | 'auditoria';
+type AbaSocio = 'matriz' | 'convites' | 'auditoria';
 type Aba = AbaAdmin | AbaSocio;
 
 export default function ControleAcesso() {
@@ -1593,6 +2786,7 @@ export default function ControleAcesso() {
 
   const [aba,          setAba]          = useState<Aba>(isAdmin ? 'globais' : 'matriz');
   const [equipeId,     setEquipeId]     = useState<number | null>(null);
+  const [empresaId,    setEmpresaId]    = useState<number | null>(null);
   const [isSocio,      setIsSocio]      = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [auditTotal,   setAuditTotal]   = useState(0);
@@ -1605,6 +2799,7 @@ export default function ControleAcesso() {
       .then(r => {
         const id = r.data?.equipeId ?? null;
         setEquipeId(id);
+        setEmpresaId(r.data?.empresaId ?? null);
         setIsSocio(isAdmin ? true : (r.data?.isSocio ?? false));
         if (r.data?.todasEquipes) setTodasEquipes(r.data.todasEquipes);
         if (id) return api.get(`/equipes/${id}/auditoria?page=1&limit=1`);
@@ -1622,10 +2817,11 @@ export default function ControleAcesso() {
     { id: 'auditoria',    label: 'Logs de Auditoria',  icon: <Activity  size={15} /> },
   ];
 
-  const ABAS_SOCIO: Array<{ id: AbaSocio; label: string; icon: React.ReactNode; badge?: number }> = [
-    { id: 'matriz',        label: 'Matriz de Perfis',  icon: <Shield    size={15} /> },
-    { id: 'profissionais', label: 'Profissionais',     icon: <Users2    size={15} /> },
-    { id: 'auditoria',    label: 'Logs de Auditoria', icon: <Activity  size={15} />, badge: auditTotal },
+  // Matriz de Perfis só aparece no desktop (desktopOnly)
+  const ABAS_SOCIO: Array<{ id: AbaSocio; label: string; icon: React.ReactNode; badge?: number; desktopOnly?: boolean }> = [
+    { id: 'matriz',    label: 'Matriz de Perfis',  icon: <Shield    size={15} />, desktopOnly: true },
+    { id: 'convites',  label: 'Convites',           icon: <Mail      size={15} /> },
+    { id: 'auditoria', label: 'Logs de Auditoria',  icon: <Activity  size={15} />, badge: auditTotal },
   ];
 
   const ABAS = isAdmin ? ABAS_ADMIN : ABAS_SOCIO;
@@ -1691,27 +2887,44 @@ export default function ControleAcesso() {
       </div>
 
       <div className="flex gap-1 bg-gray-100 rounded-2xl p-1 mb-6 overflow-x-auto">
-        {ABAS.map(a => (
-          <button key={a.id} onClick={() => setAba(a.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap transition-all flex-1 justify-center
-              ${aba === a.id
-                ? 'bg-white text-indigo-700 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'}`}>
-            {a.icon}
-            {a.label}
-            {'badge' in a && a.badge != null && a.badge > 0 && (
-              <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full ml-1">
-                {a.badge}
-              </span>
-            )}
-          </button>
-        ))}
+        {ABAS.map(a => {
+          const isDesktopOnly = 'desktopOnly' in a && a.desktopOnly;
+          return (
+            <button
+              key={a.id}
+              onClick={() => setAba(a.id)}
+              className={`${isDesktopOnly ? 'hidden md:flex' : 'flex'} items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap transition-all flex-1 justify-center
+                ${aba === a.id
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              {a.icon}
+              {a.label}
+              {'badge' in a && a.badge != null && a.badge > 0 && (
+                <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full ml-1">
+                  {a.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {isAdmin && aba === 'globais'       && <TabPermissoesGlobais />}
-      {aba === 'profissionais'             && <TabProfissionais equipeId={equipeId ?? 0} isSocio={isSocio} isAdmin={isAdmin} />}
-      {aba === 'auditoria'                 && equipeId && <TabAuditoria equipeId={equipeId} />}
-      {!isAdmin && aba === 'matriz'        && equipeId && <TabMatriz equipeId={equipeId} />}
+      {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isSocio={isSocio} isAdmin={isAdmin} />}
+      {!isAdmin && aba === 'convites'     && equipeId && <TabConvites equipeId={equipeId} isSocio={isSocio} />}
+      {aba === 'auditoria'                && equipeId && <TabAuditoria equipeId={equipeId} />}
+      {!isAdmin && aba === 'matriz'          && equipeId && (
+        <>
+          <div className="md:hidden bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 flex items-center gap-3 mb-4">
+            <Shield size={16} className="text-amber-600 flex-shrink-0" />
+            <p className="text-sm text-amber-700">A Matriz de Perfis está disponível apenas na versão desktop.</p>
+          </div>
+          <div className="hidden md:block">
+            <TabMatriz equipeId={equipeId} />
+          </div>
+        </>
+      )}
     </PageContainer>
   );
 }

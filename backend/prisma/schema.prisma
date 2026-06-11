@@ -45,7 +45,9 @@ model User {
   mensalista        Boolean  @default(false)
   valorAssistencia  Float?
   frequenciaVisitas Int?
+  empresaId         Int?     @map("empresa_id")
 
+  empresa              Empresa?               @relation("ProprietarioEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
   animais              Animal[]
   auditLogs            AuditLog[]
   dietasCriadas        Dieta[]                @relation("CriadorDieta")
@@ -97,11 +99,18 @@ model Animal {
   local              String?  @db.VarChar(255)
   baia               String?  @db.VarChar(100)
   idadeAnos          Int?
+  localizacaoId      Int?      @map("localizacao_id")
+  tratadorId         Int?      @map("tratador_id")
+  bloqueado          Boolean   @default(false)
+  bloqueioTipo       String?   @db.VarChar(30) @map("bloqueio_tipo")
+  bloqueioExpira     DateTime? @map("bloqueio_expira")
 
-  especie         Especie              @relation(fields: [especieId],  references: [id])
-  raca            Raca?                @relation(fields: [racaId],     references: [id])
-  user            User                 @relation(fields: [userId],     references: [id], onDelete: Cascade)
+  especie         Especie              @relation(fields: [especieId],    references: [id])
+  raca            Raca?                @relation(fields: [racaId],       references: [id])
+  user            User                 @relation(fields: [userId],       references: [id], onDelete: Cascade)
   empresa         Empresa?             @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: SetNull)
+  localizacao     LocalizacaoAnimal?   @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
+  tratador        Tratador?            @relation(fields: [tratadorId],   references: [id], onDelete: SetNull)
   dietas          Dieta[]
   exames          ExameNutricional[]
   ocorrencias     OcorrenciaSaude[]
@@ -122,6 +131,8 @@ model Animal {
   @@index([racaId])
   @@index([userId])
   @@index([empresaId])
+  @@index([localizacaoId])
+  @@index([tratadorId])
   @@map("tb_animais")
   @@schema("schs2vet")
 }
@@ -718,11 +729,11 @@ model Empresa {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner     User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  equipes   Equipe[]
-  animais   Animal[]         @relation("EmpresaAnimais")
+  owner           User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  proprietarios   User[]           @relation("ProprietarioEmpresa")
+  equipes         Equipe[]
+  animais         Animal[]         @relation("EmpresaAnimais")
   estoques  EstoqueClinica[] @relation("EmpresaEstoque")
-  tratadores Tratador[]      @relation("EmpresaTratadores")
 
   @@map("tb_empresas")
   @@schema("schs2vet")
@@ -1028,16 +1039,40 @@ model Tratador {
   id            Int      @id @default(autoincrement())
   nome          String   @db.VarChar(255)
   telefone      String?  @db.VarChar(30)
-  localTrabalho String?  @db.VarChar(255)
+  localizacaoId Int?     @map("localizacao_id")
+  tipoEntrada   String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
   ativo         Boolean  @default(true)
-  empresaId     Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  empresa Empresa? @relation("EmpresaTratadores", fields: [empresaId], references: [id], onDelete: SetNull)
+  localizacao LocalizacaoAnimal?  @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
+  animais     Animal[]
 
-  @@index([empresaId])
+  @@unique([nome, localizacaoId])
+  @@index([localizacaoId])
   @@map("tb_tratadores")
+  @@schema("schs2vet")
+}
+
+model Fornecedor {
+  id          Int      @id @default(autoincrement())
+  nome        String   @db.VarChar(255)
+  cpf         String?  @db.VarChar(20)
+  cnpj        String?  @db.VarChar(20)
+  telefone    String?  @db.VarChar(30)
+  tipoServico String   @db.VarChar(50)  @map("tipo_servico")
+  tipoEntrada String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
+  cep         String?  @db.VarChar(10)
+  endereco    String?  @db.VarChar(500)
+  complemento String?  @db.VarChar(255)
+  bairro      String?  @db.VarChar(255)
+  cidade      String?  @db.VarChar(255)
+  estado      String?  @db.VarChar(2)
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt      @map("updated_at")
+
+  @@map("tb_fornecedores")
   @@schema("schs2vet")
 }
 
@@ -1057,5 +1092,36 @@ model ReservaEstoque {
   @@unique([prescricaoGrupoId, estoqueId])
   @@index([estoqueId])
   @@map("tb_reservas_estoque")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// CADASTRO — LOCALIZAÇÃO DE ANIMAL
+// =============================================================================
+// Tabela global compartilhada entre todas as empresas.
+// tipoEntrada: SYSTEM (criado pelo ADMIN, imutável para não-ADMIN)
+//              CLIENTE (criado por outros, pode receber solicitação de alteração ao ADMIN)
+// Apenas ADMIN pode editar diretamente ou inativar.
+
+model LocalizacaoAnimal {
+  id                Int      @id @default(autoincrement())
+  nome              String   @unique @db.VarChar(255)
+  cnpj              String?  @db.VarChar(18)
+  cep               String?  @db.VarChar(10)
+  endereco          String?  @db.VarChar(500)
+  pessoaResponsavel String?  @db.VarChar(255)
+  telefone          String?  @db.VarChar(30)
+  tipoLocalizacao   String   @db.VarChar(50)
+  tipoEntrada       String   @default("CLIENTE") @db.VarChar(10)
+  ativo             Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  animais    Animal[]
+  tratadores Tratador[]
+
+  @@index([tipoLocalizacao])
+  @@index([ativo])
+  @@map("tb_localizacoes_animal")
   @@schema("schs2vet")
 }

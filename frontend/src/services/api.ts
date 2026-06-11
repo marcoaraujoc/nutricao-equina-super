@@ -43,17 +43,18 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const method = (error.config?.method ?? '').toLowerCase();
 
-    // 403 em GET = sem permissão para visualizar — retorna dados nulos silenciosamente
-    // O componente recebe lista vazia (null ?? []) e não exibe toast de erro
-    if (status === 403 && method === 'get') {
-      return Promise.resolve({
-        data: null,
-        status: 403,
-        statusText: 'Forbidden',
-        headers: error.response?.headers ?? {},
-        config: error.config,
-        request: error.request,
-      });
+    // 403 = sem permissão — tratado silenciosamente pelo componente.
+    // GETs retornam { data: null } resolvido; mutations rejeitam com flag tipada (sem log).
+    if (status === 403) {
+      if (method === 'get') {
+        return Promise.resolve({
+          data: null, status: 403, statusText: 'Forbidden',
+          headers: error.response?.headers ?? {}, config: error.config, request: error.request,
+        });
+      }
+      const permErr = new Error('Sem permissão para esta operação.');
+      Object.assign(permErr, { isPermissionError: true, status: 403 });
+      return Promise.reject(permErr);
     }
 
     if (status !== 401 || originalRequest?.skipRefreshInterceptor) {

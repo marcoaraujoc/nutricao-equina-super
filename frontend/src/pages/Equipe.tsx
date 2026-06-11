@@ -5,13 +5,14 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Users2, Mail, Trash2, ToggleLeft, ToggleRight,
-  UserCheck, Loader2, X, Send, Clock, CheckCircle2, XCircle,
-  AlertCircle, ShieldCheck, Pencil, ChevronDown, Check,
+  Loader2, X, CheckCircle2,
+  ShieldCheck, Pencil, ChevronDown, Check,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import PermissoesModal from '../components/PermissoesModal';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
+import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -25,26 +26,23 @@ interface Membro {
     email:    string;
     userType: string;
     ativo:    boolean;
+    phone?:       string | null;
+    cep?:         string | null;
+    endereco?:    string | null;
+    complemento?: string | null;
+    bairro?:      string | null;
+    cidade?:      string | null;
+    estado?:      string | null;
   };
   equipe?: { nome: string };
 }
 
-interface ConviteForm { email: string; cargo: string; }
-
-interface Convite {
-  id:        number;
-  email:     string;
-  cargo:     string;
-  status:    'PENDENTE' | 'ACEITO' | 'RECUSADO' | 'CANCELADO';
-  createdAt: string;
-  expiresAt: string;
-}
-
+// Perfis de acesso atribuíveis a membros da equipe
 const CARGO_OPTIONS: { value: string; label: string }[] = [
-  { value: 'VETERINARIO',  label: 'Veterinário'  },
-  { value: 'ESTAGIARIO',   label: 'Estagiário'   },
-  { value: 'ADMIN',        label: 'Administrador' },
-  { value: 'MEMBRO',       label: 'Membro'        },
+  { value: 'VETERINARIO',  label: 'Veterinário'   },
+  { value: 'ESTAGIARIO',   label: 'Estagiário'    },
+  { value: 'PRESTADOR',    label: 'Fornecedor'    },
+  { value: 'SOCIO',        label: 'Sócio'         },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -53,6 +51,7 @@ const labelCargo = (cargo: string): string => ({
   SOCIO:        'Sócio',
   VETERINARIO:  'Veterinário',
   ESTAGIARIO:   'Estagiário',
+  PRESTADOR:    'Fornecedor',
   ADMIN:        'Administrador',
   MEMBRO:       'Membro',
   PROPRIETARIO: 'Proprietário',
@@ -62,6 +61,7 @@ const badgeCargo = (cargo: string): string => ({
   SOCIO:        'bg-purple-100 text-purple-700',
   VETERINARIO:  'bg-emerald-100 text-emerald-700',
   ESTAGIARIO:   'bg-blue-100 text-blue-700',
+  PRESTADOR:    'bg-teal-100 text-teal-700',
   ADMIN:        'bg-red-100 text-red-700',
   MEMBRO:       'bg-gray-100 text-gray-600',
   PROPRIETARIO: 'bg-purple-100 text-purple-700',
@@ -80,17 +80,11 @@ export default function Equipe() {
   const [togglingId,    setTogglingId]                    = useState<number | null>(null);
   const [removendoId,   setRemovendoId]                   = useState<number | null>(null);
   const [confirmRemover,setConfirmRemover]                = useState<Membro | null>(null);
-  const [convites,      setConvites]                      = useState<Convite[]>([]);
-  const [loadConvites,  setLoadConvites]                  = useState(false);
-  const [removendoConviteId, setRemovendoConviteId]       = useState<number | null>(null);
-  const [convite,       setConvite]                       = useState<ConviteForm>({ email: '', cargo: 'VETERINARIO' });
   const [editandoId,    setEditandoId]                    = useState<number | null>(null);
   const [editCargo,     setEditCargo]                     = useState('');
   const [salvandoCargo, setSalvandoCargo]                 = useState(false);
   const [permissoesModal, setPermissoesModal]             = useState<Membro | null>(null);
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
-  const [editNome,          setEditNome]                   = useState('');
-  const [editCargoPerfil,   setEditCargoPerfil]            = useState('');
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
   const [nomeEquipe,        setNomeEquipe]                  = useState('');
   const [editandoNome,      setEditandoNome]                = useState(false);
@@ -129,29 +123,26 @@ export default function Equipe() {
 
   useEffect(() => { carregarMembros(); }, []);
 
-  const carregarConvites = async () => {
-    setLoadConvites(true);
-    try {
-      const res = await api.get('/equipes/convites');
-      setConvites(res.data?.dados ?? []);
-    } catch { setConvites([]); }
-    finally { setLoadConvites(false); }
-  };
-
-  useEffect(() => { carregarConvites(); }, []);
-
-  const handleConvidar = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!convite.email.trim()) { toast.error('Informe o e-mail'); return; }
+  const handleIncluirMembro = async (values: UsuarioFormValues) => {
     setEnviando(true);
     try {
-      await api.post('/equipes/convites', { email: convite.email.trim().toLowerCase(), cargo: convite.cargo });
-      toast.success(`Convite enviado para ${convite.email}`);
-      setConvite({ email: '', cargo: 'VETERINARIO' });
+      await api.post('/equipes/incluir-membro', {
+        email:       values.email,
+        cargo:       values.perfil,
+        fullName:    values.fullName,
+        phone:       values.phone,
+        cep:         values.cep.trim()         || null,
+        endereco:    values.endereco.trim()    || null,
+        complemento: values.complemento.trim() || null,
+        bairro:      values.bairro.trim()      || null,
+        cidade:      values.cidade.trim()      || null,
+        estado:      values.estado.trim()      || null,
+      });
+      toast.success('Membro incluído com sucesso!');
       setShowConvite(false);
-      carregarMembros(); carregarConvites();
+      carregarMembros();
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite');
+      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro');
     } finally { setEnviando(false); }
   };
 
@@ -187,32 +178,31 @@ export default function Equipe() {
     finally { setSalvandoCargo(false); }
   };
 
-  const handleSalvarEdicao = async () => {
+  const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     if (!membroEditando) return;
     setSalvandoEdicao(true);
     try {
-      await api.patch(`/equipes/membros/${membroEditando.id}`, {
-        fullName: editNome,
-        cargo:    editCargoPerfil,
+      await api.put(`/equipes/membros/${membroEditando.id}`, {
+        fullName:    values.fullName,
+        cargo:       values.perfil,
+        phone:       values.phone,
+        ativo:       values.ativo,
+        senha:       values.senha || undefined,
+        cep:         values.cep.trim()         || null,
+        endereco:    values.endereco.trim()    || null,
+        complemento: values.complemento.trim() || null,
+        bairro:      values.bairro.trim()      || null,
+        cidade:      values.cidade.trim()      || null,
+        estado:      values.estado.trim()      || null,
       });
       toast.success('Perfil atualizado');
       setMembroEditando(null);
       carregarMembros();
-    } catch {
-      toast.error('Erro ao atualizar perfil');
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao atualizar perfil');
     } finally {
       setSalvandoEdicao(false);
     }
-  };
-  const handleRemoverConvite = async (id: number) => {
-    setRemovendoConviteId(id);
-    try {
-      await api.delete(`/equipes/convites/${id}`);
-      toast.success('Convite removido');
-      setConvites(prev => prev.filter(c => c.id !== id));
-    } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover');
-    } finally { setRemovendoConviteId(null); }
   };
 
   const membrosAtivos   = membros.filter(m => m.user.ativo !== false);
@@ -277,7 +267,7 @@ export default function Equipe() {
         {isSocio && (
           <button onClick={() => setShowConvite(true)}
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-            <Mail size={16} /> Convidar membro
+            <Mail size={16} /> Incluir Membro
           </button>
         )}
       </div>
@@ -295,7 +285,7 @@ export default function Equipe() {
           {isSocio && (
             <button onClick={() => setShowConvite(true)}
               className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-              Convidar primeiro membro
+              Incluir primeiro membro
             </button>
           )}
         </div>
@@ -359,9 +349,9 @@ export default function Equipe() {
                   <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
 
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    {m.cargo !== 'SOCIO' && (
+                    {isSocio && m.cargo !== 'SOCIO' && (
                       <button
-                        onClick={() => { setMembroEditando(m); setEditNome(m.user.fullName); setEditCargoPerfil(m.cargo); }}
+                        onClick={() => setMembroEditando(m)}
                         className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg"
                         title="Editar perfil">
                         <Pencil size={15} />
@@ -403,83 +393,6 @@ export default function Equipe() {
         </div>
       )}
 
-      {/* Card Convites */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
-              <Mail size={15} className="text-blue-600" />
-            </div>
-            <div>
-              <p className="font-semibold text-gray-900 text-sm">Convites enviados</p>
-              <p className="text-[11px] text-gray-400">{convites.length} registro{convites.length !== 1 ? 's' : ''}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            {(['PENDENTE','ACEITO','RECUSADO','CANCELADO'] as const).map(val => {
-              const count = convites.filter(c => c.status === val).length;
-              if (!count) return null;
-              const cfg = {
-                PENDENTE:  { bg:'bg-amber-50',   text:'text-amber-700',   icon:<Clock size={10}/>,         label:'Pendentes'  },
-                ACEITO:    { bg:'bg-emerald-50',  text:'text-emerald-700', icon:<CheckCircle2 size={10}/>,  label:'Aceitos'    },
-                RECUSADO:  { bg:'bg-red-50',      text:'text-red-600',     icon:<XCircle size={10}/>,       label:'Recusados'  },
-                CANCELADO: { bg:'bg-gray-100',    text:'text-gray-500',    icon:<AlertCircle size={10}/>,   label:'Cancelados' },
-              }[val];
-              return (
-                <span key={val} className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold ${cfg.bg} ${cfg.text}`}>
-                  {cfg.icon}{count} {cfg.label}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-
-        {loadConvites ? (
-          <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-blue-500" /></div>
-        ) : convites.length === 0 ? (
-          <div className="px-5 py-8 text-center text-sm text-gray-400">Nenhum convite enviado ainda.</div>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {convites.map(c => {
-              const expirado = c.status === 'PENDENTE' && new Date(c.expiresAt) < new Date();
-              const eff = expirado ? 'EXPIRADO' : c.status;
-              const cfg = ({
-                PENDENTE:  { bg:'bg-amber-100',   text:'text-amber-700',   label:'Pendente',  icon:<Clock size={11}/> },
-                EXPIRADO:  { bg:'bg-gray-100',    text:'text-gray-500',    label:'Expirado',  icon:<AlertCircle size={11}/> },
-                ACEITO:    { bg:'bg-emerald-100', text:'text-emerald-700', label:'Aceito',    icon:<CheckCircle2 size={11}/> },
-                RECUSADO:  { bg:'bg-red-100',     text:'text-red-600',     label:'Recusado',  icon:<XCircle size={11}/> },
-                CANCELADO: { bg:'bg-gray-100',    text:'text-gray-500',    label:'Cancelado', icon:<AlertCircle size={11}/> },
-              } as Record<string, { bg:string; text:string; label:string; icon:React.ReactNode }>)[eff] ?? { bg:'bg-gray-100', text:'text-gray-500', label:eff, icon:null };
-              return (
-                <div key={c.id} className="flex items-center gap-3 px-5 py-3.5">
-                  <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-                    <span className="text-xs font-bold text-gray-500">{c.email[0]?.toUpperCase() ?? '?'}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{c.email}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      Enviado em {new Date(c.createdAt).toLocaleDateString('pt-BR', { day:'2-digit', month:'short', year:'numeric' })}
-                    </p>
-                  </div>
-                  <span className={`hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${badgeCargo(c.cargo)}`}>
-                    {labelCargo(c.cargo)}
-                  </span>
-                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold ${cfg.bg} ${cfg.text} flex-shrink-0`}>
-                    {cfg.icon}{cfg.label}
-                  </span>
-                  {c.status !== 'ACEITO' && (
-                    <button onClick={() => handleRemoverConvite(c.id)} disabled={removendoConviteId === c.id}
-                      className="flex-shrink-0 p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50">
-                      {removendoConviteId === c.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* Modal Permissões */}
       {permissoesModal && equipeId && (
         <PermissoesModal
@@ -490,112 +403,43 @@ export default function Equipe() {
         />
       )}
 
-      {/* Modal Convidar */}
+      {/* Modal Incluir Membro */}
       {showConvite && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
-                  <UserCheck size={18} className="text-emerald-700" />
-                </div>
-                <h2 className="text-lg font-bold text-gray-900">Convidar membro</h2>
-              </div>
-              <button onClick={() => setShowConvite(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleConvidar} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
-                <input type="email" value={convite.email} onChange={e => setConvite(p => ({ ...p, email: e.target.value }))}
-                  placeholder="colaborador@email.com" required
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Cargo</label>
-                <select value={convite.cargo} onChange={e => setConvite(p => ({ ...p, cargo: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-600 bg-white">
-                  {CARGO_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-              </div>
-              <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5 text-xs text-blue-700">
-                <Send size={12} className="flex-shrink-0 mt-0.5" />
-                <span>Um e-mail será enviado com o link de aceite.</span>
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button type="button" onClick={() => setShowConvite(false)}
-                  className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">Cancelar</button>
-                <button type="submit" disabled={enviando}
-                  className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
-                  {enviando ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-                  {enviando ? 'Enviando...' : 'Enviar convite'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <UsuarioFormModal
+          titulo="Incluir Membro"
+          infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
+          textoBotao="Incluir"
+          salvando={enviando}
+          onClose={() => setShowConvite(false)}
+          onSubmit={handleIncluirMembro}
+        />
       )}
 
-      {/* Modal Editar Membro */}
+      {/* Modal Editar Membro — mesmo formulário do Incluir, com opção de senha */}
       {membroEditando && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
-                  <Pencil size={18} className="text-blue-600" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900">Editar perfil</h2>
-                  <p className="text-xs text-gray-400">{membroEditando.user.email}</p>
-                </div>
-              </div>
-              <button onClick={() => setMembroEditando(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome</label>
-                <input
-                  type="text"
-                  value={editNome}
-                  onChange={e => setEditNome(e.target.value)}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  placeholder="Nome completo"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Cargo</label>
-                <select
-                  value={editCargoPerfil}
-                  onChange={e => setEditCargoPerfil(e.target.value)}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 bg-white"
-                >
-                  {CARGO_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button
-                type="button"
-                onClick={() => setMembroEditando(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSalvarEdicao}
-                disabled={salvandoEdicao || !editNome.trim()}
-                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2"
-              >
-                {salvandoEdicao ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                {salvandoEdicao ? 'Salvando...' : 'Salvar'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <UsuarioFormModal
+          titulo="Editar Membro"
+          modoEdicao
+          permitirSenha={isSocio}
+          emailBloqueado
+          textoBotao="Salvar"
+          salvando={salvandoEdicao}
+          onClose={() => setMembroEditando(null)}
+          onSubmit={handleSalvarEdicao}
+          initial={{
+            fullName:    membroEditando.user.fullName,
+            email:       membroEditando.user.email,
+            phone:       membroEditando.user.phone       ?? '',
+            perfil:      membroEditando.cargo,
+            ativo:       membroEditando.user.ativo !== false,
+            cep:         membroEditando.user.cep         ?? '',
+            endereco:    membroEditando.user.endereco    ?? '',
+            complemento: membroEditando.user.complemento ?? '',
+            bairro:      membroEditando.user.bairro      ?? '',
+            cidade:      membroEditando.user.cidade      ?? '',
+            estado:      membroEditando.user.estado      ?? '',
+          }}
+        />
       )}
       {/* Modal Confirmar remoção */}
       {confirmRemover && (

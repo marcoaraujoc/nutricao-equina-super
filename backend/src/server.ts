@@ -151,6 +151,8 @@ const proprietariosRoutes      = require('./routes/proprietarios');
 const tratadoresRoutes         = require('./routes/tratadores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fornecedoresRoutes       = require('./routes/fornecedores');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const localizacoesRoutes       = require('./routes/localizacoes');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -179,6 +181,7 @@ app.use('/api/procedimentos',         procedimentosRoutes);
 app.use('/api/cadastro/proprietarios', proprietariosRoutes);
 app.use('/api/cadastro/tratadores',   tratadoresRoutes);
 app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
+app.use('/api/cadastro/localizacoes', localizacoesRoutes);
 
 // Servir arquivos de upload (fotos)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -366,5 +369,40 @@ cron.schedule('0 * * * *', () => {
 }, { timezone: 'America/Sao_Paulo' });
 
 logger.info('[AutoAceite-Cron] Agendado: verifica a cada hora solicitações PENDENTE > 24h');
+
+// ===================== CRON — CANCELA VÍNCULOS PROVISÓRIOS EXPIRADOS =====================
+async function cancelarVinculosProvisionaisExpirados() {
+  const agora = new Date();
+  try {
+    const animaisExpirados = await prisma.animal.findMany({
+      where:  { bloqueado: true, bloqueioTipo: 'PROVISIONAL', bloqueioExpira: { lt: agora } },
+      select: { id: true, nome: true },
+    });
+
+    if (animaisExpirados.length === 0) return;
+
+    for (const animal of animaisExpirados) {
+      await prisma.vetAnimalSolicitacao.updateMany({
+        where: { animalId: animal.id, tipo: 'VINCULO', status: 'PENDENTE' },
+        data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
+      });
+      await prisma.animal.update({
+        where: { id: animal.id },
+        data:  { bloqueado: false, bloqueioTipo: null, bloqueioExpira: null },
+      });
+      logger.info(`[Provisional-Cron] Vínculo provisional cancelado — animalId=${animal.id} (${animal.nome})`);
+    }
+
+    logger.info(`[Provisional-Cron] ${animaisExpirados.length} vínculo(s) provisional(is) cancelado(s)`);
+  } catch (err: unknown) {
+    logger.error(`[Provisional-Cron] Erro: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+cron.schedule('15 * * * *', () => {
+  cancelarVinculosProvisionaisExpirados();
+}, { timezone: 'America/Sao_Paulo' });
+
+logger.info('[Provisional-Cron] Agendado: verifica a cada hora vínculos provisórios expirados');
 
 export default app;

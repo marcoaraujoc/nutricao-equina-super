@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
@@ -17,6 +18,7 @@ const LABEL_TIPO_USUARIO: Record<string, string> = {
   PROPRIETARIO: 'Proprietário(a)',
   VETERINARIO:  'Médico(a) Veterinário(a)',
   ESTAGIARIO:   'Estagiário(a)',
+  FORNECEDOR:   'Fornecedor(a)',
   ADMIN:        'Administrador(a)',
 };
 
@@ -42,6 +44,7 @@ export default function CadastroPessoal() {
   const { user, refreshUser }      = useAuth();
   const { refreshSelectedAnimal }  = useSelectedAnimal();
   const navigate                   = useNavigate();
+  const { loading: loadingPerms }  = usePermissoes();
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [crmvStatus,  setCrmvStatus]  = useState<CrmvStatus>('idle');
@@ -53,6 +56,11 @@ export default function CadastroPessoal() {
   const [especiesErro,    setEspeciesErro]    = useState(false);
   // Verdadeiro quando o usuário entrou via convite — espécies são herdadas e ficam bloqueadas
   const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
+  // Cargo na equipe (ex: SOCIO) — definido quando foi incluído como membro
+  const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
+
+  // Sócio: sem dados profissionais (CRMV/espécies/subespecialidade) e tipo travado
+  const isSocioEquipe = cargoEquipe === 'SOCIO';
 
   const carregarEspecies = () => {
     setEspeciesErro(false);
@@ -85,6 +93,7 @@ export default function CadastroPessoal() {
   });
 
   useEffect(() => {
+    if (loadingPerms) return;
     const loadUserData = async () => {
       const token = localStorage.getItem('token');
       if (!token || !user?.email) { setLoading(false); return; }
@@ -110,6 +119,7 @@ export default function CadastroPessoal() {
             subespecialidades: data.subespecialidades || [],
           });
           if (data.isConvidado) setIsConvidadoFlag(true);
+          setCargoEquipe(data.cargoEquipe ?? null);
         }
       } catch (err) {
         console.error('Erro ao carregar dados do usuário:', err);
@@ -118,7 +128,7 @@ export default function CadastroPessoal() {
       }
     };
     loadUserData();
-  }, [user?.email]);
+  }, [user?.email, loadingPerms]);
 
   const buscarCep = async (cep: string) => {
     const cepLimpo = cep.replace(/\D/g, '');
@@ -211,7 +221,7 @@ export default function CadastroPessoal() {
       toast.error('Estado é obrigatório');
       return false;
     }
-    if (form.tipoUsuario === 'VETERINARIO') {
+    if (form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe) {
       if (!form.crmv.trim()) {
         toast.error('CRMV é obrigatório para Médicos Veterinários');
         return false;
@@ -263,7 +273,7 @@ export default function CadastroPessoal() {
       cidade:      form.cidade.trim(),
       estado:      form.estado.trim().toUpperCase(),
       userType:    form.tipoUsuario,
-      ...(form.tipoUsuario === 'VETERINARIO' && {
+      ...(form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe && {
         crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
@@ -433,10 +443,12 @@ export default function CadastroPessoal() {
           {/* Tipo de Usuário */}
           <div>
             <Label text="Tipo de Usuário" required />
-            {fromConvite ? (
+            {(fromConvite || isSocioEquipe) ? (
               <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
                 <span className="text-gray-800 font-medium">
-                  {LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario}
+                  {isSocioEquipe
+                    ? 'Sócio(a)'
+                    : LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario}
                 </span>
                 <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
                   <Info size={11} /> Definido pela equipe
@@ -451,8 +463,8 @@ export default function CadastroPessoal() {
             )}
           </div>
 
-          {/* ── Dados profissionais — só para veterinários ── */}
-          {form.tipoUsuario === 'VETERINARIO' && (
+          {/* ── Dados profissionais — só para veterinários (sócio não preenche) ── */}
+          {form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe && (
             <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 

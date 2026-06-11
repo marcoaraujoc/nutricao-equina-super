@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -185,6 +186,11 @@ const RelatorioNutricional = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate                              = useNavigate();
   const { animalId: paramAnimalId }           = useParams<{ animalId: string }>();
+  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const podeImprimir = isSocio || podeExecutar('nutricao.relatorios.imprimir');
+  const podeExportar = isSocio || podeExecutar('nutricao.relatorios.exportar');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [snapshot,              setSnapshot]              = useState<SnapshotRelatorio | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<Animal[]>([]);
@@ -292,13 +298,15 @@ const RelatorioNutricional = () => {
   }, [effectiveAnimalId]);
 
   useEffect(() => {
+    if (loadingPerms) return;
     setLoading(true);
     Promise.all([loadAnimais(), loadCurrentAnimal()]).finally(() => setLoading(false));
-  }, [loadAnimais, loadCurrentAnimal]);
+  }, [loadAnimais, loadCurrentAnimal, loadingPerms]);
 
   useEffect(() => {
+    if (loadingPerms) return;
     if (effectiveAnimalId) gerarRelatorio();
-  }, [effectiveAnimalId, gerarRelatorio]);
+  }, [effectiveAnimalId, gerarRelatorio, loadingPerms]);
 
   // ── Lógica de filtros ─────────────────────────────────────────────────────
 
@@ -331,6 +339,7 @@ const RelatorioNutricional = () => {
   // ── Exportação ───────────────────────────────────────────────────────────
 
   const exportarPDF = () => {
+    if (!podeImprimir) { semPermissao('imprimir relatório nutricional'); return; }
     if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
     const nomeAnimal = currentAnimal?.nome ?? 'Animal';
     const dataGerado = snapshot?.geradoEm ? formatDateTime(snapshot.geradoEm) : '';
@@ -378,6 +387,7 @@ const RelatorioNutricional = () => {
   };
 
   const exportarExcelRelatorio = () => {
+    if (!podeExportar) { semPermissao('exportar relatório nutricional'); return; }
     if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
     const wb   = XLSX.utils.book_new();
     const cols  = ['Nutriente', 'Unidade', 'Total Dieta', 'Exigido NRC', 'Saldo', '% Atendido', 'Status', ...colunasDinamicas];
@@ -403,7 +413,16 @@ const RelatorioNutricional = () => {
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
-  if (loading) return (
+  if (!loadingPerms && !isSocio && !podeExecutar('nutricao.relatorios.ler')) return (
+    <PageContainer maxWidth="7xl">
+      <div className="text-center py-16">
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500">Você não tem permissão para visualizar relatórios nutricionais.</p>
+      </div>
+    </PageContainer>
+  );
+
+  if (loading || loadingPerms) return (
     <PageContainer maxWidth="7xl">
       <div className="flex items-center justify-center py-20">
         <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />

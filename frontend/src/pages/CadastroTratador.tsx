@@ -1,14 +1,24 @@
 // frontend/src/pages/CadastroTratador.tsx
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Pencil, Trash2, Search, Loader2, X, UserCog,
-  Phone, MapPin, ToggleLeft, ToggleRight, ChevronDown,
+  Search, Loader2, X, User2,
+  Phone, ToggleLeft, ToggleRight,
+  Lock, Info, ArrowLeft, CheckCircle2, Plus, MapPin,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const formatarTipo = (tipo: string) =>
+  tipo.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+// ─── Helper de máscara ───────────────────────────────────────────────────────
 
 function mascaraTelefone(v: string): string {
   const n = v.replace(/\D/g, '').slice(0, 11);
@@ -18,421 +28,335 @@ function mascaraTelefone(v: string): string {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface Localizacao {
+  id:              number;
+  nome:            string;
+  tipoLocalizacao: string;
+  ativo:           boolean;
+}
+
 interface Tratador {
   id:            number;
   nome:          string;
   telefone:      string | null;
-  localTrabalho: string | null;
+  localizacaoId: number | null;
+  tipoEntrada:   string;
   ativo:         boolean;
   createdAt:     string;
+  updatedAt:     string;
+  localizacao:   { id: number; nome: string; tipoLocalizacao: string } | null;
 }
 
 interface FormTratador {
   nome:          string;
   telefone:      string;
-  localTrabalho: string;
+  localizacaoId: number | null;
 }
 
-const FORM_INICIAL: FormTratador = { nome: '', telefone: '', localTrabalho: '' };
+const FORM_INICIAL: FormTratador = { nome: '', telefone: '', localizacaoId: null };
 
-// ─── LocalSelector — campo com sugestões existentes + criação inline ──────────
+// ─── Badge de tipo de entrada ─────────────────────────────────────────────────
 
-function LocalSelector({
-  value,
-  onChange,
-  locais,
-  className,
-}: {
-  value:     string;
-  onChange:  (v: string) => void;
-  locais:    string[];
-  className: string;
-}) {
-  const [aberto,  setAberto]  = useState(false);
-  const [filtro,  setFiltro]  = useState(value);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { setFiltro(value); }, [value]);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setAberto(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const opcoesFiltradas = locais.filter(l =>
-    l.toLowerCase().includes(filtro.toLowerCase())
-  );
-
-  const selecionar = (v: string) => {
-    onChange(v);
-    setFiltro(v);
-    setAberto(false);
-  };
-
-  const handleInput = (v: string) => {
-    setFiltro(v);
-    onChange(v);
-    setAberto(true);
-  };
-
-  return (
-    <div ref={wrapRef} className="relative">
-      <div className="relative">
-        <input
-          value={filtro}
-          onChange={e => handleInput(e.target.value)}
-          onFocus={() => setAberto(true)}
-          placeholder="Haras, fazenda ou estábulo..."
-          className={className}
-        />
-        <button type="button" onClick={() => setAberto(p => !p)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
-          <ChevronDown size={14} />
-        </button>
-      </div>
-      {aberto && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-30 max-h-48 overflow-y-auto">
-          {opcoesFiltradas.length > 0 ? (
-            opcoesFiltradas.map(l => (
-              <button key={l} type="button"
-                onClick={() => selecionar(l)}
-                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-emerald-50 transition-colors">
-                {l}
-              </button>
-            ))
-          ) : (
-            filtro.trim() ? (
-              <button type="button"
-                onClick={() => selecionar(filtro.trim())}
-                className="w-full text-left px-4 py-2.5 text-sm text-emerald-700 font-medium hover:bg-emerald-50 transition-colors">
-                Cadastrar "{filtro.trim()}"
-              </button>
-            ) : (
-              <p className="px-4 py-3 text-xs text-gray-400">Nenhum local cadastrado</p>
-            )
-          )}
-        </div>
-      )}
-    </div>
+function BadgeEntrada({ tipo }: { tipo: string }) {
+  return tipo === 'SYSTEM' ? (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+      <Lock size={10} /> SYSTEM
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+      CLIENTE
+    </span>
   );
 }
 
-// ─── Modal Formulário ─────────────────────────────────────────────────────────
-
-function ModalTratador({
-  editando, form, saving, locais,
-  onFormChange, onSalvar, onClose,
-}: {
-  editando:    Tratador | null;
-  form:        FormTratador;
-  saving:      boolean;
-  locais:      string[];
-  onFormChange: (f: keyof FormTratador, v: string) => void;
-  onSalvar:    () => void;
-  onClose:     () => void;
-}) {
-  const inputCls    = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500';
-  const inputReqCls = (v: string) => `${inputCls} ${!v.trim() ? 'border-red-200 focus:border-red-400' : ''}`;
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
-
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2">
-            <UserCog size={18} className="text-emerald-600" />
-            {editando ? 'Editar Tratador' : 'Novo Tratador'}
-          </h3>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
-        </div>
-
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Nome *</label>
-            <input
-              value={form.nome}
-              onChange={e => onFormChange('nome', e.target.value)}
-              placeholder="Nome completo do tratador"
-              className={inputReqCls(form.nome)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">
-              <span className="flex items-center gap-1"><Phone size={11} /> Telefone *</span>
-            </label>
-            <input
-              value={form.telefone}
-              onChange={e => onFormChange('telefone', mascaraTelefone(e.target.value))}
-              placeholder="(00) 00000-0000"
-              className={inputReqCls(form.telefone)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">
-              <span className="flex items-center gap-1"><MapPin size={11} /> Local de Trabalho *</span>
-            </label>
-            <LocalSelector
-              value={form.localTrabalho}
-              onChange={v => onFormChange('localTrabalho', v)}
-              locais={locais}
-              className={inputReqCls(form.localTrabalho)}
-            />
-          </div>
-        </div>
-
-        <div className="flex gap-3 px-5 pb-5 pt-2 border-t border-gray-100">
-          <button onClick={onClose} disabled={saving}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={onSalvar} disabled={saving || !form.nome.trim()}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-            {saving && <Loader2 size={13} className="animate-spin" />}
-            {saving ? 'Salvando…' : 'Salvar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Página ───────────────────────────────────────────────────────────────────
+// ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function CadastroTratador() {
-  const { podeExecutar, isSocio } = usePermissoes();
+  const navigate                                = useNavigate();
+  const { user }                                = useAuth();
+  const { podeExecutar, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar   = isSocio || podeExecutar('cadastro.tratador.criar');
-  const podeEditar  = isSocio || podeExecutar('cadastro.tratador.editar');
-  const podeDeletar = isSocio || podeExecutar('cadastro.tratador.deletar');
+  const isAdmin   = user?.role === 'ADMIN';
+  const podeCriar = isAdmin || podeExecutar('cadastro.tratador.criar');
+  const podeVer   = isAdmin || podeExecutar('cadastro.tratador.ler');
 
-  const [tratadores, setTratadores] = useState<Tratador[]>([]);
-  const [locais,     setLocais]     = useState<string[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [busca,      setBusca]      = useState('');
-  const [showModal,  setShowModal]  = useState(false);
-  const [editando,   setEditando]   = useState<Tratador | null>(null);
-  const [form,       setForm]       = useState<FormTratador>(FORM_INICIAL);
-  const [saving,     setSaving]     = useState(false);
+  const [lista,       setLista]       = useState<Tratador[]>([]);
+  const [loading,     setLoading]     = useState(false);
+  const [busca,       setBusca]       = useState('');
+  const [filtroAtivo, setFiltroAtivo] = useState<'ativo' | 'inativo' | 'all'>('ativo');
 
+  const [modalAberto, setModalAberto] = useState(false);
+  const [editando,    setEditando]    = useState<Tratador | null>(null);
+  const [form,        setForm]        = useState<FormTratador>(FORM_INICIAL);
+  const [salvando,    setSalvando]    = useState(false);
+  const [showInfo,    setShowInfo]    = useState(false);
+
+  // ── Combobox de localização no modal ─────────────────────────────────────
+  const [localizacoes,         setLocalizacoes]         = useState<Localizacao[]>([]);
+  const [locBusca,             setLocBusca]             = useState('');
+  const [locDropdownOpen,      setLocDropdownOpen]      = useState(false);
+  const [localizacaoSelecionada, setLocalizacaoSelecionada] = useState<Localizacao | null>(null);
+
+  const filteredLocs = useMemo(() => {
+    if (!locBusca.trim()) return localizacoes;
+    return localizacoes.filter(l =>
+      l.nome.toLowerCase().includes(locBusca.trim().toLowerCase()),
+    );
+  }, [localizacoes, locBusca]);
+
+  // ── Carregar localizações disponíveis ─────────────────────────────────────
+  useEffect(() => {
+    api.get('/cadastro/localizacoes?ativo=true')
+      .then(res => { if (res.data) setLocalizacoes(res.data.dados ?? []); })
+      .catch(() => setLocalizacoes([]));
+  }, []);
+
+  // ── Carregar lista de tratadores ──────────────────────────────────────────
   const carregar = useCallback(async () => {
+    if (loadingPerms) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (busca.trim()) params.set('busca', busca.trim());
-      // Inclui inativos para que possam ser reativados
-      params.set('ativo', 'all');
-      const [resT, resL] = await Promise.all([
-        api.get(`/cadastro/tratadores?${params}`),
-        api.get('/cadastro/tratadores/locais'),
-      ]);
-      setTratadores(resT.data.dados ?? []);
-      setLocais(resL.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar tratadores'); }
-    finally { setLoading(false); }
-  }, [busca]);
+      const res = await api.get('/cadastro/tratadores', {
+        params: {
+          busca: busca || undefined,
+          ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false',
+        },
+      });
+      if (!res.data) return;
+      setLista(res.data.dados ?? []);
+    } catch {
+      toast.error('Erro ao carregar tratadores');
+    } finally {
+      setLoading(false);
+    }
+  }, [busca, filtroAtivo, loadingPerms]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  // ── Abrir modal ───────────────────────────────────────────────────────────
   const abrirNovo = () => {
     setEditando(null);
     setForm(FORM_INICIAL);
-    setShowModal(true);
+    setLocBusca('');
+    setLocalizacaoSelecionada(null);
+    setModalAberto(true);
   };
 
-  const abrirEdicao = (t: Tratador) => {
+  const abrirEditar = (t: Tratador) => {
+    if (!isAdmin) { toast.error('Apenas ADMIN pode editar tratadores diretamente.'); return; }
     setEditando(t);
-    setForm({
-      nome:          t.nome,
-      telefone:      t.telefone ? mascaraTelefone(t.telefone.replace(/\D/g, '')) : '',
-      localTrabalho: t.localTrabalho ?? '',
-    });
-    setShowModal(true);
+    setForm({ nome: t.nome, telefone: t.telefone ? mascaraTelefone(t.telefone) : '', localizacaoId: t.localizacaoId });
+    const loc = t.localizacao ? (localizacoes.find(l => l.id === t.localizacaoId) ?? null) : null;
+    setLocalizacaoSelecionada(loc);
+    setLocBusca(t.localizacao?.nome ?? '');
+    setModalAberto(true);
   };
 
-  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); };
-
-  const handleFormChange = (field: keyof FormTratador, value: string) =>
-    setForm(prev => ({ ...prev, [field]: value }));
-
-  const handleSalvar = async () => {
-    if (!form.nome.trim())          { toast.error('Nome é obrigatório'); return; }
-    if (!form.telefone.trim())      { toast.error('Telefone é obrigatório'); return; }
-    if (!form.localTrabalho.trim()) { toast.error('Local de trabalho é obrigatório'); return; }
-
-    setSaving(true);
+  // ── Salvar ────────────────────────────────────────────────────────────────
+  const salvar = async () => {
+    if (!form.nome.trim()) { toast.error('Nome é obrigatório'); return; }
+    setSalvando(true);
     try {
+      const payload = {
+        nome:          form.nome.trim(),
+        telefone:      form.telefone || undefined,
+        localizacaoId: form.localizacaoId ?? undefined,
+      };
       if (editando) {
-        await api.put(`/cadastro/tratadores/${editando.id}`, form);
-        toast.success('Tratador atualizado');
+        await api.put(`/cadastro/tratadores/${editando.id}`, payload);
+        toast.success('Tratador atualizado com sucesso');
       } else {
-        await api.post('/cadastro/tratadores', form);
-        toast.success('Tratador cadastrado');
+        await api.post('/cadastro/tratadores', payload);
+        toast.success(`Tratador cadastrado como ${isAdmin ? 'SYSTEM' : 'CLIENTE'}`);
       }
-      fecharModal();
+      setModalAberto(false);
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar');
-    } finally { setSaving(false); }
+      toast.error(msg ?? 'Erro ao salvar tratador');
+    } finally {
+      setSalvando(false);
+    }
   };
 
-  const handleToggle = async (t: Tratador) => {
+  // ── Toggle ativo (ADMIN only) ─────────────────────────────────────────────
+  const toggleAtivo = async (t: Tratador) => {
+    if (!isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar tratadores'); return; }
     try {
       await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
-      toast.success(t.ativo ? 'Tratador inativado' : 'Tratador ativado');
+      toast.success(`Tratador ${t.ativo ? 'inativado' : 'ativado'}`);
       carregar();
-    } catch { toast.error('Erro ao alternar status'); }
+    } catch {
+      toast.error('Erro ao alterar status');
+    }
   };
 
-  const handleExcluir = async (t: Tratador) => {
-    if (!confirm(`Inativar o tratador "${t.nome}"?`)) return;
-    try {
-      await api.delete(`/cadastro/tratadores/${t.id}`);
-      toast.success('Tratador inativado');
-      carregar();
-    } catch { toast.error('Erro ao inativar'); }
+  // ── Combobox helpers ──────────────────────────────────────────────────────
+  const selecionarLoc = (loc: Localizacao) => {
+    setLocalizacaoSelecionada(loc);
+    setForm(f => ({ ...f, localizacaoId: loc.id }));
+    setLocBusca(loc.nome);
+    setLocDropdownOpen(false);
   };
+
+  const limparLoc = () => {
+    setLocalizacaoSelecionada(null);
+    setForm(f => ({ ...f, localizacaoId: null }));
+    setLocBusca('');
+  };
+
+  // ── Guard de acesso ───────────────────────────────────────────────────────
+  if (!loadingPerms && !podeVer && !isAdmin) {
+    return (
+      <PageContainer>
+        <div className="text-center py-16">
+          <h2 className="text-xl font-semibold text-gray-700">Acesso não autorizado</h2>
+          <p className="text-gray-500 mt-2">Você não tem permissão para visualizar esta página.</p>
+        </div>
+      </PageContainer>
+    );
+  }
+
+  const inputModal = 'w-full px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400';
 
   return (
-    <PageContainer maxWidth="5xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <UserCog size={24} className="text-emerald-600" /> Tratadores
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">Cadastro de tratadores e responsáveis pelos animais</p>
-        </div>
-        {podeCriar && (
-          <button onClick={abrirNovo}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            Novo Tratador
+    <PageContainer maxWidth="7xl">
+
+      {/* ── Cabeçalho ──────────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-4 mb-6 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate(-1)}
+            className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-2xl transition-colors flex-shrink-0"
+            title="Voltar">
+            <ArrowLeft size={20} />
           </button>
-        )}
-      </div>
-
-      {/* Busca */}
-      <div className="relative mb-4">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Buscar por nome ou local de trabalho..."
-          value={busca}
-          onChange={e => setBusca(e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors"
-        />
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-emerald-600" />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+              <User2 size={24} className="text-emerald-600" /> Tratadores
+            </h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Cadastro global de responsáveis pelo cuidado diário dos animais.
+            </p>
+          </div>
         </div>
-      ) : tratadores.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-gray-300">
-          <UserCog size={40} className="mb-3" />
-          <p className="text-sm text-gray-400">Nenhum tratador encontrado</p>
-          {podeCriar && (
+
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowInfo(v => !v)}
+            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl">
+            <Info size={18} />
+          </button>
+          {(podeCriar || isAdmin) && (
             <button onClick={abrirNovo}
-              className="mt-4 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 transition-colors">
-              Novo Tratador
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
+              <User2 size={16} /> Novo Tratador
             </button>
           )}
         </div>
-      ) : (
-        <>
-          {/* Mobile — cards */}
-          <div className="md:hidden space-y-3">
-            {tratadores.map(t => (
-              <div key={t.id} className={`bg-white rounded-2xl border p-4 shadow-sm ${!t.ativo ? 'opacity-60' : 'border-gray-100'}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{t.nome}</p>
-                    {t.telefone && (
-                      <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                        <Phone size={10} /> {t.telefone}
-                      </p>
-                    )}
-                    {t.localTrabalho && (
-                      <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                        <MapPin size={10} /> {t.localTrabalho}
-                      </p>
-                    )}
-                  </div>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${t.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                    {t.ativo ? 'Ativo' : 'Inativo'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                  {podeEditar && (
-                    <>
-                      <button onClick={() => abrirEdicao(t)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        <Pencil size={11} /> Editar
-                      </button>
-                      <button onClick={() => handleToggle(t)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        {t.ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />}
-                        {t.ativo ? 'Inativar' : 'Ativar'}
-                      </button>
-                    </>
-                  )}
-                  {podeDeletar && t.ativo && (
-                    <button onClick={() => handleExcluir(t)}
-                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+      </div>
 
-          {/* Desktop — tabela */}
-          <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* ── Info banner ──────────────────────────────────────────────────────── */}
+      {showInfo && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
+          <strong>Regras deste cadastro:</strong>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            <li>Dados são compartilhados entre todas as empresas (tabela global).</li>
+            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN e não podem ser editadas por outros.</li>
+            <li>Entradas <strong>CLIENTE</strong> são criadas por sócios/veterinários; solicite ao ADMIN para alterar.</li>
+            <li>Apenas ADMIN pode inativar ou editar qualquer tratador.</li>
+            <li>Tratadores nunca são excluídos, apenas inativados.</li>
+            <li>Um tratador pode cuidar de animais de diferentes empresas.</li>
+            <li>Não podem existir dois tratadores com o mesmo nome no mesmo local.</li>
+          </ul>
+        </div>
+      )}
+
+      {/* ── Filtros ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar por nome ou telefone…"
+            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+          />
+          {busca && (
+            <button onClick={() => setBusca('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <select
+          value={filtroAtivo}
+          onChange={e => setFiltroAtivo(e.target.value as 'ativo' | 'inativo' | 'all')}
+          className="px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
+        >
+          <option value="ativo">Somente ativos</option>
+          <option value="inativo">Somente inativos</option>
+          <option value="all">Todos</option>
+        </select>
+      </div>
+
+      {/* ── Tabela desktop ───────────────────────────────────────────────────── */}
+      <div className="hidden md:block">
+        {loading ? (
+          <div className="flex justify-center py-16"><Loader2 size={32} className="animate-spin text-emerald-500" /></div>
+        ) : lista.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <User2 size={48} className="mx-auto mb-3 opacity-30" />
+            <p>Nenhum tratador encontrado.</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Local de Trabalho</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Local de Trabalho</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Entrada</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
-                {tratadores.map(t => (
-                  <tr key={t.id} className={`hover:bg-gray-50 transition-colors ${!t.ativo ? 'opacity-60' : ''}`}>
-                    <td className="px-4 py-3 font-medium text-gray-900">{t.nome}</td>
-                    <td className="px-4 py-3 text-gray-600">{t.telefone ?? <span className="text-gray-300">—</span>}</td>
-                    <td className="px-4 py-3 text-gray-600">{t.localTrabalho ?? <span className="text-gray-300">—</span>}</td>
+              <tbody className="divide-y divide-gray-100">
+                {lista.map(t => (
+                  <tr key={t.id} className={`hover:bg-gray-50 transition-colors ${!t.ativo ? 'opacity-50' : ''}`}>
+                    <td className="px-4 py-3 font-medium text-gray-800">{t.nome}</td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${t.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                      {t.localizacao ? (
+                        <span className="flex items-center gap-1 text-gray-600">
+                          <MapPin size={12} className="text-emerald-500 shrink-0" />
+                          {t.localizacao.nome}
+                          <span className="text-xs text-gray-400 ml-1">({formatarTipo(t.localizacao.tipoLocalizacao)})</span>
+                        </span>
+                      ) : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{t.telefone ?? '—'}</td>
+                    <td className="px-4 py-3"><BadgeEntrada tipo={t.tipoEntrada} /></td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 rounded-xl text-xs font-medium ${t.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                         {t.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {podeEditar && (
+                      <div className="flex items-center justify-center gap-2">
+                        {isAdmin ? (
                           <>
-                            <button onClick={() => abrirEdicao(t)} title="Editar"
-                              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                              <Pencil size={14} />
+                            <button onClick={() => abrirEditar(t)}
+                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
+                              title="Editar">
+                              <User2 size={15} />
                             </button>
-                            <button onClick={() => handleToggle(t)} title={t.ativo ? 'Inativar' : 'Ativar'}
-                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                              {t.ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />}
+                            <button onClick={() => toggleAtivo(t)}
+                              className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
+                              title={t.ativo ? 'Inativar' : 'Ativar'}>
+                              {t.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
                             </button>
                           </>
-                        )}
-                        {podeDeletar && t.ativo && (
-                          <button onClick={() => handleExcluir(t)} title="Inativar"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 size={14} />
-                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">Somente leitura</span>
                         )}
                       </div>
                     </td>
@@ -441,19 +365,191 @@ export default function CadastroTratador() {
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        )}
+      </div>
 
-      {showModal && (
-        <ModalTratador
-          editando={editando}
-          form={form}
-          saving={saving}
-          locais={locais}
-          onFormChange={handleFormChange}
-          onSalvar={handleSalvar}
-          onClose={fecharModal}
-        />
+      {/* ── Cards mobile ─────────────────────────────────────────────────────── */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="flex justify-center py-16"><Loader2 size={32} className="animate-spin text-emerald-500" /></div>
+        ) : lista.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <User2 size={40} className="mx-auto mb-3 opacity-30" />
+            <p className="text-sm">Nenhum tratador encontrado.</p>
+          </div>
+        ) : lista.map(t => (
+          <div key={t.id} className={`bg-white rounded-3xl border border-gray-200 p-4 ${!t.ativo ? 'opacity-50' : ''}`}>
+            <div className="flex justify-between items-start gap-2 mb-2">
+              <div>
+                <p className="font-semibold text-gray-800">{t.nome}</p>
+                {t.localizacao && (
+                  <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                    <MapPin size={11} /> {t.localizacao.nome}
+                  </p>
+                )}
+              </div>
+              <BadgeEntrada tipo={t.tipoEntrada} />
+            </div>
+
+            {t.telefone && (
+              <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-2">
+                <Phone size={12} /> {t.telefone}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+              <span className={`px-2 py-1 rounded-xl text-xs font-medium ${t.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                {t.ativo ? 'Ativo' : 'Inativo'}
+              </span>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <button onClick={() => abrirEditar(t)}
+                    className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
+                    Editar
+                  </button>
+                  <button onClick={() => toggleAtivo(t)}
+                    className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
+                    {t.ativo ? 'Inativar' : 'Ativar'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Modal de criação / edição ─────────────────────────────────────────── */}
+      {modalAberto && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md flex flex-col max-h-[90vh]">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+              <h2 className="text-lg font-bold text-gray-800">
+                {editando ? 'Editar Tratador' : 'Novo Tratador'}
+              </h2>
+              <button onClick={() => setModalAberto(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-xl">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+
+              {/* Banner informativo para não-ADMIN */}
+              {!isAdmin && !editando && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800">
+                  Este tratador será cadastrado como <strong>CLIENTE</strong>. Para alterações futuras,
+                  entre em contato com o ADMIN do sistema.
+                </div>
+              )}
+
+              {/* Nome */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nome <span className="text-red-500">*</span>
+                </label>
+                <input
+                  value={form.nome}
+                  onChange={e => setForm(f => ({ ...f, nome: e.target.value }))}
+                  placeholder="Ex.: João da Silva"
+                  className={inputModal}
+                  autoFocus
+                />
+              </div>
+
+              {/* Telefone */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
+                <div className="relative">
+                  <Phone size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    value={form.telefone}
+                    onChange={e => setForm(f => ({ ...f, telefone: mascaraTelefone(e.target.value) }))}
+                    placeholder="(00) 00000-0000"
+                    className={`${inputModal} pl-8`}
+                  />
+                </div>
+              </div>
+
+              {/* Local de Trabalho — combobox */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Local de Trabalho
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={locBusca}
+                    onChange={e => {
+                      setLocBusca(e.target.value);
+                      setLocDropdownOpen(true);
+                      if (localizacaoSelecionada) {
+                        setLocalizacaoSelecionada(null);
+                        setForm(f => ({ ...f, localizacaoId: null }));
+                      }
+                    }}
+                    onFocus={() => setLocDropdownOpen(true)}
+                    onBlur={() => setTimeout(() => setLocDropdownOpen(false), 200)}
+                    placeholder="Buscar localização…"
+                    className={`${inputModal} pr-8`}
+                    autoComplete="off"
+                  />
+                  {localizacaoSelecionada ? (
+                    <CheckCircle2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+                  ) : locBusca ? (
+                    <button type="button"
+                      onMouseDown={limparLoc}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-400">
+                      <X size={14} />
+                    </button>
+                  ) : null}
+
+                  {locDropdownOpen && (
+                    <div className="absolute z-20 w-full bg-white border border-gray-200 shadow-xl rounded-xl mt-1 max-h-48 overflow-y-auto">
+                      {filteredLocs.length === 0 && !locBusca.trim() && (
+                        <p className="px-4 py-3 text-xs text-gray-400">Nenhuma localização cadastrada</p>
+                      )}
+                      {filteredLocs.map(loc => (
+                        <button key={loc.id} type="button"
+                          onMouseDown={() => selecionarLoc(loc)}
+                          className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 flex items-center justify-between text-sm border-b border-gray-50 last:border-0">
+                          <span className="font-medium text-gray-800">{loc.nome}</span>
+                          <span className="text-xs text-gray-400 ml-2 shrink-0">{formatarTipo(loc.tipoLocalizacao)}</span>
+                        </button>
+                      ))}
+                      {filteredLocs.length === 0 && locBusca.trim() && (
+                        <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{locBusca}"</p>
+                      )}
+                      {locBusca.trim() && !localizacaoSelecionada && (
+                        <div className="px-4 py-2 border-t border-gray-100">
+                          <p className="text-xs text-gray-400">
+                            <Plus size={11} className="inline mr-1" />
+                            Cadastre o local em <strong>Cadastro → Localizações</strong>.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Opcional — selecione o local onde o tratador trabalha.</p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setModalAberto(false)}
+                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+                Cancelar
+              </button>
+              <button onClick={salvar} disabled={salvando}
+                className="flex-1 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+                {salvando && <Loader2 size={15} className="animate-spin" />}
+                {editando ? 'Salvar alterações' : 'Cadastrar'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </PageContainer>
   );

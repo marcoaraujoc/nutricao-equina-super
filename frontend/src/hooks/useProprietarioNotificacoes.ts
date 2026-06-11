@@ -13,7 +13,7 @@ interface SolicitacaoStatus {
   updatedAt:        string;
   vetUserId?:       number | null;
   solicitanteId?:   number | null;
-  animal:           { nome: string };
+  animal:           { nome: string; bloqueioTipo?: string | null };
   veterinario:      { fullName: string };
   novoVeterinario?: { fullName: string } | null;
 }
@@ -107,10 +107,13 @@ export function useProprietarioNotificacoes(): void {
             { duration: 10000, icon: '⚠️' },
           );
         } else if (anterior === undefined && s.status === 'PENDENTE') {
-          // Nova solicitação de vínculo iniciada pelo VET (V→P)
-          const vetIniciou = s.solicitanteId != null && s.vetUserId != null
+          // Nova solicitação de vínculo iniciada pelo VET (V→P).
+          // Solicitudes PROVISIONAL (24h, sem e-mail) não geram toast — o proprietário
+          // verá o badge na tela Meus Animais, mas não recebe notificação em tempo real.
+          const vetIniciou  = s.solicitanteId != null && s.vetUserId != null
             && s.solicitanteId === s.vetUserId;
-          if (vetIniciou) {
+          const isProvisional = s.animal.bloqueioTipo === 'PROVISIONAL';
+          if (vetIniciou && !isProvisional) {
             toast(
               `Dr(a). ${s.veterinario.fullName} quer se vincular ao animal ${s.animal.nome} — acesse Meus Animais para responder`,
               { duration: 12000, icon: '🔔' },

@@ -6,7 +6,7 @@ import { useNavigate }              from 'react-router-dom';
 import { useAuth }                  from '../contexts/AuthContext';
 import { useSelectedAnimal }        from '../contexts/SelectedAnimalContext';
 import {
-  Plus, ClipboardList, Utensils, FlaskConical,
+  ClipboardList, Utensils, FlaskConical,
   FileText, ArrowLeft, Sun, Sunset, Moon, Sparkles, CheckCircle2,
 } from 'lucide-react';
 import api from '../services/api';
@@ -176,9 +176,6 @@ const GreetingScreen = ({ userName, onStart }: { userName: string; onStart: () =
 const NeedAnimalScreen = ({ onGo }: { onGo: () => void }) => (
   <div className="flex items-center justify-center min-h-[70vh] px-4">
     <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 p-8 sm:p-10 max-w-lg w-full text-center">
-      <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
-        <Plus size={28} className="text-emerald-600" />
-      </div>
       <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-3">Vamos cadastrar seu animal</h2>
       <p className="text-gray-500 text-sm leading-relaxed mb-8">Para liberar todas as funcionalidades, cadastre pelo menos um animal.</p>
       <button onClick={onGo} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-4 rounded-2xl font-semibold transition-colors">
@@ -331,9 +328,6 @@ const Dashboard = () => {
     <PageContainer>
       <BotaoVoltar className="mb-6" />
       <div className="max-w-2xl mx-auto text-center py-20">
-      <div className="w-20 h-20 bg-gray-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
-        <Plus size={36} className="text-gray-400" />
-      </div>
       {isConvidado ? (
         <>
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Nenhum animal encontrado</h2>

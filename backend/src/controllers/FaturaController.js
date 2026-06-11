@@ -261,7 +261,7 @@ const FaturaController = {
     const { faturaId } = req.params;
     const { status }   = req.body;
 
-    const VALIDOS = ['ABERTA', 'PAGA', 'CANCELADA'];
+    const VALIDOS = ['ABERTA', 'PAGA', 'CANCELADA', 'FECHADA'];
     if (!VALIDOS.includes(status)) {
       return res.status(400).json({ error: `Status inválido. Use: ${VALIDOS.join(', ')}` });
     }

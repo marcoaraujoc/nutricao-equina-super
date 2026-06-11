@@ -243,7 +243,7 @@ const AnimaisVet = () => {
   const { user }                                     = useAuth();
   const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
-  const { podeExecutar, temEquipe }                  = usePermissoes();
+  const { podeExecutar, temEquipe, loading: loadingPerms } = usePermissoes();
   const podeCriarAnimal                              = podeExecutar('animais.criar');
   const podeEditarAnimal                             = podeExecutar('animais.editar');
   const navigate                                     = useNavigate();
@@ -258,6 +258,7 @@ const AnimaisVet = () => {
   const [showBuscarModal,  setShowBuscarModal]  = useState(false);
   const [buscaAnimal,      setBuscaAnimal]      = useState('');
   const [resultadoBusca,   setResultadoBusca]   = useState<BuscaResultado | null>(null);
+  const [buscaFeita,       setBuscaFeita]       = useState(false);
   const [buscando,         setBuscando]         = useState(false);
   const [solicitando,      setSolicitando]      = useState(false);
 
@@ -276,7 +277,7 @@ const AnimaisVet = () => {
     }
   };
 
-  useEffect(() => { if (user?.id) loadAnimais(); }, [user?.id]);
+  useEffect(() => { if (user?.id && !loadingPerms) loadAnimais(); }, [user?.id, loadingPerms]);
 
   const animaisFiltrados = animais.filter(a => {
     const termo = busca.toLowerCase().trim();
@@ -391,6 +392,7 @@ const AnimaisVet = () => {
     if (!buscaAnimal.trim()) return;
     setBuscando(true);
     setResultadoBusca(null);
+    setBuscaFeita(false);
     try {
       const res = await api.get(`/animais/buscar-por-nome?nome=${encodeURIComponent(buscaAnimal.trim())}`);
       setResultadoBusca(res.data?.dados ?? null);
@@ -398,6 +400,7 @@ const AnimaisVet = () => {
       toast.error('Erro ao buscar animal');
     } finally {
       setBuscando(false);
+      setBuscaFeita(true);
     }
   };
 
@@ -417,6 +420,17 @@ const AnimaisVet = () => {
       setSolicitando(false);
     }
   };
+
+  if (!loadingPerms && !podeExecutar('animais.ler')) {
+    return (
+      <PageContainer>
+        <div className="text-center py-16">
+          <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+          <p className="text-sm text-gray-500">Você não tem permissão para visualizar pacientes.</p>
+        </div>
+      </PageContainer>
+    );
+  }
 
   // isConvidado mantido apenas para o VetNotificationModal (vets convidados não veem o modal)
   const isConvidado = user?.isConvidado === true;
@@ -697,22 +711,18 @@ const AnimaisVet = () => {
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-gray-900">Buscar Paciente</h2>
-              <button onClick={() => { setShowBuscarModal(false); setBuscaAnimal(''); setResultadoBusca(null); }}
+              <button onClick={() => { setShowBuscarModal(false); setBuscaAnimal(''); setResultadoBusca(null); setBuscaFeita(false); }}
                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">
                 <X size={18} />
               </button>
             </div>
-
-            <p className="text-sm text-gray-500 mb-4">
-              Digite o nome do animal para solicitar acesso. O proprietário receberá um convite por e-mail.
-            </p>
 
             <div className="flex gap-2 mb-4">
               <input
                 type="text"
                 placeholder="Nome do animal..."
                 value={buscaAnimal}
-                onChange={e => { setBuscaAnimal(e.target.value); setResultadoBusca(null); }}
+                onChange={e => { setBuscaAnimal(e.target.value); setResultadoBusca(null); setBuscaFeita(false); }}
                 onKeyDown={e => e.key === 'Enter' && handleBuscarAnimal()}
                 className="flex-1 px-4 py-2.5 border border-gray-200 rounded-2xl text-sm
                            text-gray-900 focus:outline-none focus:border-emerald-600
@@ -729,10 +739,28 @@ const AnimaisVet = () => {
               </button>
             </div>
 
-            {resultadoBusca === null && !buscando && buscaAnimal.trim() && (
-              <p className="text-sm text-gray-400 text-center py-4">Nenhum animal encontrado</p>
+            {/* Animal não encontrado → oferecer cadastro */}
+            {buscaFeita && resultadoBusca === null && !buscando && (
+              <div className="border border-dashed border-gray-200 rounded-2xl p-4 text-center space-y-3">
+                <p className="text-sm text-gray-500">
+                  Nenhum animal chamado <strong className="text-gray-700">"{buscaAnimal}"</strong> encontrado no sistema.
+                </p>
+                <button
+                  onClick={() => {
+                    setShowBuscarModal(false);
+                    setBuscaAnimal('');
+                    setResultadoBusca(null);
+                    setBuscaFeita(false);
+                    navigate('/animais', { state: { nome: buscaAnimal } });
+                  }}
+                  className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xl text-sm font-semibold transition-colors"
+                >
+                  Cadastrar Animal
+                </button>
+              </div>
             )}
 
+            {/* Animal encontrado */}
             {resultadoBusca && (
               <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50 space-y-3">
                 <div>
@@ -745,13 +773,17 @@ const AnimaisVet = () => {
                   )}
                 </div>
 
+                {/* Com vet de outra equipe — bloqueado */}
                 {resultadoBusca.temVet && !resultadoBusca.vetDaMinhaEquipe && (
-                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                    <Clock size={12} />
-                    Este animal já possui um veterinário responsável de outra equipe.
+                  <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5">
+                    <XCircle size={13} className="flex-shrink-0 mt-0.5" />
+                    <span>
+                      Este animal já possui um veterinário responsável. Não é possível solicitar vínculo no momento.
+                    </span>
                   </div>
                 )}
 
+                {/* Colega de equipe */}
                 {resultadoBusca.vetDaMinhaEquipe && (
                   <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
                     <CheckCircle2 size={12} />
@@ -759,14 +791,17 @@ const AnimaisVet = () => {
                   </div>
                 )}
 
-                <button
-                  onClick={handleSolicitarVinculoVet}
-                  disabled={solicitando}
-                  className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
-                             text-white rounded-2xl text-sm font-semibold transition-colors"
-                >
-                  {solicitando ? 'Enviando...' : 'Solicitar Vínculo'}
-                </button>
+                {/* Sem vet → pode solicitar */}
+                {!resultadoBusca.temVet && !resultadoBusca.vetDaMinhaEquipe && (
+                  <button
+                    onClick={handleSolicitarVinculoVet}
+                    disabled={solicitando}
+                    className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
+                               text-white rounded-2xl text-sm font-semibold transition-colors"
+                  >
+                    {solicitando ? 'Enviando...' : 'Solicitar Vínculo'}
+                  </button>
+                )}
               </div>
             )}
           </div>

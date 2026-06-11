@@ -71,10 +71,18 @@ const UserController = {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Cargo na equipe (ex: SOCIO) — definido na inclusão do membro
+      const membroEquipe = await prisma.membroEquipe.findFirst({
+        where:   { userId: user.id },
+        select:  { cargo: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
       const { vetPerfil, ...userData } = user;
       return res.status(200).json({
         ...userData,
         isConvidado,
+        cargoEquipe: membroEquipe?.cargo ?? null,
         crmv:              vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
         profileComplete:   !!(user.phone && user.fullName && user.fullName.trim()),
@@ -241,7 +249,16 @@ alterarSenha: async (req, res) => {
     const { senhaAtual, novaSenha } = req.body;
 
     if (!novaSenha || novaSenha.length < 8) {
-      return res.status(400).json({ sucesso: false, mensagem: 'A nova senha deve ter ao menos 8 caracteres' });
+      return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 8 caracteres' });
+    }
+    if (!/[A-Z]/.test(novaSenha)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
+    }
+    if (!/[0-9]/.test(novaSenha)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 número' });
+    }
+    if (!/[^A-Za-z0-9]/.test(novaSenha)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 caractere especial' });
     }
 
     try {

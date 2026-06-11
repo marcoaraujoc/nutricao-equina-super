@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -504,6 +505,17 @@ function BottomAddBar({
 const Dieta = () => {
   const { user } = useAuth();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
+  const { podeExecutar, loading: loadingPerms } = usePermissoes();
+
+  const podeCriar      = podeExecutar('nutricao.dietas.criar');
+  const podeEditar     = podeExecutar('nutricao.dietas.editar');
+  const podeImprimir   = podeExecutar('nutricao.dietas.imprimir');
+  const podeCompartilhar = podeExecutar('nutricao.dietas.compartilhar');
+  const podeExportar   = podeExecutar('nutricao.dietas.exportar');
+
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+
   const location  = useLocation();
   const { animalId } = useParams<{ animalId?: string }>();
 
@@ -540,23 +552,26 @@ const Dieta = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
-      const a   = (res.data?.dados ?? res.data) as AnimalExtended;
+      if (!res.data) return;
+      const a = (res.data?.dados ?? res.data) as AnimalExtended;
       setAnimal(a); setSelectedAnimal(a);
-    } catch (err) { console.error('Erro ao carregar animal:', err); }
+    } catch { /* silencioso */ }
   }, [effectiveAnimalId]);
 
   const carregarAnimais = useCallback(async () => {
     try {
       const res = await api.get('/animais');
+      if (!res.data) return;
       setAnimaisDoProprietario((res.data?.dados ?? res.data ?? []) as AnimalExtended[]);
-    } catch (err) { console.error('Erro ao carregar animais:', err); }
+    } catch { /* silencioso */ }
   }, []);
 
   const carregarAlimentos = useCallback(async () => {
     try {
       const res = await api.get('/alimentos');
+      if (!res.data) return;
       setAlimentos((res.data?.dados ?? res.data ?? []) as Alimento[]);
-    } catch (err) { console.error('Erro ao carregar alimentos:', err); }
+    } catch { /* silencioso */ }
   }, []);
 
   const carregarPlanos = useCallback(async () => {
@@ -570,10 +585,10 @@ const Dieta = () => {
         ? `/dietas/planos/animal/${effectiveAnimalId}/buscar?${params}`
         : `/dietas/planos/animal/${effectiveAnimalId}`;
       const res = await api.get(endpoint);
-      setPlanos(res.data.dados ?? []);
-    } catch (err) {
-      console.error(err); toast.error('Erro ao carregar planos de dieta');
-    } finally { setLoading(false); }
+      if (!res.data) { setPlanos([]); return; }
+      setPlanos(res.data?.dados ?? []);
+    } catch { /* silencioso */ }
+    finally { setLoading(false); }
   }, [effectiveAnimalId, search, filtroAtivo]);
 
   const carregarItens = useCallback(async (planId: number) => {
@@ -583,8 +598,9 @@ const Dieta = () => {
         api.get(`/dietas/planos/${planId}`),
         api.get(`/dietas/plano/${planId}/itens`),
       ]);
-      const plano     = planoRes.data.dados as PlanoDieta;
-      const itensList = itensRes.data.dados as DietaItem[];
+      if (!planoRes.data || !itensRes.data) { setPlanoSelecionado(null); setItens([]); return; }
+      const plano     = planoRes.data?.dados as PlanoDieta;
+      const itensList = itensRes.data?.dados as DietaItem[];
       setPlanoSelecionado(plano); setItens(itensList);
 
       const freqPorAlimento  = new Map<number, Set<string>>();
@@ -604,9 +620,8 @@ const Dieta = () => {
 
       const key = snapshotKey(String(planId));
       if (!sessionStorage.getItem(key)) salvarSnapshot(String(planId), itensList);
-    } catch (err) {
-      console.error(err); toast.error('Erro ao carregar itens da dieta');
-    } finally { setLoadingItens(false); }
+    } catch { /* silencioso */ }
+    finally { setLoadingItens(false); }
   }, []);
 
   // ── Effects ───────────────────────────────────────────────────────────────
@@ -617,11 +632,17 @@ const Dieta = () => {
     setItens([]);
   }, [effectiveAnimalId]);
 
+  // Aguarda permissões carregarem antes de fazer qualquer chamada de API.
+  // Evita chamadas 403 quando o usuário não tem acesso.
   useEffect(() => {
+    if (loadingPerms) return;
     carregarAnimal(); carregarAnimais(); carregarAlimentos();
-  }, [effectiveAnimalId]);
+  }, [effectiveAnimalId, loadingPerms]);
 
-  useEffect(() => { carregarPlanos(); }, [effectiveAnimalId, search, filtroAtivo]);
+  useEffect(() => {
+    if (loadingPerms) return;
+    carregarPlanos();
+  }, [effectiveAnimalId, search, filtroAtivo, loadingPerms]);
 
   useEffect(() => {
     if (planos.length === 0) return;
@@ -645,6 +666,7 @@ const Dieta = () => {
   };
 
   const handleCriarPlano = async () => {
+    if (!podeCriar) { semPermissao('criar dieta'); return; }
     const nomeFinal = (pendingCriarPlano?.nome ?? novoPlanoNome).trim();
     if (!nomeFinal) { toast.error('Informe um nome para o plano'); return; }
     if (!pendingCriarPlano) {
@@ -654,6 +676,7 @@ const Dieta = () => {
     try {
       const planoAtivo = planos.find(p => p.ativo);
       const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeFinal });
+      if (!res.data) { toast.error('Sem permissão para criar dieta'); return; }
       const novoPlano  = res.data.dados as PlanoDieta;
       if (planoAtivo) await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
       setNovoPlanoNome(''); setPendingCriarPlano(null);
@@ -661,10 +684,11 @@ const Dieta = () => {
       await carregarPlanos();
       carregarItens(novoPlano.id); setShowMobileItems(true);
       toast.success('Plano criado! Adicione alimentos pela barra na parte inferior direita.');
-    } catch (err) { console.error(err); toast.error('Erro ao criar plano'); }
+    } catch { /* silencioso — 403 já tratado pelo interceptor */ }
   };
 
   const handleSalvarNomePlano = async (id: number) => {
+    if (!podeEditar) { semPermissao('alterar dieta'); return; }
     if (!editandoNome.trim()) { toast.error('O nome não pode ser vazio'); return; }
     try {
       await api.put(`/dietas/planos/${id}`, { nome: editandoNome.trim() });
@@ -672,13 +696,15 @@ const Dieta = () => {
       if (planoSelecionado?.id === id)
         setPlanoSelecionado(prev => prev ? { ...prev, nome: editandoNome.trim() } : prev);
       carregarPlanos();
-    } catch (err) { console.error(err); toast.error('Erro ao atualizar nome'); }
+    } catch { /* silencioso */ }
   };
 
   const handleTogglePlano = async () => {
+    if (!podeEditar) { semPermissao('alterar status da dieta'); return; }
     if (!planoSelecionado) return;
     try {
       const res        = await api.patch(`/dietas/planos/${planoSelecionado.id}/toggle`);
+      if (!res.data) return;
       const atualizado = res.data.dados as PlanoDieta;
       setPlanoSelecionado(atualizado);
       setPlanos(prev => prev.map(p => {
@@ -686,7 +712,7 @@ const Dieta = () => {
         if (atualizado.ativo) return { ...p, ativo: false };
         return p;
       }));
-    } catch (err) { console.error(err); toast.error('Erro ao alterar status'); }
+    } catch { /* silencioso */ }
   };
 
   // ── Handlers: itens ───────────────────────────────────────────────────────
@@ -695,6 +721,7 @@ const Dieta = () => {
     alimentoId: number, horario: string, periodicidade: string, qty: number, unidade: string, observacao: string,
     noRefresh = false,
   ) => {
+    if (!podeCriar) { semPermissao('adicionar item à dieta'); return; }
     if (!planoSelecionado) { toast.error('Selecione um plano primeiro'); return; }
     const erro = validarItem(alimentoId, periodicidade, horario, itens, alimentos);
     if (erro) { toast.error(erro); return; }
@@ -708,7 +735,7 @@ const Dieta = () => {
       toast.success('Alimento adicionado!');
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
       if (!noRefresh) { carregarItens(planoSelecionado.id); carregarPlanos(); }
-    } catch (err) { console.error(err); toast.error('Erro ao adicionar alimento'); throw err; }
+    } catch { /* silencioso — 403 já tratado pelo interceptor */ throw new Error('add_failed'); }
   };
 
   const handleStartEdit = (item: DietaItem) => {
@@ -723,6 +750,7 @@ const Dieta = () => {
   };
 
   const handleSaveEdit = async (id: number) => {
+    if (!podeEditar) { semPermissao('alterar item da dieta'); return; }
     const alimentoIdNum = Number(editItemValues.alimentoId);
     const erro = validarItem(alimentoIdNum, editItemValues.periodicidade, editItemValues.horario, itens, alimentos, id);
     if (erro) { toast.error(erro); return; }
@@ -736,10 +764,11 @@ const Dieta = () => {
       });
       setEditingItemId(null); toast.success('Alimento atualizado');
       if (planoSelecionado) carregarItens(planoSelecionado.id);
-    } catch (err) { console.error(err); toast.error('Erro ao atualizar alimento'); }
+    } catch { /* silencioso */ }
   };
 
   const handleExcluirItem = async () => {
+    if (!podeEditar) { semPermissao('excluir item da dieta'); return; }
     if (!itemParaExcluir || !planoSelecionado) return;
     try {
       await api.delete(`/dietas/${itemParaExcluir.id}`);
@@ -760,7 +789,7 @@ const Dieta = () => {
       sessionStorage.removeItem(snapshotKey(String(planoSelecionado.id)));
       toast.success('Alimento removido da dieta');
       carregarItens(planoSelecionado.id); carregarPlanos();
-    } catch (err) { console.error(err); toast.error('Erro ao excluir alimento'); }
+    } catch { /* silencioso */ }
   };
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -821,7 +850,22 @@ const Dieta = () => {
     );
   };
 
-  // ── Guard ─────────────────────────────────────────────────────────────────
+  // ── Guard de permissão ────────────────────────────────────────────────────
+
+  if (!loadingPerms && !podeExecutar('nutricao.dietas.ler')) {
+    return (
+      <PageContainer>
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center mb-4">
+            <AlertTriangle size={28} className="text-red-400" />
+          </div>
+          <h2 className="text-lg font-bold text-gray-800 mb-1">Acesso não autorizado</h2>
+          <p className="text-sm text-gray-500">Você não tem permissão para acessar as dietas.</p>
+          <p className="text-xs text-gray-400 mt-1">Entre em contato com o responsável da equipe.</p>
+        </div>
+      </PageContainer>
+    );
+  }
 
   if (!animal && loading) {
     return (
@@ -888,7 +932,10 @@ const Dieta = () => {
               </div>
               {planoSelecionado && animal && (
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <DietaAcoesBar animal={animal} plano={planoSelecionado} itens={itens} user={user} />
+                  <DietaAcoesBar
+                    animal={animal} plano={planoSelecionado} itens={itens} user={user}
+                    podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
+                  />
                 </div>
               )}
             </div>
@@ -902,11 +949,13 @@ const Dieta = () => {
               <div className="p-3 space-y-2 border-b border-gray-100">
 
                 {/* Botão + Novo Plano ACIMA do search */}
-                <button
-                  onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
-                  className="w-full flex items-center justify-center gap-1 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors">
-                  Novo Plano
-                </button>
+                {podeCriar && (
+                  <button
+                    onClick={() => { setShowModalNovoPlano(true); setNovoPlanoNome(''); setPendingCriarPlano(null); }}
+                    className="w-full flex items-center justify-center gap-1 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors">
+                    Novo Plano
+                  </button>
+                )}
 
                 <div className="relative">
                   <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -966,7 +1015,7 @@ const Dieta = () => {
                 </div>
               ) : (
                 <>
-                  <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} />
+                  {podeCriar && <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} />}
                   {conflitosFrequencia.length > 0 && (
                     <div className="mx-4 mt-3 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 flex-shrink-0">
                       <AlertTriangle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
@@ -1041,12 +1090,15 @@ const Dieta = () => {
                     {planoSelecionado?.ativo ? 'Ativo' : 'Inativo'}
                   </button>
                   {planoSelecionado && animal && (
-                    <DietaAcoesBar animal={animal} plano={planoSelecionado} itens={itens} user={user} compacto />
+                    <DietaAcoesBar
+                      animal={animal} plano={planoSelecionado} itens={itens} user={user} compacto
+                      podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
+                    />
                   )}
                 </div>
               </div>
 
-              {planoSelecionado && (
+              {planoSelecionado && podeCriar && (
                 <BottomAddBar alimentos={alimentos} onAdd={handleAddItem} mobile />
               )}
 

@@ -9,6 +9,7 @@ import {
   Users, ChevronDown, ChevronUp, Check, X,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import { isValidEmail } from '../utils/validators';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
 
   const handleConvidar = async () => {
     if (!email.trim()) { toast.error('Informe um e-mail'); return; }
+    if (!isValidEmail(email)) { toast.error('Informe um e-mail válido'); return; }
     setSending(true);
     try {
       await onConvidar(equipe.id, email.trim(), cargo);

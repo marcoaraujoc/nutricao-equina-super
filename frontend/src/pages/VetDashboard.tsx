@@ -408,14 +408,6 @@ export default function VetDashboard() {
                 </span>
               </div>
             )}
-            {(isSocio || !isConvidado) && (
-              <button onClick={() => navigate('/animais')}
-                className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white
-                           px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-                <span className="hidden xs:inline sm:inline">Novo Paciente</span>
-                <span className="xs:hidden sm:hidden">Novo</span>
-              </button>
-            )}
           </div>
         </div>
 

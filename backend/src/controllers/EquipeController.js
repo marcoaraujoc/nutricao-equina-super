@@ -176,6 +176,17 @@ const EquipeController = {
 
   listarConvites: async (req, res) => {
     try {
+      const selectBase = { id: true, email: true, cargo: true, status: true, createdAt: true, expiresAt: true };
+
+      // ADMIN: todos os convites de todas as equipes
+      if (req.user.role === 'ADMIN') {
+        const convites = await prisma.conviteEquipe.findMany({
+          orderBy: { createdAt: 'desc' },
+          select:  { ...selectBase, equipe: { select: { nome: true, empresa: { select: { nome: true } } } } },
+        });
+        return res.json({ sucesso: true, dados: convites });
+      }
+
       const vetUserId = req.user.id;
       const empresa   = await getEmpresaDoSocio(vetUserId);
       if (!empresa) return res.json({ sucesso: true, dados: [] });
@@ -186,7 +197,7 @@ const EquipeController = {
       const convites = await prisma.conviteEquipe.findMany({
         where:   { equipeId: equipe.id },
         orderBy: { createdAt: 'desc' },
-        select:  { id: true, email: true, cargo: true, status: true, createdAt: true, expiresAt: true },
+        select:  { ...selectBase, equipe: { select: { nome: true, empresa: { select: { nome: true } } } } },
       });
       res.json({ sucesso: true, dados: convites });
     } catch (err) {
@@ -244,6 +255,7 @@ const EquipeController = {
             orderBy: { createdAt: 'asc' },
             include: {
               membros: {
+                where:   { NOT: { user: { role: 'ADMIN' } } },
                 orderBy: { createdAt: 'asc' },
                 include: {
                   user: { select: { id: true, fullName: true, email: true, ativo: true } },
@@ -258,6 +270,7 @@ const EquipeController = {
       const dados = empresas.map(emp => ({
         id:     emp.id,
         nome:   emp.nome,
+        cnpj:   emp.cnpj ?? null,
         equipes: emp.equipes.map(eq => ({
           id:   eq.id,
           nome: eq.nome,
@@ -298,9 +311,9 @@ const EquipeController = {
         }
 
         const membros = await prisma.membroEquipe.findMany({
-          where:   { equipeId: equipe.id },
+          where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -321,18 +334,27 @@ const EquipeController = {
 
       if (!empresa) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
 
-      const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
-      if (!equipe) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
+      const equipes = await prisma.equipe.findMany({ where: { empresaId: empresa.id }, orderBy: { createdAt: 'asc' } });
+      if (equipes.length === 0) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
+
+      const equipeAlvo = equipeIdParam ? equipes.find(e => e.id === equipeIdParam) ?? equipes[0] : equipes[0];
 
       const membros = await prisma.membroEquipe.findMany({
-        where:   { equipeId: equipe.id },
+        where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
-      res.json({ sucesso: true, dados: membros, equipeId: equipe.id, isSocio });
+      res.json({
+        sucesso: true,
+        dados:        membros,
+        equipeId:     equipeAlvo.id,
+        isSocio,
+        empresaId:    empresa.id,
+        todasEquipes: equipes.map(e => ({ id: e.id, nome: e.nome, empresaId: empresa.id, empresaNome: empresa.nome ?? '' })),
+      });
     } catch (err) {
       console.error('Erro ao listar membros:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
@@ -341,14 +363,64 @@ const EquipeController = {
   listarMembrosPorEquipe: async (req, res) => {
     try {
       const { equipeId } = req.params;
+      const equipeIdN = Number(equipeId);
+
+      // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoSocio(req.user.id);
+        if (empresa) {
+          const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+          if (!equipe || equipe.empresaId !== empresa.id) {
+            return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a esta equipe.' });
+          }
+        }
+      }
+
       const membros = await prisma.membroEquipe.findMany({
-        where:   { equipeId: Number(equipeId) },
+        where:   { equipeId: equipeIdN, NOT: { user: { role: 'ADMIN' } } },
         include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
         orderBy: { createdAt: 'desc' },
       });
       res.json({ sucesso: true, dados: membros });
     } catch (err) {
       console.error('Erro ao listar membros por equipe:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Fornecedores disponíveis para inclusão como PRESTADOR ──────────────────
+
+  getFornecedoresPorEquipe: async (req, res) => {
+    try {
+      const equipeIdN = Number(req.params.equipeId);
+
+      // Isolamento: verifica que o solicitante pertence à empresa desta equipe
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoSocio(req.user.id);
+        if (empresa) {
+          const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+          if (!equipe || equipe.empresaId !== empresa.id) {
+            return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+          }
+        }
+      }
+
+      // IDs já membros da equipe (para excluir do resultado)
+      const membroIds = await prisma.membroEquipe.findMany({
+        where:  { equipeId: equipeIdN },
+        select: { userId: true },
+      });
+      const idsJaMembros = membroIds.map(m => m.userId);
+
+      const fornecedores = await prisma.user.findMany({
+        where:   { userType: 'FORNECEDOR', ativo: true, id: { notIn: idsJaMembros } },
+        select:  { id: true, fullName: true, email: true, phone: true },
+        orderBy: { fullName: 'asc' },
+      });
+
+      res.json({ sucesso: true, dados: fornecedores });
+    } catch (err) {
+      console.error('Erro ao listar fornecedores por equipe:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -401,22 +473,51 @@ const EquipeController = {
 
   atualizarMembro: async (req, res) => {
     try {
-      const { id }                      = req.params;
-      const { cargo, phone, senha, fullName } = req.body;
+      const { id } = req.params;
+      const { cargo, phone, senha, fullName, ativo, cep, endereco, complemento, bairro, cidade, estado } = req.body;
 
-      const membro = await prisma.membroEquipe.findUnique({ where: { id: Number(id) }, include: { user: true } });
+      const membro = await prisma.membroEquipe.findUnique({
+        where:   { id: Number(id) },
+        include: { user: true, equipe: { select: { empresaId: true } } },
+      });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
+
+      // Autorização: ADMIN, ou sócio da empresa da equipe do membro
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoSocio(req.user.id);
+        if (!empresa || membro.equipe?.empresaId !== empresa.id) {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios da equipe podem editar membros.' });
+        }
+        // Sócio não edita outro sócio (inclui troca de senha)
+        if (membro.cargo === 'SOCIO') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Sócios não podem ser editados por outros sócios.' });
+        }
+      }
 
       if (cargo === 'SOCIO' && req.user.role !== 'ADMIN') {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+      }
+
+      if (senha) {
+        if (senha.length < 8)            return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 8 caracteres' });
+        if (!/[A-Z]/.test(senha))        return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
+        if (!/\d/.test(senha))           return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 número' });
+        if (!/[^A-Za-z0-9]/.test(senha)) return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 caractere especial' });
       }
 
       if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
 
       const dadosUser = {};
       if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
-      if (phone    !== undefined) dadosUser.phone        = phone;
-      if (senha)                  dadosUser.passwordHash = await bcrypt.hash(senha, 10);
+      if (phone       !== undefined) dadosUser.phone       = phone?.trim()       || null;
+      if (cep         !== undefined) dadosUser.cep         = cep?.trim()         || null;
+      if (endereco    !== undefined) dadosUser.endereco    = endereco?.trim()    || null;
+      if (complemento !== undefined) dadosUser.complemento = complemento?.trim() || null;
+      if (bairro      !== undefined) dadosUser.bairro      = bairro?.trim()      || null;
+      if (cidade      !== undefined) dadosUser.cidade      = cidade?.trim()      || null;
+      if (estado      !== undefined) dadosUser.estado      = estado?.trim()      || null;
+      if (ativo       !== undefined) dadosUser.ativo       = Boolean(ativo);
+      if (senha)                     dadosUser.passwordHash = await bcrypt.hash(senha, 10);
       if (Object.keys(dadosUser).length > 0) {
         await prisma.user.update({ where: { id: membro.userId }, data: dadosUser });
       }
@@ -560,7 +661,7 @@ const EquipeController = {
 
       // Criar usuário convidado se ainda não existir
       const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO' };
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO' };
       const userTypeConvidado = cargoToUserType[cargo] || 'ESTAGIARIO';
       let usuarioCriado = false;
       let usuarioConvidadoId = null;
@@ -637,20 +738,157 @@ const EquipeController = {
     }
   },
 
+  // ── Inclusão direta (sem fluxo de aceite) ───────────────────────────────────
+  incluirMembroDireto: async (req, res) => {
+    try {
+      const vetUserId        = req.user.id;
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado } = req.body;
+      const email = (emailRaw ?? '').trim().toLowerCase();
+
+      if (!email || !cargo) {
+        return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
+      }
+      if (!fullName?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+      }
+      if (!phone?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
+      }
+
+      const { equipe } = await garantirEquipePadrao(vetUserId);
+
+      // Bloqueia se já é membro
+      const usuarioCheck = await prisma.user.findUnique({ where: { email } });
+      if (usuarioCheck) {
+        const jaMembro = await prisma.membroEquipe.findUnique({
+          where: { equipeId_userId: { equipeId: equipe.id, userId: usuarioCheck.id } },
+        });
+        if (jaMembro) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este e-mail já faz parte da equipe' });
+        }
+      }
+
+      // Buscar dados do vet dono + espécies
+      const vetUser = await prisma.user.findUnique({ where: { id: vetUserId }, select: { fullName: true } });
+      const vetPerfilDono = await prisma.vetPerfil.findUnique({
+        where:   { userId: vetUserId },
+        include: { especies: { include: { especie: { select: { nome: true } } } } },
+      });
+      const especiesDono      = vetPerfilDono?.especies.map(e => e.especie) ?? [];
+      const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
+
+      const SENHA_INICIAL = 'Inicial_001';
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', SOCIO: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', PRESTADOR: 'FORNECEDOR' };
+      const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
+
+      let usuarioCriado = false;
+      let usuario = await prisma.user.findUnique({ where: { email } });
+
+      if (!usuario) {
+        const senhaHash = await bcrypt.hash(SENHA_INICIAL, 10);
+        usuario = await prisma.user.create({
+          data: {
+            email,
+            fullName:           fullName.trim(),
+            phone:              phone.trim(),
+            cep:                cep?.trim()         || null,
+            endereco:           endereco?.trim()    || null,
+            complemento:        complemento?.trim() || null,
+            bairro:             bairro?.trim()      || null,
+            cidade:             cidade?.trim()      || null,
+            estado:             estado?.trim()      || null,
+            passwordHash:       senhaHash,
+            role:               'USER',
+            userType:           userTypeNovo,
+            mustChangePassword: true,
+          },
+        });
+        usuarioCriado = true;
+      } else if (!usuario.fullName?.trim() || !usuario.phone?.trim()) {
+        // Usuário pré-existente sem cadastro completo: preenche nome/telefone informados
+        usuario = await prisma.user.update({
+          where: { id: usuario.id },
+          data:  {
+            fullName: usuario.fullName?.trim() ? usuario.fullName : fullName.trim(),
+            phone:    usuario.phone?.trim()    ? usuario.phone    : phone.trim(),
+          },
+        });
+      }
+
+      // Adicionar à equipe diretamente
+      await prisma.membroEquipe.create({
+        data: { equipeId: equipe.id, userId: usuario.id, cargo },
+      });
+
+      // Propagar permissões do MatrizPerfil para o novo membro
+      await PermissaoService.aplicarPermissoesPadrao({
+        equipeId:      equipe.id,
+        userId:        usuario.id,
+        cargo,
+        atualizadoPor: vetUserId,
+      });
+
+      // Marcar isConvidado e copiar espécies
+      await aplicarOnboardingConvidado(usuario.id, equipe.id);
+      if (userTypeNovo === 'VETERINARIO' && especiesDonoComId.length > 0) {
+        let perfilNovo = await prisma.vetPerfil.findUnique({ where: { userId: usuario.id } });
+        if (!perfilNovo) {
+          perfilNovo = await prisma.vetPerfil.create({ data: { userId: usuario.id } });
+        }
+        const jaTemEspecies = await prisma.vetEspecie.count({ where: { vetPerfilId: perfilNovo.id } });
+        if (jaTemEspecies === 0) {
+          await prisma.$transaction(
+            especiesDonoComId.map(especieId =>
+              prisma.vetEspecie.upsert({
+                where:  { vetPerfilId_especieId: { vetPerfilId: perfilNovo.id, especieId } },
+                update: {},
+                create: { vetPerfilId: perfilNovo.id, especieId },
+              })
+            )
+          );
+        }
+      }
+
+      // Email de notificação (sem link de aceite)
+      emailService.enviarInclusaoEquipe({
+        email,
+        cargo,
+        vetNome:       vetUser?.fullName || 'Veterinário',
+        equipeNome:    equipe.nome,
+        usuarioCriado,
+        senhaInicial:  usuarioCriado ? SENHA_INICIAL : null,
+        especiesNomes: especiesDono.map(e => e.nome).filter(Boolean),
+      }).catch(err => console.error('[emailService] Falha ao enviar notificação de inclusão:', err));
+
+      res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!' });
+    } catch (err) {
+      console.error('Erro ao incluir membro:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   convidarSocioAdmin: async (req, res) => {
     try {
       if (req.user.role !== 'ADMIN') {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem usar esta rota.' });
       }
 
-      const { email: emailRaw, fullName, empresaNome, cnpj } = req.body;
+      const { email: emailRaw, fullName, empresaNome, cnpj, cpf, nomeEquipe, especiesIds, equipeId: equipeIdParam, empresaId: empresaIdParam } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
-      if (!email)               return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório.' });
-      if (!empresaNome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome da empresa é obrigatório.' });
-      if (!cnpj?.trim())        return res.status(400).json({ sucesso: false, mensagem: 'CNPJ é obrigatório.' });
+      if (!email) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório.' });
 
-      const cnpjNorm = cnpj.replace(/\D/g, '');
+      const usandoExistente = !!equipeIdParam || !!empresaIdParam;
+
+      const isCnpj = !!cnpj?.trim();
+      const isCpf  = !isCnpj && !!cpf?.trim();
+      if (!usandoExistente) {
+        if (!empresaNome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório.' });
+        if (!isCnpj && !isCpf)   return res.status(400).json({ sucesso: false, mensagem: 'Informe o CNPJ ou CPF.' });
+      }
+
+      const cnpjNorm = isCnpj ? cnpj.replace(/\D/g, '') : null;
+      const cpfNorm  = isCpf  ? cpf.replace(/\D/g, '')  : null;
 
       // Cria usuário se não existir
       const SENHA_INICIAL  = 'Inicial_001';
@@ -662,31 +900,59 @@ const EquipeController = {
         usuarioExistente = await prisma.user.create({
           data: {
             email,
-            fullName:           fullName?.trim() || '',
+            fullName:           (fullName ?? empresaNome)?.trim() || '',
             passwordHash:       senhaHash,
             role:               'USER',
             userType:           'VETERINARIO',
             mustChangePassword: true,
+            ...(cpfNorm  ? { cpf:  cpfNorm  } : {}),
+            ...(cnpjNorm ? { cnpj: cnpjNorm } : {}),
           },
         });
         usuarioCriado = true;
       }
       const convidadoId = usuarioExistente.id;
 
-      // Reutiliza empresa pelo CNPJ (múltiplos sócios) ou cria nova
-      let empresa = await prisma.empresa.findUnique({ where: { cnpj: cnpjNorm } });
-      if (!empresa) {
-        empresa = await prisma.empresa.create({
-          data: { nome: empresaNome.trim(), cnpj: cnpjNorm, ownerId: convidadoId },
-        });
-      }
+      let empresa, equipe;
 
-      // Usa ou cria equipe principal da empresa
-      let equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
-      if (!equipe) {
-        equipe = await prisma.equipe.create({
-          data: { nome: 'Equipe Principal', empresaId: empresa.id },
-        });
+      if (equipeIdParam) {
+        // CPF + equipe existente selecionada diretamente
+        equipe = await prisma.equipe.findUnique({ where: { id: Number(equipeIdParam) }, include: { empresa: true } });
+        if (!equipe) return res.status(404).json({ sucesso: false, mensagem: 'Equipe não encontrada.' });
+        empresa = equipe.empresa;
+      } else if (empresaIdParam) {
+        // CNPJ + empresa existente selecionada diretamente
+        empresa = await prisma.empresa.findUnique({ where: { id: Number(empresaIdParam) } });
+        if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada.' });
+        equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+        if (!equipe) {
+          equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
+        }
+      } else if (isCnpj) {
+        // CNPJ: reutiliza empresa pelo CNPJ ou cria nova
+        empresa = await prisma.empresa.findUnique({ where: { cnpj: cnpjNorm } });
+        if (!empresa) {
+          empresa = await prisma.empresa.create({
+            data: { nome: empresaNome.trim(), cnpj: cnpjNorm, ownerId: convidadoId },
+          });
+        }
+        equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+        if (!equipe) {
+          equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
+        }
+      } else {
+        // CPF: cria empresa pessoal para o convidado
+        empresa = await prisma.empresa.findFirst({ where: { ownerId: convidadoId, cnpj: null } });
+        if (!empresa) {
+          empresa = await prisma.empresa.create({
+            data: { nome: empresaNome.trim(), cnpj: null, ownerId: convidadoId },
+          });
+        }
+        const nomeEquipeFinal = nomeEquipe?.trim() || 'Equipe Principal';
+        equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+        if (!equipe) {
+          equipe = await prisma.equipe.create({ data: { nome: nomeEquipeFinal, empresaId: empresa.id } });
+        }
       }
 
       const jaMembro = await prisma.membroEquipe.findUnique({
@@ -712,6 +978,23 @@ const EquipeController = {
         await prisma.$executeRawUnsafe(`UPDATE schs2vet.users SET "isConvidado" = true WHERE id = $1`, convidadoId);
       } catch { /* ignora */ }
 
+      const idsEspecies = Array.isArray(especiesIds) ? especiesIds.map(Number).filter(Boolean) : [];
+      if (idsEspecies.length > 0) {
+        let vetPerfil = await prisma.vetPerfil.findUnique({ where: { userId: convidadoId } });
+        if (!vetPerfil) {
+          vetPerfil = await prisma.vetPerfil.create({ data: { userId: convidadoId } });
+        }
+        await prisma.$transaction(
+          idsEspecies.map(especieId =>
+            prisma.vetEspecie.upsert({
+              where:  { vetPerfilId_especieId: { vetPerfilId: vetPerfil.id, especieId } },
+              update: {},
+              create: { vetPerfilId: vetPerfil.id, especieId },
+            })
+          )
+        );
+      }
+
       emailService.enviarConviteAdmin({
         email,
         token:        convite.token,
@@ -722,7 +1005,7 @@ const EquipeController = {
       return res.status(201).json({ sucesso: true, dados: convite, mensagem: 'Convite de sócio enviado por e-mail' });
     } catch (err) {
       console.error('Erro ao convidar sócio:', err);
-      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'CNPJ já cadastrado para outra empresa.' });
+      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: req.body.cnpj?.trim() ? 'CNPJ já cadastrado para outra empresa.' : 'Conflito de dados ao criar empresa.' });
       return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -781,7 +1064,7 @@ const EquipeController = {
 
       // Cria usuário se ainda não existir
       const SENHA_INICIAL     = 'Inicial_001';
-      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO' };
+      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PRESTADOR: 'FORNECEDOR' };
       const userTypeConvidado = cargoToUserType[cargo] ?? 'ESTAGIARIO';
       const usuarioExistente  = await prisma.user.findUnique({ where: { email } });
       let usuarioCriado      = false;
@@ -898,6 +1181,53 @@ const EquipeController = {
     } catch (err) {
       console.error('Erro ao aceitar convite:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // GET /api/equipes/minhas-especies
+  // Retorna os nomes das espécies que a equipe/empresa do usuário atende.
+  // ADMIN → todas as espécies. VET → do próprio VetPerfil. SOCIO/outros → união dos vets da equipe.
+  getMinhasEspecies: async (req, res) => {
+    try {
+      const userId = Number(req.user.id);
+
+      if (req.user.role === 'ADMIN') {
+        const todas = await prisma.especie.findMany({ select: { nome: true } });
+        return res.json({ sucesso: true, dados: todas.map(e => e.nome) });
+      }
+
+      // Busca o VetPerfil do próprio usuário
+      const perfilProprio = await prisma.vetPerfil.findUnique({
+        where:   { userId },
+        include: { especies: { include: { especie: { select: { nome: true } } } } },
+      });
+
+      if (perfilProprio?.especies?.length) {
+        const nomes = perfilProprio.especies.map(ve => ve.especie.nome);
+        return res.json({ sucesso: true, dados: [...new Set(nomes)] });
+      }
+
+      // Para SOCIO ou usuário sem VetPerfil: busca as espécies de todos os vets da equipe
+      const membro = await prisma.membroEquipe.findFirst({
+        where:   { userId },
+        include: { equipe: { select: { id: true, membros: { select: { userId: true } } } } },
+      });
+
+      if (!membro?.equipe) {
+        return res.json({ sucesso: true, dados: [] });
+      }
+
+      const userIds = membro.equipe.membros.map(m => m.userId);
+      const perfis  = await prisma.vetPerfil.findMany({
+        where:   { userId: { in: userIds } },
+        include: { especies: { include: { especie: { select: { nome: true } } } } },
+      });
+
+      const nomes = perfis.flatMap(p => p.especies.map(ve => ve.especie.nome));
+      return res.json({ sucesso: true, dados: [...new Set(nomes)] });
+    } catch (err) {
+      console.error('Erro ao buscar espécies da equipe:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar espécies' });
     }
   },
 
@@ -1230,6 +1560,13 @@ const EquipeController = {
     try {
       const userId = req.user.id;
 
+      // ── ADMIN: acesso irrestrito — retorna FULL em todos os módulos ───────────
+      if (req.user.role === 'ADMIN') {
+        const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
+        const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
+        return res.json({ sucesso: true, dados: { permissoes, isSocio: true, isAdmin: true, temEquipe: true } });
+      }
+
       // ── PROPRIETARIO: lê MatrizPerfil das equipes vinculadas aos seus animais ──
       if (req.user.userType === 'PROPRIETARIO') {
         const animaisDoOwner = await prisma.animal.findMany({
@@ -1259,11 +1596,20 @@ const EquipeController = {
           where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
         });
 
-        // União das permissões — toma o nível máximo entre as equipes
+        // União das permissões — NEGADO vence sobre qualquer nível positivo (deny-wins).
+        // Entre valores positivos, toma o máximo entre as equipes.
+        const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+        const negados  = new Set(); // slugs com NEGADO em ao menos uma equipe
         const mapaMaximo = {};
         for (const m of matrizes) {
+          if (m.nivel === 'NEGADO') {
+            negados.add(m.moduloSlug);
+            mapaMaximo[m.moduloSlug] = 'NEGADO';
+            continue;
+          }
+          if (negados.has(m.moduloSlug)) continue; // NEGADO já ganhou para este slug
           const atual = mapaMaximo[m.moduloSlug];
-          if (atual === undefined || NIVEL_ORDER[m.nivel] > NIVEL_ORDER[atual]) {
+          if (atual === undefined || NIVEL_POSITIVO[m.nivel] > NIVEL_POSITIVO[atual]) {
             mapaMaximo[m.moduloSlug] = m.nivel;
           }
         }
@@ -1348,6 +1694,44 @@ const EquipeController = {
     } catch (err) {
       console.error('Erro ao salvar matriz global:', err);
       return res.status(500).json({ sucesso: false, mensagem: err.message ?? 'Erro interno' });
+    }
+  },
+
+  getEspeciesEquipe: async (req, res) => {
+    try {
+      const equipeId = Number(req.params.equipeId);
+      const membros  = await prisma.membroEquipe.findMany({ where: { equipeId }, select: { userId: true } });
+      const userIds  = membros.map(m => m.userId);
+      const perfis   = await prisma.vetPerfil.findMany({
+        where:   { userId: { in: userIds } },
+        include: { especies: { include: { especie: { select: { id: true, nome: true } } } } },
+      });
+      const map = new Map();
+      perfis.forEach(vp => vp.especies.forEach(ve => map.set(ve.especie.id, ve.especie)));
+      return res.json({ sucesso: true, dados: Array.from(map.values()) });
+    } catch (err) {
+      console.error('Erro ao buscar espécies da equipe:', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  getEspeciesEmpresa: async (req, res) => {
+    try {
+      const empresaId = Number(req.params.empresaId);
+      const equipes   = await prisma.equipe.findMany({ where: { empresaId }, select: { id: true } });
+      const equipeIds = equipes.map(e => e.id);
+      const membros   = await prisma.membroEquipe.findMany({ where: { equipeId: { in: equipeIds } }, select: { userId: true } });
+      const userIds   = [...new Set(membros.map(m => m.userId))];
+      const perfis    = await prisma.vetPerfil.findMany({
+        where:   { userId: { in: userIds } },
+        include: { especies: { include: { especie: { select: { id: true, nome: true } } } } },
+      });
+      const map = new Map();
+      perfis.forEach(vp => vp.especies.forEach(ve => map.set(ve.especie.id, ve.especie)));
+      return res.json({ sucesso: true, dados: Array.from(map.values()) });
+    } catch (err) {
+      console.error('Erro ao buscar espécies da empresa:', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
 

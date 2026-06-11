@@ -3,7 +3,8 @@
 
 const bcrypt = require('bcryptjs');
 
-const prisma = require('../lib/prisma').default;
+const prisma       = require('../lib/prisma').default;
+const emailService = require('../services/emailService');
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {
@@ -71,18 +72,20 @@ const UserAdminController = {
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!email?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
-    if (!senha)            return res.status(400).json({ sucesso: false, mensagem: 'Senha é obrigatória' });
+    if (!phone?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
 
     try {
       const existente = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
       if (existente) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
 
-      const passwordHash = await bcrypt.hash(senha, 10);
+      // Sem senha no payload → aplica a padrão do sistema com troca obrigatória no primeiro acesso
+      const SENHA_INICIAL = 'Inicial_001';
+      const passwordHash = await bcrypt.hash(senha || SENHA_INICIAL, 10);
       const usuario = await prisma.user.create({
         data: {
           fullName:    fullName.trim(),
           email:       email.trim().toLowerCase(),
-          phone:       phone?.trim()       || null,
+          phone:       phone.trim(),
           role:        role                || 'USER',
           userType:    userType            || 'PROPRIETARIO',
           cep:         cep?.trim()         || null,
@@ -92,10 +95,22 @@ const UserAdminController = {
           cidade:      cidade?.trim()      || null,
           estado:      estado?.trim()      || null,
           passwordHash,
+          mustChangePassword: !senha,
           ativo: true,
         },
         select: SELECT_SEGURO,
       });
+
+      // Criado com a senha padrão → e-mail de boas-vindas com os dados de acesso
+      if (!senha) {
+        emailService.enviarBoasVindasProprietario({
+          destinatarioEmail: usuario.email,
+          destinatarioNome:  usuario.fullName,
+          criadoPorNome:     req.user?.fullName ?? 'a administração',
+          senhaInicial:      SENHA_INICIAL,
+        }).catch(err => console.warn('[UserAdminController] Falha ao enviar e-mail de boas-vindas:', err?.message));
+      }
+
       res.status(201).json({ sucesso: true, dados: usuario });
     } catch (err) {
       if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
@@ -114,6 +129,7 @@ const UserAdminController = {
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!email?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+    if (!phone?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
 
     try {
       const existe = await prisma.user.findUnique({ where: { id: Number(id) } });
@@ -164,9 +180,10 @@ const UserAdminController = {
       const existe = await prisma.user.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
 
+      const novoAtivo = !existe.ativo;
       const usuario = await prisma.user.update({
         where:  { id: Number(id) },
-        data:   { ativo: !existe.ativo },
+        data:   { ativo: novoAtivo, ...(novoAtivo ? {} : { refreshToken: null }) },
         select: { id: true, fullName: true, ativo: true },
       });
       res.json({

@@ -22,7 +22,8 @@ router.get ('/empresas', authenticate, EquipeController.listarEmpresas);
 router.post('/setup',  authenticate, EquipeController.setup);
 
 // ─── Equipe ativa do usuário logado ───────────────────────────────────────────
-router.get('/minha',   authenticate, EquipeController.getMinhaEquipe);
+router.get('/minha',             authenticate, EquipeController.getMinhaEquipe);
+router.get('/minhas-especies',   authenticate, EquipeController.getMinhasEspecies);
 
 // ─── Convites (rotas fixas) ────────────────────────────────────────────────────
 router.get   ('/convites',              authenticate, EquipeController.listarConvites);
@@ -36,6 +37,9 @@ router.post('/convite/:token/recusar',         authenticate, EquipeController.re
 
 // ─── Permissoes do usuario logado ──────────────────────────────────────────────
 router.get   ('/minhas-permissoes',  authenticate, EquipeController.minhasPermissoes);
+
+// ─── Inclusão direta de membro (sem fluxo de convite) ─────────────────────────
+router.post('/incluir-membro', authenticate, EquipeController.incluirMembroDireto);
 
 // ─── Membros (rotas fixas) ─────────────────────────────────────────────────────
 router.get   ('/membros',            authenticate, EquipeController.listarMembros);
@@ -55,6 +59,9 @@ router.get ('/admin/todas-empresas',  authenticate, EquipeController.listarTodas
 router.get('/admin/global/usertype/:userType', authenticate, EquipeController.getMatrizGlobalUserType);
 router.put('/admin/global/usertype/:userType', authenticate, EquipeController.salvarMatrizGlobalUserType);
 
+// Espécies por equipe / empresa (literais — antes de /:equipeId)
+router.get('/empresa/:empresaId/especies', authenticate, EquipeController.getEspeciesEmpresa);
+
 // =============================================================================
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO (já declaradas abaixo)
 // ─── ADMIN: remover sócio da equipe e desativar conta ────────────────────────
@@ -63,6 +70,8 @@ router.put('/admin/global/usertype/:userType', authenticate, EquipeController.sa
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO
 // =============================================================================
 
+router.get   ('/:equipeId/especies',                   authenticate, EquipeController.getEspeciesEquipe);
+router.get   ('/:equipeId/fornecedores',               authenticate, EquipeController.getFornecedoresPorEquipe);
 router.patch ('/:equipeId/nome',                        authenticate, EquipeController.renomearEquipe);
 router.delete('/:equipeId/socio/:userId',               authenticate, EquipeController.removerSocioAdmin);
 router.post  ('/:equipeId/convidar',                   authenticate, EquipeController.convidarParaEquipe);

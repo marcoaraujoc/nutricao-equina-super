@@ -2,6 +2,8 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
+import toast from 'react-hot-toast';
 import api from '../services/api';
 import { Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
@@ -16,6 +18,11 @@ const Exames = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
+  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const podeEditar  = isSocio || podeExecutar('exames.laboratorial.editar');
+  const podeDeletar = isSocio || podeExecutar('exames.laboratorial.deletar');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [exames, setExames] = useState<any[]>([]);
   const [currentAnimal, setCurrentAnimal] = useState<any>(null);
@@ -74,9 +81,10 @@ const Exames = () => {
   };
 
   useEffect(() => {
+    if (loadingPerms) return;
     setLoading(true);
     Promise.all([loadAnimais(), loadExamesAndAnimal()]).finally(() => setLoading(false));
-  }, [effectiveAnimalId, user?.id]);
+  }, [effectiveAnimalId, user?.id, loadingPerms]);
 
   const handleNovoExame = () => {
     if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo`);
@@ -86,6 +94,7 @@ const Exames = () => {
   const cancelEdit = () => { setEditingId(null); setEditValues({}); };
 
   const saveEdit = async (id: number) => {
+    if (!podeEditar) { semPermissao('editar exame'); return; }
     try {
       await api.put(`/exames/${id}`, editValues);
       setExames(exames.map(ex => ex.id === id ? { ...ex, ...editValues } : ex));
@@ -97,6 +106,7 @@ const Exames = () => {
   };
 
   const handleDelete = async (id: number) => {
+    if (!podeDeletar) { semPermissao('excluir exame'); return; }
     if (!confirm('Deseja realmente excluir este exame?')) return;
     try {
       await api.delete(`/exames/${id}`);
@@ -125,7 +135,16 @@ const Exames = () => {
     return true;
   }), [exames, filtroData, filtroNutriente, filtroStatus]);
 
-  if (loading) return (
+  if (!loadingPerms && !isSocio && !podeExecutar('exames.laboratorial.ler')) return (
+    <PageContainer>
+      <div className="text-center py-16">
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500">Você não tem permissão para visualizar exames.</p>
+      </div>
+    </PageContainer>
+  );
+
+  if (loading || loadingPerms) return (
     <PageContainer>
       <div className="flex items-center justify-center py-20">
         <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />

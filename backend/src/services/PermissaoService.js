@@ -24,6 +24,7 @@ const USER_TYPES_GERENCIADOS = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETA
 const PERFIS_PADRAO = [
   { slug: 'SOCIO',        label: 'Sócio',        descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
   { slug: 'VETERINARIO',  label: 'Veterinário',   descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
+  { slug: 'PRESTADOR',    label: 'Prestador',     descricao: 'Prestador de serviços. Acesso configurável pelo sócio da equipe.' },
   { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.' },
   { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo sócio.' },
 ];
@@ -478,11 +479,22 @@ async function atualizarPermissoesProprietario({ equipeId, alvoUserId, funcional
 }
 
 async function getPermissoesProprietarios({ equipeId }) {
+  const equipe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { empresaId: true } });
+
+  // Busca animais cujo veterinário (VetAnimalSolicitacao ACEITO) pertence à empresa desta equipe.
+  // Se a equipe não tiver empresa vinculada, retorna lista vazia (isolamento seguro).
+  const empresaId = equipe?.empresaId;
+  if (!empresaId) return [];
+
   const animais = await prisma.animal.findMany({
-    where:    { user: { animais: { some: {} } } },
+    where: {
+      empresaId,
+      user: { NOT: { userType: 'ADMIN' } },
+    },
     select:   { userId: true, user: { select: { id: true, fullName: true, email: true } } },
     distinct: ['userId'],
   });
+
   const permissoes = await prisma.permissaoProprietario.findMany({ where: { equipeId } });
   const mapaPermissoes = {};
   for (const p of permissoes) {

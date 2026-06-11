@@ -16,23 +16,29 @@ const PERMISSOES_PADRAO = {
     'cadastro.proprietario.criar':   'FULL',
     'cadastro.proprietario.editar':  'FULL',
     'cadastro.proprietario.deletar': 'FULL',
+    'cadastro.proprietario.ativar':  'FULL',
     'cadastro.tratador.ler':     'FULL',
     'cadastro.tratador.criar':   'FULL',
     'cadastro.tratador.editar':  'FULL',
     'cadastro.tratador.deletar': 'FULL',
+    'cadastro.tratador.ativar':  'FULL',
     'cadastro.fornecedor.ler':     'FULL',
     'cadastro.fornecedor.criar':   'FULL',
     'cadastro.fornecedor.editar':  'FULL',
     'cadastro.fornecedor.deletar': 'FULL',
+    'cadastro.fornecedor.ativar':  'FULL',
+    'cadastro.localizacao.ler':    'FULL',
+    'cadastro.localizacao.criar':  'FULL',
 
     'dashboard.geral.ler':      'FULL',
     'dashboard.geral.imprimir': 'FULL',
 
-    'animais.ler':      'FULL',
-    'animais.criar':    'FULL',
-    'animais.editar':   'FULL',
-    'animais.deletar':  'FULL',
-    'animais.imprimir': 'FULL',
+    'animais.ler':         'FULL',
+    'animais.criar':       'FULL',
+    'animais.editar':      'FULL',
+    'animais.deletar':     'FULL',
+    'animais.imprimir':    'FULL',
+    'animais.desvincular': 'FULL',
 
     'atendimento.evolucoes.ler':        'FULL',
     'atendimento.evolucoes.criar':      'FULL',
@@ -41,11 +47,25 @@ const PERMISSOES_PADRAO = {
     'atendimento.evolucoes.imprimir':   'FULL',
     'atendimento.evolucoes.finalizar':  'FULL',
 
-    'atendimento.prescricoes.ler':      'FULL',
-    'atendimento.prescricoes.criar':    'FULL',
-    'atendimento.prescricoes.editar':   'FULL',
-    'atendimento.prescricoes.deletar':  'FULL',
-    'atendimento.prescricoes.imprimir': 'FULL',
+    'atendimento.prescricoes.ler':       'FULL',
+    'atendimento.prescricoes.criar':     'FULL',
+    'atendimento.prescricoes.editar':    'FULL',
+    'atendimento.prescricoes.deletar':   'FULL',
+    'atendimento.prescricoes.imprimir':  'FULL',
+    'atendimento.prescricoes.finalizar': 'FULL',
+
+    'atendimento.vacinas.ler':       'FULL',
+    'atendimento.vacinas.criar':     'FULL',
+    'atendimento.vacinas.editar':    'FULL',
+    'atendimento.vacinas.deletar':   'FULL',
+    'atendimento.vacinas.imprimir':  'FULL',
+    'atendimento.vacinas.finalizar': 'FULL',
+
+    'atendimento.encaminhamentos.ler':      'FULL',
+    'atendimento.encaminhamentos.criar':    'FULL',
+    'atendimento.encaminhamentos.editar':   'FULL',
+    'atendimento.encaminhamentos.deletar':  'FULL',
+    'atendimento.encaminhamentos.imprimir': 'FULL',
 
     'atendimento.exames.ler':      'FULL',
     'atendimento.exames.criar':    'FULL',
@@ -53,19 +73,41 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.deletar':  'FULL',
     'atendimento.exames.imprimir': 'FULL',
 
-    'nutricao.dietas.ler':      'FULL',
-    'nutricao.dietas.criar':    'FULL',
-    'nutricao.dietas.editar':   'FULL',
-    'nutricao.dietas.imprimir': 'FULL',
+    'enfermagem.prescricao.ler':      'FULL',
+    'enfermagem.prescricao.executar': 'FULL',
+    'enfermagem.prescricao.imprimir': 'FULL',
+
+    'exames.laboratorial.ler':    'FULL',
+    'exames.laboratorial.criar':  'FULL',
+    'exames.laboratorial.editar': 'FULL',
+    'exames.laboratorial.deletar':'FULL',
+
+    'exames.imagem.ler':    'FULL',
+    'exames.imagem.criar':  'FULL',
+    'exames.imagem.editar': 'FULL',
+    'exames.imagem.deletar':'FULL',
+
+    'nutricao.dietas.ler':          'FULL',
+    'nutricao.dietas.criar':        'FULL',
+    'nutricao.dietas.editar':       'FULL',
+    'nutricao.dietas.imprimir':     'FULL',
+    'nutricao.dietas.compartilhar': 'FULL',
+    'nutricao.dietas.exportar':     'FULL',
+    'nutricao.dietas.ativar':       'FULL',
 
     'nutricao.relatorios.ler':      'FULL',
     'nutricao.relatorios.criar':    'FULL',
     'nutricao.relatorios.imprimir': 'FULL',
+    'nutricao.relatorios.exportar': 'FULL',
 
     'financeiro.faturas.ler':      'FULL',
     'financeiro.faturas.criar':    'FULL',
     'financeiro.faturas.editar':   'FULL',
     'financeiro.faturas.imprimir': 'FULL',
+    'financeiro.faturas.whatsapp': 'FULL',
+    'financeiro.faturas.exportar': 'FULL',
+    'financeiro.faturas.fechar':   'FULL',
+    'financeiro.faturas.lancar':   'FULL',
 
     'equipe.membros.ler':    'FULL',
     'equipe.membros.editar': 'FULL',
@@ -100,25 +142,31 @@ const PERMISSOES_PADRAO = {
     'cadastro.proprietario.criar':   'PROPRIO',
     'cadastro.proprietario.editar':  'PROPRIO',
     'cadastro.proprietario.deletar': 'NENHUM',
+    'cadastro.proprietario.ativar':  'PROPRIO',
     'cadastro.tratador.ler':     'EQUIPE',
     'cadastro.tratador.criar':   'PROPRIO',
     'cadastro.tratador.editar':  'PROPRIO',
     'cadastro.tratador.deletar': 'PROPRIO',
+    'cadastro.tratador.ativar':  'PROPRIO',
     'cadastro.fornecedor.ler':     'EQUIPE',
     'cadastro.fornecedor.criar':   'PROPRIO',
     'cadastro.fornecedor.editar':  'PROPRIO',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.fornecedor.ativar':  'PROPRIO',
+    'cadastro.localizacao.ler':    'LEITURA',
+    'cadastro.localizacao.criar':  'LEITURA',
 
     // Dashboard
     'dashboard.geral.ler':      'EQUIPE',
     'dashboard.geral.imprimir': 'EQUIPE',
 
     // Animais
-    'animais.ler':      'EQUIPE',
-    'animais.criar':    'EQUIPE',
-    'animais.editar':   'EQUIPE',
-    'animais.deletar':  'PROPRIO',
-    'animais.imprimir': 'EQUIPE',
+    'animais.ler':         'EQUIPE',
+    'animais.criar':       'EQUIPE',
+    'animais.editar':      'EQUIPE',
+    'animais.deletar':     'PROPRIO',
+    'animais.imprimir':    'EQUIPE',
+    'animais.desvincular': 'PROPRIO',
 
     // Prontuário / Evoluções clínicas
     'atendimento.evolucoes.ler':       'EQUIPE',
@@ -129,11 +177,27 @@ const PERMISSOES_PADRAO = {
     'atendimento.evolucoes.finalizar': 'PROPRIO',
 
     // Prescrições
-    'atendimento.prescricoes.ler':      'EQUIPE',
-    'atendimento.prescricoes.criar':    'PROPRIO',
-    'atendimento.prescricoes.editar':   'PROPRIO',
-    'atendimento.prescricoes.deletar':  'PROPRIO',
-    'atendimento.prescricoes.imprimir': 'PROPRIO',
+    'atendimento.prescricoes.ler':       'EQUIPE',
+    'atendimento.prescricoes.criar':     'PROPRIO',
+    'atendimento.prescricoes.editar':    'PROPRIO',
+    'atendimento.prescricoes.deletar':   'PROPRIO',
+    'atendimento.prescricoes.imprimir':  'PROPRIO',
+    'atendimento.prescricoes.finalizar': 'PROPRIO',
+
+    // Vacinas
+    'atendimento.vacinas.ler':       'EQUIPE',
+    'atendimento.vacinas.criar':     'PROPRIO',
+    'atendimento.vacinas.editar':    'PROPRIO',
+    'atendimento.vacinas.deletar':   'PROPRIO',
+    'atendimento.vacinas.imprimir':  'EQUIPE',
+    'atendimento.vacinas.finalizar': 'PROPRIO',
+
+    // Encaminhamentos
+    'atendimento.encaminhamentos.ler':      'EQUIPE',
+    'atendimento.encaminhamentos.criar':    'PROPRIO',
+    'atendimento.encaminhamentos.editar':   'PROPRIO',
+    'atendimento.encaminhamentos.deletar':  'PROPRIO',
+    'atendimento.encaminhamentos.imprimir': 'EQUIPE',
 
     // Exames clínicos e nutricionais
     'atendimento.exames.ler':      'EQUIPE',
@@ -142,22 +206,47 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.deletar':  'PROPRIO',
     'atendimento.exames.imprimir': 'EQUIPE',
 
+    // Enfermagem — Execução de Prescrição
+    'enfermagem.prescricao.ler':      'EQUIPE',
+    'enfermagem.prescricao.executar': 'PROPRIO',
+    'enfermagem.prescricao.imprimir': 'EQUIPE',
+
+    // Exames — Laboratorial
+    'exames.laboratorial.ler':     'EQUIPE',
+    'exames.laboratorial.criar':   'PROPRIO',
+    'exames.laboratorial.editar':  'PROPRIO',
+    'exames.laboratorial.deletar': 'PROPRIO',
+
+    // Exames — Imagem
+    'exames.imagem.ler':     'EQUIPE',
+    'exames.imagem.criar':   'PROPRIO',
+    'exames.imagem.editar':  'PROPRIO',
+    'exames.imagem.deletar': 'PROPRIO',
+
     // Nutrição — Dietas
-    'nutricao.dietas.ler':      'EQUIPE',
-    'nutricao.dietas.criar':    'PROPRIO',
-    'nutricao.dietas.editar':   'PROPRIO',
-    'nutricao.dietas.imprimir': 'EQUIPE',
+    'nutricao.dietas.ler':          'EQUIPE',
+    'nutricao.dietas.criar':        'PROPRIO',
+    'nutricao.dietas.editar':       'PROPRIO',
+    'nutricao.dietas.imprimir':     'EQUIPE',
+    'nutricao.dietas.compartilhar': 'PROPRIO',
+    'nutricao.dietas.exportar':     'PROPRIO',
+    'nutricao.dietas.ativar':       'PROPRIO',
 
     // Nutrição — Relatórios
     'nutricao.relatorios.ler':      'EQUIPE',
     'nutricao.relatorios.criar':    'PROPRIO',
     'nutricao.relatorios.imprimir': 'EQUIPE',
+    'nutricao.relatorios.exportar': 'PROPRIO',
 
     // Financeiro
     'financeiro.faturas.ler':      'PROPRIO',
     'financeiro.faturas.criar':    'PROPRIO',
     'financeiro.faturas.editar':   'PROPRIO',
     'financeiro.faturas.imprimir': 'PROPRIO',
+    'financeiro.faturas.whatsapp': 'PROPRIO',
+    'financeiro.faturas.exportar': 'PROPRIO',
+    'financeiro.faturas.fechar':   'PROPRIO',
+    'financeiro.faturas.lancar':   'PROPRIO',
 
     // Equipe (gestão de membros — só sócio pode)
     'equipe.membros.ler':    'LEITURA',
@@ -196,27 +285,161 @@ const PERMISSOES_PADRAO = {
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
     'cadastro.proprietario.deletar': 'NENHUM',
+    'cadastro.proprietario.ativar':  'NENHUM',
     'cadastro.tratador.ler':     'NENHUM',
     'cadastro.tratador.criar':   'NENHUM',
     'cadastro.tratador.editar':  'NENHUM',
     'cadastro.tratador.deletar': 'NENHUM',
+    'cadastro.tratador.ativar':  'NENHUM',
     'cadastro.fornecedor.ler':     'NENHUM',
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.fornecedor.ativar':  'NENHUM',
+    'cadastro.localizacao.ler':    'NENHUM',
+    'cadastro.localizacao.criar':  'NENHUM',
 
     'dashboard.geral.ler': 'LEITURA',
     'animais.ler':         'LEITURA',
 
     // Nutrição — desabilitado por padrão; admin/sócio pode habilitar por equipe
-    'nutricao.dietas.ler':      'NENHUM',
-    'nutricao.dietas.criar':    'NENHUM',
-    'nutricao.dietas.editar':   'NENHUM',
-    'nutricao.dietas.imprimir': 'NENHUM',
+    'nutricao.dietas.ler':          'NENHUM',
+    'nutricao.dietas.criar':        'NENHUM',
+    'nutricao.dietas.editar':       'NENHUM',
+    'nutricao.dietas.imprimir':     'NENHUM',
+    'nutricao.dietas.compartilhar': 'NENHUM',
+    'nutricao.dietas.exportar':     'NENHUM',
+    'nutricao.dietas.ativar':       'NENHUM',
 
     'nutricao.relatorios.ler':      'NENHUM',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
+    'nutricao.relatorios.exportar': 'NENHUM',
+  },
+
+  // Prestador de serviços — acesso restrito configurável pelo sócio
+  PRESTADOR: {
+    'cadastro.proprietario.ler':     'NENHUM',
+    'cadastro.proprietario.criar':   'NENHUM',
+    'cadastro.proprietario.editar':  'NENHUM',
+    'cadastro.proprietario.deletar': 'NENHUM',
+    'cadastro.proprietario.ativar':  'NENHUM',
+    'cadastro.tratador.ler':     'NENHUM',
+    'cadastro.tratador.criar':   'NENHUM',
+    'cadastro.tratador.editar':  'NENHUM',
+    'cadastro.tratador.deletar': 'NENHUM',
+    'cadastro.tratador.ativar':  'NENHUM',
+    'cadastro.fornecedor.ler':     'NENHUM',
+    'cadastro.fornecedor.criar':   'NENHUM',
+    'cadastro.fornecedor.editar':  'NENHUM',
+    'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.fornecedor.ativar':  'NENHUM',
+    'cadastro.localizacao.ler':    'NENHUM',
+    'cadastro.localizacao.criar':  'NENHUM',
+
+    'dashboard.geral.ler':      'LEITURA',
+    'dashboard.geral.imprimir': 'NENHUM',
+
+    'animais.ler':         'EQUIPE',
+    'animais.criar':       'NENHUM',
+    'animais.editar':      'NENHUM',
+    'animais.deletar':     'NENHUM',
+    'animais.imprimir':    'NENHUM',
+    'animais.desvincular': 'NENHUM',
+
+    'atendimento.evolucoes.ler':       'NENHUM',
+    'atendimento.evolucoes.criar':     'NENHUM',
+    'atendimento.evolucoes.editar':    'NENHUM',
+    'atendimento.evolucoes.deletar':   'NENHUM',
+    'atendimento.evolucoes.imprimir':  'NENHUM',
+    'atendimento.evolucoes.finalizar': 'NENHUM',
+
+    'atendimento.prescricoes.ler':       'NENHUM',
+    'atendimento.prescricoes.criar':     'NENHUM',
+    'atendimento.prescricoes.editar':    'NENHUM',
+    'atendimento.prescricoes.deletar':   'NENHUM',
+    'atendimento.prescricoes.imprimir':  'NENHUM',
+    'atendimento.prescricoes.finalizar': 'NENHUM',
+
+    'atendimento.vacinas.ler':       'NENHUM',
+    'atendimento.vacinas.criar':     'NENHUM',
+    'atendimento.vacinas.editar':    'NENHUM',
+    'atendimento.vacinas.deletar':   'NENHUM',
+    'atendimento.vacinas.imprimir':  'NENHUM',
+    'atendimento.vacinas.finalizar': 'NENHUM',
+
+    'atendimento.encaminhamentos.ler':      'NENHUM',
+    'atendimento.encaminhamentos.criar':    'NENHUM',
+    'atendimento.encaminhamentos.editar':   'NENHUM',
+    'atendimento.encaminhamentos.deletar':  'NENHUM',
+    'atendimento.encaminhamentos.imprimir': 'NENHUM',
+
+    'atendimento.exames.ler':      'NENHUM',
+    'atendimento.exames.criar':    'NENHUM',
+    'atendimento.exames.editar':   'NENHUM',
+    'atendimento.exames.deletar':  'NENHUM',
+    'atendimento.exames.imprimir': 'NENHUM',
+
+    'enfermagem.prescricao.ler':      'NENHUM',
+    'enfermagem.prescricao.executar': 'NENHUM',
+    'enfermagem.prescricao.imprimir': 'NENHUM',
+
+    'exames.laboratorial.ler':     'NENHUM',
+    'exames.laboratorial.criar':   'NENHUM',
+    'exames.laboratorial.editar':  'NENHUM',
+    'exames.laboratorial.deletar': 'NENHUM',
+
+    'exames.imagem.ler':     'NENHUM',
+    'exames.imagem.criar':   'NENHUM',
+    'exames.imagem.editar':  'NENHUM',
+    'exames.imagem.deletar': 'NENHUM',
+
+    'nutricao.dietas.ler':          'NENHUM',
+    'nutricao.dietas.criar':        'NENHUM',
+    'nutricao.dietas.editar':       'NENHUM',
+    'nutricao.dietas.imprimir':     'NENHUM',
+    'nutricao.dietas.compartilhar': 'NENHUM',
+    'nutricao.dietas.exportar':     'NENHUM',
+    'nutricao.dietas.ativar':       'NENHUM',
+
+    'nutricao.relatorios.ler':      'NENHUM',
+    'nutricao.relatorios.criar':    'NENHUM',
+    'nutricao.relatorios.imprimir': 'NENHUM',
+    'nutricao.relatorios.exportar': 'NENHUM',
+
+    'financeiro.faturas.ler':      'NENHUM',
+    'financeiro.faturas.criar':    'NENHUM',
+    'financeiro.faturas.editar':   'NENHUM',
+    'financeiro.faturas.imprimir': 'NENHUM',
+    'financeiro.faturas.whatsapp': 'NENHUM',
+    'financeiro.faturas.exportar': 'NENHUM',
+    'financeiro.faturas.fechar':   'NENHUM',
+    'financeiro.faturas.lancar':   'NENHUM',
+
+    'equipe.membros.ler':    'NENHUM',
+    'equipe.membros.editar': 'NENHUM',
+
+    'farmacia.estoque.ler':      'NENHUM',
+    'farmacia.estoque.criar':    'NENHUM',
+    'farmacia.estoque.editar':   'NENHUM',
+    'farmacia.estoque.deletar':  'NENHUM',
+    'farmacia.estoque.imprimir': 'NENHUM',
+
+    'farmacia.movimentacoes.ler':      'NENHUM',
+    'farmacia.movimentacoes.criar':    'NENHUM',
+    'farmacia.movimentacoes.imprimir': 'NENHUM',
+
+    'medicamentos.catalogo.ler':      'NENHUM',
+    'medicamentos.catalogo.criar':    'NENHUM',
+    'medicamentos.catalogo.editar':   'NENHUM',
+    'medicamentos.catalogo.deletar':  'NENHUM',
+    'medicamentos.catalogo.imprimir': 'NENHUM',
+
+    'procedimentos.catalogo.ler':      'NENHUM',
+    'procedimentos.catalogo.criar':    'NENHUM',
+    'procedimentos.catalogo.editar':   'NENHUM',
+    'procedimentos.catalogo.deletar':  'NENHUM',
+    'procedimentos.catalogo.imprimir': 'NENHUM',
   },
 
   // Estagiário — por padrão só leitura; sócio pode elevar via painel
@@ -226,25 +449,31 @@ const PERMISSOES_PADRAO = {
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
     'cadastro.proprietario.deletar': 'NENHUM',
+    'cadastro.proprietario.ativar':  'NENHUM',
     'cadastro.tratador.ler':     'EQUIPE',
     'cadastro.tratador.criar':   'NENHUM',
     'cadastro.tratador.editar':  'NENHUM',
     'cadastro.tratador.deletar': 'NENHUM',
+    'cadastro.tratador.ativar':  'NENHUM',
     'cadastro.fornecedor.ler':     'EQUIPE',
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.fornecedor.ativar':  'NENHUM',
+    'cadastro.localizacao.ler':    'LEITURA',
+    'cadastro.localizacao.criar':  'NENHUM',
 
     // Dashboard
     'dashboard.geral.ler':      'LEITURA',
     'dashboard.geral.imprimir': 'NENHUM',
 
     // Animais
-    'animais.ler':      'EQUIPE',
-    'animais.criar':    'NENHUM',
-    'animais.editar':   'NENHUM',
-    'animais.deletar':  'NENHUM',
-    'animais.imprimir': 'NENHUM',
+    'animais.ler':         'EQUIPE',
+    'animais.criar':       'NENHUM',
+    'animais.editar':      'NENHUM',
+    'animais.deletar':     'NENHUM',
+    'animais.imprimir':    'NENHUM',
+    'animais.desvincular': 'NENHUM',
 
     // Prontuário / Evoluções — apenas leitura por padrão
     'atendimento.evolucoes.ler':       'EQUIPE',
@@ -255,11 +484,27 @@ const PERMISSOES_PADRAO = {
     'atendimento.evolucoes.finalizar': 'NENHUM',
 
     // Prescrições — apenas leitura
-    'atendimento.prescricoes.ler':      'EQUIPE',
-    'atendimento.prescricoes.criar':    'NENHUM',
-    'atendimento.prescricoes.editar':   'NENHUM',
-    'atendimento.prescricoes.deletar':  'NENHUM',
-    'atendimento.prescricoes.imprimir': 'NENHUM',
+    'atendimento.prescricoes.ler':       'EQUIPE',
+    'atendimento.prescricoes.criar':     'NENHUM',
+    'atendimento.prescricoes.editar':    'NENHUM',
+    'atendimento.prescricoes.deletar':   'NENHUM',
+    'atendimento.prescricoes.imprimir':  'NENHUM',
+    'atendimento.prescricoes.finalizar': 'NENHUM',
+
+    // Vacinas — apenas leitura
+    'atendimento.vacinas.ler':       'EQUIPE',
+    'atendimento.vacinas.criar':     'NENHUM',
+    'atendimento.vacinas.editar':    'NENHUM',
+    'atendimento.vacinas.deletar':   'NENHUM',
+    'atendimento.vacinas.imprimir':  'NENHUM',
+    'atendimento.vacinas.finalizar': 'NENHUM',
+
+    // Encaminhamentos — apenas leitura
+    'atendimento.encaminhamentos.ler':      'EQUIPE',
+    'atendimento.encaminhamentos.criar':    'NENHUM',
+    'atendimento.encaminhamentos.editar':   'NENHUM',
+    'atendimento.encaminhamentos.deletar':  'NENHUM',
+    'atendimento.encaminhamentos.imprimir': 'NENHUM',
 
     // Exames
     'atendimento.exames.ler':      'EQUIPE',
@@ -268,22 +513,47 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.deletar':  'NENHUM',
     'atendimento.exames.imprimir': 'NENHUM',
 
+    // Enfermagem — execução permitida para estagiários (técnicos)
+    'enfermagem.prescricao.ler':      'EQUIPE',
+    'enfermagem.prescricao.executar': 'EQUIPE',
+    'enfermagem.prescricao.imprimir': 'EQUIPE',
+
+    // Exames — Laboratorial
+    'exames.laboratorial.ler':     'EQUIPE',
+    'exames.laboratorial.criar':   'NENHUM',
+    'exames.laboratorial.editar':  'NENHUM',
+    'exames.laboratorial.deletar': 'NENHUM',
+
+    // Exames — Imagem
+    'exames.imagem.ler':     'EQUIPE',
+    'exames.imagem.criar':   'NENHUM',
+    'exames.imagem.editar':  'NENHUM',
+    'exames.imagem.deletar': 'NENHUM',
+
     // Nutrição — Dietas
-    'nutricao.dietas.ler':      'EQUIPE',
-    'nutricao.dietas.criar':    'NENHUM',
-    'nutricao.dietas.editar':   'NENHUM',
-    'nutricao.dietas.imprimir': 'NENHUM',
+    'nutricao.dietas.ler':          'EQUIPE',
+    'nutricao.dietas.criar':        'NENHUM',
+    'nutricao.dietas.editar':       'NENHUM',
+    'nutricao.dietas.imprimir':     'NENHUM',
+    'nutricao.dietas.compartilhar': 'NENHUM',
+    'nutricao.dietas.exportar':     'NENHUM',
+    'nutricao.dietas.ativar':       'NENHUM',
 
     // Nutrição — Relatórios
     'nutricao.relatorios.ler':      'EQUIPE',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
+    'nutricao.relatorios.exportar': 'NENHUM',
 
     // Financeiro
     'financeiro.faturas.ler':      'NENHUM',
     'financeiro.faturas.criar':    'NENHUM',
     'financeiro.faturas.editar':   'NENHUM',
     'financeiro.faturas.imprimir': 'NENHUM',
+    'financeiro.faturas.whatsapp': 'NENHUM',
+    'financeiro.faturas.exportar': 'NENHUM',
+    'financeiro.faturas.fechar':   'NENHUM',
+    'financeiro.faturas.lancar':   'NENHUM',
 
     // Equipe
     'equipe.membros.ler':    'LEITURA',
@@ -321,33 +591,42 @@ const PERMISSOES_PADRAO = {
 // Cada entrada vira um registro em tb_modulos_sistema.
 const MODULOS_SISTEMA = [
   // ── Cadastro — Proprietário ──────────────────────────────────────────────────
-  { slug: 'cadastro.proprietario.ler',     modulo: 'cadastro', submodulo: 'proprietario', acao: 'ler',     label: 'Proprietários — Visualizar', ordemExib:  5 },
-  { slug: 'cadastro.proprietario.criar',   modulo: 'cadastro', submodulo: 'proprietario', acao: 'criar',   label: 'Proprietários — Cadastrar',  ordemExib:  6 },
-  { slug: 'cadastro.proprietario.editar',  modulo: 'cadastro', submodulo: 'proprietario', acao: 'editar',  label: 'Proprietários — Editar',     ordemExib:  7 },
-  { slug: 'cadastro.proprietario.deletar', modulo: 'cadastro', submodulo: 'proprietario', acao: 'deletar', label: 'Proprietários — Excluir',    ordemExib:  8 },
+  { slug: 'cadastro.proprietario.ler',     modulo: 'cadastro', submodulo: 'proprietario', acao: 'ler',     label: 'Proprietários — Visualizar',    ordemExib:  5 },
+  { slug: 'cadastro.proprietario.criar',   modulo: 'cadastro', submodulo: 'proprietario', acao: 'criar',   label: 'Proprietários — Cadastrar',     ordemExib:  6 },
+  { slug: 'cadastro.proprietario.editar',  modulo: 'cadastro', submodulo: 'proprietario', acao: 'editar',  label: 'Proprietários — Editar',        ordemExib:  7 },
+  { slug: 'cadastro.proprietario.deletar', modulo: 'cadastro', submodulo: 'proprietario', acao: 'deletar', label: 'Proprietários — Excluir',       ordemExib:  8 },
+  { slug: 'cadastro.proprietario.ativar',  modulo: 'cadastro', submodulo: 'proprietario', acao: 'ativar',  label: 'Proprietários — Ativar/Inativar', ordemExib: 8.5 },
 
   // ── Cadastro — Tratador ──────────────────────────────────────────────────────
-  { slug: 'cadastro.tratador.ler',     modulo: 'cadastro', submodulo: 'tratador', acao: 'ler',     label: 'Tratadores — Visualizar', ordemExib:  9 },
-  { slug: 'cadastro.tratador.criar',   modulo: 'cadastro', submodulo: 'tratador', acao: 'criar',   label: 'Tratadores — Cadastrar',  ordemExib: 10 },
-  { slug: 'cadastro.tratador.editar',  modulo: 'cadastro', submodulo: 'tratador', acao: 'editar',  label: 'Tratadores — Editar',     ordemExib: 11 },
-  { slug: 'cadastro.tratador.deletar', modulo: 'cadastro', submodulo: 'tratador', acao: 'deletar', label: 'Tratadores — Excluir',    ordemExib: 12 },
+  { slug: 'cadastro.tratador.ler',     modulo: 'cadastro', submodulo: 'tratador', acao: 'ler',     label: 'Tratadores — Visualizar',    ordemExib:  9 },
+  { slug: 'cadastro.tratador.criar',   modulo: 'cadastro', submodulo: 'tratador', acao: 'criar',   label: 'Tratadores — Cadastrar',     ordemExib: 10 },
+  { slug: 'cadastro.tratador.editar',  modulo: 'cadastro', submodulo: 'tratador', acao: 'editar',  label: 'Tratadores — Editar',        ordemExib: 11 },
+  { slug: 'cadastro.tratador.deletar', modulo: 'cadastro', submodulo: 'tratador', acao: 'deletar', label: 'Tratadores — Excluir',       ordemExib: 12 },
+  { slug: 'cadastro.tratador.ativar',  modulo: 'cadastro', submodulo: 'tratador', acao: 'ativar',  label: 'Tratadores — Ativar/Inativar', ordemExib: 12.5 },
 
   // ── Cadastro — Fornecedor ────────────────────────────────────────────────────
-  { slug: 'cadastro.fornecedor.ler',     modulo: 'cadastro', submodulo: 'fornecedor', acao: 'ler',     label: 'Fornecedores — Visualizar', ordemExib: 13 },
-  { slug: 'cadastro.fornecedor.criar',   modulo: 'cadastro', submodulo: 'fornecedor', acao: 'criar',   label: 'Fornecedores — Cadastrar',  ordemExib: 14 },
-  { slug: 'cadastro.fornecedor.editar',  modulo: 'cadastro', submodulo: 'fornecedor', acao: 'editar',  label: 'Fornecedores — Editar',     ordemExib: 15 },
-  { slug: 'cadastro.fornecedor.deletar', modulo: 'cadastro', submodulo: 'fornecedor', acao: 'deletar', label: 'Fornecedores — Excluir',    ordemExib: 16 },
+  { slug: 'cadastro.fornecedor.ler',     modulo: 'cadastro', submodulo: 'fornecedor', acao: 'ler',     label: 'Fornecedores — Visualizar',    ordemExib: 13 },
+  { slug: 'cadastro.fornecedor.criar',   modulo: 'cadastro', submodulo: 'fornecedor', acao: 'criar',   label: 'Fornecedores — Cadastrar',     ordemExib: 14 },
+  { slug: 'cadastro.fornecedor.editar',  modulo: 'cadastro', submodulo: 'fornecedor', acao: 'editar',  label: 'Fornecedores — Editar',        ordemExib: 15 },
+  { slug: 'cadastro.fornecedor.deletar', modulo: 'cadastro', submodulo: 'fornecedor', acao: 'deletar', label: 'Fornecedores — Excluir',       ordemExib: 16 },
+  { slug: 'cadastro.fornecedor.ativar',  modulo: 'cadastro', submodulo: 'fornecedor', acao: 'ativar',  label: 'Fornecedores — Ativar/Inativar', ordemExib: 16.5 },
+
+  // ── Cadastro — Localização de Animal ────────────────────────────────────────
+  // Tabela global (não por empresa). Edição/inativação restritas ao ADMIN (enforced no controller).
+  { slug: 'cadastro.localizacao.ler',   modulo: 'cadastro', submodulo: 'localizacao', acao: 'ler',   label: 'Localização — Visualizar', ordemExib: 17 },
+  { slug: 'cadastro.localizacao.criar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'criar', label: 'Localização — Cadastrar',  ordemExib: 18 },
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
   { slug: 'dashboard.geral.ler',      modulo: 'dashboard', submodulo: 'geral', acao: 'ler',      label: 'Dashboard — Visualizar',  ordemExib:  1 },
   { slug: 'dashboard.geral.imprimir', modulo: 'dashboard', submodulo: 'geral', acao: 'imprimir', label: 'Dashboard — Imprimir',    ordemExib:  2 },
 
   // ── Animais ─────────────────────────────────────────────────────────────────
-  { slug: 'animais.ler',      modulo: 'animais', submodulo: 'animais', acao: 'ler',      label: 'Animais — Visualizar', ordemExib: 10 },
-  { slug: 'animais.criar',    modulo: 'animais', submodulo: 'animais', acao: 'criar',    label: 'Animais — Cadastrar',  ordemExib: 11 },
-  { slug: 'animais.editar',   modulo: 'animais', submodulo: 'animais', acao: 'editar',   label: 'Animais — Editar',     ordemExib: 12 },
-  { slug: 'animais.deletar',  modulo: 'animais', submodulo: 'animais', acao: 'deletar',  label: 'Animais — Excluir',    ordemExib: 13 },
-  { slug: 'animais.imprimir', modulo: 'animais', submodulo: 'animais', acao: 'imprimir', label: 'Animais — Imprimir',   ordemExib: 14 },
+  { slug: 'animais.ler',         modulo: 'animais', submodulo: 'animais', acao: 'ler',         label: 'Animais — Visualizar',    ordemExib: 10 },
+  { slug: 'animais.criar',       modulo: 'animais', submodulo: 'animais', acao: 'criar',       label: 'Animais — Cadastrar',     ordemExib: 11 },
+  { slug: 'animais.editar',      modulo: 'animais', submodulo: 'animais', acao: 'editar',      label: 'Animais — Editar',        ordemExib: 12 },
+  { slug: 'animais.deletar',     modulo: 'animais', submodulo: 'animais', acao: 'deletar',     label: 'Animais — Excluir',       ordemExib: 13 },
+  { slug: 'animais.imprimir',    modulo: 'animais', submodulo: 'animais', acao: 'imprimir',    label: 'Animais — Imprimir',      ordemExib: 14 },
+  { slug: 'animais.desvincular', modulo: 'animais', submodulo: 'animais', acao: 'desvincular', label: 'Animais — Desvincular Vet', ordemExib: 15 },
 
   // ── Prontuário / Evoluções ──────────────────────────────────────────────────
   { slug: 'atendimento.evolucoes.ler',       modulo: 'atendimento', submodulo: 'evolucoes', acao: 'ler',       label: 'Evolução — Visualizar', ordemExib: 20 },
@@ -358,35 +637,76 @@ const MODULOS_SISTEMA = [
   { slug: 'atendimento.evolucoes.finalizar', modulo: 'atendimento', submodulo: 'evolucoes', acao: 'finalizar', label: 'Evolução — Finalizar',  ordemExib: 25 },
 
   // ── Prescrições ─────────────────────────────────────────────────────────────
-  { slug: 'atendimento.prescricoes.ler',      modulo: 'atendimento', submodulo: 'prescricoes', acao: 'ler',      label: 'Prescrições — Visualizar', ordemExib: 30 },
-  { slug: 'atendimento.prescricoes.criar',    modulo: 'atendimento', submodulo: 'prescricoes', acao: 'criar',    label: 'Prescrições — Inserir',    ordemExib: 31 },
-  { slug: 'atendimento.prescricoes.editar',   modulo: 'atendimento', submodulo: 'prescricoes', acao: 'editar',   label: 'Prescrições — Editar',     ordemExib: 32 },
-  { slug: 'atendimento.prescricoes.deletar',  modulo: 'atendimento', submodulo: 'prescricoes', acao: 'deletar',  label: 'Prescrições — Excluir',    ordemExib: 33 },
-  { slug: 'atendimento.prescricoes.imprimir', modulo: 'atendimento', submodulo: 'prescricoes', acao: 'imprimir', label: 'Prescrições — Imprimir',   ordemExib: 34 },
+  { slug: 'atendimento.prescricoes.ler',       modulo: 'atendimento', submodulo: 'prescricoes', acao: 'ler',       label: 'Prescrições — Visualizar', ordemExib: 30 },
+  { slug: 'atendimento.prescricoes.criar',     modulo: 'atendimento', submodulo: 'prescricoes', acao: 'criar',     label: 'Prescrições — Inserir',    ordemExib: 31 },
+  { slug: 'atendimento.prescricoes.editar',    modulo: 'atendimento', submodulo: 'prescricoes', acao: 'editar',    label: 'Prescrições — Editar',     ordemExib: 32 },
+  { slug: 'atendimento.prescricoes.deletar',   modulo: 'atendimento', submodulo: 'prescricoes', acao: 'deletar',   label: 'Prescrições — Excluir',    ordemExib: 33 },
+  { slug: 'atendimento.prescricoes.imprimir',  modulo: 'atendimento', submodulo: 'prescricoes', acao: 'imprimir',  label: 'Prescrições — Imprimir',   ordemExib: 34 },
+  { slug: 'atendimento.prescricoes.finalizar', modulo: 'atendimento', submodulo: 'prescricoes', acao: 'finalizar', label: 'Prescrições — Finalizar',  ordemExib: 35 },
 
-  // ── Exames ──────────────────────────────────────────────────────────────────
+  // ── Vacinas ──────────────────────────────────────────────────────────────────
+  { slug: 'atendimento.vacinas.ler',       modulo: 'atendimento', submodulo: 'vacinas', acao: 'ler',       label: 'Vacinas — Visualizar', ordemExib: 36 },
+  { slug: 'atendimento.vacinas.criar',     modulo: 'atendimento', submodulo: 'vacinas', acao: 'criar',     label: 'Vacinas — Inserir',    ordemExib: 37 },
+  { slug: 'atendimento.vacinas.editar',    modulo: 'atendimento', submodulo: 'vacinas', acao: 'editar',    label: 'Vacinas — Editar',     ordemExib: 38 },
+  { slug: 'atendimento.vacinas.deletar',   modulo: 'atendimento', submodulo: 'vacinas', acao: 'deletar',   label: 'Vacinas — Excluir',    ordemExib: 39 },
+  { slug: 'atendimento.vacinas.imprimir',  modulo: 'atendimento', submodulo: 'vacinas', acao: 'imprimir',  label: 'Vacinas — Imprimir',   ordemExib: 39.2 },
+  { slug: 'atendimento.vacinas.finalizar', modulo: 'atendimento', submodulo: 'vacinas', acao: 'finalizar', label: 'Vacinas — Finalizar',  ordemExib: 39.4 },
+
+  // ── Encaminhamentos ──────────────────────────────────────────────────────────
+  { slug: 'atendimento.encaminhamentos.ler',      modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'ler',      label: 'Encaminhamentos — Visualizar', ordemExib: 39.5 },
+  { slug: 'atendimento.encaminhamentos.criar',    modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'criar',    label: 'Encaminhamentos — Inserir',    ordemExib: 39.6 },
+  { slug: 'atendimento.encaminhamentos.editar',   modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'editar',   label: 'Encaminhamentos — Editar',     ordemExib: 39.7 },
+  { slug: 'atendimento.encaminhamentos.deletar',  modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'deletar',  label: 'Encaminhamentos — Excluir',    ordemExib: 39.8 },
+  { slug: 'atendimento.encaminhamentos.imprimir', modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'imprimir', label: 'Encaminhamentos — Imprimir',   ordemExib: 39.9 },
+
+  // ── Exames (clínicos/nutricionais) ───────────────────────────────────────────
   { slug: 'atendimento.exames.ler',      modulo: 'atendimento', submodulo: 'exames', acao: 'ler',      label: 'Exames — Visualizar', ordemExib: 40 },
   { slug: 'atendimento.exames.criar',    modulo: 'atendimento', submodulo: 'exames', acao: 'criar',    label: 'Exames — Inserir',    ordemExib: 41 },
   { slug: 'atendimento.exames.editar',   modulo: 'atendimento', submodulo: 'exames', acao: 'editar',   label: 'Exames — Editar',     ordemExib: 42 },
   { slug: 'atendimento.exames.deletar',  modulo: 'atendimento', submodulo: 'exames', acao: 'deletar',  label: 'Exames — Excluir',    ordemExib: 43 },
   { slug: 'atendimento.exames.imprimir', modulo: 'atendimento', submodulo: 'exames', acao: 'imprimir', label: 'Exames — Imprimir',   ordemExib: 44 },
 
+  // ── Enfermagem — Execução de Prescrição ─────────────────────────────────────
+  { slug: 'enfermagem.prescricao.ler',      modulo: 'enfermagem', submodulo: 'prescricao', acao: 'ler',      label: 'Enfermagem — Visualizar', ordemExib: 45 },
+  { slug: 'enfermagem.prescricao.executar', modulo: 'enfermagem', submodulo: 'prescricao', acao: 'executar', label: 'Enfermagem — Executar',   ordemExib: 46 },
+  { slug: 'enfermagem.prescricao.imprimir', modulo: 'enfermagem', submodulo: 'prescricao', acao: 'imprimir', label: 'Enfermagem — Imprimir',   ordemExib: 47 },
+
+  // ── Exames — Laboratorial ───────────────────────────────────────────────────
+  { slug: 'exames.laboratorial.ler',     modulo: 'exames', submodulo: 'laboratorial', acao: 'ler',     label: 'Laboratorial — Visualizar', ordemExib: 48 },
+  { slug: 'exames.laboratorial.criar',   modulo: 'exames', submodulo: 'laboratorial', acao: 'criar',   label: 'Laboratorial — Inserir',    ordemExib: 48.2 },
+  { slug: 'exames.laboratorial.editar',  modulo: 'exames', submodulo: 'laboratorial', acao: 'editar',  label: 'Laboratorial — Editar',     ordemExib: 48.4 },
+  { slug: 'exames.laboratorial.deletar', modulo: 'exames', submodulo: 'laboratorial', acao: 'deletar', label: 'Laboratorial — Excluir',    ordemExib: 48.6 },
+
+  // ── Exames — Imagem ─────────────────────────────────────────────────────────
+  { slug: 'exames.imagem.ler',     modulo: 'exames', submodulo: 'imagem', acao: 'ler',     label: 'Imagem — Visualizar', ordemExib: 49 },
+  { slug: 'exames.imagem.criar',   modulo: 'exames', submodulo: 'imagem', acao: 'criar',   label: 'Imagem — Inserir',    ordemExib: 49.2 },
+  { slug: 'exames.imagem.editar',  modulo: 'exames', submodulo: 'imagem', acao: 'editar',  label: 'Imagem — Editar',     ordemExib: 49.4 },
+  { slug: 'exames.imagem.deletar', modulo: 'exames', submodulo: 'imagem', acao: 'deletar', label: 'Imagem — Excluir',    ordemExib: 49.6 },
+
   // ── Nutrição — Dietas ───────────────────────────────────────────────────────
-  { slug: 'nutricao.dietas.ler',      modulo: 'nutricao', submodulo: 'dietas', acao: 'ler',      label: 'Dietas — Visualizar', ordemExib: 50 },
-  { slug: 'nutricao.dietas.criar',    modulo: 'nutricao', submodulo: 'dietas', acao: 'criar',    label: 'Dietas — Criar',      ordemExib: 51 },
-  { slug: 'nutricao.dietas.editar',   modulo: 'nutricao', submodulo: 'dietas', acao: 'editar',   label: 'Dietas — Editar',     ordemExib: 52 },
-  { slug: 'nutricao.dietas.imprimir', modulo: 'nutricao', submodulo: 'dietas', acao: 'imprimir', label: 'Dietas — Imprimir',   ordemExib: 53 },
+  { slug: 'nutricao.dietas.ler',          modulo: 'nutricao', submodulo: 'dietas', acao: 'ler',          label: 'Dietas — Visualizar',    ordemExib: 50 },
+  { slug: 'nutricao.dietas.criar',        modulo: 'nutricao', submodulo: 'dietas', acao: 'criar',        label: 'Dietas — Criar',         ordemExib: 51 },
+  { slug: 'nutricao.dietas.editar',       modulo: 'nutricao', submodulo: 'dietas', acao: 'editar',       label: 'Dietas — Editar',        ordemExib: 52 },
+  { slug: 'nutricao.dietas.imprimir',     modulo: 'nutricao', submodulo: 'dietas', acao: 'imprimir',     label: 'Dietas — Imprimir',      ordemExib: 53 },
+  { slug: 'nutricao.dietas.compartilhar', modulo: 'nutricao', submodulo: 'dietas', acao: 'compartilhar', label: 'Dietas — Compartilhar',  ordemExib: 53.2 },
+  { slug: 'nutricao.dietas.exportar',     modulo: 'nutricao', submodulo: 'dietas', acao: 'exportar',     label: 'Dietas — Exportar',      ordemExib: 53.4 },
+  { slug: 'nutricao.dietas.ativar',       modulo: 'nutricao', submodulo: 'dietas', acao: 'ativar',       label: 'Dietas — Ativar/Inativar', ordemExib: 53.6 },
 
   // ── Nutrição — Relatórios ───────────────────────────────────────────────────
   { slug: 'nutricao.relatorios.ler',      modulo: 'nutricao', submodulo: 'relatorios', acao: 'ler',      label: 'Relatórios — Visualizar', ordemExib: 60 },
   { slug: 'nutricao.relatorios.criar',    modulo: 'nutricao', submodulo: 'relatorios', acao: 'criar',    label: 'Relatórios — Gerar',      ordemExib: 61 },
   { slug: 'nutricao.relatorios.imprimir', modulo: 'nutricao', submodulo: 'relatorios', acao: 'imprimir', label: 'Relatórios — Imprimir',   ordemExib: 62 },
+  { slug: 'nutricao.relatorios.exportar', modulo: 'nutricao', submodulo: 'relatorios', acao: 'exportar', label: 'Relatórios — Exportar',   ordemExib: 63 },
 
   // ── Financeiro ──────────────────────────────────────────────────────────────
-  { slug: 'financeiro.faturas.ler',      modulo: 'financeiro', submodulo: 'faturas', acao: 'ler',      label: 'Faturas — Visualizar', ordemExib: 70 },
-  { slug: 'financeiro.faturas.criar',    modulo: 'financeiro', submodulo: 'faturas', acao: 'criar',    label: 'Faturas — Criar',      ordemExib: 71 },
-  { slug: 'financeiro.faturas.editar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'editar',   label: 'Faturas — Editar',     ordemExib: 72 },
-  { slug: 'financeiro.faturas.imprimir', modulo: 'financeiro', submodulo: 'faturas', acao: 'imprimir', label: 'Faturas — Imprimir',   ordemExib: 73 },
+  { slug: 'financeiro.faturas.ler',      modulo: 'financeiro', submodulo: 'faturas', acao: 'ler',      label: 'Faturas — Visualizar',       ordemExib: 70 },
+  { slug: 'financeiro.faturas.criar',    modulo: 'financeiro', submodulo: 'faturas', acao: 'criar',    label: 'Faturas — Criar',            ordemExib: 71 },
+  { slug: 'financeiro.faturas.editar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'editar',   label: 'Faturas — Editar',           ordemExib: 72 },
+  { slug: 'financeiro.faturas.imprimir', modulo: 'financeiro', submodulo: 'faturas', acao: 'imprimir', label: 'Faturas — Imprimir',         ordemExib: 73 },
+  { slug: 'financeiro.faturas.whatsapp', modulo: 'financeiro', submodulo: 'faturas', acao: 'whatsapp', label: 'Faturas — WhatsApp',         ordemExib: 73.2 },
+  { slug: 'financeiro.faturas.exportar', modulo: 'financeiro', submodulo: 'faturas', acao: 'exportar', label: 'Faturas — Exportar',         ordemExib: 73.4 },
+  { slug: 'financeiro.faturas.fechar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'fechar',   label: 'Faturas — Fechar Fatura',    ordemExib: 73.6 },
+  { slug: 'financeiro.faturas.lancar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'lancar',   label: 'Faturas — Lançar Cobrança',  ordemExib: 73.8 },
 
   // ── Equipe ──────────────────────────────────────────────────────────────────
   { slug: 'equipe.membros.ler',    modulo: 'equipe', submodulo: 'membros', acao: 'ler',    label: 'Equipe — Visualizar', ordemExib: 80 },

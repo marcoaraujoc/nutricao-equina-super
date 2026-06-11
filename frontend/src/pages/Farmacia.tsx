@@ -118,7 +118,12 @@ function extrairVolume(med: Medicamento): number | null {
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Farmacia() {
-  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
+  const podeCriar   = isSocio || podeExecutar('farmacia.estoque.criar');
+  const podeEditar  = isSocio || podeExecutar('farmacia.estoque.editar');
+  const podeDeletar = isSocio || podeExecutar('farmacia.estoque.deletar');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [itens,       setItens]       = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
@@ -191,7 +196,7 @@ export default function Farmacia() {
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
-  useEffect(() => { carregarEstoque(); }, [carregarEstoque]);
+  useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
   // Reseta frascos ao trocar de medicamento
   useEffect(() => { setFrascos(''); }, [form.medicamentoId]);
@@ -263,8 +268,14 @@ export default function Farmacia() {
   };
 
   const salvar = async () => {
+    if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
+    if (!editandoId && !podeCriar) { semPermissao('criar entrada de estoque'); return; }
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
     if (form.validade && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
+
+    // Lote e validade obrigatórios em todos os casos (novo, existente e edição)
+    if (!form.lote || !form.lote.trim()) return toast.error('Lote é obrigatório.');
+    if (!form.validade) return toast.error('Validade é obrigatória.');
 
     if (!editandoId && estoqueExistente) {
       if (form.qtdEstoque <= 0) return toast.error('Informe uma quantidade maior que zero.');
@@ -287,6 +298,7 @@ export default function Farmacia() {
 
     if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return toast.error('Quantidades não podem ser negativas.');
     if (!editandoId && form.qtdEstoque < 0) return toast.error('Estoque não pode ser negativo.');
+    if (!form.valor || form.valor <= 0) return toast.error('Valor é obrigatório.');
 
     setSalvando(true);
     try {
@@ -318,6 +330,7 @@ export default function Farmacia() {
 
   const confirmarExcluir = async () => {
     if (!confirmExcluir) return;
+    if (!podeDeletar) { semPermissao('inativar item do estoque'); return; }
     try {
       await api.delete(`/farmacia/estoque/${confirmExcluir.id}`);
       toast.success('Item inativado.');
@@ -566,21 +579,21 @@ export default function Farmacia() {
               {!estoqueExistente && (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor (R$)</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor (R$) <span className="text-red-500">*</span></label>
                     <input type="text" inputMode="decimal" value={valorStr}
                       onChange={(e) => handleValorChange(e.target.value)}
                       placeholder="0,00"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
                     <input type="text" value={form.lote}
                       onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
                       placeholder="Ex: LOT2024"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
                     <DateInputBR
                       value={form.validade}
                       onChange={v => setForm(f => ({ ...f, validade: v }))}
@@ -593,14 +606,14 @@ export default function Farmacia() {
               {estoqueExistente && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
                     <input type="text" value={form.lote}
                       onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
                       placeholder="Ex: LOT2024"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
                     <DateInputBR
                       value={form.validade}
                       onChange={v => setForm(f => ({ ...f, validade: v }))}

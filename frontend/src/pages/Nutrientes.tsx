@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../services/api';
 import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 
@@ -13,7 +13,7 @@ const Nutrientes = () => {
 
   const loadNutrientes = async () => {
     try {
-      const res = await axios.get('/api/nutrientes');
+      const res = await api.get('/nutrientes');
       setNutrientes(res.data);
     } catch (error) {
       console.error(error);
@@ -31,7 +31,7 @@ const Nutrientes = () => {
   const confirmDelete = async () => {
     if (!nutrienteToDelete) return;
     try {
-      await axios.delete(`/api/nutrientes/${nutrienteToDelete.id}`);
+      await api.delete(`/nutrientes/${nutrienteToDelete.id}`);
       alert('Nutriente desativado com sucesso!');
       setNutrienteToDelete(null);
       loadNutrientes();

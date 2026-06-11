@@ -11,7 +11,7 @@ import {
   Users, Users2, ShieldCheck, FlaskConical, Pill,
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
-  FolderOpen, UserCog, Truck,
+  FolderOpen, UserCog, Truck, MapPin,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -32,7 +32,7 @@ function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/execucao-prescricao'))   return 'enfermagem';
   if (pathname.startsWith('/farmacia'))              return 'farmacia';
   if (pathname.startsWith('/exames'))                return 'exames';
-  if (pathname.startsWith('/cadastro/'))             return 'cadastro';
+  if (pathname.startsWith('/cadastro/') || pathname === '/equipe') return 'cadastro';
   if (pathname.startsWith('/animais-vet'))           return 'geral';
   if (pathname.startsWith('/dieta'))                 return 'nutricional';
   if (pathname.startsWith('/relatorio-nutricional')) return 'nutricional';
@@ -41,7 +41,7 @@ function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/composicao-alimentar'))  return 'nutricional';
   if (
     pathname.startsWith('/usuarios') ||
-    pathname.startsWith('/equipe') ||
+    pathname.startsWith('/equipe-manager') ||
     pathname.startsWith('/controle-acesso') ||
     pathname.startsWith('/ai-usage') ||
     pathname.startsWith('/medicamentos') ||
@@ -83,9 +83,11 @@ export default function Sidebar() {
   const podeVerFarmacia       = podeExecutar('farmacia.estoque.ler');
   const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
   const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
-  const podeVerProprietarios   = isSocio || podeExecutar('cadastro.proprietario.ler');
-  const podeVerTratadores      = isSocio || podeExecutar('cadastro.tratador.ler');
-  const podeVerFornecedores    = isSocio || podeExecutar('cadastro.fornecedor.ler');
+  const podeVerProprietarios   = isAdmin || isSocio || podeExecutar('cadastro.proprietario.ler');
+  const podeVerTratadores      = isAdmin || isSocio || podeExecutar('cadastro.tratador.ler');
+  const podeVerFornecedores    = isAdmin || isSocio || podeExecutar('cadastro.fornecedor.ler');
+  const podeVerLocalizacoes    = isAdmin || isSocio || podeExecutar('cadastro.localizacao.ler');
+  const podeVerEquipe          = isAdmin || isSocio || podeExecutar('equipe.membros.ler');
 
   // temAcessoClinico: profissionais de saúde OU proprietário com ao menos 1 grant clínico
   const temAcessoClinico =
@@ -129,10 +131,10 @@ export default function Sidebar() {
     p.startsWith('/nutrientes') ||
     p.startsWith('/composicao-alimentar'),
   );
-  const [openCadastro,      setOpenCadastro]      = useState(() => p.startsWith('/cadastro/'));
+  const [openCadastro,      setOpenCadastro]      = useState(() => p.startsWith('/cadastro/') || p === '/equipe');
   const [openAdministracao, setOpenAdministracao] = useState(() =>
     p.startsWith('/usuarios') ||
-    p.startsWith('/equipe') ||
+    p.startsWith('/equipe-manager') ||
     p.startsWith('/controle-acesso') ||
     p.startsWith('/ai-usage') ||
     p.startsWith('/medicamentos') ||
@@ -243,8 +245,6 @@ export default function Sidebar() {
 
                   {openCadastro && (
                     <div className="mt-1 pl-6 space-y-0.5">
-                      {subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
-
                       {temAcessoClinico
                         ? (podeVerAnimais && (
                           <Link key="/animais-vet" to="/animais-vet" onClick={closeMobile}
@@ -263,9 +263,12 @@ export default function Sidebar() {
                         : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
                       }
 
-                      {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />, 'Proprietários', p.startsWith('/cadastro/proprietarios'))}
-                      {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
+                      {subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
+                      {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                       {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
+                      {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
+                      {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
+                      {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
                     </div>
                   )}
                 </div>
@@ -447,7 +450,6 @@ export default function Sidebar() {
                       {navLink('/ai-usage',   <Users size={20} />, 'Monitoramento IA', isAdminActive('/ai-usage'))}
                     </>
                   )}
-                  {navLink('/equipe',          <Users2      size={20} />, 'Minha Equipe',      isAdminActive('/equipe'))}
                   {navLink('/controle-acesso', <ShieldCheck size={20} />, 'Controle de Acesso', isAdminActive('/controle-acesso'))}
                 </div>
               )}

@@ -1,6 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-06-05
+# Atualizado em: 2026-06-09
 
 ---
 
@@ -28,6 +28,7 @@
 | Gestão de Empresas | ✅ Implementado |
 | Cadastro / Proprietários | ✅ Implementado |
 | Cadastro / Tratadores | ✅ Implementado |
+| Cadastro / Localizações | ✅ Implementado |
 | IA / LLM Integration | 🟡 Parcial (Groq integrado) |
 | Auditoria | 🟡 Básico |
 | Admin | 🔲 Planejado |
@@ -130,7 +131,40 @@ nutricao-equina-super/
 
 ### Roles disponíveis
 ```typescript
-type UserType = 'ADMIN' | 'VETERINARIO' | 'PROPRIETARIO' | 'ESTAGIARIO'
+type UserType = 'ADMIN' | 'VETERINARIO' | 'PROPRIETARIO' | 'ESTAGIARIO' | 'FORNECEDOR'
+// FORNECEDOR: usuário externo (prestador de serviços). Cargo na equipe: PRESTADOR.
+```
+
+### Hierarquia de níveis de permissão (MatrizPerfil / PermissaoMembro)
+```
+NEGADO (-1) < NENHUM (0) < LEITURA (1) < PROPRIO (2) < EQUIPE (3) < FULL (4)
+NEGADO: bloqueio explícito — sobrepõe qualquer nível positivo em qualquer equipe (deny-wins)
+SOCIO: bypass total — não consulta MatrizPerfil
+ADMIN: bypass total — não consulta permissões
+```
+
+### Cargos na equipe (PerfilEquipe)
+```
+SOCIO        → userType VETERINARIO, bypass total
+VETERINARIO  → userType VETERINARIO, usa MatrizPerfil padrão VET
+ESTAGIARIO   → userType ESTAGIARIO
+PRESTADOR    → userType FORNECEDOR (externo, ex: fisioterapeuta, ferrador)
+PROPRIETARIO → perfil de SISTEMA — não pode ser atribuído a membros de equipe;
+               permissões lidas de MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes
+               vinculadas ao proprietário via Animal.empresaId → Equipe
+```
+
+### ControleAcesso — abas disponíveis para SÓCIO (5 abas)
+```
+1. Matriz de Perfis  — edita níveis por perfil (VETERINARIO/ESTAGIARIO/PRESTADOR/PROPRIETARIO)
+                       itens com locked=true são imutáveis (definidos pelo ADMIN global)
+2. Equipe            — lista membros VET/EST/PRESTADOR; inclui via 2 passos:
+                       passo 1: tipo (VETERINÁRIO|ESTAGIÁRIO|FORNECEDOR)
+                       passo 2: FORNECEDOR → busca lista /equipes/:id/fornecedores
+                                outros → formulário email/nome
+3. Proprietários     — lista proprietários da empresa (read-only)
+4. Convites          — lista convites enviados; cancela PENDENTE não expirado
+5. Logs de Auditoria — (desktopOnly: true) — TabMatriz tem desktopOnly: true
 ```
 
 ### Fluxo de Auth
@@ -206,7 +240,7 @@ VacinaClinica     → registro de vacinas
 EncaminhamentoClinico → encaminhamentos entre especialistas
 Fatura / FaturaItem → financeiro básico
                     Fatura: animalId? (legado, nullable desde migration 20260605), proprietarioId?,
-                    mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA)
+                    mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA|FECHADA)
                     FaturaItem: animalId? (adicionado migration 20260605), tipo VARCHAR(50), veterinarioId?
 Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
@@ -225,11 +259,14 @@ ModuloSistema     → catálogo estático de módulos/submodulos/ações (slug �
 PermissaoMembro   → permissão por membro+módulo dentro de uma equipe
                     nivel: NENHUM|LEITURA|PROPRIO|EQUIPE|FULL
                     unique(equipeId, userId, moduloSlug)
-PerfilEquipe      → perfis/cargos por equipe (SOCIO, VETERINARIO, ESTAGIARIO, PROPRIETARIO + customizados)
+PerfilEquipe      → perfis/cargos por equipe (SOCIO, VETERINARIO, ESTAGIARIO, PRESTADOR, PROPRIETARIO + customizados)
                     PROPRIETARIO é perfil de sistema — não pode ser excluído nem atribuído a membros da equipe
+                    PRESTADOR → maps to userType FORNECEDOR (usuário externo da empresa)
 MatrizPerfil      → template de permissões por perfil — propagado a membros ao entrar/trocar cargo
                     unique(equipeId, perfilSlug, moduloSlug)
                     locked: Boolean — true = definido pelo ADMIN global, sócio não pode alterar
+                    nivel: NENHUM|LEITURA|PROPRIO|EQUIPE|FULL|NEGADO
+                    NEGADO = bloqueio explícito; deny-wins sobre outras equipes
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
 PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — substituído por MatrizPerfil PROPRIETARIO
 ```
@@ -237,8 +274,11 @@ PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — sub
 ### Catálogo de Módulos do Sistema (ModuloSistema)
 
 Gerenciado em `backend/src/seeds/002_permissoes_padrao.seed.js` e sincronizado via `node backend/seed.js`.
-Ações disponíveis: `ler` (ver), `criar`, `editar` (alterar), `deletar` (excluir), `imprimir`.
-Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass total.
+Ações disponíveis: `ler`, `criar`, `editar`, `deletar`, `imprimir`, `finalizar`, `executar`, `ativar`, `exportar`, `compartilhar`, `desvincular`, `whatsapp`, `fechar`, `lancar`.
+Níveis: NEGADO (-1) < NENHUM (0) < LEITURA (1) < PROPRIO (2) < EQUIPE (3) < FULL (4). SOCIO tem bypass total. NEGADO bloqueia explicitamente e sobrepõe qualquer nível positivo (deny-wins).
+ControleAcesso UI mostra colunas: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. Demais ações existem no DB mas não aparecem na UI atual.
+ControleAcesso UI suporta nível NEGADO como 3º estado no PermCheck (ciclo NENHUM→EQUIPE→NEGADO→NENHUM, ícone X vermelho).
+Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os módulos com nível NENHUM por padrão.
 
 | Módulo | Submódulo | Slug | Ação | VET padrão | EST padrão |
 |---|---|---|---|---|---|
@@ -246,10 +286,19 @@ Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass to
 | cadastro | proprietario | `cadastro.proprietario.criar` | criar | PROPRIO | NENHUM |
 | cadastro | proprietario | `cadastro.proprietario.editar` | alterar | PROPRIO | NENHUM |
 | cadastro | proprietario | `cadastro.proprietario.deletar` | excluir | NENHUM | NENHUM |
+| cadastro | proprietario | `cadastro.proprietario.ativar` | ativar/inativar | PROPRIO | NENHUM |
 | cadastro | tratador | `cadastro.tratador.ler` | ver | EQUIPE | EQUIPE |
 | cadastro | tratador | `cadastro.tratador.criar` | criar | PROPRIO | NENHUM |
 | cadastro | tratador | `cadastro.tratador.editar` | alterar | PROPRIO | NENHUM |
 | cadastro | tratador | `cadastro.tratador.deletar` | excluir | PROPRIO | NENHUM |
+| cadastro | tratador | `cadastro.tratador.ativar` | ativar/inativar | PROPRIO | NENHUM |
+| cadastro | fornecedor | `cadastro.fornecedor.ler` | ver | EQUIPE | EQUIPE |
+| cadastro | fornecedor | `cadastro.fornecedor.criar` | criar | PROPRIO | NENHUM |
+| cadastro | fornecedor | `cadastro.fornecedor.editar` | alterar | PROPRIO | NENHUM |
+| cadastro | fornecedor | `cadastro.fornecedor.deletar` | excluir | NENHUM | NENHUM |
+| cadastro | fornecedor | `cadastro.fornecedor.ativar` | ativar/inativar | PROPRIO | NENHUM |
+| cadastro | localizacao | `cadastro.localizacao.ler` | ver | LEITURA | LEITURA |
+| cadastro | localizacao | `cadastro.localizacao.criar` | criar | LEITURA (como CLIENTE) | NENHUM |
 | dashboard | geral | `dashboard.geral.ler` | ver | EQUIPE | LEITURA |
 | dashboard | geral | `dashboard.geral.imprimir` | imprimir | EQUIPE | NENHUM |
 | animais | animais | `animais.ler` | ver | EQUIPE | EQUIPE |
@@ -257,32 +306,65 @@ Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass to
 | animais | animais | `animais.editar` | alterar | EQUIPE | NENHUM |
 | animais | animais | `animais.deletar` | excluir | PROPRIO | NENHUM |
 | animais | animais | `animais.imprimir` | imprimir | EQUIPE | NENHUM |
+| animais | animais | `animais.desvincular` | desvincular vet | PROPRIO | NENHUM |
 | atendimento | evolucoes | `atendimento.evolucoes.ler` | ver | EQUIPE | EQUIPE |
 | atendimento | evolucoes | `atendimento.evolucoes.criar` | criar | PROPRIO | NENHUM |
 | atendimento | evolucoes | `atendimento.evolucoes.editar` | alterar | PROPRIO | NENHUM |
 | atendimento | evolucoes | `atendimento.evolucoes.deletar` | excluir | PROPRIO | NENHUM |
 | atendimento | evolucoes | `atendimento.evolucoes.imprimir` | imprimir | EQUIPE | NENHUM |
+| atendimento | evolucoes | `atendimento.evolucoes.finalizar` | finalizar | PROPRIO | NENHUM |
 | atendimento | prescricoes | `atendimento.prescricoes.ler` | ver | EQUIPE | EQUIPE |
 | atendimento | prescricoes | `atendimento.prescricoes.criar` | criar | PROPRIO | NENHUM |
 | atendimento | prescricoes | `atendimento.prescricoes.editar` | alterar | PROPRIO | NENHUM |
 | atendimento | prescricoes | `atendimento.prescricoes.deletar` | excluir | PROPRIO | NENHUM |
 | atendimento | prescricoes | `atendimento.prescricoes.imprimir` | imprimir | PROPRIO | NENHUM |
+| atendimento | prescricoes | `atendimento.prescricoes.finalizar` | finalizar | PROPRIO | NENHUM |
+| atendimento | vacinas | `atendimento.vacinas.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | vacinas | `atendimento.vacinas.criar` | criar | PROPRIO | NENHUM |
+| atendimento | vacinas | `atendimento.vacinas.editar` | alterar | PROPRIO | NENHUM |
+| atendimento | vacinas | `atendimento.vacinas.deletar` | excluir | PROPRIO | NENHUM |
+| atendimento | vacinas | `atendimento.vacinas.imprimir` | imprimir | EQUIPE | NENHUM |
+| atendimento | vacinas | `atendimento.vacinas.finalizar` | finalizar | PROPRIO | NENHUM |
+| atendimento | encaminhamentos | `atendimento.encaminhamentos.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | encaminhamentos | `atendimento.encaminhamentos.criar` | criar | PROPRIO | NENHUM |
+| atendimento | encaminhamentos | `atendimento.encaminhamentos.editar` | alterar | PROPRIO | NENHUM |
+| atendimento | encaminhamentos | `atendimento.encaminhamentos.deletar` | excluir | PROPRIO | NENHUM |
+| atendimento | encaminhamentos | `atendimento.encaminhamentos.imprimir` | imprimir | EQUIPE | NENHUM |
 | atendimento | exames | `atendimento.exames.ler` | ver | EQUIPE | EQUIPE |
 | atendimento | exames | `atendimento.exames.criar` | criar | PROPRIO | NENHUM |
 | atendimento | exames | `atendimento.exames.editar` | alterar | PROPRIO | NENHUM |
 | atendimento | exames | `atendimento.exames.deletar` | excluir | PROPRIO | NENHUM |
 | atendimento | exames | `atendimento.exames.imprimir` | imprimir | EQUIPE | NENHUM |
+| enfermagem | prescricao | `enfermagem.prescricao.ler` | ver | EQUIPE | EQUIPE |
+| enfermagem | prescricao | `enfermagem.prescricao.executar` | executar | PROPRIO | EQUIPE |
+| enfermagem | prescricao | `enfermagem.prescricao.imprimir` | imprimir | EQUIPE | EQUIPE |
+| exames | laboratorial | `exames.laboratorial.ler` | ver | EQUIPE | EQUIPE |
+| exames | laboratorial | `exames.laboratorial.criar` | criar | PROPRIO | NENHUM |
+| exames | laboratorial | `exames.laboratorial.editar` | alterar | PROPRIO | NENHUM |
+| exames | laboratorial | `exames.laboratorial.deletar` | excluir | PROPRIO | NENHUM |
+| exames | imagem | `exames.imagem.ler` | ver | EQUIPE | EQUIPE |
+| exames | imagem | `exames.imagem.criar` | criar | PROPRIO | NENHUM |
+| exames | imagem | `exames.imagem.editar` | alterar | PROPRIO | NENHUM |
+| exames | imagem | `exames.imagem.deletar` | excluir | PROPRIO | NENHUM |
 | nutricao | dietas | `nutricao.dietas.ler` | ver | EQUIPE | EQUIPE |
 | nutricao | dietas | `nutricao.dietas.criar` | criar | PROPRIO | NENHUM |
 | nutricao | dietas | `nutricao.dietas.editar` | alterar | PROPRIO | NENHUM |
 | nutricao | dietas | `nutricao.dietas.imprimir` | imprimir | EQUIPE | NENHUM |
+| nutricao | dietas | `nutricao.dietas.compartilhar` | compartilhar | PROPRIO | NENHUM |
+| nutricao | dietas | `nutricao.dietas.exportar` | exportar | PROPRIO | NENHUM |
+| nutricao | dietas | `nutricao.dietas.ativar` | ativar/inativar | PROPRIO | NENHUM |
 | nutricao | relatorios | `nutricao.relatorios.ler` | ver | EQUIPE | EQUIPE |
 | nutricao | relatorios | `nutricao.relatorios.criar` | criar | PROPRIO | NENHUM |
 | nutricao | relatorios | `nutricao.relatorios.imprimir` | imprimir | EQUIPE | NENHUM |
+| nutricao | relatorios | `nutricao.relatorios.exportar` | exportar | PROPRIO | NENHUM |
 | financeiro | faturas | `financeiro.faturas.ler` | ver | PROPRIO | NENHUM |
 | financeiro | faturas | `financeiro.faturas.criar` | criar | PROPRIO | NENHUM |
 | financeiro | faturas | `financeiro.faturas.editar` | alterar | PROPRIO | NENHUM |
 | financeiro | faturas | `financeiro.faturas.imprimir` | imprimir | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.whatsapp` | WhatsApp | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.exportar` | exportar | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.fechar` | fechar fatura | PROPRIO | NENHUM |
+| financeiro | faturas | `financeiro.faturas.lancar` | lançar cobrança | PROPRIO | NENHUM |
 | equipe | membros | `equipe.membros.ler` | ver | LEITURA | LEITURA |
 | equipe | membros | `equipe.membros.editar` | alterar | NENHUM | NENHUM |
 | farmacia | estoque | `farmacia.estoque.ler` | ver | EQUIPE | EQUIPE |
@@ -293,16 +375,16 @@ Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass to
 | farmacia | movimentacoes | `farmacia.movimentacoes.ler` | ver | EQUIPE | EQUIPE |
 | farmacia | movimentacoes | `farmacia.movimentacoes.criar` | criar | PROPRIO | NENHUM |
 | farmacia | movimentacoes | `farmacia.movimentacoes.imprimir` | imprimir | EQUIPE | NENHUM |
-| medicamentos | catalogo | `medicamentos.catalogo.ler` | ver | EQUIPE | EQUIPE |
+| medicamentos | catalogo | `medicamentos.catalogo.ler` | ver | NENHUM | NENHUM |
 | medicamentos | catalogo | `medicamentos.catalogo.criar` | criar | NENHUM | NENHUM |
 | medicamentos | catalogo | `medicamentos.catalogo.editar` | alterar | NENHUM | NENHUM |
 | medicamentos | catalogo | `medicamentos.catalogo.deletar` | excluir | NENHUM | NENHUM |
-| medicamentos | catalogo | `medicamentos.catalogo.imprimir` | imprimir | EQUIPE | NENHUM |
-| procedimentos | catalogo | `procedimentos.catalogo.ler` | ver | EQUIPE | EQUIPE |
+| medicamentos | catalogo | `medicamentos.catalogo.imprimir` | imprimir | NENHUM | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.ler` | ver | NENHUM | NENHUM |
 | procedimentos | catalogo | `procedimentos.catalogo.criar` | criar | NENHUM | NENHUM |
 | procedimentos | catalogo | `procedimentos.catalogo.editar` | alterar | NENHUM | NENHUM |
 | procedimentos | catalogo | `procedimentos.catalogo.deletar` | excluir | NENHUM | NENHUM |
-| procedimentos | catalogo | `procedimentos.catalogo.imprimir` | imprimir | EQUIPE | NENHUM |
+| procedimentos | catalogo | `procedimentos.catalogo.imprimir` | imprimir | NENHUM | NENHUM |
 
 **Notas:**
 - `dietas` não tem `deletar` — soft delete via `ativo` já protegido na camada de service
@@ -310,9 +392,12 @@ Níveis padrão: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL. SOCIO tem bypass to
 - `equipe.membros` não tem `criar`/`deletar`/`imprimir` — gerenciado pelo fluxo de convites
 - `farmacia.movimentacoes` não tem `editar`/`deletar` — movimentos são imutáveis por auditoria
 - `medicamentos` e `procedimentos`: criar/editar/excluir reservados para ADMIN (catálogo global)
+- `enfermagem.prescricao.executar`: estagiários têm EQUIPE por padrão (técnicos executam prescrições)
+- ControleAcesso.tsx ACAO_COLS: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. Ações extras (executar, ativar, exportar, compartilhar, whatsapp, fechar, lancar, desvincular) existem no DB mas não aparecem como colunas na UI — pendente implementação de colunas dinâmicas por módulo
 - Sidebar: Alimentos, Nutrientes e Composição Alimentar ficam no accordion **Nutricional** (apenas ADMIN)
 - Sidebar: Cadastro Pessoal, Pacientes/Animais, Proprietários e Tratadores ficam no sub-accordion **Cadastro** dentro de **Geral**
 - Para re-sincronizar módulos no banco após alterações no seed: `node backend/seed.js`
+- ControleAcesso: botão **Incluir Membro** (profissionais) e **Incluir Cliente** (cargo PROPRIETARIO) para convites
 
 ### Regras de modelagem
 - `@@schema("schs2vet")` em todos os modelos
@@ -373,6 +458,58 @@ index.html: height: 100% em html, body, #root
 App.tsx: shell h-full overflow-hidden
 <main>: overflow-y-auto pt-16 md:pt-0
 Páginas públicas: podem rolar livremente (sem overflow: hidden no body)
+```
+
+#### Padrão de controle de acesso por página
+```tsx
+// OBRIGATÓRIO em páginas que têm controle granular de permissão:
+const { podeExecutar, loading: loadingPerms } = usePermissoes();
+const podeCriar   = podeExecutar('modulo.submodulo.criar');
+const podeEditar  = podeExecutar('modulo.submodulo.editar');
+const podeImprimir = podeExecutar('modulo.submodulo.imprimir');
+
+// Helper de feedback ao usuário:
+const semPermissao = (acao: string) =>
+  toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+
+// 1. Guard de acesso à página (antes de qualquer render):
+if (!loadingPerms && !podeExecutar('modulo.submodulo.ler')) {
+  return (
+    <PageContainer>
+      <div className="text-center py-16">
+        <h2>Acesso não autorizado</h2>
+        <p>Você não tem permissão para visualizar esta página.</p>
+      </div>
+    </PageContainer>
+  );
+}
+
+// 2. Gating de useEffects — CRÍTICO: evita chamadas prematuras ao backend antes
+//    de carregar permissões (resultaria em 403s desnecessários):
+useEffect(() => {
+  if (loadingPerms) return;  // ← nunca omitir
+  carregarDados();
+}, [dependencias, loadingPerms]);
+
+// 3. Guards em handlers de escrita (checa ANTES de chamar a API):
+const handleSalvar = async () => {
+  if (!podeCriar) { semPermissao('criar X'); return; }
+  // ... chamada API
+};
+
+// 4. UI condicional — ocultar botões sem permissão:
+{podeCriar && <button>Novo</button>}
+```
+
+#### Comportamento do interceptor Axios para 403
+```typescript
+// api.ts (services/api.ts) — interceptor de resposta:
+// GET 403  → Promise.resolve({ data: null, status: 403, ... })
+//            componente deve checar: if (!res.data) return;
+//            NÃO usar res.data.dados diretamente — usar res.data?.dados
+// POST/PUT/DELETE/PATCH 403 → Promise.reject(permErr) com { isPermissionError: true, status: 403 }
+//            handler deve checar permissão ANTES da chamada (evita gerar o 403)
+//            catch silencioso: catch { /* silencioso */ } — não logar permErrs no console
 ```
 
 #### i18n — OBRIGATÓRIO
@@ -656,6 +793,22 @@ New-Item -ItemType Junction `
 - [x] CadastroTratador.tsx — CRUD simples (nome, telefone, local de trabalho), mobile-first
 - [x] Sidebar: sub-accordion **Cadastro** dentro de GERAL — Cadastro Pessoal + Pacientes + Proprietários + Tratadores
 - [x] Migrations `20260601000001` e `20260601000002` corrigidas com DO $$ IF EXISTS para shadow DB (proprietarioId e animalId adicionados fora de migration)
+- [x] Módulo Localização de Animal — `LocalizacaoAnimal` (tabela global `tb_localizacoes_animal`), `LocalizacaoAnimalController.js`, rota `/api/cadastro/localizacoes`, `CadastroLocalizacao.tsx`. ADMIN cria SYSTEM (imutável), outros criam CLIENTE. Mapeamento `TIPO_ESPECIES` estático. Migration `20260609120000`.
+- [x] Animal.tsx — campo `local` (free text) substituído por combobox pesquisável de `LocalizacaoAnimal`. Filtra por espécie. "Criar [nome]" abre mini-modal inline (nome + tipo). Salva `localizacaoId` + `local` (nome para compat). Migration `20260609130000`. ANIMAL_INCLUDE inclui relação `localizacao`.
+- [x] RBAC enforcement real para PROPRIETARIO — `getNivelPermissaoProprietario()` em `permissao.middleware.js` (era bypass total — bug crítico corrigido)
+- [x] Nível NEGADO (ordinal -1, deny-wins) adicionado a MatrizPerfil, PermissaoMembro, frontend `usePermissoes`, ControleAcesso UI
+- [x] Cargo PRESTADOR (userType FORNECEDOR) adicionado ao sistema — PerfilEquipe, MatrizPerfil, seed 002, ControleAcesso UI, `convidarParaEquipe`
+- [x] `getFornecedoresPorEquipe` — endpoint GET `/api/equipes/:equipeId/fornecedores` (busca fornecedores da empresa, exclui já-membros)
+- [x] ControleAcesso.tsx refatorado com 5 abas para SÓCIO: Matriz de Perfis, Equipe, Proprietários, Convites, Logs de Auditoria. TabEquipe com modal 2 passos (tipo → busca/formulário). TabProprietarios lista read-only. TabConvites com cancel.
+- [x] `checkPermission` isolamento por empresa — `listarMembrosPorEquipe` verifica que a equipe pertence à empresa do sócio requisitante
+- [x] `getPermissoesProprietarios` corrigido — filtro por `empresaId` da equipe (era global — vazamento de dados entre empresas)
+- [x] `minhasPermissoes` para PROPRIETARIO — deny-wins explícito: NEGADO de qualquer equipe bloqueia módulo, sem override por nível positivo de outra equipe
+- [x] Permission enforcement em `Dieta.tsx` — guard de página, gating de useEffects em `loadingPerms`, guards em 6 handlers de escrita, UI condicional por `podeCriar`/`podeEditar`/`podeImprimir`
+- [x] `DietaAcoesBar.tsx` — props `podeImprimir`, `podeCompartilhar`, `podeExportar`; botões ocultam/bloqueiam com toast quando sem permissão
+- [x] Axios interceptor 403 — GET resolve com `{ data: null }` silencioso; mutations rejeitam com `isPermissionError: true` (sem log)
+- [x] Console suppression em produção — `main.tsx` sobrescreve `console.*` com noop quando `!import.meta.env.DEV` (escape hatch: `VITE_SUPPRESS_CONSOLE=true` em dev)
+- [x] `UsuarioFormModal.tsx` — formulário compartilhado de criação/edição de usuário (abas Dados/Endereço, busca CEP). Usado em `Usuarios.tsx` (Novo/Editar) e `Equipe.tsx` (Incluir/Editar Membro). Perfil de acesso: VETERINARIO/ESTAGIARIO/PRESTADOR(label Fornecedor)/SOCIO — sem "tipo de usuário" e sem campo senha na criação (padrão `Inicial_001` + `mustChangePassword`); telefone obrigatório. Edição: prop `permitirSenha` exibe "Nova senha" (ADMIN: todos via PUT /users/:id; SÓCIO: membros da equipe via PUT /equipes/membros/:id) com regras de senha do sistema; prop `emailBloqueado` desabilita e-mail (usado na edição de membro). Backend: `POST /users` cria sem senha (default Inicial_001, `mustChangePassword: !senha`, phone obrigatório); `POST /equipes/incluir-membro` aceita fullName/phone/endereço (obrigatórios: nome e telefone) e `cargoToUserType` ganhou `SOCIO→VETERINARIO` (antes caía em ESTAGIARIO); `atualizarMembro` (PUT /equipes/membros/:id) ganhou autorização (ADMIN ou sócio da empresa da equipe; sócio não edita sócio — antes QUALQUER autenticado podia editar/trocar senha — bug crítico) + campos endereço/ativo + validação de senha. `listarMembros` retorna phone/endereço. Usuarios.tsx: tabela com `overflow-x-auto` (estourava à direita). Equipe.tsx: edição antiga chamava PATCH inexistente (404) — corrigido para PUT
+- [x] CadastroProprietario.tsx sem campo senha — criação usa padrão `Inicial_001` (`ProprietarioController.criar`: senha opcional, telefone obrigatório no backend); e-mail `enviarBoasVindasProprietario` segue com a senha efetiva; botão "Novo Proprietário" do empty state removido (só header). `POST /users` também envia `enviarBoasVindasProprietario` quando criado sem senha (lógica de e-mail unificada entre Usuários e Proprietários)
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -684,9 +837,11 @@ New-Item -ItemType Junction `
 | `EvolucaoController.js` | Prontuário clínico — INCLUDE_PADRAO (veterinario, modificadoPor, midias), `listarPorAnimal`, `obterPorId`, `criar`, `atualizar`, `excluir`, `aprovar`, `salvarTitulo`, `transcrever` (Whisper), `adicionarMidia`, `removerMidia`, `listarResponsaveis` |
 | `PrescricaoController.js` | Prescrições médicas — `listarPorAnimal` (page/limit/tipo/status/busca), `criar` (gera `horariosGerados` via `gerarHorarios()`), `atualizar`, `excluir` (soft), `finalizarTodas` (RASCUNHO→ATIVA + cria FaturaItems em fatura ABERTA) |
 | `PermissaoController.js` | CRUD de permissões por membro/módulo e por proprietário dentro de uma equipe |
+| `PermissaoService.js` | `PERFIS_PADRAO` inclui PRESTADOR. `getPermissoesProprietarios` filtrado por `empresaId` da equipe (não global). |
 | `ProprietarioController.js` | CRUD de proprietários (userType=PROPRIETARIO) com campos extras: cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas |
 | `TratadorController.js` | CRUD de tratadores (model Tratador) — nome, telefone, localTrabalho |
-| `EquipeController.js` | Equipes, membros, convites |
+| `LocalizacaoAnimalController.js` | CRUD global de localizações — `listar` (filtro por busca/ativo/especie), `listarTipos`, `criar` (ADMIN→SYSTEM, outros→CLIENTE), `atualizar` (ADMIN only), `toggleAtivo` (ADMIN only). Exporta `TIPO_ESPECIES` e `TIPOS_VALIDOS`. |
+| `EquipeController.js` | Equipes, membros, convites. `getFornecedoresPorEquipe` — busca fornecedores da empresa da equipe (exclui já-membros). `listarMembrosPorEquipe` — valida isolamento por empresa. `convidarParaEquipe` — suporta cargo PRESTADOR (userType FORNECEDOR). `minhasPermissoes` PROPRIETARIO usa deny-wins para NEGADO. |
 | `AlimentoController.js` | Banco de alimentos |
 | `ComposicaoAlimentarController.js` | Composição nutricional por alimento/espécie |
 | `NutrientesController.js` | Banco de nutrientes |
@@ -696,6 +851,22 @@ New-Item -ItemType Junction `
 ### Backend — Funções e Constantes Críticas
 
 ```javascript
+// permissao.middleware.js
+getNivelPermissaoProprietario(userId, moduloSlug)
+// Resolve o nível efetivo de um PROPRIETARIO para um módulo:
+// 1. Busca animais do proprietário com empresaId não-nulo
+// 2. Encontra equipes dessas empresas
+// 3. Lê MatrizPerfil[perfilSlug='PROPRIETARIO', moduloSlug] de cada equipe
+// 4. Se qualquer equipe tem NEGADO → retorna 'NEGADO' (deny-wins)
+// 5. Caso contrário → retorna o nível máximo positivo entre as equipes
+// 6. Se sem animais ou sem equipes → retorna 'NENHUM'
+
+// EquipeController.js
+getFornecedoresPorEquipe(req, res)
+// GET /equipes/:equipeId/fornecedores
+// Requer: equipe pertence à empresa do sócio requisitante
+// Retorna: usuários com userType='FORNECEDOR' da empresa, excluindo já-membros da equipe
+
 // AnimalController.js
 ANIMAL_INCLUDE          // Include Prisma padrão para todas as queries de animal
                         // inclui: especie, raca, user, solicitacoes(PENDENTE + VINCULO ACEITO)
@@ -788,6 +959,11 @@ GET/PUT     /api/cadastro/tratadores/:id
 PATCH       /api/cadastro/tratadores/:id/toggle
 DELETE      /api/cadastro/tratadores/:id
 
+GET         /api/cadastro/localizacoes/tipos → LocalizacaoAnimalController.listarTipos (tipos + espécies mapeadas)
+GET/POST    /api/cadastro/localizacoes        → LocalizacaoAnimalController (tabela global tb_localizacoes_animal)
+GET/PUT     /api/cadastro/localizacoes/:id    → obterPorId / atualizar (ADMIN only)
+PATCH       /api/cadastro/localizacoes/:id/toggle → toggleAtivo (ADMIN only, somente inativar)
+
 # Outros prefixos relevantes
 /api/auth          → AuthController (login, refresh, logout)
 /api/users         → UserController (/me, CRUD)
@@ -799,6 +975,7 @@ DELETE      /api/cadastro/tratadores/:id
 /api/nutrientes    → NutrientesController
 /api/composicoes-alimentares → ComposicaoAlimentarController
 /api/clinica/faturas → FaturaController
+GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPorEquipe (busca FORNECEDOR da empresa, exclui já-membros)
 ```
 
 ### Backend — Middlewares
@@ -808,7 +985,7 @@ DELETE      /api/cadastro/tratadores/:id
 | `auth.js` | `authenticate` — valida JWT, injeta `req.user` |
 | `tenant.js` | `injectTenant` — injeta `empresaId` no contexto (usado em animais e evolução) |
 | `validate.js` | Roda express-validator, retorna 422 em erros |
-| `permissao.middleware.js` | RBAC por userType |
+| `permissao.middleware.js` | RBAC por userType. `checkPermission(moduloSlug, nivelMinimo)` — verifica permissão real para todos os roles. ADMIN: bypass. SOCIO: bypass. PROPRIETARIO: chama `getNivelPermissaoProprietario()` — lê MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes vinculadas via Animal.empresaId; aplica deny-wins se NEGADO. `NIVEL_ORDINAL` inclui `NEGADO: -1`. |
 | `requestId.js` | Injeta `x-request-id` em toda requisição |
 
 ### Frontend — Páginas
@@ -827,7 +1004,7 @@ DELETE      /api/cadastro/tratadores/:id
 | `Animal.tsx` | `/animais` — formulário criar/editar animal |
 | `AnimalDetail.tsx` | `/animal/:id` — dashboard do animal (aba única) |
 | `AnimalView.tsx` | visualização detalhada do animal |
-| `Dieta.tsx` | `/dieta` — visualização da dieta do animal selecionado |
+| `Dieta.tsx` | `/dieta` — visualização da dieta do animal selecionado. Controle de acesso completo: guard de página (`nutricao.dietas.ler`), gating de useEffects em `loadingPerms`, guards nos 6 handlers de escrita, UI condicional por `podeCriar`/`podeEditar`. Loaders verificam `if (!res.data) return` (GET 403 → null). |
 | `CriaDieta.tsx` | `/cria-dieta` — formulário de criação/edição de dieta |
 | `RelatorioNutricional.tsx` | `/relatorio` — relatório nutricional do animal selecionado |
 | `Exames.tsx` | `/exames` — exames do animal selecionado |
@@ -841,6 +1018,8 @@ DELETE      /api/cadastro/tratadores/:id
 | `AprovarVinculoProprietario.tsx` | `/proprietario/aprovar-vinculo` — proprietário aprova via email (público) |
 | `CadastroProprietario.tsx` | `/cadastro/proprietarios` — CRUD de proprietários com CPF/CNPJ, mensalista, frequência de visitas |
 | `CadastroTratador.tsx` | `/cadastro/tratadores` — CRUD de tratadores (nome, telefone, local de trabalho) |
+| `CadastroLocalizacao.tsx` | `/cadastro/localizacoes` — CRUD global de localizações. ADMIN: cria SYSTEM, edita e inativa tudo. Não-ADMIN: cria CLIENTE (read-only após). Badge SYSTEM/CLIENTE. Filtro por espécie via `TIPO_ESPECIES`. Busca CEP via ViaCEP. |
+| `ControleAcesso.tsx` | `/controle-acesso` — gerenciamento de permissões. Abas para ADMIN: TabPermissoesGlobais (UserTypes VET/EST/PROP). Abas para SÓCIO (5): Matriz de Perfis (TabMatriz, locked items imutáveis), Equipe (TabEquipe, modal 2 passos), Proprietários (TabProprietarios), Convites (TabConvites), Logs de Auditoria. Nível NEGADO como 3º estado no PermCheck (ciclo: NENHUM→EQUIPE→NEGADO→NENHUM). |
 | `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
 | `EquipeManager.tsx` | `/equipe-manager` — admin de equipes |
 | `Alimentos.tsx` | `/alimentos` — banco de alimentos |
@@ -862,6 +1041,7 @@ DELETE      /api/cadastro/tratadores/:id
 | `ProtectedRoute.tsx` | Guarda de rota por `userType` |
 | `SeletorAnimal.tsx` | Dropdown de seleção de animal (alimenta SelectedAnimalContext) |
 | `PageContainer.tsx` | Wrapper com padding e maxWidth padronizados |
+| `DietaAcoesBar.tsx` | Barra de ações da dieta. Props: `podeImprimir?`, `podeCompartilhar?`, `podeExportar?` (default true). Botões ocultam em modo compacto ou exibem toast quando sem permissão. |
 
 ### Frontend — Hooks e Contextos
 
@@ -872,7 +1052,8 @@ DELETE      /api/cadastro/tratadores/:id
 | `useProprietarioNotificacoes.ts` | Polling 15s em `/animais/minhas-solicitacoes`. Inicializa mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos para detecção retroativa via updatedAt <10min. Só para PROPRIETARIO |
 | `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE e mudanças CANCELADO. Só para VETERINARIO |
 | `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
-| `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Base URL: `/api` |
+| `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Interceptor 403 → GET resolve `{ data: null }` (silencioso); mutations rejeitam com `{ isPermissionError: true }` (sem log). Base URL: `/api` |
+| `hooks/usePermissoes.ts` | `Nivel` inclui `'NEGADO'`. `NIVEL_ORDINAL` inclui `NEGADO: -1`. `podeExecutar` retorna false para NEGADO (ordinal -1 < qualquer mínimo). `loading` deve ser usado para gating de useEffects. |
 | `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
 | `utils/EvolucaoPrint.ts` | `imprimirEvolucao(evolucao)` — abre janela de impressão formatada para evolução clínica |
 
@@ -979,6 +1160,35 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 19. CadastroProprietario.tsx usa BrasilAPI pública (brasilapi.com.br/api/cnpj/v1/{cnpj}) para auto-fill
     de CNPJ — chamada feita direto do frontend (CORS liberado pela API). Nenhum proxy no backend.
     Falha silenciosa: se a API estiver indisponível, exibe toast informativo e mantém campos editáveis.
+
+20. PROPRIETARIO era bypass total em checkPermission (BUG CRÍTICO corrigido).
+    O bloco antigo: `if (req.user.userType === 'PROPRIETARIO') return next();`
+    permitia que PROPRIETARIO acessasse qualquer rota protegida com `checkPermission`, mesmo com NEGADO
+    na MatrizPerfil. Corrigido: `getNivelPermissaoProprietario()` realiza lookup real em MatrizPerfil.
+    Entrada direta por URL (`/#/dieta/4`) NÃO bypassava o frontend (React router ainda carregava), mas
+    bypassava o backend completamente. A correção é no middleware, não no frontend.
+
+21. NEGADO deny-wins — ao agregar permissões de múltiplas equipes para PROPRIETARIO:
+    - Se qualquer equipe tem NEGADO para aquele módulo, o resultado final é NEGADO (bloqueia).
+    - Não é "máximo entre equipes" — NEGADO tem ordinal -1 mas ganha sobre qualquer positivo.
+    - Implementado com Set de negados no `minhasPermissoes` e com verificação prévia em
+      `getNivelPermissaoProprietario()`.
+
+22. loadingPerms deve gating useEffects — se `usePermissoes` ainda carrega (`loading: true`),
+    `podeExecutar()` retorna false para tudo (permissoes é {}). Chamar APIs neste estado gera
+    403s desnecessários que poluem logs e ativam o interceptor. Sempre verificar:
+    `useEffect(() => { if (loadingPerms) return; carregarDados(); }, [deps, loadingPerms]);`
+
+23. GET 403 retorna `{ data: null }` — o interceptor em api.ts resolve (não rejeita) GETs com 403.
+    Portanto, `res.data` pode ser null. NUNCA fazer `res.data.dados` — usar `res.data?.dados`.
+    Também adicionar guard: `if (!res.data) return;` imediatamente após await da chamada GET.
+    Sem o guard: `TypeError: Cannot read properties of null (reading 'dados')`.
+
+24. Console suppression em produção — main.tsx sobrescreve console.* com noop quando !DEV.
+    Erros de rede (403, 404, etc.) ainda aparecem na aba Network do DevTools mas NÃO no console.
+    Erros JavaScript (TypeError, etc.) também são suprimidos no console em produção.
+    Para reativar em desenvolvimento: setar VITE_SUPPRESS_CONSOLE=true no .env NÃO é o caminho;
+    o noop só é ativado quando !DEV OU VITE_SUPPRESS_CONSOLE=true. Em DEV normal, console funciona.
 ```
 
 ---
@@ -1000,6 +1210,8 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 | Rate limiting | 200 req/min geral · 20 req/15min em /auth | Defesa contra brute force e scraping |
 | API keys | Groq e Gemini apenas no backend `.env` | Nunca expor no bundle JS do frontend |
 | Google Client ID | `VITE_GOOGLE_CLIENT_ID` no frontend — intencional | Client ID é público por design do OAuth |
+| Console output | Suprimido em produção via main.tsx (`console.*` → noop quando `!import.meta.env.DEV`) | Não expor stack traces e erros internos ao usuário final |
+| 403 silenciosos | GET 403 resolve como `{ data: null }` (não rejeita, não loga) | Evitar ruído de erro para operações bloqueadas por permissão normal |
 
 ### CORS — configuração correta
 ```

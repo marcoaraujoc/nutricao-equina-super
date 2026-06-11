@@ -108,7 +108,7 @@ const MeusAnimais = () => {
   const { user }                                     = useAuth();
   const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate                                     = useNavigate();
-  const { podeExecutar }                             = usePermissoes();
+  const { podeExecutar, loading: loadingPerms }      = usePermissoes();
   const podeCriarAnimal  = podeExecutar('animais.criar');
   const podeEditarAnimal = podeExecutar('animais.editar');
   const podeDeletarAnimal = podeExecutar('animais.deletar');
@@ -132,7 +132,7 @@ const MeusAnimais = () => {
     }
   };
 
-  useEffect(() => { if (user?.id) loadAnimais(); }, [user?.id]);
+  useEffect(() => { if (user?.id && !loadingPerms) loadAnimais(); }, [user?.id, loadingPerms]);
 
   const filteredAnimais = animais.filter(a =>
     a.nome.toLowerCase().includes(search.toLowerCase())

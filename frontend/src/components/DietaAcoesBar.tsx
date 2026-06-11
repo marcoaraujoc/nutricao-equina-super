@@ -25,12 +25,15 @@ export interface PlanoParaAcoes extends PrintPlan {
 }
 
 export interface DietaAcoesBarProps {
-  animal:    AnimalParaAcoes;
-  plano:     PlanoParaAcoes;
-  itens:     PrintItem[];
-  user:      PrintUser | null;
+  animal:            AnimalParaAcoes;
+  plano:             PlanoParaAcoes;
+  itens:             PrintItem[];
+  user:              PrintUser | null;
   /** Variante compacta (só ícones, sem labels) — para uso em cabeçalhos mobile */
-  compacto?: boolean;
+  compacto?:         boolean;
+  podeImprimir?:     boolean;
+  podeCompartilhar?: boolean;
+  podeExportar?:     boolean;
 }
 
 // ─── Helper: gerar PDF como Blob via iframe ───────────────────────────────────
@@ -243,7 +246,10 @@ function CompartilharModal({
 
 // ─── DietaAcoesBar ────────────────────────────────────────────────────────────
 
-export default function DietaAcoesBar({ animal, plano, itens, user, compacto = false }: DietaAcoesBarProps) {
+export default function DietaAcoesBar({
+  animal, plano, itens, user, compacto = false,
+  podeImprimir = true, podeCompartilhar = true, podeExportar = true,
+}: DietaAcoesBarProps) {
   const [exportandoPdf,        setExportandoPdf]        = useState(false);
   const [compartilhando,       setCompartilhando]       = useState(false);
   const [showCompartilhar,     setShowCompartilhar]     = useState(false);
@@ -321,23 +327,32 @@ export default function DietaAcoesBar({ animal, plano, itens, user, compacto = f
 
   // ── Render ───────────────────────────────────────────────────────────────
 
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+
   if (compacto) {
     return (
       <>
-        <button onClick={abrirCompartilhar} title="Compartilhar"
-          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
-          <Share2 size={15} />
-        </button>
-        <button onClick={imprimir} title="Imprimir"
-          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
-          <Printer size={15} />
-        </button>
-        <button onClick={exportarPdf} disabled={exportandoPdf} title="Exportar PDF"
-          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 disabled:opacity-50">
-          {exportandoPdf
-            ? <Loader2 size={15} className="animate-spin" />
-            : <Download size={15} />}
-        </button>
+        {podeCompartilhar && (
+          <button onClick={abrirCompartilhar} title="Compartilhar"
+            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
+            <Share2 size={15} />
+          </button>
+        )}
+        {podeImprimir && (
+          <button onClick={imprimir} title="Imprimir"
+            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
+            <Printer size={15} />
+          </button>
+        )}
+        {podeExportar && (
+          <button onClick={exportarPdf} disabled={exportandoPdf} title="Exportar PDF"
+            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 disabled:opacity-50">
+            {exportandoPdf
+              ? <Loader2 size={15} className="animate-spin" />
+              : <Download size={15} />}
+          </button>
+        )}
         {showCompartilhar && (
           <CompartilharModal animal={animal} plano={plano} itens={itens} user={user}
             onClose={() => setShowCompartilhar(false)} />
@@ -348,28 +363,44 @@ export default function DietaAcoesBar({ animal, plano, itens, user, compacto = f
 
   return (
     <>
-      <button onClick={abrirCompartilhar} disabled={compartilhando}
-        className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 disabled:opacity-60 rounded-lg text-xs text-gray-600 transition-colors">
+      <button
+        onClick={podeCompartilhar ? abrirCompartilhar : () => semPermissao('compartilhar dieta')}
+        disabled={compartilhando}
+        className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors disabled:opacity-60 ${
+          podeCompartilhar
+            ? 'border-gray-200 hover:bg-gray-50 text-gray-600'
+            : 'border-gray-100 text-gray-300 cursor-not-allowed'
+        }`}>
         {compartilhando
           ? <Loader2 size={13} className="animate-spin" />
           : <Share2 size={13} />}
         Compartilhar
       </button>
 
-      <button onClick={imprimir}
-        className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 rounded-lg text-xs text-gray-600 transition-colors">
+      <button
+        onClick={podeImprimir ? imprimir : () => semPermissao('imprimir dieta')}
+        className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors ${
+          podeImprimir
+            ? 'border-gray-200 hover:bg-gray-50 text-gray-600'
+            : 'border-gray-100 text-gray-300 cursor-not-allowed'
+        }`}>
         <Printer size={13} /> Imprimir
       </button>
 
       <div className="relative" ref={el => { exportMenuRef.current = el; }}>
-        <button onClick={() => setShowExportMenu(v => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 rounded-lg text-xs text-white font-semibold transition-colors">
+        <button
+          onClick={podeExportar ? () => setShowExportMenu(v => !v) : () => semPermissao('exportar dieta')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+            podeExportar
+              ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+              : 'bg-gray-100 text-gray-300 cursor-not-allowed'
+          }`}>
           {exportandoPdf
             ? <Loader2 size={13} className="animate-spin" />
             : <Download size={13} />}
           Exportar <ChevronDown size={11} />
         </button>
-        {showExportMenu && (
+        {showExportMenu && podeExportar && (
           <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
             <button onClick={exportarPdf}
               className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">

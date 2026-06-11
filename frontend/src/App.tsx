@@ -22,6 +22,7 @@ import ResetPassword        from './pages/ResetPassword';
 import CadastroProprietario from './pages/CadastroProprietario';
 import CadastroTratador     from './pages/CadastroTratador';
 import CadastroFornecedor   from './pages/CadastroFornecedor';
+import CadastroLocalizacao  from './pages/CadastroLocalizacao';
 
 // Pages — Animais
 import Animal      from './pages/Animal';
@@ -129,6 +130,7 @@ function App() {
                           <Route path="/cadastro/proprietarios" element={<CadastroProprietario />} />
                           <Route path="/cadastro/tratadores"    element={<CadastroTratador />} />
                           <Route path="/cadastro/fornecedores"  element={<CadastroFornecedor />} />
+                          <Route path="/cadastro/localizacoes"  element={<CadastroLocalizacao />} />
 
                           {/* Animais */}
                           <Route path="/meus-animais"  element={<MeusAnimais />} />

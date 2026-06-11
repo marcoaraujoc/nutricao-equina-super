@@ -769,7 +769,7 @@ interface Props {
 
 export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
-  const { podeExecutar, isSocio, permissoes } = usePermissoes();
+  const { podeExecutar, isSocio, permissoes, loading: loadingPerms } = usePermissoes();
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
@@ -822,13 +822,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     finally { setLoading(false); }
   }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, busca]);
 
-  useEffect(() => { carregarEvolucoes(); }, [carregarEvolucoes]);
+  useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
   useEffect(() => {
+    if (loadingPerms) return;
     api.get(`/clinica/evolucoes/responsaveis/${animalId}`)
       .then(res => setResponsaveis(res.data?.dados ?? []))
       .catch(() => {});
-  }, [animalId]);
+  }, [animalId, loadingPerms]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 

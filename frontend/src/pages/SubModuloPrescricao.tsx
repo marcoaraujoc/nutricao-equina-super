@@ -705,7 +705,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
               {isMed && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">DOSAGEM</label>
+                    <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
                     <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                       <input type="number" min="0" step="0.001" value={form.dosagem}
                         onChange={e => set('dosagem', e.target.value)}
@@ -752,7 +752,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                     className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS)</label>
+                  <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS) *</label>
                   <input type="number" min="1"
                     value={form.duracaoDias}
                     onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
@@ -864,7 +864,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
           <div className="flex items-center gap-2 ml-auto">
             {/* Imprimir — só FINALIZADO */}
-            {grupo?.status === 'FINALIZADO' && (
+            {grupo?.status === 'FINALIZADO' && podeImprimir && (
               <button onClick={() => imprimirPrescricao(grupo!, animal)}
                 className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm transition-colors">
                 <Printer size={14} /> Imprimir
@@ -1053,9 +1053,18 @@ function CancelarModal({
 
 export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
-  const { isSocio } = usePermissoes();
-  const canEdit = user?.userType !== 'ESTAGIARIO';
-  const canFinalizarCancelar = isSocio;
+  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+
+  const podeCriar    = isSocio || podeExecutar('atendimento.prescricoes.criar');
+  const podeEditar   = isSocio || podeExecutar('atendimento.prescricoes.editar');
+  const podeFinalizar = isSocio || podeExecutar('atendimento.prescricoes.finalizar');
+  const podeImprimir  = isSocio || podeExecutar('atendimento.prescricoes.imprimir');
+
+  const canEdit = podeCriar;
+  const canFinalizarCancelar = podeFinalizar;
+
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [grupos,           setGrupos]           = useState<PrescricaoGrupo[]>([]);
   const [loading,          setLoading]          = useState(false);
@@ -1082,12 +1091,13 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     finally { setLoading(false); }
   }, [animalId, page, limit]);
 
-  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
   const abrirNovo = () => { setEditingGrupo(null); setShowModal(true); };
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowModal(true); };
 
   const handleFinalizarDireto = async (grupoId: number) => {
+    if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
     try {
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`);
       toast.success('Prescrição finalizada');
@@ -1123,6 +1133,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const onSaved = () => { carregar(); onFaturaAtualizada(); };
 
   const handleExcluirCancelar = async (motivo: string) => {
+    if (!podeFinalizar) { semPermissao('cancelar prescrição'); return; }
     if (deletingId === null) return;
     try {
       await api.post(`/clinica/prescricoes/grupos/${deletingId}/cancelar`, { motivo });
@@ -1243,7 +1254,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                           <CheckCircle2 size={13} />
                         </button>
                       )}
-                      {g.status === 'FINALIZADO' && (
+                      {g.status === 'FINALIZADO' && podeImprimir && (
                         <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
                           className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
                           <Printer size={13} />
@@ -1284,7 +1295,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                 className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                 {g.status === 'SALVO' ? <><Pencil size={11} /> Editar</> : <><Eye size={11} /> Ver</>}
               </button>
-              {g.status === 'FINALIZADO' && (
+              {g.status === 'FINALIZADO' && podeImprimir && (
                 <button onClick={() => imprimirPrescricao(g, animal)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                   <Printer size={11} /> Imprimir

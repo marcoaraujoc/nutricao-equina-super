@@ -11,6 +11,13 @@ const authenticate = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, SECRET);
+
+    // Rejeita imediatamente se a conta foi desativada
+    const userCheck = await prisma.user.findUnique({ where: { id: decoded.id }, select: { ativo: true } });
+    if (!userCheck || userCheck.ativo === false) {
+      return res.status(401).json({ error: 'Conta desativada. Entre em contato com o administrador.' });
+    }
+
     req.user = decoded;
 
     // Injeta req.empresaId a partir da equipe ativa do usuário.

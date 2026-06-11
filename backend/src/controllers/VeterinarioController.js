@@ -307,7 +307,7 @@ const VeterinarioController = {
       }
 
       const pendentes = await prisma.vetAnimalSolicitacao.findMany({
-        where:   { vetUserId, status: 'PENDENTE' },
+        where:   { vetUserId, status: 'PENDENTE', NOT: { solicitanteId: vetUserId } },
         include: {
           animal: {
             select: {

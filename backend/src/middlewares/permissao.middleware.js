@@ -23,6 +23,7 @@ const NIVEL_ORDINAL = {
   PROPRIO: 2,
   EQUIPE:  3,
   FULL:    4,
+  NEGADO:  -1, // bloqueio explícito — sempre recusado independente do nível mínimo
 };
 
 /**
@@ -59,6 +60,43 @@ async function isSocio(userId, equipeId) {
 }
 
 /**
+ * Resolve o nível de permissão de um PROPRIETARIO para um módulo via MatrizPerfil.
+ * Política: NEGADO vence sobre qualquer nível positivo (deny-wins entre equipes).
+ * Retorna 'NENHUM' se o proprietário não tiver animais vinculados a nenhuma equipe.
+ */
+async function getNivelPermissaoProprietario(userId, moduloSlug) {
+  const animais = await prisma.animal.findMany({
+    where:    { userId, empresaId: { not: null } },
+    select:   { empresaId: true },
+    distinct: ['empresaId'],
+  });
+  const empresaIds = animais.map(a => a.empresaId).filter(Boolean);
+  if (empresaIds.length === 0) return 'NENHUM';
+
+  const equipes = await prisma.equipe.findMany({
+    where:  { empresaId: { in: empresaIds } },
+    select: { id: true },
+  });
+  const equipeIds = equipes.map(e => e.id);
+  if (equipeIds.length === 0) return 'NENHUM';
+
+  const matrizes = await prisma.matrizPerfil.findMany({
+    where:  { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO', moduloSlug },
+    select: { nivel: true },
+  });
+  if (matrizes.length === 0) return 'NENHUM';
+
+  // NEGADO em qualquer equipe bloqueia (deny-wins)
+  if (matrizes.some(m => m.nivel === 'NEGADO')) return 'NEGADO';
+
+  // Toma o nível máximo entre as equipes
+  const positivos = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+  return matrizes.reduce((max, m) => {
+    return (positivos[m.nivel] ?? 0) > (positivos[max] ?? 0) ? m.nivel : max;
+  }, 'NENHUM');
+}
+
+/**
  * Busca o nível de permissão de um usuário para um módulo específico.
  * Retorna 'NENHUM' como default seguro se não houver registro.
  */
@@ -86,8 +124,35 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return res.status(401).json({ error: 'Não autenticado.' });
       }
 
-      // ADMIN (role sistêmica) e PROPRIETARIO têm controle de acesso próprio — bypass aqui
-      if (req.user.role === 'ADMIN' || req.user.userType === 'PROPRIETARIO') {
+      // ADMIN (role sistêmica): bypass total
+      if (req.user.role === 'ADMIN') {
+        return next();
+      }
+
+      // PROPRIETARIO: verifica MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas
+      if (req.user.userType === 'PROPRIETARIO') {
+        const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+
+        if (nivelAtual === 'NEGADO') {
+          return res.status(403).json({
+            error:  'Acesso negado pelo administrador da equipe.',
+            modulo: moduloSlug,
+          });
+        }
+
+        const ordinalAtual  = NIVEL_ORDINAL[nivelAtual]  ?? 0;
+        const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
+
+        if (ordinalAtual < ordinalMinimo) {
+          return res.status(403).json({
+            error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
+            modulo: moduloSlug,
+          });
+        }
+
+        req.permissaoNivel = nivelAtual;
+        req.equipeId       = null;
+        req.membroCargo    = 'PROPRIETARIO';
         return next();
       }
 

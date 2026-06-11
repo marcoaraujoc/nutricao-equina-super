@@ -11,6 +11,6 @@ router.post  ('/',           authenticate, ProprietarioController.criar);
 router.get   ('/:id',        authenticate, ProprietarioController.obterPorId);
 router.put   ('/:id',        authenticate, ProprietarioController.atualizar);
 router.patch ('/:id/toggle', authenticate, ProprietarioController.toggleAtivo);
-router.delete('/:id',        authenticate, ProprietarioController.excluir);
+router.delete('/:id',        authenticate, ProprietarioController.removerDaEmpresa);
 
 module.exports = router;

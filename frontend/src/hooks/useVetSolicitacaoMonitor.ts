@@ -7,10 +7,12 @@ import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 interface SolicitacaoInfo {
-  id:       number;
-  status:   string;
-  mensagem: string | null;
-  animal:   { nome: string };
+  id:            number;
+  status:        string;
+  mensagem:      string | null;
+  vetUserId:     number | null;
+  solicitanteId: number | null;
+  animal:        { nome: string };
 }
 
 export function useVetSolicitacaoMonitor(): void {
@@ -42,8 +44,10 @@ export function useVetSolicitacaoMonitor(): void {
             ?? `Acesso ao animal ${s.animal.nome} foi alterado pelo proprietário`;
           toast(texto, { duration: 10000, icon: '⚠️' });
         }
-        // Nova solicitação chegou enquanto o hook já estava rodando
-        if (anterior === undefined && s.status === 'PENDENTE') {
+        // Nova solicitação recebida (não iniciada pelo próprio vet)
+        const vetIniciou = s.solicitanteId != null && s.vetUserId != null
+          && s.solicitanteId === s.vetUserId;
+        if (anterior === undefined && s.status === 'PENDENTE' && !vetIniciou) {
           toast(`Nova solicitação pendente para ${s.animal.nome}`, { duration: 8000, icon: '🔔' });
         }
         prevRef.current!.set(s.id, s.status);

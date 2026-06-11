@@ -1,11 +1,12 @@
 // src/pages/Animal.tsx
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
+import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 
@@ -36,8 +37,22 @@ interface FormData {
   categoriaAnimal:   string;
   tipoExercicio:     string;
   veterinarioUserId: number | null;
-  local:             string;
+  localizacaoId:     number | null;
+  tratadorId:        number | null;
   baia:              string;
+}
+
+interface Tratador {
+  id:       number;
+  nome:     string;
+  telefone: string | null;
+}
+
+interface Localizacao {
+  id:              number;
+  nome:            string;
+  tipoLocalizacao: string;
+  tipoEntrada:     string;
 }
 
 interface FormProprietario {
@@ -148,13 +163,39 @@ const getTiposDisponiveis = (cat: string, dn: string, ia: string) => {
   return ['24 Meses','24 Meses Exercício Leve','24 Meses Exercício Moderado','24 Meses Exercício Pesado','24 Meses Exercício Muito Pesado'];
 };
 
+// ─── Dados estáticos de localização ──────────────────────────────────────────
+const TIPO_ESPECIES_MAP: Record<string, string[] | null> = {
+  HARAS:              ['Equino'],
+  CANIL:              ['Canino'],
+  GATIL:              ['Felino'],
+  FAZENDA:            null,
+  CLINICA:            null,
+  HOSPITAL:           null,
+  CENTRO_REPRODUCAO:  ['Equino', 'Canino', 'Felino', 'Bovino'],
+  CENTRO_TREINAMENTO: ['Equino', 'Canino', 'Felino', 'Bovino'],
+  PETSHOP:            ['Canino', 'Felino', 'Réptil'],
+  HOTEL_ANIMAL:       ['Canino', 'Felino', 'Réptil'],
+  ONG:                null,
+  CRIADOR:            null,
+  PROPRIETARIO:       null,
+  OUTRO:              null,
+};
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 const Animal = () => {
   const { refreshSelectedAnimal } = useSelectedAnimal();
   const { user }                  = useAuth();
   const navigate                  = useNavigate();
+  const location                  = useLocation();
   const { id }                    = useParams<{ id: string }>();
   const isEditMode                = !!id;
+  const nomeFromState             = !id ? (location.state as { nome?: string } | null)?.nome ?? '' : '';
+
+  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const podeCriar  = isSocio || podeExecutar('animais.criar');
+  const podeEditar = isSocio || podeExecutar('animais.editar');
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const role          = (user?.role     ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
@@ -173,6 +214,21 @@ const Animal = () => {
   const [vetOriginalId,  setVetOriginalId]  = useState<number | null>(null);
   const [vetStatusAtual, setVetStatusAtual] = useState<string | null>(null);
 
+  // ── Localização do animal ──────────────────────────────────────────────────
+  const [localizacoes,   setLocalizacoes]   = useState<Localizacao[]>([]);
+  const [locBusca,       setLocBusca]       = useState('');
+  const [locDropdownOpen, setLocDropdownOpen] = useState(false);
+  const [criandoLocal,   setCriandoLocal]   = useState(false);
+  const [novoLocalNome,  setNovoLocalNome]  = useState('');
+  const [novoLocalTipo,  setNovoLocalTipo]  = useState('');
+  const [salvandoLocal,  setSalvandoLocal]  = useState(false);
+
+  // ── Tratador do animal ─────────────────────────────────────────────────────
+  const [tratadores,      setTratadores]      = useState<Tratador[]>([]);
+  const [tratBusca,       setTratBusca]       = useState('');
+  const [tratDropdownOpen, setTratDropdownOpen] = useState(false);
+  const [criandoTratador, setCriandoTratador] = useState(false);
+
   // ── Busca por nome (vet, novo cadastro) ────────────────────────────────────
   const [buscandoAnimal,    setBuscandoAnimal]    = useState(false);
   const [animalEncontrado,  setAnimalEncontrado]  = useState<AnimalEncontrado | null>(null);
@@ -181,14 +237,20 @@ const Animal = () => {
   // ── Busca proprietário por email ───────────────────────────────────────────
   const [buscandoProprietario,   setBuscandoProprietario]   = useState(false);
   const [proprietarioExistente,  setProprietarioExistente]  = useState<boolean | null>(null);
+  const [pedirAutorizacao,       setPedirAutorizacao]       = useState(false);
+
+  // ── Estado de bloqueio do animal ────────────────────────────────────────────
+  const [animalBloqueado,   setAnimalBloqueado]   = useState(false);
+  const [bloqueioTipo,      setBloqueioTipo]      = useState<string | null>(null);
+  const [bloqueioExpira,    setBloqueioExpira]    = useState<string | null>(null);
 
   // ── Formulário ─────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState<FormData>({
-    nome: '', especieId: 0, racaId: null, peso: '',
+    nome: nomeFromState, especieId: 0, racaId: null, peso: '',
     dataNascimento: '', idadeAnos: '', sexo: '',
     categoriaAnimal: '', tipoExercicio: '',
     veterinarioUserId: null,
-    local: '', baia: '',
+    localizacaoId: null, tratadorId: null, baia: '',
   });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
@@ -225,9 +287,52 @@ const Animal = () => {
   );
   const temIdadeOuData = !!formData.dataNascimento || !!formData.idadeAnos;
 
+  const filteredLocs = useMemo(() => {
+    if (!locBusca.trim()) return localizacoes;
+    return localizacoes.filter(l =>
+      l.nome.toLowerCase().includes(locBusca.trim().toLowerCase()),
+    );
+  }, [localizacoes, locBusca]);
+
+  const filteredTrats = useMemo(() => {
+    if (!tratBusca.trim()) return tratadores;
+    return tratadores.filter(t =>
+      t.nome.toLowerCase().includes(tratBusca.trim().toLowerCase()),
+    );
+  }, [tratadores, tratBusca]);
+
+  const tiposCompativeis = useMemo(() => {
+    const especieNome = especieAtual?.nome ?? '';
+    return Object.keys(TIPO_ESPECIES_MAP).filter(tipo => {
+      const specs = TIPO_ESPECIES_MAP[tipo];
+      if (specs === null) return true;
+      return especieNome && specs.some(s => especieNome.toLowerCase().includes(s.toLowerCase()));
+    });
+  }, [especieAtual]);
+
   const vetFoiAlterado = isEditMode
     && formData.veterinarioUserId !== null
     && formData.veterinarioUserId !== vetOriginalId;
+
+  // ── Buscar localizações ao trocar espécie ─────────────────────────────────
+  useEffect(() => {
+    if (!formData.especieId || !especies.length) return;
+    const especieNome = especieAtual?.nome ?? '';
+    const params = `ativo=true${especieNome ? `&especie=${encodeURIComponent(especieNome)}` : ''}`;
+    api.get(`/cadastro/localizacoes?${params}`)
+      .then(res => { if (res.data) setLocalizacoes(res.data?.dados ?? []); })
+      .catch(() => setLocalizacoes([]));
+  }, [formData.especieId, especies.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Buscar tratadores (filtrado pelo local do animal, se definido) ─────────
+  useEffect(() => {
+    const params = formData.localizacaoId
+      ? `ativo=true&localizacaoId=${formData.localizacaoId}`
+      : 'ativo=true';
+    api.get(`/cadastro/tratadores?${params}`)
+      .then(res => { if (res.data) setTratadores(res.data?.dados ?? []); })
+      .catch(() => setTratadores([]));
+  }, [formData.localizacaoId]);
 
   // ── Efeitos de limpeza ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -265,6 +370,7 @@ const Animal = () => {
 
   // ── Carregamento inicial ───────────────────────────────────────────────────
   useEffect(() => {
+    if (loadingPerms) return;
     const load = async () => {
       try {
         const [espRes, racRes] = await Promise.all([
@@ -280,28 +386,25 @@ const Animal = () => {
         setVets(vetsData);
         setVetsFiltrados(vetsData);
 
-        // Filtrar espécies pelo perfil do vet logado
+        // Filtrar espécies pelas atendidas na empresa/equipe
+        // (vet: suas espécies; sócio: união das espécies dos vets da equipe)
+        let especiesVisiveis = todasEspecies;
         if (isVet) {
           try {
-            const meRes = await fetch('/api/users/me', {
-              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-            });
-            if (meRes.ok) {
-              const meData = await meRes.json();
-              const especiesDoVet: number[] = meData.especiesAtendidas ?? [];
-              setEspecies(
-                especiesDoVet.length > 0
-                  ? todasEspecies.filter(e => especiesDoVet.includes(e.id))
-                  : todasEspecies
-              );
-            } else {
-              setEspecies(todasEspecies);
+            const espEquipeRes = await api.get('/equipes/minhas-especies');
+            const nomes: string[] = espEquipeRes.data?.dados ?? [];
+            if (nomes.length > 0) {
+              const filtradas = todasEspecies.filter(e => nomes.includes(e.nome));
+              if (filtradas.length > 0) especiesVisiveis = filtradas;
             }
-          } catch {
-            setEspecies(todasEspecies);
-          }
-        } else {
-          setEspecies(todasEspecies);
+          } catch { /* mantém todas */ }
+        }
+        setEspecies(especiesVisiveis);
+
+        // Empresa atende uma única espécie → mostra e seleciona somente ela
+        if (!isEditMode && especiesVisiveis.length === 1) {
+          const unicaId = especiesVisiveis[0].id;
+          setFormData(p => (p.especieId ? p : { ...p, especieId: unicaId }));
         }
 
         if (isEditMode && id) {
@@ -338,9 +441,20 @@ const Animal = () => {
             categoriaAnimal:   a.categoriaAnimal  ?? '',
             tipoExercicio:     a.tipoExercicio    ?? '',
             veterinarioUserId: vetCarregadoId,
-            local:             a.local            ?? '',
+            localizacaoId:     a.localizacaoId    ?? null,
+            tratadorId:        a.tratadorId       ?? null,
             baia:              a.baia             ?? '',
           });
+          // Pré-preenche o texto da busca de localização
+          if (a.localizacao?.nome) {
+            setLocBusca(a.localizacao.nome);
+          } else if (a.local) {
+            setLocBusca(a.local);
+          }
+          // Pré-preenche o texto da busca de tratador
+          if (a.tratador?.nome) {
+            setTratBusca(a.tratador.nome);
+          }
           if (a.photoUrl) setPhotoPreview(a.photoUrl);
           if (a.user) {
             setFormProp({
@@ -349,6 +463,9 @@ const Animal = () => {
               telefone:     a.user.phone   ?? '',
             });
           }
+          setAnimalBloqueado(a.bloqueado ?? false);
+          setBloqueioTipo(a.bloqueioTipo ?? null);
+          setBloqueioExpira(a.bloqueioExpira ?? null);
         }
       } catch (err) {
         console.error(err);
@@ -358,7 +475,7 @@ const Animal = () => {
       }
     };
     load();
-  }, [id, isEditMode, isVet]);
+  }, [id, isEditMode, isVet, loadingPerms]);
 
   // ── Busca por nome ─────────────────────────────────────────────────────────
   const buscarAnimalExistente = async (nome: string) => {
@@ -412,6 +529,13 @@ const Animal = () => {
       setBuscandoAnimal(false);
     }
   };
+
+  // Auto-busca quando nome vem de location state (ex: AnimaisVet → "Cadastrar Animal").
+  // Garante que animais já existentes não tomem o caminho nao_encontrado e criem duplicatas.
+  useEffect(() => {
+    if (!nomeFromState || !isVet || isEditMode) return;
+    buscarAnimalExistente(nomeFromState);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Busca proprietário por email ───────────────────────────────────────────
   const buscarProprietarioPorEmail = async (email: string) => {
@@ -480,9 +604,64 @@ const Animal = () => {
     }
   };
 
+  // ── Criar localização inline ───────────────────────────────────────────────
+  const handleCriarLocal = async () => {
+    if (!novoLocalNome.trim() || !novoLocalTipo) return;
+    setSalvandoLocal(true);
+    try {
+      const res = await api.post('/cadastro/localizacoes', {
+        nome:            novoLocalNome.trim(),
+        tipoLocalizacao: novoLocalTipo,
+      });
+      if (res.data?.dados) {
+        const novaLoc: Localizacao = res.data.dados;
+        setLocalizacoes(prev => [...prev, novaLoc].sort((a, b) => a.nome.localeCompare(b.nome)));
+        setFormData(p => ({ ...p, localizacaoId: novaLoc.id }));
+        setLocBusca(novaLoc.nome);
+        setCriandoLocal(false);
+        setNovoLocalNome('');
+        setNovoLocalTipo('');
+        toast.success('Local criado com sucesso!');
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar local';
+      toast.error(msg);
+    } finally {
+      setSalvandoLocal(false);
+    }
+  };
+
+  // ── Criar tratador inline ──────────────────────────────────────────────────
+  const handleCriarTratador = async (nome: string) => {
+    if (!nome.trim() || criandoTratador) return;
+    setCriandoTratador(true);
+    try {
+      const res = await api.post('/cadastro/tratadores', {
+        nome: nome.trim(),
+        localizacaoId: formData.localizacaoId ?? undefined,
+      });
+      if (res.data?.dados) {
+        const novo: Tratador = res.data.dados;
+        setTratadores(prev => [...prev, novo].sort((a, b) => a.nome.localeCompare(b.nome)));
+        setFormData(p => ({ ...p, tratadorId: novo.id }));
+        setTratBusca(novo.nome);
+        setTratDropdownOpen(false);
+        toast.success('Tratador criado com sucesso!');
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar tratador';
+      toast.error(msg);
+    } finally {
+      setCriandoTratador(false);
+    }
+  };
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isEditMode && !podeEditar) { semPermissao('alterar animal'); return; }
+    if (!isEditMode && !podeCriar) { semPermissao('criar animal'); return; }
 
     if (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'minha_equipe') {
       toast.error(`${formData.nome} já está sob cuidados de um veterinário`);
@@ -491,11 +670,11 @@ const Animal = () => {
 
     setSubmitting(true);
 
-    if (!formData.nome?.trim())  { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
-    if (!formData.especieId)     { toast.error('Espécie é obrigatória'); setSubmitting(false); return; }
-    if (!formData.sexo)          { toast.error('Sexo é obrigatório'); setSubmitting(false); return; }
-    if (!formData.local?.trim()) { toast.error('Local do animal é obrigatório'); setSubmitting(false); return; }
-    if (!formData.racaId)        { toast.error('Raça é obrigatória'); setSubmitting(false); return; }
+    if (!formData.nome?.trim())      { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.especieId)         { toast.error('Espécie é obrigatória'); setSubmitting(false); return; }
+    if (!formData.sexo)              { toast.error('Sexo é obrigatório'); setSubmitting(false); return; }
+    if (!formData.localizacaoId)     { toast.error('Selecione ou crie o local do animal'); setSubmitting(false); return; }
+    if (!formData.racaId)            { toast.error('Raça é obrigatória'); setSubmitting(false); return; }
     if (!formData.dataNascimento && !formData.idadeAnos) { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
     if (formData.peso && Number(formData.peso) <= 0)     { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
     if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { toast.error('A idade deve ser positiva'); setSubmitting(false); return; }
@@ -527,7 +706,9 @@ const Animal = () => {
         veterinarioNome:    vetSelecionado?.nome ?? null,
         veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
         veterinarioUserId:  formData.veterinarioUserId ?? null,
-        local:              formData.local.trim(),
+        localizacaoId:      formData.localizacaoId ?? null,
+        tratadorId:         formData.tratadorId    ?? null,
+        local:              locBusca.trim() || null,
         baia:               formData.baia.trim() || null,
         // Vet vinculando animal existente sem vet
         ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
@@ -540,6 +721,10 @@ const Animal = () => {
             email:    formProp.email.trim(),
             phone:    formProp.telefone.trim() || null,
           },
+        }),
+        // Informa o backend se o proprietário precisa aprovar ou vínculo é imediato
+        ...(isVet && !isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado') && {
+          pedirAutorizacao,
         }),
       };
 
@@ -574,8 +759,11 @@ const Animal = () => {
       }
 
       // Mensagem de sucesso contextual
-      const msgSucesso = statusBuscaAnimal === 'sem_vet'
-        ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
+      const vinculandoParaProprietario = (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado');
+      const msgSucesso = vinculandoParaProprietario
+        ? (pedirAutorizacao
+            ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
+            : 'Vínculo estabelecido com sucesso!')
         : isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!';
 
       toast.success(msgSucesso);
@@ -599,7 +787,7 @@ const Animal = () => {
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  if (loading) return (
+  if (loading || loadingPerms) return (
     <PageContainer maxWidth="2xl">
       <div className="flex items-center justify-center py-20 text-gray-500">
         Carregando...
@@ -607,12 +795,49 @@ const Animal = () => {
     </PageContainer>
   );
 
+  if (!loadingPerms && (isEditMode ? !podeEditar : !podeCriar)) {
+    return (
+      <PageContainer maxWidth="2xl">
+        <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
+        <div className="text-center py-16">
+          <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+          <p className="text-sm text-gray-500">Você não tem permissão para {isEditMode ? 'alterar' : 'criar'} animais.</p>
+        </div>
+      </PageContainer>
+    );
+  }
+
   const inputClass = 'w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 transition-colors';
 
   return (
+    <>
     <PageContainer maxWidth="2xl">
 
       <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
+
+      {isEditMode && animalBloqueado && (
+        <div className={`mb-4 flex items-start gap-3 rounded-2xl px-4 py-3 border ${
+          bloqueioTipo === 'AGUARDANDO_APROVACAO'
+            ? 'bg-amber-50 border-amber-300 text-amber-800'
+            : 'bg-orange-50 border-orange-300 text-orange-800'
+        }`}>
+          <span className="text-lg mt-0.5">🔒</span>
+          <div className="flex-1">
+            <p className="font-semibold text-sm">
+              {bloqueioTipo === 'AGUARDANDO_APROVACAO'
+                ? 'Animal aguardando autorização do proprietário'
+                : 'Animal em período provisional'}
+            </p>
+            <p className="text-xs mt-0.5">
+              {bloqueioTipo === 'AGUARDANDO_APROVACAO'
+                ? 'Uma notificação foi enviada ao proprietário. O animal será liberado após a aprovação.'
+                : bloqueioExpira
+                  ? `O proprietário tem até ${new Date(bloqueioExpira).toLocaleString('pt-BR')} para confirmar o vínculo. Após esse prazo, o pedido será cancelado automaticamente.`
+                  : 'O proprietário tem 24h para confirmar o vínculo. Após esse prazo, o pedido será cancelado automaticamente.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
 
@@ -640,33 +865,49 @@ const Animal = () => {
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5">
 
-            {/* ── 1. Nome do animal ─────────────────────────────────────────── */}
+            {/* ── 1. Nome do animal + Sexo ──────────────────────────────────── */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Nome do animal <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={formData.nome}
-                  onChange={e => {
-                    setFormData({ ...formData, nome: e.target.value });
-                    if (statusBuscaAnimal !== 'idle') {
-                      setStatusBuscaAnimal('idle');
-                      setAnimalEncontrado(null);
-                      setFormProp({ nomeCompleto: '', email: '', telefone: '' });
-                      setProprietarioExistente(null);
-                    }
-                  }}
-                  onBlur={e => isVet && !isEditMode && buscarAnimalExistente(e.target.value)}
-                  placeholder="Ex: Trovão, Mel, Rex..."
-                  className={inputClass}
-                />
-                {buscandoAnimal && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nome do animal <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formData.nome}
+                      onChange={e => {
+                        setFormData({ ...formData, nome: e.target.value });
+                        if (statusBuscaAnimal !== 'idle') {
+                          setStatusBuscaAnimal('idle');
+                          setAnimalEncontrado(null);
+                          setFormProp({ nomeCompleto: '', email: '', telefone: '' });
+                          setProprietarioExistente(null);
+                        }
+                      }}
+                      onBlur={e => isVet && !isEditMode && buscarAnimalExistente(e.target.value)}
+                      placeholder="Ex: Trovão, Mel, Rex..."
+                      className={inputClass}
+                    />
+                    {buscandoAnimal && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
+                  <select
+                    value={formData.sexo}
+                    onChange={e => setFormData({ ...formData, sexo: e.target.value })}
+                    className={inputClass}
+                  >
+                    <option value="" disabled>Selecione o sexo</option>
+                    <option value="Macho">Macho</option>
+                    <option value="Fêmea">Fêmea</option>
+                  </select>
+                </div>
               </div>
 
               {/* Animal com vet de outra equipe — bloqueado */}
@@ -697,8 +938,10 @@ const Animal = () => {
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
                     <strong>{formData.nome}</strong> já está cadastrado sem veterinário responsável.
-                    Os dados do proprietário foram preenchidos automaticamente.
-                    Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.
+                    Os dados do proprietário foram preenchidos automaticamente.{' '}
+                    {pedirAutorizacao
+                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo. O animal ficará bloqueado até a aprovação.'
+                      : 'Após salvar, o vínculo será estabelecido imediatamente sem notificação ao proprietário.'}
                   </span>
                 </div>
               )}
@@ -711,23 +954,8 @@ const Animal = () => {
               )}
             </div>
 
-            {/* ── 2. Local + Espécie ───────────────────────────────────────── */}
+            {/* ── 2. Espécie + Raça ────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  <span className="flex items-center gap-1">
-                    <MapPin size={14} className="text-emerald-600" />
-                    Local do Animal <span className="text-red-500">*</span>
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.local}
-                  onChange={e => setFormData({ ...formData, local: e.target.value })}
-                  placeholder="Ex: Fazenda Santa Clara, Haras Bela Vista..."
-                  className={inputClass}
-                />
-              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
                 <select
@@ -739,11 +967,279 @@ const Animal = () => {
                   {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Raça <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.racaId || ''}
+                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
+                  className={inputClass}
+                >
+                  <option value="">Selecione</option>
+                  {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                </select>
+              </div>
             </div>
 
-            {/* ── 3. Proprietário (apenas vets) ────────────────────────────── */}
+
+            {/* ── 3. Peso + Idade + Data de nascimento ─────────────────────── */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Peso (kg) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number" step="0.1" min="0.1" placeholder="Ex: 450"
+                  value={formData.peso}
+                  onChange={e => setFormData({ ...formData, peso: e.target.value })}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                </label>
+                <input
+                  type="number" min="1" step="1" placeholder="Ex: 5"
+                  value={formData.idadeAnos}
+                  disabled={!!formData.dataNascimento}
+                  onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
+                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                />
+                {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
+                    value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
+                    onChange={handleDateTextChange}
+                    className={`${inputClass} pr-10`}
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
+                    <Calendar size={18} className="text-emerald-600 pointer-events-none" />
+                    <input
+                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
+                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
+                      onChange={e => {
+                        if (!e.target.value) return;
+                        const d = new Date(e.target.value + 'T00:00');
+                        const h = new Date(); h.setHours(0, 0, 0, 0);
+                        if (d > h) { toast.error('Data futura não permitida.'); return; }
+                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                  </div>
+                </div>
+                {formData.dataNascimento && (
+                  <button type="button" onClick={() => setFormData({ ...formData, dataNascimento: '' })}
+                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                    Limpar data
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* ── 4. Perfil NRC — equinos ───────────────────────────────────── */}
+            {isEquino && (
+              <>
+                <div className="pt-2 border-t border-gray-100">
+                  <p className="text-sm font-semibold text-gray-600 mb-1">Perfil NRC</p>
+                  {!temIdadeOuData && <p className="text-xs text-amber-600">Informe a idade ou data para ver as categorias.</p>}
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Categoria <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={formData.categoriaAnimal}
+                      onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
+                      disabled={!temIdadeOuData}
+                      className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                    >
+                      <option value="">Selecione a categoria</option>
+                      {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  {formData.categoriaAnimal && tiposDisponiveis.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Tipo / Estágio <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.tipoExercicio}
+                        onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione o tipo</option>
+                        {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* ── 5. Local do Animal + Baia ─────────────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="relative">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <span className="flex items-center gap-1">
+                    <MapPin size={14} className="text-emerald-600" />
+                    Local do Animal <span className="text-red-500">*</span>
+                  </span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={locBusca}
+                    onChange={e => {
+                      setLocBusca(e.target.value);
+                      setLocDropdownOpen(true);
+                      if (formData.localizacaoId !== null) setFormData(p => ({ ...p, localizacaoId: null }));
+                    }}
+                    onFocus={() => setLocDropdownOpen(true)}
+                    onBlur={() => setTimeout(() => setLocDropdownOpen(false), 200)}
+                    placeholder={formData.especieId ? 'Buscar ou criar local...' : 'Selecione a espécie primeiro'}
+                    disabled={!formData.especieId}
+                    className={`${inputClass} pr-8 ${!formData.especieId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                    autoComplete="off"
+                  />
+                  {formData.localizacaoId
+                    ? <CheckCircle2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+                    : locBusca && (
+                      <button type="button"
+                        onMouseDown={() => { setLocBusca(''); setFormData(p => ({ ...p, localizacaoId: null })); }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-400">
+                        <X size={14} />
+                      </button>
+                    )
+                  }
+                </div>
+                {locDropdownOpen && formData.especieId > 0 && (
+                  <div className="absolute z-20 w-full bg-white border border-gray-200 shadow-xl rounded-xl mt-1 max-h-52 overflow-y-auto">
+                    {filteredLocs.length === 0 && !locBusca.trim() && (
+                      <p className="px-4 py-3 text-xs text-gray-400">Nenhum local cadastrado para esta espécie</p>
+                    )}
+                    {filteredLocs.map(loc => (
+                      <button key={loc.id} type="button"
+                        onMouseDown={() => {
+                          setFormData(p => ({ ...p, localizacaoId: loc.id }));
+                          setLocBusca(loc.nome);
+                          setLocDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 text-sm border-b border-gray-50 last:border-0">
+                        <span className="font-medium text-gray-800">{loc.nome}</span>
+                      </button>
+                    ))}
+                    {filteredLocs.length === 0 && locBusca.trim() && (
+                      <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{locBusca}"</p>
+                    )}
+                    {locBusca.trim() && filteredLocs.length === 0 && (
+                      <button type="button"
+                        onMouseDown={() => { setNovoLocalNome(locBusca); setCriandoLocal(true); setLocDropdownOpen(false); }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100">
+                        <Plus size={13} />
+                        Criar "{locBusca}"
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {labelBaia && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {labelBaia}
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.baia}
+                    onChange={e => setFormData({ ...formData, baia: e.target.value })}
+                    placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
+                    className={inputClass}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* ── 6. Tratador ──────────────────────────────────────────────── */}
+            <div className="relative">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <span className="flex items-center gap-1">
+                  <User2 size={14} className="text-emerald-600" />
+                  Tratador Responsável
+                </span>
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={tratBusca}
+                  onChange={e => {
+                    setTratBusca(e.target.value);
+                    setTratDropdownOpen(true);
+                    if (formData.tratadorId !== null) setFormData(p => ({ ...p, tratadorId: null }));
+                  }}
+                  onFocus={() => setTratDropdownOpen(true)}
+                  onBlur={() => setTimeout(() => setTratDropdownOpen(false), 200)}
+                  placeholder="Buscar ou criar tratador…"
+                  className={`${inputClass} pr-8`}
+                  autoComplete="off"
+                />
+                {formData.tratadorId
+                  ? <CheckCircle2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+                  : tratBusca && (
+                    <button type="button"
+                      onMouseDown={() => { setTratBusca(''); setFormData(p => ({ ...p, tratadorId: null })); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-400">
+                      <X size={14} />
+                    </button>
+                  )
+                }
+              </div>
+              {tratDropdownOpen && (
+                <div className="absolute z-20 w-full bg-white border border-gray-200 shadow-xl rounded-xl mt-1 max-h-52 overflow-y-auto">
+                  {filteredTrats.length === 0 && !tratBusca.trim() && (
+                    <p className="px-4 py-3 text-xs text-gray-400">
+                      Nenhum tratador{formData.localizacaoId ? ' para este local' : ''} cadastrado
+                    </p>
+                  )}
+                  {filteredTrats.map(t => (
+                    <button key={t.id} type="button"
+                      onMouseDown={() => {
+                        setFormData(p => ({ ...p, tratadorId: t.id }));
+                        setTratBusca(t.nome);
+                        setTratDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 flex items-center justify-between text-sm border-b border-gray-50 last:border-0">
+                      <span className="font-medium text-gray-800">{t.nome}</span>
+                      {t.telefone && <span className="text-xs text-gray-400 ml-2 shrink-0">{t.telefone}</span>}
+                    </button>
+                  ))}
+                  {filteredTrats.length === 0 && tratBusca.trim() && (
+                    <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{tratBusca}"</p>
+                  )}
+                  {tratBusca.trim() && filteredTrats.length === 0 && (
+                    <button type="button"
+                      onMouseDown={() => handleCriarTratador(tratBusca)}
+                      disabled={criandoTratador}
+                      className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100 disabled:opacity-50">
+                      <Plus size={13} />
+                      {criandoTratador ? 'Criando…' : `Criar "${tratBusca}"`}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ── 7. Proprietário (apenas vets) ────────────────────────────── */}
             {isVet && (
-              <div className="pb-4 border-b border-gray-100">
+              <div className="pt-4 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Proprietário</p>
                 <div className="space-y-3">
                   {/* E-mail primeiro — lookup automático ao sair do campo */}
@@ -807,6 +1303,28 @@ const Animal = () => {
                       />
                     </div>
                   </div>
+                  {/* Checkbox "Pedir Autorização?" — apenas para novos vínculos */}
+                  {!isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado') && (
+                    <div className="border border-gray-200 rounded-2xl p-3 bg-gray-50 space-y-2">
+                      <label className="flex items-start gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={pedirAutorizacao}
+                          onChange={e => setPedirAutorizacao(e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-300 accent-blue-600 mt-0.5 flex-shrink-0"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-700">Solicitar autorização ao proprietário</span>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {pedirAutorizacao
+                              ? 'O proprietário receberá um e-mail com os dados de acesso (se conta nova) e um link para autorizar o vínculo.'
+                              : 'O vínculo será estabelecido imediatamente. O proprietário não receberá notificação por e-mail.'}
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  )}
+
                   {!isEditMode && proprietarioExistente === true && (
                     <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
                       <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
@@ -831,162 +1349,8 @@ const Animal = () => {
                       </span>
                     </div>
                   )}
-                  {!isEditMode && statusBuscaAnimal === 'idle' && (
-                    <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-500">
-                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>Digite o nome do animal acima para verificar se já está cadastrado.</span>
-                    </div>
-                  )}
                 </div>
               </div>
-            )}
-
-            {/* ── 4. Baia/Leito + Sexo ─────────────────────────────────────── */}
-            <div className={labelBaia ? 'grid grid-cols-2 gap-4' : ''}>
-              {labelBaia && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {labelBaia}
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.baia}
-                    onChange={e => setFormData({ ...formData, baia: e.target.value })}
-                    placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
-                    className={inputClass}
-                  />
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
-                <select
-                  value={formData.sexo}
-                  onChange={e => setFormData({ ...formData, sexo: e.target.value })}
-                  className={inputClass}
-                >
-                  <option value="" disabled>Selecione o sexo</option>
-                  <option value="Macho">Macho</option>
-                  <option value="Fêmea">Fêmea</option>
-                </select>
-              </div>
-            </div>
-
-            {/* ── 5. Raça + Peso ────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Raça <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={formData.racaId || ''}
-                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
-                  className={inputClass}
-                >
-                  <option value="">Selecione</option>
-                  {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Peso (kg) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number" step="0.1" min="0.1" placeholder="Ex: 450"
-                  value={formData.peso}
-                  onChange={e => setFormData({ ...formData, peso: e.target.value })}
-                  className={inputClass}
-                />
-              </div>
-            </div>
-
-            {/* ── 6. Idade + Data ───────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
-                </label>
-                <input
-                  type="number" min="1" step="1" placeholder="Ex: 5"
-                  value={formData.idadeAnos}
-                  disabled={!!formData.dataNascimento}
-                  onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
-                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                />
-                {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
-                </label>
-                <div className="relative">
-                  <input
-                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
-                    value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
-                    onChange={handleDateTextChange}
-                    className={`${inputClass} pr-10`}
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
-                    <Calendar size={18} className="text-emerald-600 pointer-events-none" />
-                    <input
-                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
-                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
-                      onChange={e => {
-                        if (!e.target.value) return;
-                        const d = new Date(e.target.value + 'T00:00');
-                        const h = new Date(); h.setHours(0, 0, 0, 0);
-                        if (d > h) { toast.error('Data futura não permitida.'); return; }
-                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
-                      }}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                  </div>
-                </div>
-                {formData.dataNascimento && (
-                  <button type="button" onClick={() => setFormData({ ...formData, dataNascimento: '' })}
-                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors">
-                    Limpar data
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* ── 7. NRC — equinos ──────────────────────────────────────────── */}
-            {isEquino && (
-              <>
-                <div className="pt-2 border-t border-gray-100">
-                  <p className="text-sm font-semibold text-gray-600 mb-1">Perfil NRC</p>
-                  {!temIdadeOuData && <p className="text-xs text-amber-600">Informe a idade ou data para ver as categorias.</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Categoria <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={formData.categoriaAnimal}
-                    onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
-                    disabled={!temIdadeOuData}
-                    className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                  >
-                    <option value="">Selecione a categoria</option>
-                    {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                {formData.categoriaAnimal && tiposDisponiveis.length > 0 && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Tipo / Estágio <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={formData.tipoExercicio}
-                      onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
-                      className={inputClass}
-                    >
-                      <option value="">Selecione o tipo</option>
-                      {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                )}
-              </>
             )}
 
             {/* ── 8. Veterinário (apenas proprietários) ────────────────────── */}
@@ -1067,13 +1431,74 @@ const Animal = () => {
                   : statusBuscaAnimal === 'com_vet'
                     ? 'Cadastro bloqueado — animal com outro vet'
                     : statusBuscaAnimal === 'sem_vet'
-                      ? 'Solicitar autorização ao proprietário'
+                      ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Vincular diretamente')
                       : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
             </button>
 
           </form>
         </div>
     </PageContainer>
+
+    {/* ── Mini-modal: criar localização inline ──────────────────────────── */}
+
+    {criandoLocal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm space-y-4">
+          <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+            <MapPin size={16} className="text-emerald-600" />
+            Novo Local
+          </h3>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Nome <span className="text-red-500">*</span>
+            </label>
+            <input
+              value={novoLocalNome}
+              onChange={e => setNovoLocalNome(e.target.value)}
+              className={inputClass}
+              placeholder="Ex: Haras Bela Vista"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Tipo <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={novoLocalTipo}
+              onChange={e => setNovoLocalTipo(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Selecione o tipo</option>
+              {tiposCompativeis.map(t => (
+                <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => { setCriandoLocal(false); setNovoLocalNome(''); setNovoLocalTipo(''); }}
+              className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleCriarLocal}
+              disabled={salvandoLocal || !novoLocalNome.trim() || !novoLocalTipo}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+            >
+              {salvandoLocal ? 'Salvando...' : 'Criar local'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 
