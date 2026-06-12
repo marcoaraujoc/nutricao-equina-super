@@ -51,8 +51,8 @@ router.delete('/membros/:membroId',  authenticate, EquipeController.removerMembr
 // ─── Criar equipe avulsa ───────────────────────────────────────────────────────
 router.post('/', authenticate, EquipeController.criarEquipe);
 
-// ─── Convite ADMIN → Sócio (cria empresa+equipe pelo CNPJ) ───────────────────
-router.post('/admin/convidar-socio',  authenticate, EquipeController.convidarSocioAdmin);
+// ─── Convite ADMIN → Gestor (cria empresa+equipe pelo CNPJ) ───────────────────
+router.post('/admin/convidar-gestor',  authenticate, EquipeController.convidarGestorAdmin);
 router.get ('/admin/todas-empresas',  authenticate, EquipeController.listarTodasEmpresasAdmin);
 
 // ─── Permissões globais por UserType (somente ADMIN) ─────────────────────────
@@ -64,7 +64,7 @@ router.get('/empresa/:empresaId/especies', authenticate, EquipeController.getEsp
 
 // =============================================================================
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO (já declaradas abaixo)
-// ─── ADMIN: remover sócio da equipe e desativar conta ────────────────────────
+// ─── ADMIN: remover gestor da equipe e desativar conta ────────────────────────
 
 // =============================================================================
 // ROTAS COM PARÂMETRO /:equipeId — DEVEM VIR POR ÚLTIMO
@@ -73,7 +73,7 @@ router.get('/empresa/:empresaId/especies', authenticate, EquipeController.getEsp
 router.get   ('/:equipeId/especies',                   authenticate, EquipeController.getEspeciesEquipe);
 router.get   ('/:equipeId/fornecedores',               authenticate, EquipeController.getFornecedoresPorEquipe);
 router.patch ('/:equipeId/nome',                        authenticate, EquipeController.renomearEquipe);
-router.delete('/:equipeId/socio/:userId',               authenticate, EquipeController.removerSocioAdmin);
+router.delete('/:equipeId/gestor/:userId',               authenticate, EquipeController.removerGestorAdmin);
 router.post  ('/:equipeId/convidar',                   authenticate, EquipeController.convidarParaEquipe);
 router.get   ('/:equipeId/membros',                    authenticate, EquipeController.listarMembrosPorEquipe);
 router.delete('/:equipeId/membros/:alvoUserId',        authenticate, EquipeController.removerMembro);

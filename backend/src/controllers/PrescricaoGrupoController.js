@@ -415,9 +415,9 @@ const finalizar = async (req, res) => {
     const veterinarioId   = req.user.id;
     const forcarFinalizacao = req.body?.forcarFinalizacao === true;
 
-    // Apenas sócios podem finalizar
-    const membroSocio = await prisma.membroEquipe.findFirst({ where: { userId: veterinarioId, cargo: 'SOCIO' } });
-    if (!membroSocio) return res.status(403).json({ error: 'Apenas sócios podem finalizar prescrições.' });
+    // Apenas gestores podem finalizar
+    const membroGestor = await prisma.membroEquipe.findFirst({ where: { userId: veterinarioId, cargo: 'GESTOR' } });
+    if (!membroGestor) return res.status(403).json({ error: 'Apenas gestores podem finalizar prescrições.' });
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
@@ -468,9 +468,9 @@ const cancelar = async (req, res) => {
     const userId  = req.user.id;
     const motivo  = req.body?.motivo?.trim() ?? null;
 
-    // Apenas sócios podem cancelar
-    const membroSocio = await prisma.membroEquipe.findFirst({ where: { userId, cargo: 'SOCIO' } });
-    if (!membroSocio) return res.status(403).json({ error: 'Apenas sócios podem cancelar prescrições.' });
+    // Apenas gestores podem cancelar
+    const membroGestor = await prisma.membroEquipe.findFirst({ where: { userId, cargo: 'GESTOR' } });
+    if (!membroGestor) return res.status(403).json({ error: 'Apenas gestores podem cancelar prescrições.' });
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },

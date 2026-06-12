@@ -4,6 +4,7 @@
 const bcrypt       = require('bcryptjs');
 const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
+const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 
 const SELECT_PROPRIETARIO = {
   id: true, fullName: true, email: true, phone: true,
@@ -12,13 +13,36 @@ const SELECT_PROPRIETARIO = {
   cpf: true, cnpj: true, mensalista: true, valorAssistencia: true, frequenciaVisitas: true,
 };
 
-// Verifica se o proprietário tem animal ativo na empresa (para acesso isolado por empresa)
-async function verificarAcessoNaEmpresa(proprietarioId, empresaId) {
-  const animal = await prisma.animal.findFirst({
-    where: { userId: proprietarioId, empresaId, ativo: true },
+// Proprietário pertence ao escopo (empresa + equipes do contexto):
+// - animal ativo numa equipe do escopo, OU animal legado sem equipe na empresa,
+// - OU cadastrado direto numa equipe do escopo / legado sem equipe na empresa.
+// equipeScope null = sem restrição por equipe (dono da empresa sem MembroEquipe).
+function whereProprietarioNoEscopo(empresaId, equipeScope) {
+  if (!equipeScope) {
+    return {
+      OR: [
+        { animais: { some: { empresaId, ativo: true } } },
+        { empresaId },
+      ],
+    };
+  }
+  return {
+    OR: [
+      { animais: { some: { ativo: true, equipeId: { in: equipeScope } } } },
+      { animais: { some: { ativo: true, empresaId, equipeId: null } } },
+      { empresaId, equipeId: { in: equipeScope } },
+      { empresaId, equipeId: null },
+    ],
+  };
+}
+
+// Verifica se o proprietário está no escopo de empresa/equipe do solicitante
+async function verificarAcessoNoEscopo(proprietarioId, empresaId, equipeScope) {
+  const prop = await prisma.user.findFirst({
+    where:  { id: proprietarioId, ...whereProprietarioNoEscopo(empresaId, equipeScope) },
     select: { id: true },
   });
-  return !!animal;
+  return !!prop;
 }
 
 const ProprietarioController = {
@@ -35,13 +59,9 @@ const ProprietarioController = {
         if (!req.empresaId) {
           return res.json({ sucesso: true, dados: [] });
         }
-        // Proprietários com animal ativo na empresa OU criados diretamente nela
-        where.AND.push({
-          OR: [
-            { animais:    { some: { empresaId: req.empresaId, ativo: true } } },
-            { empresaId:  req.empresaId },
-          ],
-        });
+        // Escopo por equipe dentro da empresa ativa (segregação entre equipes do gestor)
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        where.AND.push(whereProprietarioNoEscopo(req.empresaId, equipeScope));
       }
 
       if (busca?.trim()) {
@@ -83,7 +103,8 @@ const ProprietarioController = {
       if (!proprietario) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
       if (!isAdmin && req.empresaId) {
-        const temAcesso = await verificarAcessoNaEmpresa(proprietario.id, req.empresaId);
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        const temAcesso = await verificarAcessoNoEscopo(proprietario.id, req.empresaId, equipeScope);
         if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado' });
       }
 
@@ -135,6 +156,10 @@ const ProprietarioController = {
           mustChangePassword: true,
           ativo:     true,
           empresaId: req.empresaId || null,
+          // Equipe do contexto ativo do gestor — segrega o proprietário por equipe
+          equipeId:  req.empresaId
+            ? (await getContextoDoVet(req.user.id, req.empresaId, req.equipeId)).equipeId
+            : null,
         },
         select: SELECT_PROPRIETARIO,
       });
@@ -172,7 +197,8 @@ const ProprietarioController = {
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
       if (!isAdmin && req.empresaId) {
-        const temAcesso = await verificarAcessoNaEmpresa(Number(id), req.empresaId);
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        const temAcesso = await verificarAcessoNoEscopo(Number(id), req.empresaId, equipeScope);
         if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado' });
       }
 
@@ -219,7 +245,7 @@ const ProprietarioController = {
 
   // PATCH /api/cadastro/proprietarios/:id/toggle
   // ADMIN: toggle User.ativo global
-  // Sócio: não permitido (remover da empresa usa DELETE)
+  // Gestor: não permitido (remover da empresa usa DELETE)
   toggleAtivo: async (req, res) => {
     const { id } = req.params;
     const isAdmin = req.user?.role === 'ADMIN';
@@ -248,7 +274,7 @@ const ProprietarioController = {
   },
 
   // DELETE /api/cadastro/proprietarios/:id
-  // Sócio: remove da empresa (inativa animais + clear empresaId)
+  // Gestor: remove da empresa (inativa animais + clear empresaId)
   // Proprietários NUNCA são excluídos do sistema
   removerDaEmpresa: async (req, res) => {
     const { id } = req.params;
@@ -269,13 +295,18 @@ const ProprietarioController = {
       const existe = await prisma.user.findFirst({ where: { id: Number(id), userType: 'PROPRIETARIO' } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
-      const temAcesso = await verificarAcessoNaEmpresa(Number(id), req.empresaId);
+      const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+      const temAcesso = await verificarAcessoNoEscopo(Number(id), req.empresaId, equipeScope);
       if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Este proprietário não pertence à sua empresa' });
 
-      // Inativa todos os animais do proprietário nesta empresa e remove o vínculo empresarial
+      // Inativa os animais do proprietário no escopo (equipe ativa; legados sem equipe inclusos)
       const resultado = await prisma.animal.updateMany({
-        where: { userId: Number(id), empresaId: req.empresaId },
-        data:  { ativo: false, empresaId: null },
+        where: {
+          userId:    Number(id),
+          empresaId: req.empresaId,
+          ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
+        },
+        data: { ativo: false, empresaId: null, equipeId: null },
       });
 
       res.json({

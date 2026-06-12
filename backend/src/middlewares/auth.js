@@ -20,21 +20,68 @@ const authenticate = async (req, res, next) => {
 
     req.user = decoded;
 
-    // Injeta req.empresaId a partir da equipe ativa do usuário.
-    // Permite que todos os controllers filtrem por empresa sem middleware adicional.
-    // Mesma lógica de getEmpresaIdDoVet: MembroEquipe primeiro, depois Empresa.ownerId.
+    // Injeta req.empresaId / req.equipeId — o "contexto ativo" do usuário (seletor no frontend).
+    // 1. Header x-equipe-id (gestor CPF trabalha por equipe): aceito se o usuário for membro
+    //    da equipe OU dono da empresa dela (ADMIN aceita direto). Define também req.empresaId.
+    // 2. Header x-empresa-id (gestor CNPJ trabalha por empresa): aceito se for dono OU membro
+    //    de alguma equipe dela. Valor inválido/sem vínculo é ignorado silenciosamente.
+    // 3. Fallback: MembroEquipe mais recente → Equipe.empresaId; depois Empresa.ownerId.
     try {
-      const membro = await prisma.membroEquipe.findFirst({
-        where:   { userId: decoded.id },
-        include: { equipe: { select: { empresaId: true } } },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (membro?.equipe?.empresaId) {
-        req.empresaId = membro.equipe.empresaId;
-      } else {
-        // Fallback: usuário é dono da empresa (Empresa.ownerId) mas pode não ter MembroEquipe
-        const empresa = await prisma.empresa.findFirst({ where: { ownerId: decoded.id } });
-        req.empresaId = empresa?.id ?? null;
+      req.empresaId = null;
+      req.equipeId  = null;
+
+      const headerEquipeId = Number(req.headers['x-equipe-id']);
+      if (Number.isInteger(headerEquipeId) && headerEquipeId > 0) {
+        const equipe = await prisma.equipe.findFirst({
+          where: decoded.role === 'ADMIN'
+            ? { id: headerEquipeId }
+            : {
+                id: headerEquipeId,
+                OR: [
+                  { membros: { some: { userId: decoded.id } } },
+                  { empresa: { ownerId: decoded.id } },
+                ],
+              },
+          select: { id: true, empresaId: true },
+        });
+        if (equipe) {
+          req.equipeId  = equipe.id;
+          req.empresaId = equipe.empresaId;
+        }
+      }
+
+      const headerEmpresaId = Number(req.headers['x-empresa-id']);
+      if (!req.empresaId && Number.isInteger(headerEmpresaId) && headerEmpresaId > 0) {
+        if (decoded.role === 'ADMIN') {
+          req.empresaId = headerEmpresaId;
+        } else {
+          const vinculo = await prisma.empresa.findFirst({
+            where: {
+              id: headerEmpresaId,
+              OR: [
+                { ownerId: decoded.id },
+                { equipes: { some: { membros: { some: { userId: decoded.id } } } } },
+              ],
+            },
+            select: { id: true },
+          });
+          if (vinculo) req.empresaId = vinculo.id;
+        }
+      }
+
+      if (!req.empresaId) {
+        const membro = await prisma.membroEquipe.findFirst({
+          where:   { userId: decoded.id },
+          include: { equipe: { select: { empresaId: true } } },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (membro?.equipe?.empresaId) {
+          req.empresaId = membro.equipe.empresaId;
+        } else {
+          // Fallback: usuário é dono da empresa (Empresa.ownerId) mas pode não ter MembroEquipe
+          const empresa = await prisma.empresa.findFirst({ where: { ownerId: decoded.id } });
+          req.empresaId = empresa?.id ?? null;
+        }
       }
     } catch {
       req.empresaId = null;

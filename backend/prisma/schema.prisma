@@ -46,8 +46,10 @@ model User {
   valorAssistencia  Float?
   frequenciaVisitas Int?
   empresaId         Int?     @map("empresa_id")
+  equipeId          Int?     @map("equipe_id") // equipe que cadastrou o proprietário (segregação por equipe)
 
   empresa              Empresa?               @relation("ProprietarioEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
+  equipe               Equipe?                @relation("ProprietarioEquipe", fields: [equipeId], references: [id], onDelete: SetNull)
   animais              Animal[]
   auditLogs            AuditLog[]
   dietasCriadas        Dieta[]                @relation("CriadorDieta")
@@ -71,6 +73,13 @@ model User {
   membrosEquipe        MembroEquipe[]
   permissoesMembro       PermissaoMembro[]
   permissoesProprietario PermissaoProprietario[]
+  fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
+  encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
+  designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
+  designacoesCriadas       DesignacaoPrestador[]   @relation("DesignacaoCriadoPor")
+  agendamentosComoVet      AgendamentoClinico[]    @relation("AgendamentoVeterinario")
+  agendamentosCriados      AgendamentoClinico[]    @relation("AgendamentoCriadoPor")
+  @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
 }
@@ -92,6 +101,7 @@ model Animal {
   racaId             Int?
   userId             Int
   empresaId          Int?     // multi-tenant: clínica principal que gerencia este animal
+  equipeId           Int?     // equipe responsável dentro da empresa (segregação de permissões)
   categoriaAnimal    String?  @db.VarChar(100)
   tipoExercicio      String?  @db.VarChar(100)
   veterinarioNome    String?  @db.VarChar(255)
@@ -109,6 +119,7 @@ model Animal {
   raca            Raca?                @relation(fields: [racaId],       references: [id])
   user            User                 @relation(fields: [userId],       references: [id], onDelete: Cascade)
   empresa         Empresa?             @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: SetNull)
+  equipe          Equipe?              @relation("EquipeAnimais", fields: [equipeId], references: [id], onDelete: SetNull)
   localizacao     LocalizacaoAnimal?   @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
   tratador        Tratador?            @relation(fields: [tratadorId],   references: [id], onDelete: SetNull)
   dietas          Dieta[]
@@ -126,11 +137,14 @@ model Animal {
   faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
   solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
   reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
+  designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
+  agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
 
   @@index([especieId])
   @@index([racaId])
   @@index([userId])
   @@index([empresaId])
+  @@index([equipeId])
   @@index([localizacaoId])
   @@index([tratadorId])
   @@map("tb_animais")
@@ -514,10 +528,36 @@ model VacinaClinica {
   @@schema("schs2vet")
 }
 
+// Agendamentos do animal (consultas, vacinas, retornos, exames, procedimentos)
+// Exibidos no painel "Agendamentos" da tela do animal (AnimalDetail)
+model AgendamentoClinico {
+  id            Int      @id @default(autoincrement())
+  animalId      Int      @map("animal_id")
+  veterinarioId Int?     @map("veterinario_id")
+  tipo          String   @default("CONSULTA") @db.VarChar(20) // CONSULTA|VACINA|RETORNO|EXAME|PROCEDIMENTO
+  titulo        String   @db.VarChar(255)
+  dataHora      DateTime @map("data_hora")
+  observacao    String?  @db.Text
+  status        String   @default("AGENDADO") @db.VarChar(20) // AGENDADO|CONCLUIDO|CANCELADO
+  ativo         Boolean  @default(true)
+  criadoPorId   Int?     @map("criado_por_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt      @map("updated_at")
+
+  animal      Animal @relation("AnimalAgendamentos",       fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?  @relation("AgendamentoVeterinario",   fields: [veterinarioId], references: [id], onDelete: SetNull)
+  criadoPor   User?  @relation("AgendamentoCriadoPor",     fields: [criadoPorId],   references: [id], onDelete: SetNull)
+
+  @@index([animalId, dataHora])
+  @@map("tb_agendamentos_clinicos")
+  @@schema("schs2vet")
+}
+
 model EncaminhamentoClinico {
   id                 Int      @id @default(autoincrement())
   animalId           Int
   veterinarioId      Int?
+  prestadorId        Int?     @map("prestador_id") // prestador da equipe (User FORNECEDOR) — null = destino externo
   especialidade      String
   motivo             String   @db.Text
   veterinarioDestino String?
@@ -530,8 +570,43 @@ model EncaminhamentoClinico {
 
   animal      Animal @relation("AnimalEncaminhamentos",      fields: [animalId],      references: [id], onDelete: Cascade)
   veterinario User?  @relation("EncaminhamentoVeterinario",  fields: [veterinarioId], references: [id], onDelete: SetNull)
+  prestador   User?  @relation("EncaminhamentoPrestador",    fields: [prestadorId],   references: [id], onDelete: SetNull)
+  designacoes DesignacaoPrestador[] @relation("EncaminhamentoDesignacoes")
 
+  @@index([prestadorId])
   @@map("tb_encaminhamentos_clinicos")
+  @@schema("schs2vet")
+}
+
+// Designação de prestador (User FORNECEDOR) a um animal específico.
+// É o escopo de acesso do prestador: ele só enxerga animais com designação ativa.
+// Criada automaticamente ao encaminhar para um prestador da equipe; inativada ao
+// concluir/cancelar o encaminhamento (ou manualmente pelo gestor).
+model DesignacaoPrestador {
+  id               Int       @id @default(autoincrement())
+  animalId         Int       @map("animal_id")
+  prestadorId      Int       @map("prestador_id")      // User userType=FORNECEDOR
+  equipeId         Int       @map("equipe_id")          // equipe que designou (segregação multi-empresa)
+  encaminhamentoId Int?      @map("encaminhamento_id")  // origem clínica, quando criada via encaminhamento
+  motivo           String?   @db.VarChar(255)
+  ativo            Boolean   @default(true)
+  dataInicio       DateTime  @default(now()) @map("data_inicio")
+  dataFim          DateTime? @map("data_fim")
+  criadoPorId      Int?      @map("criado_por_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt      @map("updated_at")
+
+  animal         Animal                 @relation("AnimalDesignacoes",        fields: [animalId],         references: [id], onDelete: Cascade)
+  prestador      User                   @relation("DesignacaoPrestadorUser",  fields: [prestadorId],      references: [id], onDelete: Cascade)
+  equipe         Equipe                 @relation("EquipeDesignacoes",        fields: [equipeId],         references: [id], onDelete: Cascade)
+  encaminhamento EncaminhamentoClinico? @relation("EncaminhamentoDesignacoes", fields: [encaminhamentoId], references: [id], onDelete: SetNull)
+  criadoPor      User?                  @relation("DesignacaoCriadoPor",      fields: [criadoPorId],      references: [id], onDelete: SetNull)
+
+  @@unique([animalId, prestadorId, equipeId])
+  @@index([prestadorId, ativo])
+  @@index([equipeId])
+  @@index([encaminhamentoId])
+  @@map("tb_designacoes_prestador")
   @@schema("schs2vet")
 }
 
@@ -722,7 +797,7 @@ model VetAnimalSolicitacao {
 model Empresa {
   id        Int      @id @default(autoincrement())
   nome      String
-  cnpj      String?  @unique
+  cnpj      String?
   telefone  String?
   endereco  String?
   ownerId   Int?
@@ -735,6 +810,9 @@ model Empresa {
   animais         Animal[]         @relation("EmpresaAnimais")
   estoques  EstoqueClinica[] @relation("EmpresaEstoque")
 
+  // Duplicidade: mesmo gestor (ownerId ≡ e-mail único) + mesmo nome + mesmo CNPJ é bloqueado.
+  // cnpj NULL (empresa pessoal/CPF): Postgres trata NULLs como distintos — enforcement na aplicação.
+  @@unique([ownerId, nome, cnpj])
   @@map("tb_empresas")
   @@schema("schs2vet")
 }
@@ -751,7 +829,11 @@ model Equipe {
   permissoesMembros       PermissaoMembro[]
   permissoesProprietarios PermissaoProprietario[]
   perfis                  PerfilEquipe[]
+  animais                 Animal[]                @relation("EquipeAnimais")
+  proprietarios           User[]                  @relation("ProprietarioEquipe")
+  designacoesPrestador    DesignacaoPrestador[]   @relation("EquipeDesignacoes")
 
+  @@unique([empresaId, nome])
   @@map("tb_equipes")
   @@schema("schs2vet")
 }
@@ -894,7 +976,7 @@ model MatrizPerfil {
   @@schema("schs2vet")
 }
 
-// Permissões especiais liberadas para proprietários pelo veterinário sócio.
+// Permissões especiais liberadas para proprietários pelo veterinário gestor.
 // Por padrão todas são false — habilitadas sob demanda.
 // funcionalidade: "ver_prontuario" | "ver_exames" | "ver_faturas" | "agendar"
 model PermissaoProprietario {
@@ -1059,7 +1141,8 @@ model Fornecedor {
   nome        String   @db.VarChar(255)
   cpf         String?  @db.VarChar(20)
   cnpj        String?  @db.VarChar(20)
-  telefone    String?  @db.VarChar(30)
+  telefone    String?  @db.VarChar(30)  // obrigatório na app (nullable p/ legado)
+  email       String?  @db.VarChar(255) // obrigatório na app (nullable p/ legado) — usado p/ vincular ao User
   tipoServico String   @db.VarChar(50)  @map("tipo_servico")
   tipoEntrada String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
   cep         String?  @db.VarChar(10)
@@ -1069,9 +1152,16 @@ model Fornecedor {
   cidade      String?  @db.VarChar(255)
   estado      String?  @db.VarChar(2)
   ativo       Boolean  @default(true)
+  // SYSTEM (ADMIN) e registros legados: empresaId null = visível para todos.
+  // CLIENTE novo: escopado à empresa ativa (req.empresaId) de quem criou.
+  empresaId   Int?     @map("empresa_id")
+  userId      Int?     @unique @map("user_id") // conta de login (User FORNECEDOR) — dá ao prestador o tipoServico
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt      @map("updated_at")
 
+  user        User?    @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId])
   @@map("tb_fornecedores")
   @@schema("schs2vet")
 }

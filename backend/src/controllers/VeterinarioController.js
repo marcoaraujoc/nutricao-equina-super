@@ -4,7 +4,7 @@
 const { PrismaClient } = require('@prisma/client');
 const crypto           = require('crypto');
 const emailService     = require('../services/emailService');
-const { getEmpresaIdDoVet } = require('../lib/vetUtils');
+const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 
 const prisma = new PrismaClient();
@@ -20,7 +20,7 @@ const gerarExpiracao = (dias = 7) => {
 
 /**
  * Retorna true se o vet PODE receber solicitações (VINCULO/DESVINCULO/TROCA_VET).
- * Regra: pode quem é DONO de uma empresa (Empresa.ownerId), SÓCIO de uma equipe,
+ * Regra: pode quem é DONO de uma empresa (Empresa.ownerId), GESTOR de uma equipe,
  * ou vet autônomo (sem nenhum MembroEquipe). VETERINARIO/ESTAGIARIO membros → false.
  */
 async function podeReceberSolicitacoes(vetId) {
@@ -30,9 +30,9 @@ async function podeReceberSolicitacoes(vetId) {
   const empresa = await prisma.empresa.findFirst({ where: { ownerId: id } });
   if (empresa) return true;
 
-  // Membro de equipe: só SÓCIO pode gerenciar vínculos (consistente com criarSolicitacaoPendente)
+  // Membro de equipe: só GESTOR pode gerenciar vínculos (consistente com criarSolicitacaoPendente)
   const membro = await prisma.membroEquipe.findFirst({ where: { userId: id } });
-  if (membro) return membro.cargo === 'SOCIO';
+  if (membro) return membro.cargo === 'GESTOR';
 
   // Vet autônomo (sem equipe e sem empresa ainda) → pode
   return true;
@@ -47,13 +47,13 @@ const VeterinarioController = {
     try {
       const { especieId } = req.query;
 
-      // Apenas vets sem vínculo de equipe (standalone) ou que sejam sócios da equipe.
-      // Vets convidados (membros com cargo != SOCIO) não aparecem para proprietários.
+      // Apenas vets sem vínculo de equipe (standalone) ou que sejam gestores da equipe.
+      // Vets convidados (membros com cargo != GESTOR) não aparecem para proprietários.
       const where = {
         user: {
           OR: [
             { membrosEquipe: { none: {} } },
-            { membrosEquipe: { some: { cargo: 'SOCIO' } } },
+            { membrosEquipe: { some: { cargo: 'GESTOR' } } },
           ],
         },
       };
@@ -423,13 +423,13 @@ const VeterinarioController = {
       });
     }
 
-    // VINCULO aceito: associa o animal à empresa do vet (multi-tenant)
+    // VINCULO aceito: associa o animal à empresa/equipe do vet (multi-tenant)
     if (aceito && solicitacao.tipo === 'VINCULO') {
-      const empId = await getEmpresaIdDoVet(solicitacao.vetUserId);
-      if (empId) {
+      const ctx = await getContextoDoVet(solicitacao.vetUserId);
+      if (ctx.empresaId) {
         await prisma.animal.update({
           where: { id: solicitacao.animalId },
-          data:  { empresaId: empId },
+          data:  { empresaId: ctx.empresaId, equipeId: ctx.equipeId },
         });
       }
       await garantirFaturaAberta(solicitacao.animal.user?.id);
@@ -544,13 +544,14 @@ const VeterinarioController = {
         });
       }
 
-      // VINCULO aceito: associa o animal à empresa do vet (multi-tenant)
+      // VINCULO aceito: associa o animal à empresa/equipe do vet (multi-tenant).
+      // Vet logado: usa o contexto ativo (x-empresa-id / x-equipe-id) se presente.
       if (status === 'ACEITO' && solicitacao.tipo === 'VINCULO') {
-        const empId = await getEmpresaIdDoVet(vetUserId);
-        if (empId) {
+        const ctx = await getContextoDoVet(vetUserId, req.empresaId, req.equipeId);
+        if (ctx.empresaId) {
           await prisma.animal.update({
             where: { id: solicitacao.animalId },
-            data:  { empresaId: empId },
+            data:  { empresaId: ctx.empresaId, equipeId: ctx.equipeId },
           });
         }
         await garantirFaturaAberta(solicitacao.animal.user?.id);
@@ -729,6 +730,11 @@ const VeterinarioController = {
         user:    { select: { id: true, fullName: true, email: true } },
       };
 
+      // Escopo por equipe dentro da empresa ativa (segregação entre equipes do gestor)
+      const equipeScope = empresaId
+        ? await getEquipeScopeDoUsuario(vetUserId, empresaId, req.equipeId)
+        : null;
+
       // Animais vinculados diretamente ao vet (ACEITO)
       const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
         where:   { vetUserId, status: 'ACEITO' },
@@ -738,11 +744,23 @@ const VeterinarioController = {
 
       let animais = solicitacoes.map(s => s.animal).filter(Boolean);
 
-      // Também inclui animais da empresa (visíveis por todos os membros da equipe)
+      // Vínculo direto de OUTRA equipe da mesma empresa fica fora desta listagem
+      if (empresaId && equipeScope) {
+        animais = animais.filter(a =>
+          a.empresaId !== empresaId || !a.equipeId || equipeScope.includes(a.equipeId)
+        );
+      }
+
+      // Também inclui animais da(s) equipe(s) do vet na empresa (legados sem equipe: empresa toda)
       if (empresaId) {
         const idsJaCarregados = new Set(animais.map(a => a.id));
         const animaisEmpresa  = await prisma.animal.findMany({
-          where:   { empresaId, ativo: true, id: { notIn: [...idsJaCarregados] } },
+          where: {
+            empresaId,
+            ativo: true,
+            id:    { notIn: [...idsJaCarregados] },
+            ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
+          },
           include: ANIMAL_INCLUDE,
           orderBy: { dataCadastro: 'desc' },
         });

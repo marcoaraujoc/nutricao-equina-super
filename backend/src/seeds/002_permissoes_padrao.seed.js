@@ -4,14 +4,14 @@
 // Aplicada automaticamente quando um membro entra em uma equipe.
 //
 // Níveis: NENHUM < LEITURA < PROPRIO < EQUIPE < FULL
-// SOCIO: todas as permissões FULL — ADMIN pode bloquear globalmente via MatrizPerfil.locked.
+// GESTOR: todas as permissões FULL — ADMIN pode bloquear globalmente via MatrizPerfil.locked.
 // =============================================================================
 'use strict';
 
 const PERMISSOES_PADRAO = {
 
-  // Sócio — acesso total irrestrito a todos os módulos (incluindo catálogos admin-only)
-  SOCIO: {
+  // Gestor — acesso total irrestrito a todos os módulos (incluindo catálogos admin-only)
+  GESTOR: {
     'cadastro.proprietario.ler':     'FULL',
     'cadastro.proprietario.criar':   'FULL',
     'cadastro.proprietario.editar':  'FULL',
@@ -248,7 +248,7 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.fechar':   'PROPRIO',
     'financeiro.faturas.lancar':   'PROPRIO',
 
-    // Equipe (gestão de membros — só sócio pode)
+    // Equipe (gestão de membros — só gestor pode)
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
 
@@ -279,7 +279,7 @@ const PERMISSOES_PADRAO = {
     'procedimentos.catalogo.imprimir': 'NENHUM',
   },
 
-  // Proprietário — leitura por padrão; criar/editar nutrição configuráveis pelo admin/sócio
+  // Proprietário — leitura por padrão; criar/editar nutrição configuráveis pelo admin/gestor
   PROPRIETARIO: {
     'cadastro.proprietario.ler':     'NENHUM',
     'cadastro.proprietario.criar':   'NENHUM',
@@ -302,7 +302,7 @@ const PERMISSOES_PADRAO = {
     'dashboard.geral.ler': 'LEITURA',
     'animais.ler':         'LEITURA',
 
-    // Nutrição — desabilitado por padrão; admin/sócio pode habilitar por equipe
+    // Nutrição — desabilitado por padrão; admin/gestor pode habilitar por equipe
     'nutricao.dietas.ler':          'NENHUM',
     'nutricao.dietas.criar':        'NENHUM',
     'nutricao.dietas.editar':       'NENHUM',
@@ -317,7 +317,7 @@ const PERMISSOES_PADRAO = {
     'nutricao.relatorios.exportar': 'NENHUM',
   },
 
-  // Prestador de serviços — acesso restrito configurável pelo sócio
+  // Prestador de serviços — acesso restrito configurável pelo gestor
   PRESTADOR: {
     'cadastro.proprietario.ler':     'NENHUM',
     'cadastro.proprietario.criar':   'NENHUM',
@@ -442,7 +442,7 @@ const PERMISSOES_PADRAO = {
     'procedimentos.catalogo.imprimir': 'NENHUM',
   },
 
-  // Estagiário — por padrão só leitura; sócio pode elevar via painel
+  // Estagiário — por padrão só leitura; gestor pode elevar via painel
   ESTAGIARIO: {
     // Cadastro
     'cadastro.proprietario.ler':     'EQUIPE',

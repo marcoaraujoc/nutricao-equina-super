@@ -361,7 +361,7 @@ const emailService = {
     console.log(`[emailService] Convite de equipe enviado → ${email} (usuarioCriado=${usuarioCriado})`);
   },
 
-  // ── Convite ADMIN — Sócio fundador, cria sua própria organização ─────────────
+  // ── Convite ADMIN — Gestor fundador, cria sua própria organização ─────────────
   async enviarConviteAdmin({ email, token, usuarioCriado = false, senhaInicial = null }) {
     if (!podeEnviar()) return;
 
@@ -409,7 +409,7 @@ const emailService = {
             <h2 style="color:#111827;margin-top:0;">Você foi convidado para o S2Vet!</h2>
             <p style="color:#374151;line-height:1.6;">
               Olá! Você foi convidado para acessar o <strong>S2Vet</strong> e criar a sua organização na plataforma.
-              Como sócio, você terá acesso completo para configurar sua equipe, cadastrar animais e gerenciar todo o fluxo clínico.
+              Como gestor, você terá acesso completo para configurar sua equipe, cadastrar animais e gerenciar todo o fluxo clínico.
             </p>
 
             ${blocoCredenciais}
@@ -737,13 +737,13 @@ const emailService = {
     console.log(`[emailService] Notificação de vínculo enviada → ${vetEmail}`);
   },
 
-  // ── Notificação para sócios — autorização de vínculo concedida ───────────────
-  async notificarSociosAutorizacaoConcedida({ socioEmail, socioNome, animalNome, proprietarioNome, vetNome }) {
+  // ── Notificação para gestores — autorização de vínculo concedida ───────────────
+  async notificarGestoresAutorizacaoConcedida({ gestorEmail, gestorNome, animalNome, proprietarioNome, vetNome }) {
     if (!podeEnviar()) return;
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
     await createTransporter().sendMail({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
-      to:      socioEmail,
+      to:      gestorEmail,
       subject: `[S2Vet] Autorização concedida — ${animalNome}`,
       html: `
         <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -754,7 +754,7 @@ const emailService = {
           <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
             <h2 style="color:#111827;margin-top:0;">✅ Autorização concedida</h2>
             <p style="color:#374151;line-height:1.6;">
-              Olá, <strong>${socioNome}</strong>.<br/>
+              Olá, <strong>${gestorNome}</strong>.<br/>
               O(a) proprietário(a) <strong>${proprietarioNome}</strong> autorizou o(a) Dr(a).
               <strong>${vetNome}</strong> como responsável pelo animal <strong>${animalNome}</strong>.
             </p>
@@ -776,7 +776,7 @@ const emailService = {
         </div>
       `,
     });
-    console.log(`[emailService] Notificação de autorização enviada → ${socioEmail}`);
+    console.log(`[emailService] Notificação de autorização enviada → ${gestorEmail}`);
   },
 
   // ── Boas-vindas ao proprietário recém-cadastrado ─────────────────────────────

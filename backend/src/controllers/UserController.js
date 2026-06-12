@@ -71,7 +71,7 @@ const UserController = {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Cargo na equipe (ex: SOCIO) — definido na inclusão do membro
+      // Cargo na equipe (ex: GESTOR) — definido na inclusão do membro
       const membroEquipe = await prisma.membroEquipe.findFirst({
         where:   { userId: user.id },
         select:  { cargo: true },

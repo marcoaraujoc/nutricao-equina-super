@@ -51,7 +51,7 @@ const PrescricaoController = {
       const { page = 1, limit = 10, tipo, status, busca } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -95,7 +95,7 @@ const PrescricaoController = {
         return res.status(400).json({ error: 'animalId, medicamento e frequencia são obrigatórios' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -153,7 +153,7 @@ const PrescricaoController = {
       });
       if (!prescricaoParaCheck) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
-      const acessoUpd = await verificarAcessoAnimal({ animalId: prescricaoParaCheck.animalId, userId: req.user.id, empresaId: req.empresaId });
+      const acessoUpd = await verificarAcessoAnimal({ animalId: prescricaoParaCheck.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoUpd === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoUpd)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -202,7 +202,7 @@ const PrescricaoController = {
       });
       if (!prescricaoParaDel) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
-      const acessoDel = await verificarAcessoAnimal({ animalId: prescricaoParaDel.animalId, userId: req.user.id, empresaId: req.empresaId });
+      const acessoDel = await verificarAcessoAnimal({ animalId: prescricaoParaDel.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoDel === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoDel)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -229,7 +229,7 @@ const PrescricaoController = {
 
       if (!prescricao) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
-      const acessoFin1 = await verificarAcessoAnimal({ animalId: prescricao.animalId, userId: vet.id, empresaId: req.empresaId });
+      const acessoFin1 = await verificarAcessoAnimal({ animalId: prescricao.animalId, userId: vet.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoFin1 === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin1)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -285,7 +285,7 @@ const PrescricaoController = {
       const { animalId } = req.params;
       const vet = req.user;
 
-      const acessoFin = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId });
+      const acessoFin = await verificarAcessoAnimal({ animalId: Number(animalId), userId: vet.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoFin === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 

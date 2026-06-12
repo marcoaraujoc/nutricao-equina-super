@@ -26,12 +26,19 @@ const FornecedorController = {
       else if (ativo !== undefined) where.ativo = ativo === 'true';
       else where.ativo = true;
 
+      // Escopo por empresa: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
+      // + fornecedores da empresa ativa (seletor de empresa)
+      if (req.user?.role !== 'ADMIN') {
+        where.AND = [{ OR: [{ empresaId: null }, { empresaId: req.empresaId ?? -1 }] }];
+      }
+
       if (busca?.trim()) {
         where.OR = [
           { nome:     { contains: busca.trim(), mode: 'insensitive' } },
           { cpf:      { contains: busca.trim(), mode: 'insensitive' } },
           { cnpj:     { contains: busca.trim(), mode: 'insensitive' } },
           { telefone: { contains: busca.trim(), mode: 'insensitive' } },
+          { email:    { contains: busca.trim(), mode: 'insensitive' } },
         ];
       }
 
@@ -69,12 +76,16 @@ const FornecedorController = {
   // ADMIN → tipoEntrada=SYSTEM; demais → tipoEntrada=CLIENTE
   criar: async (req, res) => {
     const {
-      nome, cpf, cnpj, telefone, tipoServico,
+      nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
     if (!nome?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+    if (!email?.trim())
+      return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+    if (!telefone?.trim())
+      return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
     if (!tipoServico?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório' });
     if (!TIPOS_SERVICO_VALIDOS.includes(tipoServico))
@@ -85,10 +96,13 @@ const FornecedorController = {
     try {
       const fornecedor = await prisma.fornecedor.create({
         data: {
+          // SYSTEM é global; CLIENTE pertence à empresa ativa do criador
+          empresaId:   tipoEntrada === 'CLIENTE' ? (req.empresaId ?? null) : null,
           nome:        nome.trim(),
           cpf:         cpf?.trim()         || null,
           cnpj:        cnpj?.trim()        || null,
-          telefone:    telefone?.trim()    || null,
+          telefone:    telefone.trim(),
+          email:       email.trim().toLowerCase(),
           tipoServico: tipoServico.trim(),
           tipoEntrada,
           cep:         cep?.trim()         || null,
@@ -113,12 +127,16 @@ const FornecedorController = {
 
     const { id } = req.params;
     const {
-      nome, cpf, cnpj, telefone, tipoServico,
+      nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
     if (!nome?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+    if (!email?.trim())
+      return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+    if (!telefone?.trim())
+      return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
     if (tipoServico && !TIPOS_SERVICO_VALIDOS.includes(tipoServico))
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
 
@@ -132,7 +150,8 @@ const FornecedorController = {
           nome:        nome.trim(),
           cpf:         cpf?.trim()         || null,
           cnpj:        cnpj?.trim()        || null,
-          telefone:    telefone?.trim()    || null,
+          telefone:    telefone.trim(),
+          email:       email.trim().toLowerCase(),
           tipoServico: tipoServico?.trim() || existe.tipoServico,
           cep:         cep?.trim()         || null,
           endereco:    endereco?.trim()    || null,

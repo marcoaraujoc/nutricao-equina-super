@@ -10,7 +10,7 @@ import prisma from './lib/prisma';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const requestIdMiddleware = require('./middlewares/requestId');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { getEmpresaIdDoVet } = require('./lib/vetUtils');
+const { getContextoDoVet } = require('./lib/vetUtils');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { garantirFaturaAberta } = require('./services/FaturaService');
 
@@ -153,6 +153,10 @@ const tratadoresRoutes         = require('./routes/tratadores');
 const fornecedoresRoutes       = require('./routes/fornecedores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const localizacoesRoutes       = require('./routes/localizacoes');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const encaminhamentosRoutes    = require('./routes/encaminhamentos');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const agendaRoutes             = require('./routes/agenda');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -170,6 +174,8 @@ app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 app.use('/api/clinica/evolucoes',     evolucaoRoutes);
 app.use('/api/clinica/faturas',       faturaRoutes);
 app.use('/api/clinica/prescricoes',   prescricoesRoutes);
+app.use('/api/clinica/encaminhamentos', encaminhamentosRoutes);
+app.use('/api/clinica',               agendaRoutes); // /historico e /agendamentos
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);
 app.use('/api/veterinarios',          veterinariosRoutes);
@@ -300,18 +306,18 @@ async function autoAceitarSolicitacoesPendentes() {
 
       for (const s of simples) {
         if (s.tipo === 'DESVINCULO') {
-          // Desvinculo: remove vet e limpa empresa do animal
+          // Desvinculo: remove vet e limpa empresa/equipe do animal
           await prisma.animal.update({
             where: { id: s.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null },
+            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null, equipeId: null },
           });
         } else if (s.tipo === 'VINCULO') {
-          // Vinculo: associa animal à empresa do vet
-          const empId = await getEmpresaIdDoVet(s.vetUserId);
-          if (empId) {
+          // Vinculo: associa animal à empresa/equipe do vet
+          const ctx = await getContextoDoVet(s.vetUserId);
+          if (ctx.empresaId) {
             await prisma.animal.update({
               where: { id: s.animalId },
-              data:  { empresaId: empId },
+              data:  { empresaId: ctx.empresaId, equipeId: ctx.equipeId },
             });
           }
           if (s.animal.userId) await garantirFaturaAberta(s.animal.userId);

@@ -3,7 +3,7 @@
 // Middleware de verificação de permissão por módulo/ação.
 //
 // REGRAS DE OURO:
-//  1. SÓCIO tem bypass total — nunca bloqueado dentro da própria equipe.
+//  1. GESTOR tem bypass total — nunca bloqueado dentro da própria equipe.
 //  2. Permissão é verificada no banco — nunca confiamos só no JWT.
 //  3. Nível mínimo requerido é configurado por rota, não por role.
 //  4. O nível resolvido é injetado em req.permissaoNivel para uso nos services.
@@ -28,14 +28,29 @@ const NIVEL_ORDINAL = {
 
 /**
  * Resolve o equipeId da requisição.
- * Prioridade: header X-Equipe-Id > query equipeId > primeira equipe do usuário.
+ * Prioridade: equipe ativa validada pelo authenticate (header x-equipe-id do seletor
+ * de contexto) > query equipeId > equipe do usuário dentro da empresa ativa >
+ * primeira equipe do usuário.
+ * IMPORTANTE: cada equipe/empresa tem sua própria matriz — o nível resolvido aqui
+ * é sempre o do contexto ativo, nunca uma união entre equipes.
  */
 async function resolveEquipeId(req) {
-  const fromHeader = req.headers['x-equipe-id'];
-  if (fromHeader) return parseInt(fromHeader, 10);
+  // Já validado em auth.js (membro da equipe OU dono da empresa dela)
+  if (req.equipeId) return req.equipeId;
 
   const fromQuery = req.query.equipeId;
   if (fromQuery) return parseInt(fromQuery, 10);
+
+  // Empresa ativa (seletor): equipe do usuário dentro dela
+  if (req.empresaId) {
+    const membroNaEmpresa = await prisma.membroEquipe.findFirst({
+      where:   { userId: req.user.id, equipe: { empresaId: req.empresaId } },
+      select:  { equipeId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    // Sem vínculo na empresa ativa → null (caller aplica bypass de dono se for o caso)
+    return membroNaEmpresa?.equipeId ?? null;
+  }
 
   // Fallback: primeira equipe em que o usuário é membro
   const membro = await prisma.membroEquipe.findFirst({
@@ -48,15 +63,46 @@ async function resolveEquipeId(req) {
 }
 
 /**
- * Verifica se um usuário é sócio de uma equipe.
- * Sócios têm bypass total — não consultamos a matriz de permissões.
+ * Verifica se um usuário é gestor de uma equipe.
+ * Gestores têm bypass total — não consultamos a matriz de permissões.
  */
-async function isSocio(userId, equipeId) {
+async function isGestor(userId, equipeId) {
   const membro = await prisma.membroEquipe.findUnique({
     where: { equipeId_userId: { equipeId, userId } },
     select: { cargo: true },
   });
-  return membro?.cargo === 'SOCIO';
+  return membro?.cargo === 'GESTOR';
+}
+
+/**
+ * Equipes vinculadas a um PROPRIETARIO via seus animais.
+ * Usa Animal.equipeId (equipe responsável pelo animal) quando presente —
+ * segrega as permissões por equipe, não pela empresa inteira.
+ * Animais legados sem equipeId caem no escopo de todas as equipes da empresa
+ * (comportamento anterior, até serem revinculados/backfilled).
+ */
+async function getEquipeIdsDoProprietario(userId) {
+  const animais = await prisma.animal.findMany({
+    where:  { userId, empresaId: { not: null } },
+    select: { empresaId: true, equipeId: true },
+  });
+
+  const equipeIds        = new Set();
+  const empresasSemEquipe = new Set();
+  for (const a of animais) {
+    if (a.equipeId) equipeIds.add(a.equipeId);
+    else empresasSemEquipe.add(a.empresaId);
+  }
+
+  if (empresasSemEquipe.size > 0) {
+    const equipes = await prisma.equipe.findMany({
+      where:  { empresaId: { in: [...empresasSemEquipe] } },
+      select: { id: true },
+    });
+    equipes.forEach(e => equipeIds.add(e.id));
+  }
+
+  return [...equipeIds];
 }
 
 /**
@@ -65,19 +111,7 @@ async function isSocio(userId, equipeId) {
  * Retorna 'NENHUM' se o proprietário não tiver animais vinculados a nenhuma equipe.
  */
 async function getNivelPermissaoProprietario(userId, moduloSlug) {
-  const animais = await prisma.animal.findMany({
-    where:    { userId, empresaId: { not: null } },
-    select:   { empresaId: true },
-    distinct: ['empresaId'],
-  });
-  const empresaIds = animais.map(a => a.empresaId).filter(Boolean);
-  if (empresaIds.length === 0) return 'NENHUM';
-
-  const equipes = await prisma.equipe.findMany({
-    where:  { empresaId: { in: empresaIds } },
-    select: { id: true },
-  });
-  const equipeIds = equipes.map(e => e.id);
+  const equipeIds = await getEquipeIdsDoProprietario(userId);
   if (equipeIds.length === 0) return 'NENHUM';
 
   const matrizes = await prisma.matrizPerfil.findMany({
@@ -159,12 +193,16 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
       const equipeId = await resolveEquipeId(req);
 
       if (!equipeId) {
-        // Dono de empresa sem MembroEquipe: tem bypass total (igual a SOCIO)
-        const empresaOwned = await prisma.empresa.findFirst({ where: { ownerId: req.user.id } });
+        // Dono de empresa sem MembroEquipe: tem bypass total (igual a GESTOR).
+        // Com contexto ativo (req.empresaId), o bypass vale APENAS se ele for dono
+        // DAQUELA empresa — ser dono de outra empresa não concede nada aqui.
+        const empresaOwned = await prisma.empresa.findFirst({
+          where: { ownerId: req.user.id, ...(req.empresaId ? { id: req.empresaId } : {}) },
+        });
         if (empresaOwned) {
           req.permissaoNivel = 'FULL';
           req.equipeId       = null;
-          req.membroCargo    = 'SOCIO';
+          req.membroCargo    = 'GESTOR';
           return next();
         }
 
@@ -188,16 +226,28 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
       });
 
       if (!membro) {
+        // Dono da empresa da equipe sem registro de MembroEquipe → bypass de gestor
+        const equipe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { empresaId: true } });
+        const dono = equipe
+          ? await prisma.empresa.findFirst({ where: { id: equipe.empresaId, ownerId: req.user.id }, select: { id: true } })
+          : null;
+        if (dono) {
+          req.permissaoNivel = 'FULL';
+          req.equipeId       = equipeId;
+          req.membroCargo    = 'GESTOR';
+          return next();
+        }
+
         return res.status(403).json({
           error: 'Você não pertence a esta equipe.',
         });
       }
 
-      // BYPASS para sócios — têm acesso total dentro da equipe
-      if (membro.cargo === 'SOCIO') {
+      // BYPASS para gestores — têm acesso total dentro da equipe
+      if (membro.cargo === 'GESTOR') {
         req.permissaoNivel  = 'FULL';
         req.equipeId        = equipeId;
-        req.membroCargo     = 'SOCIO';
+        req.membroCargo     = 'GESTOR';
         return next();
       }
 
@@ -280,5 +330,6 @@ module.exports = {
   checkPermission,
   checkPermissaoProprietario,
   podeOperarRegistro,
+  getEquipeIdsDoProprietario,
   NIVEL_ORDINAL,
 };

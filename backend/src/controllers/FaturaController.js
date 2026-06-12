@@ -1,6 +1,7 @@
 // backend/src/controllers/FaturaController.js
 
 const prisma = require('../lib/prisma').default;
+const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -31,7 +32,7 @@ const FaturaController = {
 
   // GET /proprietarios
   // Lista todos os proprietários cujos animais estão vinculados ao vet logado
-  // OU pertencem à empresa do vet (acesso compartilhado entre sócios da equipe).
+  // OU pertencem à empresa do vet (acesso compartilhado entre gestores da equipe).
   // Quando chamado por um PROPRIETÁRIO, retorna os próprios dados (ver fatura própria).
   listarProprietarios: async (req, res) => {
     const vetId     = req.user.id;
@@ -69,18 +70,31 @@ const FaturaController = {
         return res.json({ dados });
       }
 
-      // Proprietários via vínculos diretos do vet
+      // Escopo por equipe dentro da empresa ativa (segregação entre equipes do gestor)
+      const equipeScope = empresaId
+        ? await getEquipeScopeDoUsuario(vetId, empresaId, req.equipeId)
+        : null;
+
+      // Proprietários via vínculos diretos do vet — animais de OUTRA equipe da
+      // mesma empresa ficam fora (mesma regra da listagem de pacientes)
       const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
         where:   { vetUserId: vetId, tipo: 'VINCULO', status: 'ACEITO' },
-        include: { animal: { select: { id: true, userId: true } } },
+        include: { animal: { select: { id: true, userId: true, empresaId: true, equipeId: true } } },
       });
 
-      let proprietarioIds = [...new Set(solicitacoes.map(s => s.animal.userId))];
+      const animaisVinculados = solicitacoes
+        .map(s => s.animal)
+        .filter(a => !empresaId || !equipeScope || a.empresaId !== empresaId || !a.equipeId || equipeScope.includes(a.equipeId));
+      let proprietarioIds = [...new Set(animaisVinculados.map(a => a.userId))];
 
-      // Também inclui proprietários via animais vinculados à empresa (todos os sócios veem)
+      // Também inclui proprietários via animais da(s) equipe(s) do vet na empresa
       if (empresaId) {
         const animaisEmpresa = await prisma.animal.findMany({
-          where:  { empresaId, ativo: true },
+          where: {
+            empresaId,
+            ativo: true,
+            ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
+          },
           select: { userId: true },
         });
         const idsEmpresa = animaisEmpresa.map(a => a.userId);

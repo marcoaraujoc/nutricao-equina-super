@@ -4,18 +4,34 @@
 const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
+const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
 
 const prisma = require('../lib/prisma').default;
 
-// ─── Helper: encontra a empresa do usuário (owner OU sócio convidado) ─────────
-async function getEmpresaDoSocio(userId) {
+// ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
+// empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
+// usada se o usuário for dono OU gestor dela; caso contrário cai no fallback.
+async function getEmpresaDoGestor(userId, empresaIdPreferida = null) {
+  if (empresaIdPreferida) {
+    const preferida = await prisma.empresa.findFirst({
+      where: {
+        id: Number(empresaIdPreferida),
+        OR: [
+          { ownerId: userId },
+          { equipes: { some: { membros: { some: { userId, cargo: 'GESTOR' } } } } },
+        ],
+      },
+    });
+    if (preferida) return preferida;
+  }
+
   // 1. Usuário é dono (ownerId)
   let empresa = await prisma.empresa.findFirst({ where: { ownerId: userId } });
   if (empresa) return empresa;
 
-  // 2. Usuário é sócio convidado (cargo: 'SOCIO' em alguma equipe)
+  // 2. Usuário é gestor convidado (cargo: 'GESTOR' em alguma equipe)
   const assoc = await prisma.membroEquipe.findFirst({
-    where:   { userId, cargo: 'SOCIO' },
+    where:   { userId, cargo: 'GESTOR' },
     include: { equipe: { select: { empresaId: true } } },
     orderBy: { createdAt: 'asc' },
   });
@@ -26,8 +42,9 @@ async function getEmpresaDoSocio(userId) {
 }
 
 // ─── Helper: garante empresa + equipe padrão do vet ──────────────────────────
-async function garantirEquipePadrao(vetUserId) {
-  let empresa = await getEmpresaDoSocio(vetUserId);
+// equipeIdPreferida (req.equipeId — equipe ativa do gestor CPF): usada se pertencer à empresa.
+async function garantirEquipePadrao(vetUserId, empresaIdPreferida = null, equipeIdPreferida = null) {
+  let empresa = await getEmpresaDoGestor(vetUserId, empresaIdPreferida);
   if (!empresa) {
     const vetUser = await prisma.user.findUnique({ where: { id: vetUserId }, select: { fullName: true } });
     empresa = await prisma.empresa.create({
@@ -35,7 +52,13 @@ async function garantirEquipePadrao(vetUserId) {
     });
   }
 
-  let equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+  let equipe = null;
+  if (equipeIdPreferida) {
+    equipe = await prisma.equipe.findFirst({
+      where: { id: Number(equipeIdPreferida), empresaId: empresa.id },
+    });
+  }
+  if (!equipe) equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
   if (!equipe) {
     equipe = await prisma.equipe.create({
       data: { nome: 'Equipe Principal', empresaId: empresa.id },
@@ -43,6 +66,19 @@ async function garantirEquipePadrao(vetUserId) {
   }
 
   return { empresa, equipe };
+}
+
+// ─── Helper: equipe ativa dentro da empresa ───────────────────────────────────
+// Prefere req.equipeId (seletor do gestor CPF) se a equipe pertencer à empresa;
+// caso contrário cai na primeira equipe da empresa.
+async function getEquipeAtiva(empresaId, equipeIdPreferida = null) {
+  if (equipeIdPreferida) {
+    const equipe = await prisma.equipe.findFirst({
+      where: { id: Number(equipeIdPreferida), empresaId },
+    });
+    if (equipe) return equipe;
+  }
+  return prisma.equipe.findFirst({ where: { empresaId } });
 }
 
 // ─── Helper: onboarding de vet convidado ─────────────────────────────────────
@@ -109,13 +145,25 @@ const EquipeController = {
       const { nome, cnpj, telefone, endereco } = req.body;
       if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
 
+      const nomeTrim = nome.trim();
+      const cnpjNorm = cnpj?.trim() ? cnpj.replace(/\D/g, '') : null;
+
+      // Duplicidade: mesmo gestor (e-mail) + mesmo nome + mesmo CPF/CNPJ → bloqueia.
+      // cnpj null = empresa pessoal (CPF do owner, fixo por usuário) — coberto pelo mesmo check.
+      const duplicada = await prisma.empresa.findFirst({
+        where: { ownerId: req.user.id, nome: { equals: nomeTrim, mode: 'insensitive' }, cnpj: cnpjNorm },
+      });
+      if (duplicada) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma empresa com este nome e CPF/CNPJ para o seu usuário.' });
+      }
+
       const empresa = await prisma.empresa.create({
-        data: { nome: nome.trim(), cnpj: cnpj || null, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
+        data: { nome: nomeTrim, cnpj: cnpjNorm, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
       });
       res.status(201).json({ sucesso: true, dados: empresa });
     } catch (err) {
       console.error('Erro ao criar empresa:', err);
-      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'CNPJ já cadastrado' });
+      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma empresa com este nome e CPF/CNPJ para o seu usuário.' });
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -123,15 +171,15 @@ const EquipeController = {
   listarEmpresas: async (req, res) => {
     try {
       const userId = req.user.id;
-      // Inclui empresas onde é owner OU onde é sócio convidado (cargo: 'SOCIO')
-      const membroSocio = await prisma.membroEquipe.findMany({
-        where:   { userId, cargo: 'SOCIO' },
+      // Inclui empresas onde é owner OU onde é gestor convidado (cargo: 'GESTOR')
+      const membroGestor = await prisma.membroEquipe.findMany({
+        where:   { userId, cargo: 'GESTOR' },
         select:  { equipe: { select: { empresaId: true } } },
       });
-      const empresaIdsSocio = membroSocio.map(m => m.equipe.empresaId).filter(Boolean);
+      const empresaIdsGestor = membroGestor.map(m => m.equipe.empresaId).filter(Boolean);
 
       const empresas = await prisma.empresa.findMany({
-        where:   { OR: [{ ownerId: userId }, { id: { in: empresaIdsSocio } }] },
+        where:   { OR: [{ ownerId: userId }, { id: { in: empresaIdsGestor } }] },
         include: { equipes: { include: { _count: { select: { membros: true } } } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -151,23 +199,32 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'nome e empresaId são obrigatórios' });
       }
 
-      // Verifica se o usuário é owner ou sócio da empresa
+      // Verifica se o usuário é owner ou gestor da empresa
       const userId    = req.user.id;
       const empresaId_n = Number(empresaId);
       const membro    = await prisma.membroEquipe.findFirst({
-        where: { userId, cargo: 'SOCIO', equipe: { empresaId: empresaId_n } },
+        where: { userId, cargo: 'GESTOR', equipe: { empresaId: empresaId_n } },
       });
       const empresa = await prisma.empresa.findFirst({
         where: { id: empresaId_n, OR: [{ ownerId: userId }, { id: membro ? empresaId_n : -1 }] },
       });
       if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
 
+      // Duplicidade: nome de equipe único dentro da empresa
+      const equipeDuplicada = await prisma.equipe.findFirst({
+        where: { empresaId: empresaId_n, nome: { equals: nome.trim(), mode: 'insensitive' } },
+      });
+      if (equipeDuplicada) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma equipe com este nome nesta empresa.' });
+      }
+
       const equipe = await prisma.equipe.create({
-        data: { nome: nome.trim(), empresaId: Number(empresaId) },
+        data: { nome: nome.trim(), empresaId: empresaId_n },
       });
       res.status(201).json({ sucesso: true, dados: equipe });
     } catch (err) {
       console.error('Erro ao criar equipe:', err);
+      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma equipe com este nome nesta empresa.' });
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -188,10 +245,10 @@ const EquipeController = {
       }
 
       const vetUserId = req.user.id;
-      const empresa   = await getEmpresaDoSocio(vetUserId);
+      const empresa   = await getEmpresaDoGestor(vetUserId, req.empresaId);
       if (!empresa) return res.json({ sucesso: true, dados: [] });
 
-      const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+      const equipe = await getEquipeAtiva(empresa.id, req.equipeId);
       if (!equipe)  return res.json({ sucesso: true, dados: [] });
 
       const convites = await prisma.conviteEquipe.findMany({
@@ -206,7 +263,7 @@ const EquipeController = {
     }
   },
 
-  // ── Renomear equipe (apenas sócios da equipe) ────────────────────────────────
+  // ── Renomear equipe (apenas gestores da equipe) ────────────────────────────────
 
   renomearEquipe: async (req, res) => {
     try {
@@ -217,13 +274,13 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Nome da equipe é obrigatório.' });
       }
 
-      // Verifica que o usuário é sócio da equipe (ADMIN tem acesso irrestrito)
+      // Verifica que o usuário é gestor da equipe (ADMIN tem acesso irrestrito)
       if (req.user.role !== 'ADMIN') {
         const membro = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
         });
-        if (!membro || membro.cargo !== 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem renomear a equipe.' });
+        if (!membro || membro.cargo !== 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem renomear a equipe.' });
         }
       }
 
@@ -240,7 +297,7 @@ const EquipeController = {
     }
   },
 
-  // ── Admin: todas as empresas com sócios e membros agrupados ─────────────────
+  // ── Admin: todas as empresas com gestores e membros agrupados ─────────────────
 
   listarTodasEmpresasAdmin: async (req, res) => {
     try {
@@ -266,7 +323,7 @@ const EquipeController = {
         },
       });
 
-      // Ordena membros de cada equipe: SOCIO primeiro, depois alfabético
+      // Ordena membros de cada equipe: GESTOR primeiro, depois alfabético
       const dados = empresas.map(emp => ({
         id:     emp.id,
         nome:   emp.nome,
@@ -275,8 +332,8 @@ const EquipeController = {
           id:   eq.id,
           nome: eq.nome,
           membros: eq.membros.sort((a, b) => {
-            if (a.cargo === 'SOCIO' && b.cargo !== 'SOCIO') return -1;
-            if (b.cargo === 'SOCIO' && a.cargo !== 'SOCIO') return  1;
+            if (a.cargo === 'GESTOR' && b.cargo !== 'GESTOR') return -1;
+            if (b.cargo === 'GESTOR' && a.cargo !== 'GESTOR') return  1;
             return (a.user.fullName ?? '').localeCompare(b.user.fullName ?? '');
           }),
         })),
@@ -307,7 +364,7 @@ const EquipeController = {
           : todasEquipes[0];
 
         if (!equipe) {
-          return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: true, todasEquipes: [] });
+          return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: true, todasEquipes: [] });
         }
 
         const membros = await prisma.membroEquipe.findMany({
@@ -323,21 +380,23 @@ const EquipeController = {
           sucesso: true,
           dados:        membros,
           equipeId:     equipe.id,
-          isSocio:      true,
+          isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
         });
       }
 
-      // Owner OU sócio convidado (cargo: 'SOCIO') — ambos têm isSocio=true
-      const empresa = await getEmpresaDoSocio(vetUserId);
-      const isSocio = !!empresa;
+      // Owner OU gestor convidado (cargo: 'GESTOR') — ambos têm isGestor=true
+      const empresa = await getEmpresaDoGestor(vetUserId, req.empresaId);
+      const isGestor = !!empresa;
 
-      if (!empresa) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
+      if (!empresa) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
 
       const equipes = await prisma.equipe.findMany({ where: { empresaId: empresa.id }, orderBy: { createdAt: 'asc' } });
-      if (equipes.length === 0) return res.json({ sucesso: true, dados: [], equipeId: null, isSocio: false });
+      if (equipes.length === 0) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
 
-      const equipeAlvo = equipeIdParam ? equipes.find(e => e.id === equipeIdParam) ?? equipes[0] : equipes[0];
+      // Prioridade: query param explícito > equipe ativa do seletor (req.equipeId) > primeira
+      const equipeAlvoId = equipeIdParam ?? req.equipeId;
+      const equipeAlvo = equipeAlvoId ? equipes.find(e => e.id === equipeAlvoId) ?? equipes[0] : equipes[0];
 
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
@@ -351,7 +410,7 @@ const EquipeController = {
         sucesso: true,
         dados:        membros,
         equipeId:     equipeAlvo.id,
-        isSocio,
+        isGestor,
         empresaId:    empresa.id,
         todasEquipes: equipes.map(e => ({ id: e.id, nome: e.nome, empresaId: empresa.id, empresaNome: empresa.nome ?? '' })),
       });
@@ -367,7 +426,7 @@ const EquipeController = {
 
       // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
       if (req.user.role !== 'ADMIN') {
-        const empresa = await getEmpresaDoSocio(req.user.id);
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (empresa) {
           const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
           if (!equipe || equipe.empresaId !== empresa.id) {
@@ -396,7 +455,7 @@ const EquipeController = {
 
       // Isolamento: verifica que o solicitante pertence à empresa desta equipe
       if (req.user.role !== 'ADMIN') {
-        const empresa = await getEmpresaDoSocio(req.user.id);
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (empresa) {
           const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
           if (!equipe || equipe.empresaId !== empresa.id) {
@@ -434,11 +493,11 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'fullName, email e cargo são obrigatórios' });
       }
 
-      if (cargo === 'SOCIO' && req.user.role !== 'ADMIN') {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+      if (cargo === 'GESTOR' && req.user.role !== 'ADMIN') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
-      const { equipe } = await garantirEquipePadrao(vetUserId);
+      const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
 
       let usuario = await prisma.user.findUnique({ where: { email } });
       if (!usuario) {
@@ -482,20 +541,20 @@ const EquipeController = {
       });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
 
-      // Autorização: ADMIN, ou sócio da empresa da equipe do membro
+      // Autorização: ADMIN, ou gestor da empresa da equipe do membro
       if (req.user.role !== 'ADMIN') {
-        const empresa = await getEmpresaDoSocio(req.user.id);
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (!empresa || membro.equipe?.empresaId !== empresa.id) {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios da equipe podem editar membros.' });
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores da equipe podem editar membros.' });
         }
-        // Sócio não edita outro sócio (inclui troca de senha)
-        if (membro.cargo === 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Sócios não podem ser editados por outros sócios.' });
+        // Gestor não edita outro gestor (inclui troca de senha)
+        if (membro.cargo === 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Gestores não podem ser editados por outros gestores.' });
         }
       }
 
-      if (cargo === 'SOCIO' && req.user.role !== 'ADMIN') {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+      if (cargo === 'GESTOR' && req.user.role !== 'ADMIN') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
       if (senha) {
@@ -547,16 +606,16 @@ const EquipeController = {
     try {
       const { membroId } = req.params;
 
-      // Sócios não podem excluir outros sócios — apenas desativar
+      // Gestores não podem excluir outros gestores — apenas desativar
       if (req.user.role !== 'ADMIN') {
         const alvo = await prisma.membroEquipe.findUnique({
           where:  { id: Number(membroId) },
           select: { cargo: true },
         });
-        if (alvo?.cargo === 'SOCIO') {
+        if (alvo?.cargo === 'GESTOR') {
           return res.status(403).json({
             sucesso: false,
-            mensagem: 'Sócios não podem ser excluídos por outros sócios. Use a opção de desativar.',
+            mensagem: 'Gestores não podem ser excluídos por outros gestores. Use a opção de desativar.',
           });
         }
       }
@@ -570,8 +629,8 @@ const EquipeController = {
     }
   },
 
-  // ADMIN: remove o sócio da equipe e desativa a conta
-  removerSocioAdmin: async (req, res) => {
+  // ADMIN: remove o gestor da equipe e desativa a conta
+  removerGestorAdmin: async (req, res) => {
     try {
       if (req.user.role !== 'ADMIN') {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem usar esta ação.' });
@@ -588,8 +647,8 @@ const EquipeController = {
       if (!membro) {
         return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado nesta equipe.' });
       }
-      if (membro.cargo !== 'SOCIO') {
-        return res.status(400).json({ sucesso: false, mensagem: 'Esta rota é exclusiva para remoção de sócios.' });
+      if (membro.cargo !== 'GESTOR') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Esta rota é exclusiva para remoção de gestores.' });
       }
 
       await prisma.$transaction([
@@ -599,7 +658,7 @@ const EquipeController = {
 
       res.json({ sucesso: true, mensagem: `${membro.user.fullName} foi removido e sua conta foi excluída.` });
     } catch (err) {
-      console.error('Erro ao remover sócio:', err);
+      console.error('Erro ao remover gestor:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -615,7 +674,7 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
       }
 
-      const { equipe } = await garantirEquipePadrao(vetUserId);
+      const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
 
       // Bloqueia re-convite: membro já existente
       const usuarioCheck = await prisma.user.findUnique({ where: { email } });
@@ -742,7 +801,7 @@ const EquipeController = {
   incluirMembroDireto: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
-      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado } = req.body;
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
@@ -755,7 +814,24 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
       }
 
-      const { equipe } = await garantirEquipePadrao(vetUserId);
+      // Cargo PRESTADOR: amarra a conta de login ao cadastro Fornecedor (tipoServico
+      // alimenta o seletor de encaminhamento). Existente → vincula; novo → cria CLIENTE.
+      let fornecedorVinculo = null;
+      if (cargo === 'PRESTADOR') {
+        if (fornecedorId) {
+          fornecedorVinculo = await prisma.fornecedor.findUnique({ where: { id: Number(fornecedorId) } });
+          if (!fornecedorVinculo) {
+            return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
+          }
+        } else {
+          const { TIPOS_SERVICO_VALIDOS } = require('./FornecedorController');
+          if (!tipoServico?.trim() || !TIPOS_SERVICO_VALIDOS.includes(tipoServico)) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório para fornecedor' });
+          }
+        }
+      }
+
+      const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
 
       // Bloqueia se já é membro
       const usuarioCheck = await prisma.user.findUnique({ where: { email } });
@@ -778,7 +854,7 @@ const EquipeController = {
       const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
       const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', SOCIO: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', PRESTADOR: 'FORNECEDOR' };
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', PRESTADOR: 'FORNECEDOR' };
       const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
 
       let usuarioCriado = false;
@@ -815,10 +891,41 @@ const EquipeController = {
         });
       }
 
+      // Fornecedor já vinculado a OUTRA conta não pode ser reutilizado
+      if (fornecedorVinculo?.userId && fornecedorVinculo.userId !== usuario.id) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Este fornecedor já está vinculado a outro usuário' });
+      }
+
       // Adicionar à equipe diretamente
       await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: usuario.id, cargo },
       });
+
+      // Vincular/criar cadastro Fornecedor do prestador
+      if (cargo === 'PRESTADOR') {
+        if (fornecedorVinculo) {
+          await prisma.fornecedor.update({
+            where: { id: fornecedorVinculo.id },
+            data: {
+              userId:   usuario.id,
+              email:    fornecedorVinculo.email    || email,
+              telefone: fornecedorVinculo.telefone || phone.trim(),
+            },
+          });
+        } else {
+          await prisma.fornecedor.create({
+            data: {
+              nome:        fullName.trim(),
+              email,
+              telefone:    phone.trim(),
+              tipoServico: tipoServico.trim(),
+              tipoEntrada: 'CLIENTE',
+              empresaId:   req.empresaId ?? null,
+              userId:      usuario.id,
+            },
+          });
+        }
+      }
 
       // Propagar permissões do MatrizPerfil para o novo membro
       await PermissaoService.aplicarPermissoesPadrao({
@@ -867,7 +974,7 @@ const EquipeController = {
     }
   },
 
-  convidarSocioAdmin: async (req, res) => {
+  convidarGestorAdmin: async (req, res) => {
     try {
       if (req.user.role !== 'ADMIN') {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem usar esta rota.' });
@@ -929,8 +1036,10 @@ const EquipeController = {
           equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
         }
       } else if (isCnpj) {
-        // CNPJ: reutiliza empresa pelo CNPJ ou cria nova
-        empresa = await prisma.empresa.findUnique({ where: { cnpj: cnpjNorm } });
+        // CNPJ: reutiliza empresa por CNPJ + nome (mesmo CNPJ com nome diferente cria outra empresa)
+        empresa = await prisma.empresa.findFirst({
+          where: { cnpj: cnpjNorm, nome: { equals: empresaNome.trim(), mode: 'insensitive' } },
+        });
         if (!empresa) {
           empresa = await prisma.empresa.create({
             data: { nome: empresaNome.trim(), cnpj: cnpjNorm, ownerId: convidadoId },
@@ -941,15 +1050,20 @@ const EquipeController = {
           equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
         }
       } else {
-        // CPF: cria empresa pessoal para o convidado
-        empresa = await prisma.empresa.findFirst({ where: { ownerId: convidadoId, cnpj: null } });
+        // CPF: empresa pessoal do convidado — reutiliza só se o nome também coincidir
+        // (mesmo CPF + e-mail com nome diferente = nova empresa permitida)
+        empresa = await prisma.empresa.findFirst({
+          where: { ownerId: convidadoId, cnpj: null, nome: { equals: empresaNome.trim(), mode: 'insensitive' } },
+        });
         if (!empresa) {
           empresa = await prisma.empresa.create({
             data: { nome: empresaNome.trim(), cnpj: null, ownerId: convidadoId },
           });
         }
         const nomeEquipeFinal = nomeEquipe?.trim() || 'Equipe Principal';
-        equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+        equipe = await prisma.equipe.findFirst({
+          where: { empresaId: empresa.id, nome: { equals: nomeEquipeFinal, mode: 'insensitive' } },
+        });
         if (!equipe) {
           equipe = await prisma.equipe.create({ data: { nome: nomeEquipeFinal, empresaId: empresa.id } });
         }
@@ -971,7 +1085,7 @@ const EquipeController = {
 
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const convite   = await prisma.conviteEquipe.create({
-        data: { equipeId: equipe.id, email, cargo: 'SOCIO', expiresAt },
+        data: { equipeId: equipe.id, email, cargo: 'GESTOR', expiresAt },
       });
 
       try {
@@ -1000,11 +1114,11 @@ const EquipeController = {
         token:        convite.token,
         usuarioCriado,
         senhaInicial: usuarioCriado ? SENHA_INICIAL : null,
-      }).catch(err => console.error('[emailService] Falha ao enviar convite sócio:', err));
+      }).catch(err => console.error('[emailService] Falha ao enviar convite gestor:', err));
 
-      return res.status(201).json({ sucesso: true, dados: convite, mensagem: 'Convite de sócio enviado por e-mail' });
+      return res.status(201).json({ sucesso: true, dados: convite, mensagem: 'Convite de gestor enviado por e-mail' });
     } catch (err) {
-      console.error('Erro ao convidar sócio:', err);
+      console.error('Erro ao convidar gestor:', err);
       if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: req.body.cnpj?.trim() ? 'CNPJ já cadastrado para outra empresa.' : 'Conflito de dados ao criar empresa.' });
       return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
@@ -1020,15 +1134,15 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
       }
 
-      // Apenas ADMIN (role sistêmica) ou SÓCIO da equipe podem usar esta rota
+      // Apenas ADMIN (role sistêmica) ou GESTOR da equipe podem usar esta rota
       const isAdmin = req.user.role === 'ADMIN';
       if (!isAdmin) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
           select: { cargo: true },
         });
-        if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores ou sócios podem convidar membros.' });
+        if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores ou gestores podem convidar membros.' });
         }
       }
 
@@ -1092,8 +1206,8 @@ const EquipeController = {
         } catch { /* ignora se coluna ainda não existir */ }
       }
 
-      // ADMIN convida como Sócio → email diferenciado (cria organização)
-      // SÓCIO convida membros comuns → email padrão de equipe
+      // ADMIN convida como Gestor → email diferenciado (cria organização)
+      // GESTOR convida membros comuns → email padrão de equipe
       if (isAdmin) {
         emailService.enviarConviteAdmin({
           email,
@@ -1102,7 +1216,7 @@ const EquipeController = {
           senhaInicial:  usuarioCriado ? SENHA_INICIAL : null,
         }).catch(err => console.error('[emailService] Falha ao enviar convite admin:', err));
       } else {
-        const convidadoPorNome = req.user.fullName || 'Sócio';
+        const convidadoPorNome = req.user.fullName || 'Gestor';
         emailService.enviarConviteEquipe({
           email,
           cargo,
@@ -1186,7 +1300,7 @@ const EquipeController = {
 
   // GET /api/equipes/minhas-especies
   // Retorna os nomes das espécies que a equipe/empresa do usuário atende.
-  // ADMIN → todas as espécies. VET → do próprio VetPerfil. SOCIO/outros → união dos vets da equipe.
+  // ADMIN → todas as espécies. VET → do próprio VetPerfil. GESTOR/outros → união dos vets da equipe.
   getMinhasEspecies: async (req, res) => {
     try {
       const userId = Number(req.user.id);
@@ -1207,7 +1321,7 @@ const EquipeController = {
         return res.json({ sucesso: true, dados: [...new Set(nomes)] });
       }
 
-      // Para SOCIO ou usuário sem VetPerfil: busca as espécies de todos os vets da equipe
+      // Para GESTOR ou usuário sem VetPerfil: busca as espécies de todos os vets da equipe
       const membro = await prisma.membroEquipe.findFirst({
         where:   { userId },
         include: { equipe: { select: { id: true, membros: { select: { userId: true } } } } },
@@ -1233,27 +1347,46 @@ const EquipeController = {
 
   getMinhaEquipe: async (req, res) => {
     try {
-      const membro = await prisma.membroEquipe.findFirst({
-        where: { userId: Number(req.user.id) },
-        include: {
-          equipe: {
-            include: {
-              empresa: true,
-              membros: {
-                include: {
-                  user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } },
-                },
-                orderBy: { createdAt: 'asc' },
+      // Prioriza equipe ativa (gestor CPF) > empresa ativa (gestor CNPJ) > primeira equipe
+      const whereBase = { userId: Number(req.user.id) };
+      const where = req.equipeId
+        ? { ...whereBase, equipeId: req.equipeId }
+        : req.empresaId
+          ? { ...whereBase, equipe: { empresaId: req.empresaId } }
+          : whereBase;
+
+      const includeEquipe = {
+        equipe: {
+          include: {
+            empresa: true,
+            membros: {
+              include: {
+                user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } },
               },
-              convites: {
-                where: { status: 'PENDENTE', expiresAt: { gt: new Date() } },
-                orderBy: { createdAt: 'desc' },
-              },
+              orderBy: { createdAt: 'asc' },
+            },
+            convites: {
+              where: { status: 'PENDENTE', expiresAt: { gt: new Date() } },
+              orderBy: { createdAt: 'desc' },
             },
           },
         },
+      };
+
+      let membro = await prisma.membroEquipe.findFirst({
+        where,
+        include: includeEquipe,
         orderBy: { createdAt: 'asc' },
       });
+
+      // Sem MembroEquipe no contexto ativo (ex.: owner sem registro) → primeira equipe geral
+      if (!membro?.equipe && (req.equipeId || req.empresaId)) {
+        membro = await prisma.membroEquipe.findFirst({
+          where: whereBase,
+          include: includeEquipe,
+          orderBy: { createdAt: 'asc' },
+        });
+      }
 
       if (!membro?.equipe) return res.status(404).json({ sucesso: false, mensagem: 'Nenhuma equipe encontrada.' });
       res.json({ sucesso: true, dados: membro.equipe });
@@ -1345,10 +1478,10 @@ const EquipeController = {
       const userId    = req.user.id;
       const conviteId = Number(req.params.conviteId);
 
-      const empresa = await getEmpresaDoSocio(userId);
+      const empresa = await getEmpresaDoGestor(userId, req.empresaId);
       if (!empresa) return res.status(403).json({ sucesso: false, mensagem: 'Sem permissão' });
 
-      const equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+      const equipe = await getEquipeAtiva(empresa.id, req.equipeId);
       if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Sem permissão' });
 
       const convite = await prisma.conviteEquipe.findFirst({ where: { id: conviteId, equipeId: equipe.id } });
@@ -1374,8 +1507,8 @@ const EquipeController = {
         where: { equipeId_userId: { equipeId, userId: req.user.id } },
         select: { cargo: true },
       });
-      if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem cancelar convites.' });
+      if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem cancelar convites.' });
       }
 
       await prisma.conviteEquipe.updateMany({
@@ -1403,17 +1536,17 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente.' });
       }
 
-      // ADMIN bypass; Sócio pode alterar mas não pode promover a SÓCIO
+      // ADMIN bypass; Gestor pode alterar mas não pode promover a GESTOR
       if (req.user.role !== 'ADMIN') {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
           select: { cargo: true },
         });
-        if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem alterar cargos.' });
+        if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem alterar cargos.' });
         }
-        if (cargos.includes('SOCIO')) {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+        if (cargos.includes('GESTOR')) {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
         }
       }
 
@@ -1427,8 +1560,8 @@ const EquipeController = {
         }
       }
 
-      // Cargo primário: SOCIO tem prioridade, senão o primeiro da lista
-      const cargoPrimario = cargos.includes('SOCIO') ? 'SOCIO' : cargos[0];
+      // Cargo primário: GESTOR tem prioridade, senão o primeiro da lista
+      const cargoPrimario = cargos.includes('GESTOR') ? 'GESTOR' : cargos[0];
 
       // Carrega as matrizes de permissão de todos os cargos e faz a união (nivel máximo)
       const NIVEL_ORD = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
@@ -1490,17 +1623,17 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente — não pode ser concedido como cargo de equipe.' });
       }
 
-      // ADMIN tem bypass total; SÓCIO pode alterar cargos mas não pode promover a SÓCIO
+      // ADMIN tem bypass total; GESTOR pode alterar cargos mas não pode promover a GESTOR
       if (req.user.role !== 'ADMIN') {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
           select: { cargo: true },
         });
-        if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas sócios podem alterar cargos.' });
+        if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem alterar cargos.' });
         }
-        if (cargo === 'SOCIO') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Sócio.' });
+        if (cargo === 'GESTOR') {
+          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
         }
       }
 
@@ -1527,9 +1660,13 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'empresaNome e equipeName são obrigatórios.' });
       }
 
-      const empresaExistente = await getEmpresaDoSocio(req.user.id);
-      if (empresaExistente) {
-        return res.status(409).json({ sucesso: false, mensagem: 'Você já pertence a uma empresa cadastrada.' });
+      // Gestor pode ter mais de uma empresa/equipe — bloqueia apenas duplicata exata
+      // (mesmo e-mail/owner + mesmo nome de empresa; setup não recebe CNPJ → empresa pessoal)
+      const duplicada = await prisma.empresa.findFirst({
+        where: { ownerId: req.user.id, nome: { equals: empresaNome.trim(), mode: 'insensitive' } },
+      });
+      if (duplicada) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Você já possui uma empresa com este nome.' });
       }
 
       const resultado = await prisma.$transaction(async (tx) => {
@@ -1540,7 +1677,7 @@ const EquipeController = {
           data: { nome: equipeName.trim(), empresaId: empresa.id },
         });
         await tx.membroEquipe.create({
-          data: { equipeId: equipe.id, userId: req.user.id, cargo: 'SOCIO' },
+          data: { equipeId: equipe.id, userId: req.user.id, cargo: 'GESTOR' },
         });
         return { empresa, equipe };
       });
@@ -1554,7 +1691,7 @@ const EquipeController = {
 
   // ── Permissões do usuário logado ─────────────────────────────────────────────
   // Retorna mapa plano { slug: nivel } para o frontend aplicar controle de acesso.
-  // Sócio recebe FULL em tudo automaticamente (bypass via flag isSocio).
+  // Gestor recebe FULL em tudo automaticamente (bypass via flag isGestor).
   // PROPRIETARIO: lê MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas aos seus animais.
   minhasPermissoes: async (req, res) => {
     try {
@@ -1564,33 +1701,23 @@ const EquipeController = {
       if (req.user.role === 'ADMIN') {
         const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
         const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
-        return res.json({ sucesso: true, dados: { permissoes, isSocio: true, isAdmin: true, temEquipe: true } });
+        return res.json({ sucesso: true, dados: { permissoes, isGestor: true, isAdmin: true, temEquipe: true } });
       }
 
       // ── PROPRIETARIO: lê MatrizPerfil das equipes vinculadas aos seus animais ──
+      // Segregação por equipe: usa Animal.equipeId (equipe responsável); animais
+      // legados sem equipeId caem no escopo de todas as equipes da empresa.
       if (req.user.userType === 'PROPRIETARIO') {
-        const animaisDoOwner = await prisma.animal.findMany({
-          where:    { userId: Number(userId), empresaId: { not: null } },
-          select:   { empresaId: true },
-          distinct: ['empresaId'],
-        });
+        const equipeIds = await getEquipeIdsDoProprietario(Number(userId));
 
-        const empresaIds = animaisDoOwner.map(a => a.empresaId).filter(Boolean);
-
-        if (empresaIds.length === 0) {
+        if (equipeIds.length === 0) {
           return res.json({ sucesso: true, dados: {
             permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
-            isSocio:       false,
+            isGestor:       false,
             temEquipe:     false,
             isProprietario: true,
           }});
         }
-
-        const equipes = await prisma.equipe.findMany({
-          where:  { empresaId: { in: empresaIds } },
-          select: { id: true },
-        });
-        const equipeIds = equipes.map(e => e.id);
 
         const matrizes = await prisma.matrizPerfil.findMany({
           where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
@@ -1621,27 +1748,60 @@ const EquipeController = {
 
         return res.json({ sucesso: true, dados: {
           permissoes,
-          isSocio:       false,
+          isGestor:       false,
           temEquipe:     equipeIds.length > 0,
           isProprietario: true,
         }});
       }
 
-      const membro = await prisma.membroEquipe.findFirst({
-        where:   { userId },
-        select:  { equipeId: true, cargo: true },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      if (!membro) {
-        return res.json({ sucesso: true, dados: { permissoes: {}, isSocio: false, temEquipe: false } });
+      // Resolve o vínculo do CONTEXTO ATIVO — cargo e permissões podem diferir entre
+      // equipes/empresas (ex.: GESTOR na equipe A, VETERINARIO na equipe B).
+      // Prioridade: equipe ativa > equipe dentro da empresa ativa > vínculo mais recente.
+      let membro = null;
+      if (req.equipeId) {
+        membro = await prisma.membroEquipe.findUnique({
+          where:  { equipeId_userId: { equipeId: req.equipeId, userId } },
+          select: { equipeId: true, cargo: true },
+        });
+      }
+      if (!membro && req.empresaId) {
+        membro = await prisma.membroEquipe.findFirst({
+          where:   { userId, equipe: { empresaId: req.empresaId } },
+          select:  { equipeId: true, cargo: true },
+          orderBy: { createdAt: 'desc' },
+        });
       }
 
-      if (membro.cargo === 'SOCIO') {
-        // Sócio tem bypass — retorna FULL em todos os módulos
+      // Dono da empresa ativa sem MembroEquipe nela → bypass de gestor
+      if (!membro && req.empresaId) {
+        const dono = await prisma.empresa.findFirst({
+          where:  { id: req.empresaId, ownerId: userId },
+          select: { id: true },
+        });
+        if (dono) {
+          const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
+          const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
+          return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
+        }
+      }
+
+      if (!membro) {
+        membro = await prisma.membroEquipe.findFirst({
+          where:   { userId },
+          select:  { equipeId: true, cargo: true },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+
+      if (!membro) {
+        return res.json({ sucesso: true, dados: { permissoes: {}, isGestor: false, temEquipe: false } });
+      }
+
+      if (membro.cargo === 'GESTOR') {
+        // Gestor tem bypass — retorna FULL em todos os módulos
         const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
         const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
-        return res.json({ sucesso: true, dados: { permissoes, isSocio: true, temEquipe: true } });
+        return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
       }
 
       const registros = await prisma.permissaoMembro.findMany({
@@ -1650,7 +1810,7 @@ const EquipeController = {
       });
 
       const permissoes = Object.fromEntries(registros.map(r => [r.moduloSlug, r.nivel]));
-      return res.json({ sucesso: true, dados: { permissoes, isSocio: false, temEquipe: true } });
+      return res.json({ sucesso: true, dados: { permissoes, isGestor: false, temEquipe: true } });
     } catch (err) {
       console.error('Erro ao buscar permissões:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

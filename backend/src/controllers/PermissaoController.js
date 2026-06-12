@@ -4,11 +4,41 @@
 const PermissaoService = require('../services/PermissaoService');
 const prisma = require('../lib/prisma').default;
 
+// ─── Autorização: ADMIN, GESTOR da equipe ou dono da empresa da equipe ─────────
+// Perfis/permissões são POR EQUIPE — um gestor de outra equipe/empresa não pode
+// ler nem alterar a matriz desta. Retorna null se autorizado, ou { status, mensagem }.
+async function autorizarGestorDaEquipe(req, equipeId) {
+  if (req.user.role === 'ADMIN') return null;
+
+  const equipe = await prisma.equipe.findUnique({
+    where:  { id: equipeId },
+    select: { empresaId: true },
+  });
+  if (!equipe) return { status: 404, mensagem: 'Equipe não encontrada.' };
+
+  const membro = await prisma.membroEquipe.findUnique({
+    where:  { equipeId_userId: { equipeId, userId: req.user.id } },
+    select: { cargo: true },
+  });
+  if (membro?.cargo === 'GESTOR') return null;
+
+  const dono = await prisma.empresa.findFirst({
+    where:  { id: equipe.empresaId, ownerId: req.user.id },
+    select: { id: true },
+  });
+  if (dono) return null;
+
+  return { status: 403, mensagem: 'Apenas gestores desta equipe podem gerenciar permissões.' };
+}
+
 const PermissaoController = {
 
   async getPermissoesMembro(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const userId   = Number(req.params.membroUserId);
       const dados    = await PermissaoService.getPermissoesMembro({ equipeId, userId });
       return res.json({ sucesso: true, dados });
@@ -21,6 +51,9 @@ const PermissaoController = {
   async atualizarPermissoes(req, res) {
     try {
       const equipeId      = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const alvoUserId    = Number(req.params.membroUserId);
       const { alteracoes } = req.body;
 
@@ -48,6 +81,9 @@ const PermissaoController = {
   async getPermissoesProprietarios(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const dados    = await PermissaoService.getPermissoesProprietarios({ equipeId });
       return res.json({ sucesso: true, dados });
     } catch (err) {
@@ -59,6 +95,9 @@ const PermissaoController = {
   async atualizarPermissoesProprietario(req, res) {
     try {
       const equipeId    = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const alvoUserId  = Number(req.params.alvoUserId);
       const { funcionalidades } = req.body;
 
@@ -84,6 +123,9 @@ const PermissaoController = {
   async getPerfisByEquipe(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const dados    = await PermissaoService.getPerfisByEquipe({ equipeId });
       return res.json({ sucesso: true, dados });
     } catch (err) {
@@ -95,6 +137,9 @@ const PermissaoController = {
   async getMatrizPorCargo(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const { cargo } = req.params;
       const dados    = await PermissaoService.getMatrizPorCargo({ equipeId, cargo });
       return res.json({ sucesso: true, dados });
@@ -107,6 +152,9 @@ const PermissaoController = {
   async salvarMatrizPorCargo(req, res) {
     try {
       const equipeId         = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const { cargo }        = req.params;
       const { permissoes }   = req.body;
 
@@ -138,15 +186,8 @@ const PermissaoController = {
         return res.status(400).json({ sucesso: false, mensagem: 'slug e label são obrigatórios.' });
       }
 
-      // Garante que o usuário pertence à equipe (ADMIN tem acesso irrestrito)
-      if (req.user.role !== 'ADMIN') {
-        const membro = await prisma.membroEquipe.findUnique({
-          where: { equipeId_userId: { equipeId, userId: req.user.id } },
-        });
-        if (!membro) {
-          return res.status(403).json({ sucesso: false, mensagem: 'Você não pertence a esta equipe.' });
-        }
-      }
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
 
       const perfil = await PermissaoService.criarPerfil({ equipeId, slug, label, descricao });
       return res.status(201).json({ sucesso: true, dados: perfil });
@@ -160,6 +201,9 @@ const PermissaoController = {
   async deletarPerfil(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const { cargo } = req.params;
 
       await PermissaoService.deletarPerfil({ equipeId, slug: cargo });
@@ -174,6 +218,9 @@ const PermissaoController = {
   async getAuditoria(req, res) {
     try {
       const equipeId = Number(req.params.equipeId);
+      const negado = await autorizarGestorDaEquipe(req, equipeId);
+      if (negado) return res.status(negado.status).json({ sucesso: false, mensagem: negado.mensagem });
+
       const page     = Number(req.query.page)  || 1;
       const limit    = Number(req.query.limit) || 30;
       const dados    = await PermissaoService.getAuditoriaPermissoes({ equipeId, page, limit });

@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const prisma = require('../lib/prisma').default;
 const { aplicarPermissoesPadrao } = require('./PermissaoService');
 
-const CARGOS_VALIDOS      = ['SOCIO', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];
+const CARGOS_VALIDOS      = ['GESTOR', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];
 const HORAS_EXPIRACAO_CONVITE = 72;
 
 // =============================================================================
@@ -46,13 +46,15 @@ async function getMinhaEquipe(userId) {
 }
 
 async function criarEmpresaEEquipe({ userId, empresaNome, equipeName }) {
-  // Um usuário só pode ser owner de uma empresa
-  const empresaExistente = await prisma.empresa.findFirst({ where: { ownerId: userId } });
-  if (empresaExistente) throw new Error('Você já possui uma empresa cadastrada.');
+  // Gestor pode ter várias empresas — bloqueia apenas duplicata (mesmo owner/e-mail + mesmo nome)
+  const empresaDuplicada = await prisma.empresa.findFirst({
+    where: { ownerId: userId, nome: { equals: empresaNome.trim(), mode: 'insensitive' } },
+  });
+  if (empresaDuplicada) throw new Error('Você já possui uma empresa com este nome.');
 
   return prisma.$transaction(async (tx) => {
     const empresa = await tx.empresa.create({
-      data: { nome: empresaNome, ownerId: userId },
+      data: { nome: empresaNome.trim(), ownerId: userId },
     });
 
     const equipe = await tx.equipe.create({
@@ -60,13 +62,13 @@ async function criarEmpresaEEquipe({ userId, empresaNome, equipeName }) {
         nome:      equipeName,
         empresaId: empresa.id,
         membros: {
-          create: { userId, cargo: 'SOCIO' },
+          create: { userId, cargo: 'GESTOR' },
         },
       },
       include: { empresa: true, membros: true },
     });
 
-    // Sócios não têm entradas na matriz de permissões — têm bypass total
+    // Gestores não têm entradas na matriz de permissões — têm bypass total
     return { empresa, equipe };
   });
 }
@@ -80,13 +82,13 @@ async function convidarMembro({ equipeId, email, cargo, atualizadoPorId }) {
     throw new Error(`Cargo inválido: ${cargo}. Use: ${CARGOS_VALIDOS.join(', ')}`);
   }
 
-  // Garante que quem convida é sócio
+  // Garante que quem convida é gestor
   const membroConvidante = await prisma.membroEquipe.findUnique({
     where: { equipeId_userId: { equipeId, userId: atualizadoPorId } },
     select: { cargo: true },
   });
-  if (!membroConvidante || membroConvidante.cargo !== 'SOCIO') {
-    throw new Error('Apenas sócios podem convidar membros.');
+  if (!membroConvidante || membroConvidante.cargo !== 'GESTOR') {
+    throw new Error('Apenas gestores podem convidar membros.');
   }
 
   // Verifica se email já é membro
@@ -175,7 +177,7 @@ async function cancelarConvite({ conviteId, equipeId, userId }) {
     where: { equipeId_userId: { equipeId, userId } },
     select: { cargo: true },
   });
-  if (!membro || membro.cargo !== 'SOCIO') throw new Error('Apenas sócios podem cancelar convites.');
+  if (!membro || membro.cargo !== 'GESTOR') throw new Error('Apenas gestores podem cancelar convites.');
 
   const convite = await prisma.conviteEquipe.findUnique({ where: { id: conviteId } });
   if (!convite || convite.equipeId !== equipeId) throw new Error('Convite não encontrado.');
@@ -197,12 +199,12 @@ async function removerMembro({ equipeId, alvoUserId, solicitanteId }) {
     prisma.membroEquipe.findUnique({ where: { equipeId_userId: { equipeId, userId: alvoUserId  } } }),
   ]);
 
-  if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-    throw new Error('Apenas sócios podem remover membros.');
+  if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+    throw new Error('Apenas gestores podem remover membros.');
   }
   if (!membroAlvo) throw new Error('Membro não encontrado nesta equipe.');
-  if (membroAlvo.cargo === 'SOCIO' && solicitanteId !== alvoUserId) {
-    throw new Error('Um sócio só pode remover a si mesmo da equipe.');
+  if (membroAlvo.cargo === 'GESTOR' && solicitanteId !== alvoUserId) {
+    throw new Error('Um gestor só pode remover a si mesmo da equipe.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -221,8 +223,8 @@ async function alterarCargo({ equipeId, alvoUserId, novoCargo, solicitanteId }) 
     where: { equipeId_userId: { equipeId, userId: solicitanteId } },
     select: { cargo: true },
   });
-  if (!membroSolicitante || membroSolicitante.cargo !== 'SOCIO') {
-    throw new Error('Apenas sócios podem alterar cargos.');
+  if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
+    throw new Error('Apenas gestores podem alterar cargos.');
   }
 
   return prisma.$transaction(async (tx) => {
