@@ -18,9 +18,9 @@ const Exames = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
-  const podeEditar  = isSocio || podeExecutar('exames.laboratorial.editar');
-  const podeDeletar = isSocio || podeExecutar('exames.laboratorial.deletar');
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const podeEditar  = isGestor || podeExecutar('exames.laboratorial.editar');
+  const podeDeletar = isGestor || podeExecutar('exames.laboratorial.deletar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -135,7 +135,7 @@ const Exames = () => {
     return true;
   }), [exames, filtroData, filtroNutriente, filtroStatus]);
 
-  if (!loadingPerms && !isSocio && !podeExecutar('exames.laboratorial.ler')) return (
+  if (!loadingPerms && !isGestor && !podeExecutar('exames.laboratorial.ler')) return (
     <PageContainer>
       <div className="text-center py-16">
         <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>

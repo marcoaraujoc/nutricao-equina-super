@@ -56,11 +56,11 @@ export default function CadastroPessoal() {
   const [especiesErro,    setEspeciesErro]    = useState(false);
   // Verdadeiro quando o usuário entrou via convite — espécies são herdadas e ficam bloqueadas
   const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
-  // Cargo na equipe (ex: SOCIO) — definido quando foi incluído como membro
+  // Cargo na equipe (ex: GESTOR) — definido quando foi incluído como membro
   const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
 
-  // Sócio: sem dados profissionais (CRMV/espécies/subespecialidade) e tipo travado
-  const isSocioEquipe = cargoEquipe === 'SOCIO';
+  // Gestor: sem dados profissionais (CRMV/espécies/subespecialidade) e tipo travado
+  const isGestorEquipe = cargoEquipe === 'GESTOR';
 
   const carregarEspecies = () => {
     setEspeciesErro(false);
@@ -221,7 +221,7 @@ export default function CadastroPessoal() {
       toast.error('Estado é obrigatório');
       return false;
     }
-    if (form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe) {
+    if (form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe) {
       if (!form.crmv.trim()) {
         toast.error('CRMV é obrigatório para Médicos Veterinários');
         return false;
@@ -273,7 +273,7 @@ export default function CadastroPessoal() {
       cidade:      form.cidade.trim(),
       estado:      form.estado.trim().toUpperCase(),
       userType:    form.tipoUsuario,
-      ...(form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe && {
+      ...(form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe && {
         crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
@@ -443,11 +443,11 @@ export default function CadastroPessoal() {
           {/* Tipo de Usuário */}
           <div>
             <Label text="Tipo de Usuário" required />
-            {(fromConvite || isSocioEquipe) ? (
+            {(fromConvite || isGestorEquipe) ? (
               <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
                 <span className="text-gray-800 font-medium">
-                  {isSocioEquipe
-                    ? 'Sócio(a)'
+                  {isGestorEquipe
+                    ? 'Gestor(a)'
                     : LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario}
                 </span>
                 <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
@@ -463,8 +463,8 @@ export default function CadastroPessoal() {
             )}
           </div>
 
-          {/* ── Dados profissionais — só para veterinários (sócio não preenche) ── */}
-          {form.tipoUsuario === 'VETERINARIO' && !isSocioEquipe && (
+          {/* ── Dados profissionais — só para veterinários (gestor não preenche) ── */}
+          {form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe && (
             <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 

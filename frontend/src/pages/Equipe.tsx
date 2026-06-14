@@ -42,13 +42,13 @@ const CARGO_OPTIONS: { value: string; label: string }[] = [
   { value: 'VETERINARIO',  label: 'Veterinário'   },
   { value: 'ESTAGIARIO',   label: 'Estagiário'    },
   { value: 'PRESTADOR',    label: 'Fornecedor'    },
-  { value: 'SOCIO',        label: 'Sócio'         },
+  { value: 'GESTOR',        label: 'Gestor'         },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const labelCargo = (cargo: string): string => ({
-  SOCIO:        'Sócio',
+  GESTOR:        'Gestor',
   VETERINARIO:  'Veterinário',
   ESTAGIARIO:   'Estagiário',
   PRESTADOR:    'Fornecedor',
@@ -58,7 +58,7 @@ const labelCargo = (cargo: string): string => ({
 } as Record<string,string>)[cargo] ?? cargo;
 
 const badgeCargo = (cargo: string): string => ({
-  SOCIO:        'bg-purple-100 text-purple-700',
+  GESTOR:        'bg-purple-100 text-purple-700',
   VETERINARIO:  'bg-emerald-100 text-emerald-700',
   ESTAGIARIO:   'bg-blue-100 text-blue-700',
   PRESTADOR:    'bg-teal-100 text-teal-700',
@@ -73,7 +73,7 @@ export default function Equipe() {
   const { user }                                          = useAuth();
   const [membros,       setMembros]                       = useState<Membro[]>([]);
   const [equipeId,      setEquipeId]                      = useState<number | null>(null);
-  const [isSocio,       setIsSocio]                       = useState(false);
+  const [isGestor,       setIsGestor]                       = useState(false);
   const [loading,       setLoading]                       = useState(true);
   const [showConvite,   setShowConvite]                   = useState(false);
   const [enviando,      setEnviando]                      = useState(false);
@@ -97,7 +97,7 @@ export default function Equipe() {
       const dados = res.data?.dados ?? [];
       setMembros(dados);
       setEquipeId(res.data?.equipeId ?? null);
-      setIsSocio(res.data?.isSocio ?? false);
+      setIsGestor(res.data?.isGestor ?? false);
       const nome = dados[0]?.equipe?.nome ?? '';
       setNomeEquipe(nome);
       setNovoNome(nome);
@@ -127,16 +127,19 @@ export default function Equipe() {
     setEnviando(true);
     try {
       await api.post('/equipes/incluir-membro', {
-        email:       values.email,
-        cargo:       values.perfil,
-        fullName:    values.fullName,
-        phone:       values.phone,
-        cep:         values.cep.trim()         || null,
-        endereco:    values.endereco.trim()    || null,
-        complemento: values.complemento.trim() || null,
-        bairro:      values.bairro.trim()      || null,
-        cidade:      values.cidade.trim()      || null,
-        estado:      values.estado.trim()      || null,
+        email:        values.email,
+        cargo:        values.perfil,
+        fullName:     values.fullName,
+        phone:        values.phone,
+        cep:          values.cep.trim()         || null,
+        endereco:     values.endereco.trim()    || null,
+        complemento:  values.complemento.trim() || null,
+        bairro:       values.bairro.trim()      || null,
+        cidade:       values.cidade.trim()      || null,
+        estado:       values.estado.trim()      || null,
+        fornecedorId: values.fornecedorId ?? null,
+        tipoServico:  values.tipoServico  ?? null,
+        equipeId,  // inclui na equipe gerenciada nesta tela (não na do contexto ativo)
       });
       toast.success('Membro incluído com sucesso!');
       setShowConvite(false);
@@ -247,7 +250,7 @@ export default function Equipe() {
                 <h1 className="text-2xl font-bold text-gray-900">
                   {nomeEquipe || 'Minha Equipe'}
                 </h1>
-                {isSocio && (
+                {isGestor && (
                   <button onClick={() => setEditandoNome(true)}
                     title="Renomear equipe"
                     className="p-1 text-gray-300 hover:text-emerald-600 transition-colors">
@@ -260,11 +263,11 @@ export default function Equipe() {
               {membros.length > 0
                 ? `${membrosAtivos.length} membro${membrosAtivos.length !== 1 ? 's' : ''} ativo${membrosAtivos.length !== 1 ? 's' : ''}`
                 : 'Nenhum membro ainda'}
-              {isSocio && <span className="ml-2 text-[10px] font-bold bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">Sócio</span>}
+              {isGestor && <span className="ml-2 text-[10px] font-bold bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">Gestor</span>}
             </p>
           </div>
         </div>
-        {isSocio && (
+        {isGestor && (
           <button onClick={() => setShowConvite(true)}
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
             <Mail size={16} /> Incluir Membro
@@ -282,7 +285,7 @@ export default function Equipe() {
           <Users2 size={40} className="mx-auto mb-4 text-gray-200" />
           <h2 className="text-lg font-semibold text-gray-700 mb-2">Sua equipe está vazia</h2>
           <p className="text-sm text-gray-400 mb-6">Convide veterinários, estagiários e colaboradores.</p>
-          {isSocio && (
+          {isGestor && (
             <button onClick={() => setShowConvite(true)}
               className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
               Incluir primeiro membro
@@ -315,8 +318,8 @@ export default function Equipe() {
                     <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                   </div>
 
-                  {/* Cargo editável para Sócio (apenas membros não-sócio) */}
-                  {isSocio && editandoId === m.id ? (
+                  {/* Cargo editável para Gestor (apenas membros não-gestor) */}
+                  {isGestor && editandoId === m.id ? (
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <div className="relative">
                         <select value={editCargo} onChange={e => setEditCargo(e.target.value)}
@@ -337,19 +340,19 @@ export default function Equipe() {
                     <span
                       className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
                         ativo ? badgeCargo(m.cargo) : 'bg-gray-100 text-gray-400'
-                      } ${isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? 'cursor-pointer hover:opacity-80' : ''}`}
-                      onClick={isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? () => { setEditandoId(m.id); setEditCargo(m.cargo); } : undefined}
-                      title={isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? 'Clique para editar cargo' : undefined}
+                      } ${isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      onClick={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? () => { setEditandoId(m.id); setEditCargo(m.cargo); } : undefined}
+                      title={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'Clique para editar cargo' : undefined}
                     >
                       {labelCargo(m.cargo)}
-                      {isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' && <Pencil size={9} className="opacity-50" />}
+                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && <Pencil size={9} className="opacity-50" />}
                     </span>
                   )}
 
                   <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
 
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    {isSocio && m.cargo !== 'SOCIO' && (
+                    {isGestor && m.cargo !== 'GESTOR' && (
                       <button
                         onClick={() => setMembroEditando(m)}
                         className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg"
@@ -359,7 +362,7 @@ export default function Equipe() {
                     )}
                     {m.user.id !== user?.id && (
                       <>
-                        {isSocio && equipeId && m.cargo !== 'SOCIO' && (
+                        {isGestor && equipeId && m.cargo !== 'GESTOR' && (
                           <button onClick={() => setPermissoesModal(m)}
                             className="p-1.5 text-purple-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg" title="Controle de acesso">
                             <ShieldCheck size={15} />
@@ -377,7 +380,7 @@ export default function Equipe() {
                             : ativo ? <ToggleRight size={18} /> : <ToggleLeft size={18} />
                           }
                         </button>
-                        {m.cargo !== 'SOCIO' && (
+                        {m.cargo !== 'GESTOR' && (
                           <button onClick={() => setConfirmRemover(m)}
                             className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Remover">
                             <Trash2 size={15} />
@@ -409,6 +412,7 @@ export default function Equipe() {
           titulo="Incluir Membro"
           infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
           textoBotao="Incluir"
+          comFornecedor
           salvando={enviando}
           onClose={() => setShowConvite(false)}
           onSubmit={handleIncluirMembro}
@@ -420,7 +424,7 @@ export default function Equipe() {
         <UsuarioFormModal
           titulo="Editar Membro"
           modoEdicao
-          permitirSenha={isSocio}
+          permitirSenha={isGestor}
           emailBloqueado
           textoBotao="Salvar"
           salvando={salvandoEdicao}

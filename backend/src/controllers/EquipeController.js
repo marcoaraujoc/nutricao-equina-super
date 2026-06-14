@@ -58,7 +58,9 @@ async function garantirEquipePadrao(vetUserId, empresaIdPreferida = null, equipe
       where: { id: Number(equipeIdPreferida), empresaId: empresa.id },
     });
   }
-  if (!equipe) equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
+  // orderBy createdAt asc: mesma equipe "primeira" que listarMembros escolhe — evita
+  // inclusão e listagem divergirem quando não há equipe ativa no contexto.
+  if (!equipe) equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id }, orderBy: { createdAt: 'asc' } });
   if (!equipe) {
     equipe = await prisma.equipe.create({
       data: { nome: 'Equipe Principal', empresaId: empresa.id },
@@ -801,7 +803,7 @@ const EquipeController = {
   incluirMembroDireto: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
-      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico } = req.body;
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, equipeId: equipeIdBody } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
@@ -831,7 +833,10 @@ const EquipeController = {
         }
       }
 
-      const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
+      // Inclui na equipe que a tela está gerenciando (equipeIdBody) — garantirEquipePadrao
+      // valida que ela pertence à empresa do gestor; caso contrário cai no contexto ativo.
+      // Sem isso, a inclusão podia gravar numa equipe diferente da exibida na lista.
+      const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, equipeIdBody ?? req.equipeId);
 
       // Bloqueia se já é membro
       const usuarioCheck = await prisma.user.findUnique({ where: { email } });

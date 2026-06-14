@@ -31,9 +31,11 @@ const registerRules = [
   body('phone')
     .optional({ values: 'falsy' })
     .isMobilePhone('pt-BR').withMessage('Telefone inválido'),
+  // Cadastro direto só permite PROPRIETARIO ou VETERINARIO. ESTAGIARIO/FORNECEDOR/ADMIN
+  // são atribuídos exclusivamente pela equipe (convite) ou pelo ADMIN — nunca auto-atribuídos.
   body('userType')
     .optional()
-    .isIn(['PROPRIETARIO', 'VETERINARIO', 'ESTAGIARIO', 'ADMIN']).withMessage('Tipo de usuário inválido'),
+    .isIn(['PROPRIETARIO', 'VETERINARIO']).withMessage('Tipo de usuário inválido'),
 ];
 
 const forgotPasswordRules = [

@@ -7,14 +7,19 @@ const router                  = express.Router();
 const HistoricoController     = require('../controllers/HistoricoController');
 const AgendamentoController   = require('../controllers/AgendamentoController');
 const { authenticate }        = require('../middlewares/auth');
+const { checkPermission }     = require('../middlewares/permissao.middleware');
 
 // Acesso por animal é validado nos controllers via verificarAcessoAnimal
 // (cobre PROPRIETARIO, equipe, vínculo direto do vet e designação de prestador)
 router.get('/historico/animal/:animalId',     authenticate, HistoricoController.listarPorAnimal);
 
-router.get('/agendamentos/animal/:animalId',  authenticate, AgendamentoController.listarPorAnimal);
-router.post('/agendamentos',                  authenticate, AgendamentoController.criar);
-router.patch('/agendamentos/:id/status',      authenticate, AgendamentoController.atualizarStatus);
-router.delete('/agendamentos/:id',            authenticate, AgendamentoController.excluir);
+// /agendamentos (sem parâmetro) deve vir ANTES de /agendamentos/animal/:id
+// /agendamentos/interpretar deve vir ANTES de /agendamentos (evita ambiguidade)
+router.post('/agendamentos/interpretar',      authenticate, checkPermission('atendimento.agendamentos.criar', 'PROPRIO'), AgendamentoController.interpretarVoz);
+router.get('/agendamentos',                   authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarGlobal);
+router.get('/agendamentos/animal/:animalId',  authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarPorAnimal);
+router.post('/agendamentos',                  authenticate, checkPermission('atendimento.agendamentos.criar',  'PROPRIO'), AgendamentoController.criar);
+router.patch('/agendamentos/:id/status',      authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.atualizarStatus);
+router.delete('/agendamentos/:id',            authenticate, checkPermission('atendimento.agendamentos.deletar','PROPRIO'), AgendamentoController.excluir);
 
 module.exports = router;

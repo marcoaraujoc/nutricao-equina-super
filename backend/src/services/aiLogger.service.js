@@ -28,11 +28,20 @@ const PRECOS = {
   'claude-3-sonnet-20240229': { entrada: 3.00,  saida: 15.00 },
   'claude-3-opus-20240229':   { entrada: 15.00, saida: 75.00 },
 
+  // Anthropic (modelos recentes)
+  'claude-haiku-4-5-20251001':  { entrada: 0.80,  saida: 4.00  },
+  'claude-sonnet-4-6':          { entrada: 3.00,  saida: 15.00 },
+  'claude-opus-4-8':            { entrada: 15.00, saida: 75.00 },
+
+  // OpenAI (modelos recentes)
+  'gpt-4o-mini':               { entrada: 0.15,  saida: 0.60  },
+
   // Google Gemini
-  'gemini-2.5-flash':         { entrada: 0.15,  saida: 0.60  },
-  'gemini-1.5-flash':         { entrada: 0.075, saida: 0.30  },
-  'gemini-1.5-pro':           { entrada: 1.25,  saida: 5.00  },
-  'gemini-2.0-flash':         { entrada: 0.10,  saida: 0.40  },
+  'gemini-2.5-flash':          { entrada: 0.15,  saida: 0.60  },
+  'gemini-2.5-pro':            { entrada: 1.25,  saida: 10.00 },
+  'gemini-1.5-flash':          { entrada: 0.075, saida: 0.30  },
+  'gemini-1.5-pro':            { entrada: 1.25,  saida: 5.00  },
+  'gemini-2.0-flash':          { entrada: 0.10,  saida: 0.40  },
 
   // Fallback para modelos não mapeados
   'default':                  { entrada: 0.59,  saida: 0.79  },

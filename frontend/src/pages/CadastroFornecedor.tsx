@@ -12,6 +12,7 @@ import {
 import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import { isValidEmail } from '../utils/validators';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ interface Fornecedor {
   cpf:         string | null;
   cnpj:        string | null;
   telefone:    string | null;
+  email:       string | null;
   tipoServico: string;
   tipoEntrada: string;
   cep:         string | null;
@@ -105,6 +107,7 @@ interface FormForn {
   cpf:         string;
   cnpj:        string;
   telefone:    string;
+  email:       string;
   tipoServico: TipoServico | '';
   cep:         string;
   endereco:    string;
@@ -115,7 +118,7 @@ interface FormForn {
 }
 
 const FORM_INICIAL: FormForn = {
-  nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '',
+  nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
   tipoServico: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
@@ -231,39 +234,10 @@ function ModalFornecedor({
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
-          {/* ── Identificação ── */}
+          {/* ── Documento (primeiro — CNPJ preenche os demais campos via BrasilAPI) ── */}
           <section>
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-              <UserIcon size={12} /> Identificação
-            </h4>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Nome / Razão Social *</label>
-                <input value={form.nome} onChange={e => onFormChange({ nome: e.target.value })}
-                  placeholder="Nome do profissional ou empresa" className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Tipo de Serviço *</label>
-                <select value={form.tipoServico}
-                  onChange={e => onFormChange({ tipoServico: e.target.value as TipoServico })}
-                  className={`${inputCls} ${!form.tipoServico ? 'border-amber-200 focus:border-amber-400' : ''}`}>
-                  <option value="">Selecione o tipo de serviço...</option>
-                  {TIPOS_SERVICO.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Telefone</label>
-                <input value={form.telefone}
-                  onChange={e => onFormChange({ telefone: mascaraTelefone(e.target.value) })}
-                  placeholder="(00) 00000-0000" className={inputCls} />
-              </div>
-            </div>
-          </section>
-
-          {/* ── Documento ── */}
-          <section>
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-              <BadgeCheck size={12} /> Documento (opcional — CPF ou CNPJ)
+              <BadgeCheck size={12} /> Documento (CPF ou CNPJ)
             </h4>
             <div className="flex gap-2 mb-3">
               {(['cpf','cnpj'] as TipoDoc[]).map(tipo => (
@@ -299,6 +273,43 @@ function ModalFornecedor({
             {docValido === true && (
               <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1"><BadgeCheck size={11} />{form.tipoDoc.toUpperCase()} válido</p>
             )}
+          </section>
+
+          {/* ── Identificação ── */}
+          <section>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <UserIcon size={12} /> Identificação
+            </h4>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Nome / Razão Social *</label>
+                <input value={form.nome} onChange={e => onFormChange({ nome: e.target.value })}
+                  placeholder="Nome do profissional ou empresa" className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Tipo de Serviço *</label>
+                <select value={form.tipoServico}
+                  onChange={e => onFormChange({ tipoServico: e.target.value as TipoServico })}
+                  className={`${inputCls} ${!form.tipoServico ? 'border-amber-200 focus:border-amber-400' : ''}`}>
+                  <option value="">Selecione o tipo de serviço...</option>
+                  {TIPOS_SERVICO.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">E-mail *</label>
+                  <input type="email" value={form.email}
+                    onChange={e => onFormChange({ email: e.target.value })}
+                    placeholder="email@exemplo.com" className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Telefone *</label>
+                  <input value={form.telefone}
+                    onChange={e => onFormChange({ telefone: mascaraTelefone(e.target.value) })}
+                    placeholder="(00) 00000-0000" className={inputCls} />
+                </div>
+              </div>
+            </div>
           </section>
 
           {/* ── Endereço ── */}
@@ -413,6 +424,7 @@ export default function CadastroFornecedor() {
       cpf:         f.cpf  ? mascaraCPF(f.cpf.replace(/\D/g,''))   : '',
       cnpj:        f.cnpj ? mascaraCNPJ(f.cnpj.replace(/\D/g,'')) : '',
       telefone:    f.telefone ? mascaraTelefone(f.telefone.replace(/\D/g,'')) : '',
+      email:       f.email ?? '',
       tipoServico: (TIPOS_SERVICO as readonly string[]).includes(f.tipoServico)
         ? f.tipoServico as TipoServico : '',
       cep:         f.cep         ? mascaraCEP(f.cep.replace(/\D/g,'')) : '',
@@ -433,6 +445,9 @@ export default function CadastroFornecedor() {
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
     if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
     if (!form.tipoServico)       { toast.error('Tipo de serviço é obrigatório'); return; }
+    if (!form.email.trim())      { toast.error('E-mail é obrigatório'); return; }
+    if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
+    if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
     if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf)) {
@@ -447,7 +462,8 @@ export default function CadastroFornecedor() {
       nome:        form.nome,
       cpf:         form.tipoDoc === 'cpf'  && docCPF  ? form.cpf  : null,
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
-      telefone:    form.telefone    || null,
+      telefone:    form.telefone,
+      email:       form.email.trim().toLowerCase(),
       tipoServico: form.tipoServico || null,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
@@ -562,6 +578,9 @@ export default function CadastroFornecedor() {
                         <Phone size={10} />{f.telefone}
                       </p>
                     )}
+                    {f.email && (
+                      <p className="text-xs text-gray-500 mt-0.5 truncate">{f.email}</p>
+                    )}
                     {f.cidade && (
                       <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
                         <MapPin size={10} />{f.cidade}{f.estado ? ` — ${f.estado}` : ''}
@@ -612,6 +631,7 @@ export default function CadastroFornecedor() {
                   <tr key={f.id} className={`hover:bg-gray-50 transition-colors ${!f.ativo ? 'opacity-60' : ''}`}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{f.nome}</p>
+                      {f.email && <p className="text-xs text-gray-400 truncate">{f.email}</p>}
                       {f.cidade && (
                         <p className="text-xs text-gray-400 flex items-center gap-0.5">
                           <MapPin size={9} />{f.cidade}{f.estado ? ` — ${f.estado}` : ''}

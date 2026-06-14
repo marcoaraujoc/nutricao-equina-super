@@ -186,9 +186,9 @@ const RelatorioNutricional = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate                              = useNavigate();
   const { animalId: paramAnimalId }           = useParams<{ animalId: string }>();
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
-  const podeImprimir = isSocio || podeExecutar('nutricao.relatorios.imprimir');
-  const podeExportar = isSocio || podeExecutar('nutricao.relatorios.exportar');
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const podeImprimir = isGestor || podeExecutar('nutricao.relatorios.imprimir');
+  const podeExportar = isGestor || podeExecutar('nutricao.relatorios.exportar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -413,7 +413,7 @@ const RelatorioNutricional = () => {
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
-  if (!loadingPerms && !isSocio && !podeExecutar('nutricao.relatorios.ler')) return (
+  if (!loadingPerms && !isGestor && !podeExecutar('nutricao.relatorios.ler')) return (
     <PageContainer maxWidth="7xl">
       <div className="text-center py-16">
         <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>

@@ -73,6 +73,11 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.deletar':  'FULL',
     'atendimento.exames.imprimir': 'FULL',
 
+    'atendimento.agendamentos.ler':      'FULL',
+    'atendimento.agendamentos.criar':    'FULL',
+    'atendimento.agendamentos.editar':   'FULL',
+    'atendimento.agendamentos.deletar':  'FULL',
+
     'enfermagem.prescricao.ler':      'FULL',
     'enfermagem.prescricao.executar': 'FULL',
     'enfermagem.prescricao.imprimir': 'FULL',
@@ -206,6 +211,12 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.deletar':  'PROPRIO',
     'atendimento.exames.imprimir': 'EQUIPE',
 
+    // Agendamentos
+    'atendimento.agendamentos.ler':      'EQUIPE',
+    'atendimento.agendamentos.criar':    'PROPRIO',
+    'atendimento.agendamentos.editar':   'PROPRIO',
+    'atendimento.agendamentos.deletar':  'PROPRIO',
+
     // Enfermagem — Execução de Prescrição
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'PROPRIO',
@@ -302,6 +313,12 @@ const PERMISSOES_PADRAO = {
     'dashboard.geral.ler': 'LEITURA',
     'animais.ler':         'LEITURA',
 
+    // Agendamentos — proprietário pode visualizar
+    'atendimento.agendamentos.ler':      'LEITURA',
+    'atendimento.agendamentos.criar':    'NENHUM',
+    'atendimento.agendamentos.editar':   'NENHUM',
+    'atendimento.agendamentos.deletar':  'NENHUM',
+
     // Nutrição — desabilitado por padrão; admin/gestor pode habilitar por equipe
     'nutricao.dietas.ler':          'NENHUM',
     'nutricao.dietas.criar':        'NENHUM',
@@ -379,6 +396,11 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.editar':   'NENHUM',
     'atendimento.exames.deletar':  'NENHUM',
     'atendimento.exames.imprimir': 'NENHUM',
+
+    'atendimento.agendamentos.ler':      'NENHUM',
+    'atendimento.agendamentos.criar':    'NENHUM',
+    'atendimento.agendamentos.editar':   'NENHUM',
+    'atendimento.agendamentos.deletar':  'NENHUM',
 
     'enfermagem.prescricao.ler':      'NENHUM',
     'enfermagem.prescricao.executar': 'NENHUM',
@@ -512,6 +534,12 @@ const PERMISSOES_PADRAO = {
     'atendimento.exames.editar':   'NENHUM',
     'atendimento.exames.deletar':  'NENHUM',
     'atendimento.exames.imprimir': 'NENHUM',
+
+    // Agendamentos
+    'atendimento.agendamentos.ler':      'EQUIPE',
+    'atendimento.agendamentos.criar':    'EQUIPE',
+    'atendimento.agendamentos.editar':   'PROPRIO',
+    'atendimento.agendamentos.deletar':  'NENHUM',
 
     // Enfermagem — execução permitida para estagiários (técnicos)
     'enfermagem.prescricao.ler':      'EQUIPE',
@@ -658,6 +686,12 @@ const MODULOS_SISTEMA = [
   { slug: 'atendimento.encaminhamentos.editar',   modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'editar',   label: 'Encaminhamentos — Editar',     ordemExib: 39.7 },
   { slug: 'atendimento.encaminhamentos.deletar',  modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'deletar',  label: 'Encaminhamentos — Excluir',    ordemExib: 39.8 },
   { slug: 'atendimento.encaminhamentos.imprimir', modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'imprimir', label: 'Encaminhamentos — Imprimir',   ordemExib: 39.9 },
+
+  // ── Agendamentos ─────────────────────────────────────────────────────────────
+  { slug: 'atendimento.agendamentos.ler',     modulo: 'atendimento', submodulo: 'agendamentos', acao: 'ler',     label: 'Agendamentos — Visualizar', ordemExib: 39.91 },
+  { slug: 'atendimento.agendamentos.criar',   modulo: 'atendimento', submodulo: 'agendamentos', acao: 'criar',   label: 'Agendamentos — Inserir',    ordemExib: 39.92 },
+  { slug: 'atendimento.agendamentos.editar',  modulo: 'atendimento', submodulo: 'agendamentos', acao: 'editar',  label: 'Agendamentos — Editar',     ordemExib: 39.93 },
+  { slug: 'atendimento.agendamentos.deletar', modulo: 'atendimento', submodulo: 'agendamentos', acao: 'deletar', label: 'Agendamentos — Excluir',    ordemExib: 39.94 },
 
   // ── Exames (clínicos/nutricionais) ───────────────────────────────────────────
   { slug: 'atendimento.exames.ler',      modulo: 'atendimento', submodulo: 'exames', acao: 'ler',      label: 'Exames — Visualizar', ordemExib: 40 },

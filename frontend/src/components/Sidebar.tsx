@@ -1,8 +1,9 @@
 // src/components/Sidebar.tsx
 
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { useEmpresa } from '../contexts/EmpresaContext';
 import { useState } from 'react';
 import {
   LayoutDashboard, User, Zap, ClipboardList,
@@ -11,7 +12,8 @@ import {
   Users, Users2, ShieldCheck, FlaskConical, Pill,
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
-  FolderOpen, UserCog, Truck, MapPin,
+  FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
+  Sparkles, CalendarPlus,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -25,9 +27,10 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
-type ActiveSection = 'geral' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'exames' | 'enfermagem' | 'cadastro';
+type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'exames' | 'enfermagem' | 'cadastro';
 
 function detectSection(pathname: string): ActiveSection {
+  if (pathname.startsWith('/agendamentos'))           return 'agenda';
   if (pathname.startsWith('/clinica'))               return 'clinica';
   if (pathname.startsWith('/execucao-prescricao'))   return 'enfermagem';
   if (pathname.startsWith('/farmacia'))              return 'farmacia';
@@ -45,7 +48,8 @@ function detectSection(pathname: string): ActiveSection {
     pathname.startsWith('/controle-acesso') ||
     pathname.startsWith('/ai-usage') ||
     pathname.startsWith('/medicamentos') ||
-    pathname.startsWith('/procedimentos')
+    pathname.startsWith('/procedimentos') ||
+    pathname.startsWith('/admin/vacinas')
   ) return 'admin';
   return 'geral';
 }
@@ -54,7 +58,9 @@ export default function Sidebar() {
   const { user, logout }              = useAuth();
   const { isNewUser, selectedAnimal } = useSelectedAnimal();
   const location                      = useLocation();
+  const navigate                      = useNavigate();
   const pendentesCount                = useVetPendentes();
+  const { opcoes: opcoesContexto, contextoAtivo, trocarContexto } = useEmpresa();
   useVetSolicitacaoMonitor();
   useProprietarioNotificacoes();
 
@@ -65,13 +71,13 @@ export default function Sidebar() {
   const isProprietario     = userTypeUpper === 'PROPRIETARIO';
 
   // ── Permissões granulares ─────────────────────────────────────────────────────
-  // ADMIN/SOCIO têm bypass total em podeExecutar.
+  // ADMIN/GESTOR têm bypass total em podeExecutar.
   // PROPRIETARIO recebe permissões reais do backend (só o que o vet/empresa concedeu).
-  const { podeExecutar, isSocio } = usePermissoes();
+  const { podeExecutar, isGestor } = usePermissoes();
 
-  // ADMIN sempre vê Administração. SÓCIO (cargo=SOCIO em MembroEquipe) também vê.
+  // ADMIN sempre vê Administração. GESTOR (cargo=GESTOR em MembroEquipe) também vê.
   // Vets comuns só veem se não forem convidados.
-  const podeVerAdministracao = isAdmin || isSocio || (isVet && !user?.isConvidado);
+  const podeVerAdministracao = isAdmin || isGestor || (isVet && !user?.isConvidado);
   const podeVerDashboard      = podeExecutar('dashboard.geral.ler');
   const podeVerAnimais        = podeExecutar('animais.ler');
   const podeVerExames         = podeExecutar('atendimento.exames.ler');
@@ -83,11 +89,11 @@ export default function Sidebar() {
   const podeVerFarmacia       = podeExecutar('farmacia.estoque.ler');
   const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
   const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
-  const podeVerProprietarios   = isAdmin || isSocio || podeExecutar('cadastro.proprietario.ler');
-  const podeVerTratadores      = isAdmin || isSocio || podeExecutar('cadastro.tratador.ler');
-  const podeVerFornecedores    = isAdmin || isSocio || podeExecutar('cadastro.fornecedor.ler');
-  const podeVerLocalizacoes    = isAdmin || isSocio || podeExecutar('cadastro.localizacao.ler');
-  const podeVerEquipe          = isAdmin || isSocio || podeExecutar('equipe.membros.ler');
+  const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
+  const podeVerTratadores      = isAdmin || isGestor || podeExecutar('cadastro.tratador.ler');
+  const podeVerFornecedores    = isAdmin || isGestor || podeExecutar('cadastro.fornecedor.ler');
+  const podeVerLocalizacoes    = isAdmin || isGestor || podeExecutar('cadastro.localizacao.ler');
+  const podeVerEquipe          = isAdmin || isGestor || podeExecutar('equipe.membros.ler');
 
   // temAcessoClinico: profissionais de saúde OU proprietário com ao menos 1 grant clínico
   const temAcessoClinico =
@@ -138,7 +144,8 @@ export default function Sidebar() {
     p.startsWith('/controle-acesso') ||
     p.startsWith('/ai-usage') ||
     p.startsWith('/medicamentos') ||
-    p.startsWith('/procedimentos'),
+    p.startsWith('/procedimentos') ||
+    p.startsWith('/admin/vacinas'),
   );
   const [openFinanceiro,    setOpenFinanceiro]    = useState(false);
   const [isMobileMenuOpen,  setIsMobileMenuOpen]  = useState(false);
@@ -215,6 +222,33 @@ export default function Sidebar() {
             <X size={28} />
           </button>
         </div>
+
+        {/* Seletor de contexto ativo — só para gestor com mais de uma empresa/equipe.
+            CNPJ = opção por empresa; CPF = opção por equipe da empresa pessoal */}
+        {opcoesContexto.length > 1 && (
+          <div className="px-4 py-3 border-b border-gray-200 flex-shrink-0">
+            <span className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+              <Building2 className="w-3.5 h-3.5" /> {contextoAtivo?.equipeId ? 'Equipe ativa' : 'Empresa ativa'}
+            </span>
+            <select
+              value={contextoAtivo ? `${contextoAtivo.empresaId}:${contextoAtivo.equipeId ?? ''}` : ''}
+              onChange={(e) => {
+                const [empresaId, equipeId] = e.target.value.split(':');
+                const opcao = opcoesContexto.find(
+                  (o) => o.empresaId === Number(empresaId) && o.equipeId === (equipeId ? Number(equipeId) : null),
+                );
+                if (opcao) trocarContexto(opcao);
+              }}
+              className="w-full text-sm font-semibold text-gray-700 bg-gray-50 border border-gray-200 rounded-2xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+            >
+              {opcoesContexto.map((o) => (
+                <option key={`${o.empresaId}:${o.equipeId ?? ''}`} value={`${o.empresaId}:${o.equipeId ?? ''}`}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Nav */}
         <nav className="flex-1 min-h-0 px-3 py-4 space-y-4 overflow-y-auto">
@@ -294,10 +328,23 @@ export default function Sidebar() {
               {openModulos && (
                 <div className="mt-1 pl-4 space-y-0.5">
 
-                  {/* ── Clínica ──────────────────────────────────────── */}
+                  {/* ── Agenda ───────────────────────────────────────── */}
+                  {temAcessoClinico && (
+                    <button
+                      onClick={() => { closeMobile(); navigate('/agendamentos'); }}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/agendamentos') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <CalendarClock size={20} />
+                      Agenda
+                    </button>
+                  )}
+
+                  {/* ── Atendimento ──────────────────────────────────── */}
                   {temAcessoClinico && temAcessoAtendimento && (
                     <div>
-                      {moduleButton('Clínica', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
+                      {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
                       {openClinica && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {podeVerEvolucoes  && subLink(
@@ -442,8 +489,9 @@ export default function Sidebar() {
 
               {openAdministracao && (
                 <div className="mt-1 space-y-0.5 pl-4">
-                  {isAdmin && navLink('/medicamentos',  <Pill     size={20} />, 'Medicamentos',  isAdminActive('/medicamentos'))}
-                  {isAdmin && navLink('/procedimentos', <Activity size={20} />, 'Procedimentos', isAdminActive('/procedimentos'))}
+                  {isAdmin && navLink('/medicamentos',    <Pill     size={20} />, 'Medicamentos',    isAdminActive('/medicamentos'))}
+                  {isAdmin && navLink('/procedimentos',  <Activity size={20} />, 'Procedimentos',  isAdminActive('/procedimentos'))}
+                  {isAdmin && navLink('/admin/vacinas',  <Syringe  size={20} />, 'Vacinas',        isAdminActive('/admin/vacinas'))}
                   {isAdmin && (
                     <>
                       {navLink('/usuarios',   <Users size={20} />, 'Usuários',         isAdminActive('/usuarios'))}
@@ -472,10 +520,10 @@ export default function Sidebar() {
               {isAdmin && (
                 <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex-shrink-0">ADMIN</span>
               )}
-              {isSocio && !isAdmin && (
-                <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full flex-shrink-0">SÓCIO</span>
+              {isGestor && !isAdmin && (
+                <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full flex-shrink-0">GESTOR</span>
               )}
-              {(role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO') && !isAdmin && !isSocio && (
+              {(role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO') && !isAdmin && !isGestor && (
                 <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex-shrink-0">VET</span>
               )}
               {role === 'ESTAGIARIO' && (
@@ -494,6 +542,7 @@ export default function Sidebar() {
       {isMobileMenuOpen && (
         <div onClick={closeMobile} className="md:hidden fixed inset-0 bg-black/50 z-40" />
       )}
+
     </>
   );
 }

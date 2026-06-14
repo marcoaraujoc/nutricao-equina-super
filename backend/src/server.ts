@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import type { ServerResponse } from 'http';
 import cors from 'cors';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -71,7 +72,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'x-empresa-id', 'x-equipe-id'],
   maxAge: 3600,
 }));
 
@@ -157,6 +158,10 @@ const localizacoesRoutes       = require('./routes/localizacoes');
 const encaminhamentosRoutes    = require('./routes/encaminhamentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const agendaRoutes             = require('./routes/agenda');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const vacinaAdminRoutes        = require('./routes/vacinaAdmin');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const vacinaClinicaRoutes      = require('./routes/vacinaClinica');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -188,9 +193,33 @@ app.use('/api/cadastro/proprietarios', proprietariosRoutes);
 app.use('/api/cadastro/tratadores',   tratadoresRoutes);
 app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
 app.use('/api/cadastro/localizacoes', localizacoesRoutes);
+app.use('/api/admin/vacinas',         vacinaAdminRoutes);
+app.use('/api/clinica/vacinas',       vacinaClinicaRoutes);
 
-// Servir arquivos de upload (fotos)
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Servir arquivos de upload (fotos, mídias clínicas).
+// Acesso por capability URL: os nomes são gerados com crypto.randomBytes (não enumeráveis).
+// Hardening anti-XSS: nosniff + CSP sandbox neutralizam SVG/HTML maliciosos; tipos não
+// reconhecidos como mídia são forçados a download (Content-Disposition: attachment).
+// Extensões exibidas inline. PDF é seguro aqui (renderizado pelo visualizador do browser,
+// não como HTML; nosniff + CSP sandbox impedem execução). SVG/HTML ficam de fora de
+// propósito → forçados a download, neutralizando XSS armazenado.
+const MEDIA_INLINE_EXT = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.mp4', '.webm', '.ogg', '.mov', '.m4v',
+  '.mp3', '.wav', '.m4a', '.aac',
+  '.pdf',
+]);
+app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+  dotfiles: 'deny',
+  index: false,
+  setHeaders: (res: ServerResponse, filePath: string) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'none'");
+    if (!MEDIA_INLINE_EXT.has(path.extname(filePath).toLowerCase())) {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+  },
+}));
 
 // ===================== HEALTH CHECK =====================
 const APP_VERSION = process.env.npm_package_version ?? '1.0.0';
@@ -410,5 +439,54 @@ cron.schedule('15 * * * *', () => {
 }, { timezone: 'America/Sao_Paulo' });
 
 logger.info('[Provisional-Cron] Agendado: verifica a cada hora vínculos provisórios expirados');
+
+// ===================== CRON — LEMBRETE D-1 (agendamentos de amanhã) =====================
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const emailServiceCron = require('./services/emailService');
+
+async function enviarLembretesAgendamentos() {
+  try {
+    const amanha  = new Date();
+    amanha.setDate(amanha.getDate() + 1);
+    const inicio  = new Date(amanha); inicio.setHours(0,  0,  0, 0);
+    const fim     = new Date(amanha); fim.setHours(23, 59, 59, 999);
+
+    const agendamentos = await prisma.agendamentoClinico.findMany({
+      where: { ativo: true, status: 'AGENDADO', dataHora: { gte: inicio, lte: fim } },
+      include: {
+        animal:      { include: { user: { select: { fullName: true, email: true } } } },
+        veterinario: { select: { fullName: true, phone: true } },
+      },
+    });
+
+    logger.info(`[Lembrete-Cron] ${agendamentos.length} agendamento(s) para amanhã`);
+
+    for (const ag of agendamentos) {
+      const proprietarioEmail = ag.animal?.user?.email;
+      if (!proprietarioEmail) continue;
+      try {
+        await emailServiceCron.enviarLembreteDiaAnteriorProprietario({
+          proprietarioEmail,
+          proprietarioNome: ag.animal?.user?.fullName  ?? 'Proprietário',
+          animalNome:       ag.animal?.nome            ?? 'Animal',
+          vetNome:          ag.veterinario?.fullName   ?? 'Veterinário',
+          vetPhone:         ag.veterinario?.phone      ?? '',
+          dataHora:         ag.dataHora,
+        });
+      } catch (err: unknown) {
+        logger.warn(`[Lembrete-Cron] Falha ao enviar lembrete para ${proprietarioEmail}: ${(err as Error).message}`);
+      }
+    }
+  } catch (err: unknown) {
+    logger.error(`[Lembrete-Cron] Erro: ${(err as Error).message}`);
+  }
+}
+
+cron.schedule('0 8 * * *', () => {
+  logger.info('[Lembrete-Cron] Enviando lembretes de agendamentos de amanhã...');
+  enviarLembretesAgendamentos();
+}, { timezone: 'America/Sao_Paulo' });
+
+logger.info('[Lembrete-Cron] Agendado: diariamente às 08:00 (Brasília)');
 
 export default app;

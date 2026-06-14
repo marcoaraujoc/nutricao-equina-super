@@ -955,6 +955,127 @@ const emailService = {
 
     console.log(`[emailService] Inclusão de equipe notificada → ${email} (usuarioCriado=${usuarioCriado})`);
   },
+
+  // ── Notificação de novo agendamento ao profissional ───────────────────────
+  async enviarNotificacaoAgendamentoProfissional({ vetEmail, vetNome, animalNome, proprietarioNome, proprietarioPhone, dataHora, tipo }) {
+    if (!podeEnviar()) return;
+    const appUrl = process.env.APP_URL || 'http://localhost:5173';
+    const d      = new Date(dataHora);
+    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const tipoLabel = { CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[tipo] ?? tipo;
+
+    const waLink = proprietarioPhone
+      ? `https://wa.me/55${proprietarioPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Confirmo meu agendamento com você no dia ${dataFmt} às ${horaFmt} para ${animalNome}.`)}`
+      : null;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      vetEmail,
+      subject: `[S2Vet] Novo agendamento — ${animalNome} · ${horaFmt}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">📅 Novo agendamento confirmado</h2>
+            <p style="color:#374151;">Olá, <strong>${vetNome}</strong>! Um novo agendamento foi registrado para você.</p>
+
+            <div style="background:white;border:2px solid #a7f3d0;border-radius:12px;padding:20px;margin:24px 0;">
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:130px;">📋 Tipo</td><td style="font-weight:700;color:#111827;">${tipoLabel}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📅 Data</td><td style="font-weight:700;color:#111827;">${dataFmt}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🕐 Horário</td><td style="font-weight:700;color:#111827;font-size:18px;">${horaFmt}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🐎 Paciente</td><td style="font-weight:700;color:#111827;">${animalNome}</td></tr>
+                ${proprietarioNome ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">👤 Proprietário</td><td style="font-weight:700;color:#111827;">${proprietarioNome}</td></tr>` : ''}
+                ${proprietarioPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📱 Telefone</td><td style="font-weight:700;color:#111827;">${proprietarioPhone}</td></tr>` : ''}
+              </table>
+            </div>
+
+            ${waLink ? `
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${waLink}" style="background:#25d366;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                💬 Contatar via WhatsApp
+              </a>
+            </div>` : ''}
+
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                Ver agenda no S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Agendamento registrado via S2Vet Portal de Agendamentos.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Notificação de agendamento → ${vetEmail}`);
+  },
+
+  // ── Lembrete 1 dia antes ao proprietário ──────────────────────────────────
+  async enviarLembreteDiaAnteriorProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, vetPhone, dataHora, appUrl: appUrlParam }) {
+    if (!podeEnviar()) return;
+    const appUrl = appUrlParam || process.env.APP_URL || 'http://localhost:5173';
+    const d      = new Date(dataHora);
+    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+
+    const waClinica = vetPhone
+      ? `https://wa.me/55${vetPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Referente ao agendamento de ${animalNome} amanhã às ${horaFmt}.`)}`
+      : null;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      proprietarioEmail,
+      subject: `[S2Vet] Lembrete: consulta de ${animalNome} amanhã às ${horaFmt}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Lembrete de Consulta</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">⏰ Consulta amanhã!</h2>
+            <p style="color:#374151;">Olá, <strong>${proprietarioNome}</strong>! Este é um lembrete do agendamento de amanhã.</p>
+
+            <div style="background:white;border:2px solid #fcd34d;border-radius:12px;padding:20px;margin:24px 0;">
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:130px;">🐎 Paciente</td><td style="font-weight:700;color:#111827;">${animalNome}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🩺 Veterinário</td><td style="font-weight:700;color:#111827;">${vetNome}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📅 Data</td><td style="font-weight:700;color:#111827;">${dataFmt}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🕐 Horário</td><td style="font-weight:700;color:#111827;font-size:18px;">${horaFmt}</td></tr>
+              </table>
+            </div>
+
+            <p style="color:#374151;font-size:14px;">Por favor, confirme sua presença ou entre em contato em caso de imprevisto.</p>
+
+            ${waClinica ? `
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${waClinica}" style="background:#25d366;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                💬 Entrar em contato via WhatsApp
+              </a>
+            </div>` : ''}
+
+            <div style="text-align:center;margin:16px 0;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                Ver no S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              S2Vet — Sistema Hospitalar Veterinário. Não responda este email.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Lembrete D-1 → ${proprietarioEmail}`);
+  },
 };
 
 module.exports = emailService;

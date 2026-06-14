@@ -5,9 +5,18 @@ const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
 const SECRET = process.env.JWT_SECRET;
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
+const REFRESH_EXPIRES = '30d';
 
-function generateRefreshToken() {
-  return crypto.randomBytes(48).toString('hex');
+// Refresh token assinado (JWT) com expiração. Continua salvo no banco para permitir
+// rotação e revogação (logout / troca de senha). O jti aleatório garante unicidade
+// mesmo para o mesmo usuário em momentos diferentes.
+function generateRefreshToken(userId) {
+  return jwt.sign(
+    { id: userId, type: 'refresh', jti: crypto.randomBytes(16).toString('hex') },
+    REFRESH_SECRET,
+    { expiresIn: REFRESH_EXPIRES }
+  );
 }
 
 const transporter = nodemailer.createTransport({
@@ -60,64 +69,19 @@ const AuthController = {
     }
   },
 
-  // ==================== LOGIN COM GOOGLE (NOVO) ====================
-  googleLogin: async (req, res) => {
-    const { email, fullName } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'E-mail é obrigatório' });
-    }
-
-    try {
-      const emailLower = email.trim().toLowerCase();
-
-      let user = await prisma.user.findUnique({
-        where: { email: emailLower }
-      });
-
-      if (!user) {
-        user = await prisma.user.create({
-          data: {
-            fullName: fullName || 'Usuário Google',
-            email: emailLower,
-            passwordHash: '',           // usuário Google não tem senha local
-            role: 'USER',
-            userType: 'PROPRIETARIO',
-            ativo: true,
-            // photoUrl: picture,
-          }
-        });
-        console.log(`🆕 Novo usuário Google criado → ${user.email} (ID: ${user.id})`);
-      } else {
-        console.log(`✅ Usuário Google encontrado → ${user.email} (ID: ${user.id})`);
-      }
-
-      const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
-        SECRET,
-        { expiresIn: '7d' }
-      );
-
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          fullName: user.fullName,
-          email: user.email,
-          role: user.role,
-          userType: user.userType
-        },
-        token
-      });
-
-    } catch (error) {
-      console.error('Erro googleLogin:', error);
-      res.status(500).json({ error: 'Erro ao fazer login com Google' });
-    }
-  },
+  // NOTA: o login com Google é tratado por GoogleController.login (rota POST /api/auth/google),
+  // que valida o access_token contra a API do Google antes de emitir o JWT. O antigo
+  // AuthController.googleLogin (que confiava cegamente no e-mail do body — risco de account
+  // takeover) foi removido por segurança. NÃO reintroduzir um login que confie em e-mail do body.
 
   // ==================== ESQUECI MINHA SENHA (seu código original) ====================
   forgotPassword: async (req, res) => {
+    // Resposta SEMPRE genérica — nunca revela se o e-mail existe (evita enumeração de usuários).
+    const respostaGenerica = {
+      success: true,
+      message: 'Se houver uma conta com este e-mail, enviaremos um link de recuperação.',
+    };
+
     try {
       const { email } = req.body;
       if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
@@ -126,7 +90,8 @@ const AuthController = {
         where: { email: email.toLowerCase() }
       });
 
-      if (!user) return res.status(404).json({ error: 'E-mail não encontrado' });
+      // E-mail inexistente: responde igual ao caso de sucesso, sem enviar nada.
+      if (!user) return res.json(respostaGenerica);
 
       const resetToken = jwt.sign({ id: user.id }, SECRET, { expiresIn: '1h' });
 
@@ -152,10 +117,11 @@ const AuthController = {
         `,
       });
 
-      res.json({ success: true, message: 'Link de recuperação enviado para o e-mail' });
+      res.json(respostaGenerica);
     } catch (error) {
       console.error('Erro forgotPassword:', error);
-      res.status(500).json({ error: 'Erro interno ao enviar link' });
+      // Mesmo em erro interno, mantém a resposta genérica para não vazar sinal por timing/status.
+      res.json(respostaGenerica);
     }
   },
 
@@ -163,6 +129,11 @@ const AuthController = {
   resetPassword: async (req, res) => {
     try {
       const { token, newPassword } = req.body;
+
+      // Defesa em profundidade (além do validator de rota): nunca aceita senha fraca.
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({ error: 'A nova senha deve ter ao menos 8 caracteres' });
+      }
 
       const decoded = jwt.verify(token, SECRET);
       const user = await prisma.user.findUnique({ where: { id: decoded.id } });
@@ -194,8 +165,17 @@ const AuthController = {
     const { refreshToken } = req.body;
 
     try {
+      // Valida assinatura + expiração antes de tocar o banco. Tokens antigos (formato
+      // legado sem expiração) falham aqui → cliente refaz login. Uma vez só.
+      let payload;
+      try {
+        payload = jwt.verify(refreshToken, REFRESH_SECRET);
+      } catch {
+        return res.status(401).json({ error: 'Refresh token inválido ou expirado' });
+      }
+
       const user = await prisma.user.findFirst({
-        where: { refreshToken, ativo: true },
+        where: { refreshToken, ativo: true, id: payload.id },
         select: {
           id:       true,
           email:    true,
@@ -217,7 +197,7 @@ const AuthController = {
       );
 
       // Rotação: gera novo refresh token a cada uso
-      const newRefreshToken = generateRefreshToken();
+      const newRefreshToken = generateRefreshToken(user.id);
       await prisma.user.update({
         where: { id: user.id },
         data:  { refreshToken: newRefreshToken },

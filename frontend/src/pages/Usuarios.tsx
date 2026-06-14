@@ -53,7 +53,7 @@ const PERFIL_TO_USERTYPE: Record<string, string> = {
   VETERINARIO:  'VETERINARIO',
   ESTAGIARIO:   'ESTAGIARIO',
   PRESTADOR:    'FORNECEDOR',
-  SOCIO:        'VETERINARIO',
+  GESTOR:        'VETERINARIO',
   PROPRIETARIO: 'PROPRIETARIO',
   ADMIN:        'ADMIN',
 };
@@ -65,7 +65,7 @@ const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label 
 
 // userType/cargo do usuário → valor do select "Perfil de acesso"
 const perfilDoUsuario = (u: Usuario): string =>
-  u.cargoEquipe === 'SOCIO' ? 'SOCIO'
+  u.cargoEquipe === 'GESTOR' ? 'GESTOR'
   : u.userType === 'FORNECEDOR' ? 'PRESTADOR'
   : u.userType;
 
@@ -265,12 +265,12 @@ const Usuarios = () => {
                       }`}>{labelRole(u.role)}</span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-700">
-                      {u.cargoEquipe === 'SOCIO'
-                        ? <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">Sócio</span>
+                      {u.cargoEquipe === 'GESTOR'
+                        ? <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">Gestor</span>
                         : labelUserType(u.userType)}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
-                      {u.cargoEquipe === 'SOCIO' ? (
+                      {u.cargoEquipe === 'GESTOR' ? (
                         u.empresaNome
                           ? <span className="flex items-center gap-1 text-xs text-gray-500"><Building2 size={11} className="text-indigo-500 flex-shrink-0" />{u.empresaNome}</span>
                           : '—'

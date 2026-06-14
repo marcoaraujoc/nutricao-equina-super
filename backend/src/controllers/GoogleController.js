@@ -4,9 +4,16 @@ const https  = require('https');
 
 const prisma = require('../lib/prisma').default;
 const SECRET = process.env.JWT_SECRET;
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
+const REFRESH_EXPIRES = '30d';
 
-function generateRefreshToken() {
-  return crypto.randomBytes(48).toString('hex');
+// Refresh token assinado (JWT) com expiração — validado em AuthController.refreshToken.
+function generateRefreshToken(userId) {
+  return jwt.sign(
+    { id: userId, type: 'refresh', jti: crypto.randomBytes(16).toString('hex') },
+    REFRESH_SECRET,
+    { expiresIn: REFRESH_EXPIRES }
+  );
 }
 
 function fetchGoogleUserInfo(accessToken) {
@@ -84,7 +91,7 @@ const GoogleController = {
         { expiresIn: '24h' }
       );
 
-      const refreshToken = generateRefreshToken();
+      const refreshToken = generateRefreshToken(user.id);
       await prisma.user.update({
         where: { id: user.id },
         data:  { refreshToken },

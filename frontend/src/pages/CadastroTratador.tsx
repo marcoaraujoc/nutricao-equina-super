@@ -261,7 +261,7 @@ export default function CadastroTratador() {
           <ul className="mt-1 list-disc pl-5 space-y-0.5">
             <li>Dados são compartilhados entre todas as empresas (tabela global).</li>
             <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN e não podem ser editadas por outros.</li>
-            <li>Entradas <strong>CLIENTE</strong> são criadas por sócios/veterinários; solicite ao ADMIN para alterar.</li>
+            <li>Entradas <strong>CLIENTE</strong> são criadas por gestores/veterinários; solicite ao ADMIN para alterar.</li>
             <li>Apenas ADMIN pode inativar ou editar qualquer tratador.</li>
             <li>Tratadores nunca são excluídos, apenas inativados.</li>
             <li>Um tratador pode cuidar de animais de diferentes empresas.</li>

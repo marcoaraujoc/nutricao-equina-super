@@ -437,9 +437,9 @@ const Atendimento = () => {
             onFaturaAtualizada={carregarFatura}
           />
         );
-      case 'vacina':         return <SubModuloVacina />;
+      case 'vacina':         return <SubModuloVacina animalId={animalIdNum} animal={animal} />;
       case 'exames':         return <SubModuloExames />;
-      case 'encaminhamento': return <SubModuloEncaminhamento />;
+      case 'encaminhamento': return <SubModuloEncaminhamento animalId={animalIdNum} />;
     }
   };
 

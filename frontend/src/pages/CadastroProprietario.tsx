@@ -473,11 +473,11 @@ function ModalProprietario({
 export default function CadastroProprietario() {
   const { user }    = useAuth();
   const isAdmin     = user?.role === 'ADMIN';
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar   = isSocio || podeExecutar('cadastro.proprietario.criar');
-  const podeEditar  = isSocio || podeExecutar('cadastro.proprietario.editar');
-  const podeRemover = isSocio || podeExecutar('cadastro.proprietario.deletar');
+  const podeCriar   = isGestor || podeExecutar('cadastro.proprietario.criar');
+  const podeEditar  = isGestor || podeExecutar('cadastro.proprietario.editar');
+  const podeRemover = isGestor || podeExecutar('cadastro.proprietario.deletar');
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);

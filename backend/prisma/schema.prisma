@@ -509,21 +509,66 @@ model ProcedimentoVeterinario {
   @@schema("schs2vet")
 }
 
+model Vacina {
+  id         Int      @id @default(autoincrement())
+  nome       String   @db.VarChar(255)
+  fabricante String?  @db.VarChar(255)
+  via        String   @default("Subcutânea (SC)") @db.VarChar(100)
+  ativo      Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  lotes      LoteVacina[]
+  aplicacoes VacinaClinica[] @relation("VacinaAplicacoes")
+
+  @@index([ativo])
+  @@map("tb_vacinas")
+  @@schema("schs2vet")
+}
+
+model LoteVacina {
+  id            Int      @id @default(autoincrement())
+  vacinaId      Int      @map("vacina_id")
+  empresaId     Int?     @map("empresa_id")
+  lote          String   @db.VarChar(100)
+  validade      DateTime
+  qtdTotal      Int      @default(0) @map("qtd_total")
+  qtdDisponivel Int      @default(0) @map("qtd_disponivel")
+  ativo         Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  vacina    Vacina   @relation(fields: [vacinaId],  references: [id], onDelete: Cascade)
+  empresa   Empresa? @relation("LoteVacinaEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
+  aplicacoes VacinaClinica[] @relation("LoteAplicacoes")
+
+  @@index([vacinaId])
+  @@index([empresaId])
+  @@map("tb_lotes_vacina")
+  @@schema("schs2vet")
+}
+
 model VacinaClinica {
   id            Int       @id @default(autoincrement())
   animalId      Int
   veterinarioId Int?
+  vacinaId      Int?      @map("vacina_id")
+  loteId        Int?      @map("lote_id")
   nome          String
-  lote          String?
   fabricante    String?
+  lote          String?
+  dose          String?   @db.VarChar(50)
+  via           String?   @db.VarChar(100)
   dataAplicacao DateTime  @default(now())
   dataReforco   DateTime?
   observacao    String?   @db.Text
   ativo         Boolean   @default(true)
 
-  animal      Animal @relation("AnimalVacinas",      fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario User?  @relation("VacinaVeterinario",  fields: [veterinarioId],   references: [id], onDelete: SetNull)
+  animal      Animal      @relation("AnimalVacinas",     fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?       @relation("VacinaVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  vacina      Vacina?     @relation("VacinaAplicacoes",  fields: [vacinaId],      references: [id], onDelete: SetNull)
+  loteVacina  LoteVacina? @relation("LoteAplicacoes",   fields: [loteId],        references: [id], onDelete: SetNull)
 
+  @@index([animalId])
+  @@index([vacinaId])
   @@map("tb_vacinas_clinicas")
   @@schema("schs2vet")
 }
@@ -808,7 +853,8 @@ model Empresa {
   proprietarios   User[]           @relation("ProprietarioEmpresa")
   equipes         Equipe[]
   animais         Animal[]         @relation("EmpresaAnimais")
-  estoques  EstoqueClinica[] @relation("EmpresaEstoque")
+  estoques    EstoqueClinica[] @relation("EmpresaEstoque")
+  loteVacinas LoteVacina[]     @relation("LoteVacinaEmpresa")
 
   // Duplicidade: mesmo gestor (ownerId ≡ e-mail único) + mesmo nome + mesmo CNPJ é bloqueado.
   // cnpj NULL (empresa pessoal/CPF): Postgres trata NULLs como distintos — enforcement na aplicação.

@@ -509,9 +509,9 @@ function LinhaGrupo({
 
 export default function ExecucaoPrescricao() {
   const { user }                               = useAuth();
-  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
-  const podeExecutarAcao = isSocio || podeExecutar('enfermagem.prescricao.executar');
-  const podeImprimir     = isSocio || podeExecutar('enfermagem.prescricao.imprimir');
+  const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
+  const podeExecutarAcao = isGestor || podeExecutar('enfermagem.prescricao.executar');
+  const podeImprimir     = isGestor || podeExecutar('enfermagem.prescricao.imprimir');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 

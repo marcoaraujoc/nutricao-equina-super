@@ -2,6 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const path   = require('path');
+const crypto = require('crypto');
 const exameController = require('../controllers/ExameController');
 const { authenticate }    = require('../middlewares/auth');
 const { checkPermission } = require('../middlewares/permissao.middleware');
@@ -13,7 +15,12 @@ const upload = multer({ storage: multer.memoryStorage() });
 const uploadTemp = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, 'uploads/exames/'),
-    filename:    (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+    // Nunca usa originalname no nome final (path traversal via `../`); só extensão limpa.
+    filename:    (_req, file, cb) => {
+      const extRaw = path.extname(file.originalname || '').toLowerCase();
+      const ext = /^\.[a-z0-9]{1,8}$/.test(extRaw) ? extRaw : '';
+      cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
+    },
   }),
 });
 

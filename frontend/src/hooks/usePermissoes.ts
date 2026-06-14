@@ -1,7 +1,7 @@
 // src/hooks/usePermissoes.ts
 // =============================================================================
 // Carrega e disponibiliza as permissões do usuário logado.
-// Sócios recebem FULL em tudo (isSocio=true). Usuários sem equipe recebem {}.
+// Gestores recebem FULL em tudo (isGestor=true). Usuários sem equipe recebem {}.
 // =============================================================================
 
 import { useState, useEffect, useCallback } from 'react';
@@ -23,7 +23,7 @@ const NIVEL_ORDINAL: Record<Nivel, number> = {
 
 interface UsePermissoesResult {
   permissoes:    PermissaoMap;
-  isSocio:       boolean;
+  isGestor:       boolean;
   temEquipe:     boolean;   // true se o usuário pertence a alguma equipe
   loading:       boolean;
   // Retorna true se o usuário tem ao menos o nível informado no slug dado
@@ -43,7 +43,7 @@ export function usePermissoes(): UsePermissoesResult {
   const precisaCarregar = user && !isAdminUser;
 
   const [permissoes, setPermissoes] = useState<PermissaoMap>({});
-  const [isSocio,    setIsSocio]    = useState(false);
+  const [isGestor,    setIsGestor]    = useState(false);
   const [temEquipe,  setTemEquipe]  = useState(false);
   // Começa true quando há permissões reais a carregar — evita flash de "sem acesso"
   const [loading,    setLoading]    = useState(() => !!precisaCarregar);
@@ -51,7 +51,7 @@ export function usePermissoes(): UsePermissoesResult {
   const carregar = useCallback(async () => {
     if (!precisaCarregar) {
       setPermissoes({});
-      setIsSocio(false);
+      setIsGestor(false);
       setTemEquipe(false);
       return;
     }
@@ -59,7 +59,7 @@ export function usePermissoes(): UsePermissoesResult {
     try {
       const res = await api.get('/equipes/minhas-permissoes');
       setPermissoes(res.data?.dados?.permissoes ?? {});
-      setIsSocio(res.data?.dados?.isSocio     ?? false);
+      setIsGestor(res.data?.dados?.isGestor     ?? false);
       setTemEquipe(res.data?.dados?.temEquipe  ?? false);
     } catch {
       setPermissoes({});
@@ -72,11 +72,11 @@ export function usePermissoes(): UsePermissoesResult {
   useEffect(() => { carregar(); }, [carregar]);
 
   const podeExecutar = useCallback((slug: string, nivelMinimo: Nivel = 'LEITURA'): boolean => {
-    if (isSocio || isAdminUser) return true;
+    if (isGestor || isAdminUser) return true;
     // PROPRIETARIO e demais: verifica o mapa retornado pelo backend
     const nivelAtual = permissoes[slug] ?? 'NENHUM';
     return NIVEL_ORDINAL[nivelAtual] >= NIVEL_ORDINAL[nivelMinimo];
-  }, [isSocio, isAdminUser, permissoes]);
+  }, [isGestor, isAdminUser, permissoes]);
 
-  return { permissoes, isSocio, temEquipe, loading, podeExecutar, recarregar: carregar };
+  return { permissoes, isGestor, temEquipe, loading, podeExecutar, recarregar: carregar };
 }

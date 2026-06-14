@@ -191,9 +191,9 @@ const Animal = () => {
   const isEditMode                = !!id;
   const nomeFromState             = !id ? (location.state as { nome?: string } | null)?.nome ?? '' : '';
 
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
-  const podeCriar  = isSocio || podeExecutar('animais.criar');
-  const podeEditar = isSocio || podeExecutar('animais.editar');
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const podeCriar  = isGestor || podeExecutar('animais.criar');
+  const podeEditar = isGestor || podeExecutar('animais.editar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -387,7 +387,7 @@ const Animal = () => {
         setVetsFiltrados(vetsData);
 
         // Filtrar espécies pelas atendidas na empresa/equipe
-        // (vet: suas espécies; sócio: união das espécies dos vets da equipe)
+        // (vet: suas espécies; gestor: união das espécies dos vets da equipe)
         let especiesVisiveis = todasEspecies;
         if (isVet) {
           try {
@@ -941,7 +941,7 @@ const Animal = () => {
                     Os dados do proprietário foram preenchidos automaticamente.{' '}
                     {pedirAutorizacao
                       ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo. O animal ficará bloqueado até a aprovação.'
-                      : 'Após salvar, o vínculo será estabelecido imediatamente sem notificação ao proprietário.'}
+                      : 'Após salvar, o vínculo será estabelecido imediatamente e o proprietário receberá um e-mail informativo.'}
                   </span>
                 </div>
               )}
@@ -1318,7 +1318,7 @@ const Animal = () => {
                           <p className="text-xs text-gray-500 mt-0.5">
                             {pedirAutorizacao
                               ? 'O proprietário receberá um e-mail com os dados de acesso (se conta nova) e um link para autorizar o vínculo.'
-                              : 'O vínculo será estabelecido imediatamente. O proprietário não receberá notificação por e-mail.'}
+                              : 'O vínculo será estabelecido imediatamente. O proprietário receberá um e-mail informativo (sem necessidade de aprovação).'}
                           </p>
                         </div>
                       </label>

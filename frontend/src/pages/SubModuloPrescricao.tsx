@@ -1053,12 +1053,12 @@ function CancelarModal({
 
 export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar    = isSocio || podeExecutar('atendimento.prescricoes.criar');
-  const podeEditar   = isSocio || podeExecutar('atendimento.prescricoes.editar');
-  const podeFinalizar = isSocio || podeExecutar('atendimento.prescricoes.finalizar');
-  const podeImprimir  = isSocio || podeExecutar('atendimento.prescricoes.imprimir');
+  const podeCriar    = isGestor || podeExecutar('atendimento.prescricoes.criar');
+  const podeEditar   = isGestor || podeExecutar('atendimento.prescricoes.editar');
+  const podeFinalizar = isGestor || podeExecutar('atendimento.prescricoes.finalizar');
+  const podeImprimir  = isGestor || podeExecutar('atendimento.prescricoes.imprimir');
 
   const canEdit = podeCriar;
   const canFinalizarCancelar = podeFinalizar;

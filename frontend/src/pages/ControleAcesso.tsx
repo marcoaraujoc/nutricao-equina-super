@@ -3,10 +3,10 @@
 //
 // ADMIN:
 //   1. Permissões Globais  — configura locks por UserType (propagado a todas as equipes)
-//   2. Profissionais       — vista global de todos os sócios/membros
+//   2. Profissionais       — vista global de todos os gestores/membros
 //   3. Logs de Auditoria
 //
-// SÓCIO:
+// GESTOR:
 //   1. Matriz de Perfis    — gerencia permissões por cargo (itens locked são read-only)
 //   2. Profissionais       — membros da equipe
 //   3. Logs de Auditoria
@@ -147,20 +147,20 @@ function mascaraCNPJ(v: string): string {
 // ─── Constantes estáticas ─────────────────────────────────────────────────────
 
 const CARGO_INFO: Record<string, { label: string; desc: string; cor: string; tipo?: string }> = {
-  SOCIO:        { label: 'Sócio',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple',  tipo: 'SISTEMA' },
+  GESTOR:        { label: 'Gestor',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple',  tipo: 'SISTEMA' },
   VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.',                 cor: 'emerald', tipo: 'SISTEMA' },
-  PRESTADOR:    { label: 'Prestador',    desc: 'Prestador de serviços. Acesso configurável pelo sócio da equipe.',                       cor: 'teal',    tipo: 'SISTEMA' },
-  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo sócio conforme necessário.',      cor: 'blue',    tipo: 'SISTEMA' },
-  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo sócio.',                   cor: 'amber',   tipo: 'SISTEMA' },
+  PRESTADOR:    { label: 'Prestador',    desc: 'Prestador de serviços. Acesso configurável pelo gestor da equipe.',                       cor: 'teal',    tipo: 'SISTEMA' },
+  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.',      cor: 'blue',    tipo: 'SISTEMA' },
+  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.',                   cor: 'amber',   tipo: 'SISTEMA' },
   ADMIN:        { label: 'Administrador',desc: 'Gerência operacional e suporte técnico. Acesso amplo sem permissões financeiras.',        cor: 'red' },
   MEMBRO:       { label: 'Membro',       desc: 'Membro da equipe com acesso básico configurável.',                                       cor: 'gray' },
 };
 
-const USER_TYPES_GERENCIADOS = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'] as const;
+const USER_TYPES_GERENCIADOS = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'] as const;
 type UserTypeGerenciado = typeof USER_TYPES_GERENCIADOS[number];
 
 const USER_TYPE_INFO: Record<UserTypeGerenciado, { label: string; desc: string; cor: string }> = {
-  SOCIO:        { label: 'Sócios',        desc: 'Permissões globais para todos os sócios. O que for concedido aqui fica bloqueado e não pode ser alterado por nenhuma função inferior.',  cor: 'purple' },
+  GESTOR:        { label: 'Gestores',        desc: 'Permissões globais para todos os gestores. O que for concedido aqui fica bloqueado e não pode ser alterado por nenhuma função inferior.',  cor: 'purple' },
   VETERINARIO:  { label: 'Veterinários',  desc: 'Permissões base para todos os profissionais veterinários da plataforma.',    cor: 'emerald' },
   ESTAGIARIO:   { label: 'Estagiários',   desc: 'Permissões base para todos os estagiários da plataforma.',                   cor: 'blue' },
   PROPRIETARIO: { label: 'Proprietários', desc: 'Permissões base (leitura) disponíveis para proprietários de animais.',        cor: 'amber' },
@@ -170,7 +170,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   dashboard:      { label: 'Dashboard',            icon: <LayoutDashboard size={14} /> },
   cadastro:       { label: 'Cadastro',             icon: <Users2          size={14} /> },
   animais:        { label: 'Animais & Pacientes',  icon: <PawPrint        size={14} /> },
-  atendimento:    { label: 'Clínica / Atendimento',icon: <Stethoscope     size={14} /> },
+  atendimento:    { label: 'Atendimento',           icon: <Stethoscope     size={14} /> },
   enfermagem:     { label: 'Enfermagem',           icon: <Activity        size={14} /> },
   exames:         { label: 'Exames',               icon: <FlaskConical    size={14} /> },
   nutricao:       { label: 'Nutrição',             icon: <Apple           size={14} /> },
@@ -190,9 +190,11 @@ const SUBMODULO_LABEL: Record<string, string> = {
   evolucoes:          'Evolução Clínica',
   prescricoes:        'Prescrições',
   vacinas:            'Vacinas',
+  agendamentos:       'Agendamentos',
   encaminhamentos:    'Encaminhamentos',
   exames:             'Exames & Laudos',
   prescricao:         'Execução de Prescrição',
+  localizacao:        'Localizações de Animal',
   laboratorial:       'Exames Laboratoriais',
   imagem:             'Exames de Imagem',
   dietas:             'Planos de Dieta',
@@ -218,7 +220,7 @@ const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';
 const badgeCargo = (cargo: string) =>
   ({ VETERINARIO: 'bg-emerald-100 text-emerald-700', ESTAGIARIO: 'bg-blue-100 text-blue-700',
      ADMIN: 'bg-red-100 text-red-700', MEMBRO: 'bg-gray-100 text-gray-600',
-     SOCIO: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
+     GESTOR: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
      PRESTADOR: 'bg-teal-100 text-teal-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
 
 // ─── Utilitário ───────────────────────────────────────────────────────────────
@@ -374,7 +376,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ABA 1 — Matriz de Perfis (Sócio)
+// ABA 1 — Matriz de Perfis (Gestor)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TabMatriz({ equipeId }: { equipeId: number }) {
@@ -507,8 +509,8 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
               const labelExib   = p.label ?? CARGO_INFO[p.cargo]?.label ?? p.cargo;
               const descExib    = p.descricao ?? CARGO_INFO[p.cargo]?.desc ?? '';
               const isSel       = cargoSel === p.cargo;
-              const podeDeletar = p.totalMembros === 0 && !['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'].includes(p.cargo);
-              const isSistema   = ['SOCIO', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'].includes(p.cargo);
+              const podeDeletar = p.totalMembros === 0 && !['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'].includes(p.cargo);
+              const isSistema   = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'].includes(p.cargo);
               return (
                 <div
                   key={p.cargo}
@@ -577,19 +579,19 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
                 <div>
                   <p className="font-bold text-gray-900 text-sm">MATRIZ: {infoSel?.label.toUpperCase()}</p>
                   <p className="text-xs text-gray-400 italic mt-0.5 max-w-md">&ldquo;{infoSel?.desc}&rdquo;</p>
-                  {cargoSel === 'SOCIO' && (
+                  {cargoSel === 'GESTOR' && (
                     <div className="flex items-center gap-1 mt-1.5 text-[10px] text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-2 py-1 w-fit">
                       <ShieldCheck size={9} />
-                      <span>Sócios têm bypass total — permissões bloqueadas aqui valem para toda a equipe</span>
+                      <span>Gestores têm bypass total — permissões bloqueadas aqui valem para toda a equipe</span>
                     </div>
                   )}
-                  {nLocked > 0 && cargoSel !== 'SOCIO' && (
+                  {nLocked > 0 && cargoSel !== 'GESTOR' && (
                     <div className="flex items-center gap-1 mt-1.5 text-[10px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 w-fit">
                       <Lock size={9} />
                       <span>{nLocked} permiss{nLocked > 1 ? 'ões bloqueadas' : 'ão bloqueada'} pelo administrador</span>
                     </div>
                   )}
-                  {nLocked > 0 && cargoSel === 'SOCIO' && (
+                  {nLocked > 0 && cargoSel === 'GESTOR' && (
                     <div className="flex items-center gap-1 mt-1.5 text-[10px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 w-fit">
                       <Lock size={9} />
                       <span>{nLocked} permiss{nLocked > 1 ? 'ões bloqueadas' : 'ão bloqueada'} globalmente pelo administrador</span>
@@ -851,9 +853,9 @@ function TabPermissoesGlobais() {
 // ABA — Gerenciar Profissionais
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TabProfissionais({ equipeId, isSocio, isAdmin }: {
+function TabProfissionais({ equipeId, isGestor, isAdmin }: {
   equipeId: number;
-  isSocio:  boolean;
+  isGestor:  boolean;
   isAdmin?: boolean;
 }) {
   const { user }             = useAuth();
@@ -971,7 +973,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
       } else {
         const res = await api.get(`/equipes/membros?equipeId=${equipeId}`);
         setMembros(res.data?.dados ?? []);
-        if (equipeId && isSocio) {
+        if (equipeId && isGestor) {
           try {
             const resProps = await api.get(`/equipes/${equipeId}/proprietarios`);
             setProprietarios(resProps.data?.dados ?? []);
@@ -981,7 +983,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
     } catch { toast.error('Erro ao carregar membros'); }
     finally  { setLoading(false); }
 
-    if (isAdmin || isSocio) {
+    if (isAdmin || isGestor) {
       setLoadingConvites(true);
       api.get('/equipes/convites')
         .then(r => setConvitesEnviados(
@@ -990,14 +992,14 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
         .catch(() => {})
         .finally(() => setLoadingConvites(false));
     }
-  }, [equipeId, isAdmin, isSocio]);
+  }, [equipeId, isAdmin, isGestor]);
 
   const carregarPerfis = useCallback(async () => {
     try {
       const res = await api.get(`/equipes/${equipeId}/perfis`);
       const lista = (res.data.dados ?? []) as Array<{ cargo: string; label?: string }>;
-      // Remove SOCIO e PROPRIETARIO do seletor de cargo para membros da equipe
-      const semReservados = lista.filter(p => p.cargo !== 'SOCIO' && p.cargo !== 'PROPRIETARIO');
+      // Remove GESTOR e PROPRIETARIO do seletor de cargo para membros da equipe
+      const semReservados = lista.filter(p => p.cargo !== 'GESTOR' && p.cargo !== 'PROPRIETARIO');
       setPerfisDisponiveis(semReservados.map(p => ({ slug: p.cargo, label: p.label ?? p.cargo })));
     } catch (err) {
       console.error('[TabProfissionais] carregarPerfis:', err);
@@ -1005,7 +1007,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
   }, [equipeId]);
 
   useEffect(() => { carregar(); }, [carregar]);
-  useEffect(() => { if (isAdmin || isSocio) carregarPerfis(); }, [carregarPerfis, isAdmin, isSocio]);
+  useEffect(() => { if (isAdmin || isGestor) carregarPerfis(); }, [carregarPerfis, isAdmin, isGestor]);
 
   const resetConviteForm = () => {
     setConviteNome('');
@@ -1109,7 +1111,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
             payload.nomeEquipe = comboInput.trim();
           }
         }
-        await api.post('/equipes/admin/convidar-socio', payload);
+        await api.post('/equipes/admin/convidar-gestor', payload);
       } else {
         await api.post(`/equipes/${equipeId}/convidar`, {
           email:    conviteEmail.trim(),
@@ -1153,8 +1155,8 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
     if (!confirmDel) return;
     setRemovendo(confirmDel.id);
     try {
-      if (isAdmin && confirmDel.cargo === 'SOCIO') {
-        await api.delete(`/equipes/${equipeId}/socio/${confirmDel.user.id}`);
+      if (isAdmin && confirmDel.cargo === 'GESTOR') {
+        await api.delete(`/equipes/${equipeId}/gestor/${confirmDel.user.id}`);
         toast.success(`${confirmDel.user.fullName} removido e conta desativada`);
       } else {
         await api.delete(`/equipes/membros/${confirmDel.id}`);
@@ -1177,12 +1179,12 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
     if (!adminConfirmDel) return;
     setRemovendo(adminConfirmDel.membro.id);
     try {
-      await api.delete(`/equipes/${adminConfirmDel.equipeId}/socio/${adminConfirmDel.membro.user.id}`);
+      await api.delete(`/equipes/${adminConfirmDel.equipeId}/gestor/${adminConfirmDel.membro.user.id}`);
       toast.success(`${adminConfirmDel.membro.user.fullName} removido e conta excluída`);
       setAdminConfirmDel(null);
       carregar();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover sócio';
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover gestor';
       toast.error(msg);
     } finally { setRemovendo(null); }
   };
@@ -1202,7 +1204,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
           <p className="font-bold text-gray-900">Gerenciamento de Profissionais ({membros.length})</p>
           <p className="text-xs text-gray-400 mt-0.5">Cadastre a equipe e atribua perfis de acesso</p>
         </div>
-        {(isSocio || isAdmin) && (
+        {(isGestor || isAdmin) && (
           <div className="flex items-center gap-2 flex-wrap">
             {!isAdmin && (
               <button
@@ -1219,7 +1221,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
             )}
             <button
               onClick={() => {
-                setConviteCargo(isAdmin ? 'SOCIO' : 'VETERINARIO');
+                setConviteCargo(isAdmin ? 'GESTOR' : 'VETERINARIO');
                 resetConviteForm();
                 setShowConvite(true);
                 if (isAdmin) {
@@ -1230,7 +1232,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
               }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors"
             >
-              <Plus size={14} /> {isAdmin ? 'Convidar Sócio' : 'Incluir Membro'}
+              <Plus size={14} /> {isAdmin ? 'Convidar Gestor' : 'Incluir Membro'}
             </button>
           </div>
         )}
@@ -1257,9 +1259,9 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                   </div>
                   {emp.equipes.map(eq =>
                     eq.membros.map(m => {
-                      const isSocioMem = m.cargo === 'SOCIO';
+                      const isGestorMem = m.cargo === 'GESTOR';
                       const ativo      = m.user.ativo !== false;
-                      return isSocioMem ? (
+                      return isGestorMem ? (
                         <div key={m.id} className="flex items-center gap-4 px-5 py-4 bg-purple-50/70 border-b border-purple-100">
                           <div className="w-9 h-9 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold text-sm flex-shrink-0">
                             {m.user.fullName?.[0]?.toUpperCase()}
@@ -1267,7 +1269,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="text-sm font-bold text-gray-900">{m.user.fullName}</p>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">SÓCIO</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">GESTOR</span>
                             </div>
                             <p className="text-xs text-gray-500">{m.user.email}</p>
                           </div>
@@ -1282,7 +1284,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                           </span>
                           <button
                             onClick={() => setAdminConfirmDel({ membro: m, equipeId: eq.id, empresaNome: emp.nome })}
-                            title="Remover sócio e excluir conta"
+                            title="Remover gestor e excluir conta"
                             className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
                           >
                             <Trash2 size={14} />
@@ -1371,7 +1373,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                           </div>
                         </td>
                         <td className="px-5 py-3.5">
-                          {isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? (
+                          {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? (
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
                                 <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
@@ -1406,7 +1408,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                          {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
                             <button onClick={() => setConfirmDel(m)} title="Remover membro"
                               className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                               <Trash2 size={14} />
@@ -1432,7 +1434,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
                       {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
                     </span>
-                    {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                    {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
                       <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
                         <Trash2 size={14} />
                       </button>
@@ -1446,7 +1448,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
       )}
 
       {/* Seção — Convites enviados */}
-      {(isAdmin || isSocio) && (
+      {(isAdmin || isGestor) && (
         <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
@@ -1515,7 +1517,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-gray-900">
-                    {isAdmin ? 'Convidar Sócio' : conviteCargo === 'PROPRIETARIO' ? 'Incluir Cliente' : 'Incluir Membro'}
+                    {isAdmin ? 'Convidar Gestor' : conviteCargo === 'PROPRIETARIO' ? 'Incluir Cliente' : 'Incluir Membro'}
                   </h2>
                   <p className="text-xs text-gray-400">Um e-mail de convite será enviado</p>
                 </div>
@@ -1788,14 +1790,14 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
               {conviteCargo === 'PROPRIETARIO' ? (
                 <div className="flex items-center gap-2 px-4 py-2.5 border border-amber-200 bg-amber-50 rounded-xl">
                   <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">PROPRIETÁRIO</span>
-                  <span className="text-sm text-amber-700">Acesso de cliente — permissões configuráveis pelo sócio</span>
+                  <span className="text-sm text-amber-700">Acesso de cliente — permissões configuráveis pelo gestor</span>
                 </div>
               ) : (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
                   {isAdmin ? (
                     <div className="flex items-center gap-2 px-4 py-2.5 border border-purple-200 bg-purple-50 rounded-xl">
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">SÓCIO</span>
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">GESTOR</span>
                       <span className="text-sm text-purple-700">Acesso total irrestrito à equipe</span>
                     </div>
                   ) : (
@@ -1806,7 +1808,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
                             <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
                           ))
                         : Object.entries(CARGO_INFO)
-                            .filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO')
+                            .filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO')
                             .map(([c, info]) => (
                               <option key={c} value={c}>{info.label.toUpperCase()}</option>
                             ))
@@ -1841,7 +1843,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
         </div>
       )}
 
-      {/* Modal exclusão — sócio */}
+      {/* Modal exclusão — gestor */}
       {confirmDel && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
@@ -1871,7 +1873,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
             <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Trash2 size={22} className="text-red-500" />
             </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Remover sócio?</h2>
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Remover gestor?</h2>
             <p className="text-sm text-gray-500 mb-2">
               <strong className="text-gray-700">{adminConfirmDel.membro.user.fullName}</strong>{' '}
               será removido da equipe e sua conta será excluída do sistema.
@@ -1902,7 +1904,7 @@ function TabProfissionais({ equipeId, isSocio, isAdmin }: {
       )}
 
       {/* Seção — Proprietários */}
-      {!isAdmin && isSocio && proprietarios.length > 0 && (
+      {!isAdmin && isGestor && proprietarios.length > 0 && (
         <div className="mt-4 bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
           <div className="px-5 py-3 border-b border-amber-100 bg-amber-50/60 flex items-center gap-2">
             <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">PROPRIETÁRIOS</span>
@@ -1956,7 +1958,7 @@ function EditarCargosModal({
         </div>
         <p className="text-xs text-gray-400 mb-4">Selecione um ou mais perfis. As permissões serão a combinação de todos os selecionados.</p>
         <div className="space-y-2 max-h-60 overflow-y-auto mb-5">
-          {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO').map(([slug, info]) => ({ slug, label: info.label }))).map(p => (
+          {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO').map(([slug, info]) => ({ slug, label: info.label }))).map(p => (
             <label key={p.slug} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${selecionados.includes(p.slug) ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
               <input type="checkbox" checked={selecionados.includes(p.slug)} onChange={() => toggle(p.slug)} className="w-4 h-4 accent-indigo-600" />
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeCargo(p.slug)}`}>{p.label.toUpperCase()}</span>
@@ -2156,9 +2158,18 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
 // ABA — Equipe (membros profissionais: Veterinário, Estagiário, Prestador)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface Fornecedor { id: number; fullName: string; email: string; phone?: string }
+// Cadastro da tabela Fornecedor (tb_fornecedores) — disponível = sem login vinculado (userId null)
+interface Fornecedor {
+  id:          number;
+  nome:        string;
+  email:       string | null;
+  telefone:    string | null;
+  tipoServico: string;
+  userId:      number | null;
+  ativo:       boolean;
+}
 
-function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }) {
+function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean }) {
   const { user }       = useAuth();
   const [membros,      setMembros]      = useState<Membro[]>([]);
   const [loading,      setLoading]      = useState(true);
@@ -2180,11 +2191,15 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
   const [emailErro,      setEmailErro]      = useState('');
   const [enviando,       setEnviando]       = useState(false);
 
-  // Fornecedores (para tipo PRESTADOR)
+  // Fornecedores (para tipo PRESTADOR) — cadastros da tabela Fornecedor disponíveis
   const [fornecedores,        setFornecedores]        = useState<Fornecedor[]>([]);
   const [loadingFornecedores, setLoadingFornecedores] = useState(false);
   const [buscaFornecedor,     setBuscaFornecedor]     = useState('');
   const [fornecedorSel,       setFornecedorSel]       = useState<Fornecedor | null>(null);
+  const [modoNovoForn,        setModoNovoForn]        = useState(false);
+  const [conviteTelefone,     setConviteTelefone]     = useState('');
+  const [tiposServico,        setTiposServico]        = useState<string[]>([]);
+  const [tipoServicoSel,      setTipoServicoSel]      = useState('');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2201,16 +2216,17 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
     try {
       const res = await api.get(`/equipes/${equipeId}/perfis`);
       const lista = (res.data.dados ?? []) as Array<{ cargo: string; label?: string }>;
-      setPerfisDisponiveis(lista.filter(p => p.cargo !== 'SOCIO' && p.cargo !== 'PROPRIETARIO').map(p => ({ slug: p.cargo, label: p.label ?? p.cargo })));
+      setPerfisDisponiveis(lista.filter(p => p.cargo !== 'GESTOR' && p.cargo !== 'PROPRIETARIO').map(p => ({ slug: p.cargo, label: p.label ?? p.cargo })));
     } catch { /* silencioso */ }
   }, [equipeId]);
 
   useEffect(() => { carregar(); }, [carregar]);
-  useEffect(() => { if (isSocio) carregarPerfis(); }, [carregarPerfis, isSocio]);
+  useEffect(() => { if (isGestor) carregarPerfis(); }, [carregarPerfis, isGestor]);
 
   const abrirModal = () => {
     setPasso(1); setTipoSel(null); setConviteNome(''); setConviteEmail(''); setEmailErro('');
     setFornecedorSel(null); setBuscaFornecedor(''); setFornecedores([]);
+    setModoNovoForn(false); setConviteTelefone(''); setTipoServicoSel('');
     setShowModal(true);
   };
 
@@ -2220,25 +2236,76 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
     if (tipo === 'PRESTADOR') {
       setLoadingFornecedores(true);
       try {
-        const res = await api.get(`/equipes/${equipeId}/fornecedores`);
-        setFornecedores(res.data?.dados ?? []);
+        const [resForn, resTipos] = await Promise.all([
+          api.get('/cadastro/fornecedores'),
+          api.get('/cadastro/fornecedores/tipos'),
+        ]);
+        const lista = (resForn.data?.dados ?? []) as Fornecedor[];
+        setFornecedores(lista.filter(f => f.ativo && !f.userId)); // disponíveis = sem login vinculado
+        setTiposServico(resTipos.data?.dados ?? []);
       } catch { toast.error('Erro ao carregar fornecedores'); }
       finally { setLoadingFornecedores(false); }
     }
     setPasso(2);
   };
 
+  const selecionarFornecedor = (f: Fornecedor) => {
+    setFornecedorSel(f);
+    setModoNovoForn(false);
+    setConviteNome(f.nome);
+    setConviteEmail(f.email ?? '');
+    setConviteTelefone(f.telefone ?? '');
+    setEmailErro('');
+  };
+
+  const ativarNovoFornecedor = () => {
+    setModoNovoForn(true);
+    setFornecedorSel(null);
+    setConviteNome(''); setConviteEmail(''); setConviteTelefone(''); setTipoServicoSel('');
+    setEmailErro('');
+  };
+
   const handleEnviar = async () => {
     setEmailErro('');
-    const email = tipoSel === 'PRESTADOR' ? fornecedorSel?.email ?? '' : conviteEmail.trim();
-    if (!email) { setEmailErro('Selecione um prestador ou informe o e-mail'); return; }
-    if (tipoSel !== 'PRESTADOR' && !isValidEmail(email)) { setEmailErro('E-mail inválido'); return; }
+
+    // PRESTADOR: inclusão direta — cria/vincula o cadastro Fornecedor à conta de login
+    if (tipoSel === 'PRESTADOR') {
+      if (!fornecedorSel && !modoNovoForn) { setEmailErro('Selecione um fornecedor ou cadastre um novo'); return; }
+      if (!conviteNome.trim())             { toast.error('Informe o nome');     return; }
+      if (!conviteEmail.trim() || !isValidEmail(conviteEmail)) { setEmailErro('E-mail inválido'); return; }
+      if (!conviteTelefone.trim())         { toast.error('Informe o telefone'); return; }
+      if (modoNovoForn && !tipoServicoSel) { toast.error('Informe o tipo de serviço'); return; }
+
+      setEnviando(true);
+      try {
+        await api.post('/equipes/incluir-membro', {
+          email:        conviteEmail.trim(),
+          cargo:        'PRESTADOR',
+          fullName:     conviteNome.trim(),
+          phone:        conviteTelefone.trim(),
+          fornecedorId: fornecedorSel?.id ?? null,
+          tipoServico:  modoNovoForn ? tipoServicoSel : null,
+          equipeId,  // inclui na equipe exibida nesta aba (não na do contexto ativo)
+        });
+        toast.success('Prestador incluído na equipe');
+        setShowModal(false);
+        carregar();
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir prestador';
+        toast.error(msg);
+      } finally { setEnviando(false); }
+      return;
+    }
+
+    const email = conviteEmail.trim();
+    if (!email) { setEmailErro('Informe o e-mail'); return; }
+    if (!isValidEmail(email)) { setEmailErro('E-mail inválido'); return; }
 
     setEnviando(true);
     try {
       await api.post(`/equipes/${equipeId}/convidar`, {
         email,
-        fullName: tipoSel === 'PRESTADOR' ? fornecedorSel?.fullName : (conviteNome.trim() || undefined),
+        fullName: conviteNome.trim() || undefined,
         cargo:    conviteCargo,
       });
       toast.success('Convite enviado por e-mail');
@@ -2293,7 +2360,10 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
   });
 
   const fornecedoresFiltrados = fornecedores.filter(f =>
-    !buscaFornecedor || f.fullName.toLowerCase().includes(buscaFornecedor.toLowerCase()) || f.email.toLowerCase().includes(buscaFornecedor.toLowerCase())
+    !buscaFornecedor
+    || f.nome.toLowerCase().includes(buscaFornecedor.toLowerCase())
+    || (f.email ?? '').toLowerCase().includes(buscaFornecedor.toLowerCase())
+    || f.tipoServico.toLowerCase().includes(buscaFornecedor.toLowerCase())
   );
 
   const TIPOS_MEMBRO = [
@@ -2309,7 +2379,7 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
           <p className="font-bold text-gray-900">Equipe ({membros.length})</p>
           <p className="text-xs text-gray-400 mt-0.5">Veterinários, estagiários e prestadores de serviço</p>
         </div>
-        {isSocio && (
+        {isGestor && (
           <button onClick={abrirModal}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors">
             <Plus size={14} /> Incluir Membro
@@ -2367,7 +2437,7 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      {isSocio && m.user.id !== user?.id && m.cargo !== 'SOCIO' ? (
+                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? (
                         <div className="flex items-center gap-1.5 flex-wrap">
                           {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
                             <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
@@ -2397,7 +2467,7 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                      {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
                         <button onClick={() => setConfirmDel(m)} title="Remover membro"
                           className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                           <Trash2 size={14} />
@@ -2422,7 +2492,7 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
                   {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
                 </span>
-                {m.user.id !== user?.id && isSocio && m.cargo !== 'SOCIO' && (
+                {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
                   <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
                     <Trash2 size={14} />
                   </button>
@@ -2446,7 +2516,13 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                   <h2 className="text-base font-bold text-gray-900">
                     {passo === 1 ? 'Incluir Membro' : `Convidar ${tipoSel === 'PRESTADOR' ? 'Prestador' : tipoSel === 'ESTAGIARIO' ? 'Estagiário' : 'Veterinário'}`}
                   </h2>
-                  <p className="text-xs text-gray-400">{passo === 1 ? 'Selecione o tipo de membro' : 'Um e-mail de convite será enviado'}</p>
+                  <p className="text-xs text-gray-400">
+                    {passo === 1
+                      ? 'Selecione o tipo de membro'
+                      : tipoSel === 'PRESTADOR'
+                        ? 'O prestador será incluído imediatamente na equipe'
+                        : 'Um e-mail de convite será enviado'}
+                  </p>
                 </div>
               </div>
               <button onClick={() => setShowModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"><X size={16} /></button>
@@ -2471,38 +2547,84 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
             ) : tipoSel === 'PRESTADOR' ? (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecionar prestador de serviço</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecionar fornecedor cadastrado</label>
                   <div className="relative mb-2">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                     <input value={buscaFornecedor} onChange={e => setBuscaFornecedor(e.target.value)}
-                      placeholder="Buscar por nome ou e-mail..."
+                      placeholder="Buscar por nome, e-mail ou serviço..."
                       className="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:border-indigo-500" />
                   </div>
                   {loadingFornecedores ? (
                     <div className="flex justify-center py-4"><Loader2 size={18} className="animate-spin text-indigo-500" /></div>
-                  ) : fornecedoresFiltrados.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-4">
-                      {fornecedores.length === 0 ? 'Nenhum prestador cadastrado. Acesse Cadastro → Fornecedores.' : 'Nenhum resultado.'}
-                    </p>
                   ) : (
                     <div className="max-h-48 overflow-y-auto space-y-1.5 border border-gray-200 rounded-xl p-2">
-                      {fornecedoresFiltrados.map(f => (
-                        <button key={f.id} onClick={() => setFornecedorSel(f)}
+                      <button onClick={ativarNovoFornecedor}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${modoNovoForn ? 'bg-indigo-50 border border-indigo-300' : 'hover:bg-gray-50 border border-dashed border-gray-300'}`}>
+                        <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center flex-shrink-0">
+                          <Plus size={14} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">Cadastrar novo fornecedor</p>
+                          <p className="text-xs text-gray-400">Cria o cadastro e inclui na equipe</p>
+                        </div>
+                        {modoNovoForn && <Check size={14} className="text-indigo-600 flex-shrink-0" />}
+                      </button>
+                      {fornecedoresFiltrados.length === 0 ? (
+                        <p className="text-xs text-gray-400 text-center py-3">
+                          {fornecedores.length === 0 ? 'Nenhum fornecedor disponível no cadastro.' : 'Nenhum resultado.'}
+                        </p>
+                      ) : fornecedoresFiltrados.map(f => (
+                        <button key={f.id} onClick={() => selecionarFornecedor(f)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${fornecedorSel?.id === f.id ? 'bg-teal-50 border border-teal-300' : 'hover:bg-gray-50 border border-transparent'}`}>
                           <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                            {f.fullName?.[0]?.toUpperCase()}
+                            {f.nome?.[0]?.toUpperCase()}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">{f.fullName}</p>
-                            <p className="text-xs text-gray-400 truncate">{f.email}</p>
+                            <p className="text-sm font-semibold text-gray-900 truncate">{f.nome}</p>
+                            <p className="text-xs text-gray-400 truncate">{f.tipoServico}{f.email ? ` · ${f.email}` : ''}</p>
                           </div>
                           {fornecedorSel?.id === f.id && <Check size={14} className="text-teal-600 flex-shrink-0" />}
                         </button>
                       ))}
                     </div>
                   )}
-                  {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
                 </div>
+
+                {(fornecedorSel || modoNovoForn) && (
+                  <div className="space-y-3 border-t border-gray-100 pt-3">
+                    {modoNovoForn && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome <span className="text-red-500">*</span></label>
+                          <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Nome do profissional"
+                            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Tipo de Serviço <span className="text-red-500">*</span></label>
+                          <select value={tipoServicoSel} onChange={e => setTipoServicoSel(e.target.value)}
+                            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
+                            <option value="">Selecione...</option>
+                            {tiposServico.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </div>
+                      </>
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
+                      <input type="email" value={conviteEmail}
+                        onChange={e => { setEmailErro(''); setConviteEmail(e.target.value); }}
+                        placeholder="prestador@exemplo.com"
+                        className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none ${emailErro ? 'border-red-400' : 'border-gray-300 focus:border-indigo-500'}`} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Telefone <span className="text-red-500">*</span></label>
+                      <input value={conviteTelefone} onChange={e => setConviteTelefone(e.target.value)}
+                        placeholder="(00) 00000-0000"
+                        className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
+                    </div>
+                  </div>
+                )}
+                {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
               </div>
             ) : (
               <div className="space-y-4">
@@ -2522,7 +2644,7 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
                   <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
                     className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
-                    {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'SOCIO' && c !== 'PROPRIETARIO').map(([c, info]) => ({ slug: c, label: info.label }))).map(p => (
+                    {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO').map(([c, info]) => ({ slug: c, label: info.label }))).map(p => (
                       <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
                     ))}
                   </select>
@@ -2536,10 +2658,10 @@ function TabEquipe({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }
                 {passo === 2 ? 'Voltar' : 'Cancelar'}
               </button>
               {passo === 2 && (
-                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'PRESTADOR' && !fornecedorSel)}
+                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'PRESTADOR' && !fornecedorSel && !modoNovoForn)}
                   className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
                   {enviando ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
-                  Enviar Convite
+                  {tipoSel === 'PRESTADOR' ? 'Incluir Prestador' : 'Enviar Convite'}
                 </button>
               )}
             </div>
@@ -2668,7 +2790,7 @@ interface ConviteItem {
   equipe?:   { nome: string; empresa?: { nome: string } };
 }
 
-function TabConvites({ equipeId, isSocio }: { equipeId: number; isSocio: boolean }) {
+function TabConvites({ equipeId, isGestor }: { equipeId: number; isGestor: boolean }) {
   const [convites,  setConvites]  = useState<ConviteItem[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [cancelando, setCancelando] = useState<number | null>(null);
@@ -2750,7 +2872,7 @@ function TabConvites({ equipeId, isSocio }: { equipeId: number; isSocio: boolean
                                <XCircle size={11} />}
                   {expirado ? 'Expirado' : pendente ? 'Pendente' : c.status === 'ACEITO' ? 'Aceito' : 'Cancelado/Recusado'}
                 </span>
-                {pendente && !expirado && isSocio && (
+                {pendente && !expirado && isGestor && (
                   <button onClick={() => handleCancelar(c.id)} disabled={cancelando === c.id}
                     className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Cancelar convite">
                     {cancelando === c.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
@@ -2777,8 +2899,8 @@ interface EquipeOpcao {
 }
 
 type AbaAdmin = 'globais' | 'profissionais' | 'auditoria';
-type AbaSocio = 'matriz' | 'convites' | 'auditoria';
-type Aba = AbaAdmin | AbaSocio;
+type AbaGestor = 'matriz' | 'convites' | 'auditoria';
+type Aba = AbaAdmin | AbaGestor;
 
 export default function ControleAcesso() {
   const { user }     = useAuth();
@@ -2787,7 +2909,7 @@ export default function ControleAcesso() {
   const [aba,          setAba]          = useState<Aba>(isAdmin ? 'globais' : 'matriz');
   const [equipeId,     setEquipeId]     = useState<number | null>(null);
   const [empresaId,    setEmpresaId]    = useState<number | null>(null);
-  const [isSocio,      setIsSocio]      = useState(false);
+  const [isGestor,      setIsGestor]      = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [auditTotal,   setAuditTotal]   = useState(0);
   const [todasEquipes, setTodasEquipes] = useState<EquipeOpcao[]>([]);
@@ -2800,7 +2922,7 @@ export default function ControleAcesso() {
         const id = r.data?.equipeId ?? null;
         setEquipeId(id);
         setEmpresaId(r.data?.empresaId ?? null);
-        setIsSocio(isAdmin ? true : (r.data?.isSocio ?? false));
+        setIsGestor(isAdmin ? true : (r.data?.isGestor ?? false));
         if (r.data?.todasEquipes) setTodasEquipes(r.data.todasEquipes);
         if (id) return api.get(`/equipes/${id}/auditoria?page=1&limit=1`);
       })
@@ -2818,13 +2940,13 @@ export default function ControleAcesso() {
   ];
 
   // Matriz de Perfis só aparece no desktop (desktopOnly)
-  const ABAS_SOCIO: Array<{ id: AbaSocio; label: string; icon: React.ReactNode; badge?: number; desktopOnly?: boolean }> = [
+  const ABAS_GESTOR: Array<{ id: AbaGestor; label: string; icon: React.ReactNode; badge?: number; desktopOnly?: boolean }> = [
     { id: 'matriz',    label: 'Matriz de Perfis',  icon: <Shield    size={15} />, desktopOnly: true },
     { id: 'convites',  label: 'Convites',           icon: <Mail      size={15} /> },
     { id: 'auditoria', label: 'Logs de Auditoria',  icon: <Activity  size={15} />, badge: auditTotal },
   ];
 
-  const ABAS = isAdmin ? ABAS_ADMIN : ABAS_SOCIO;
+  const ABAS = isAdmin ? ABAS_ADMIN : ABAS_GESTOR;
 
   if (loading) {
     return (
@@ -2911,8 +3033,8 @@ export default function ControleAcesso() {
       </div>
 
       {isAdmin && aba === 'globais'       && <TabPermissoesGlobais />}
-      {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isSocio={isSocio} isAdmin={isAdmin} />}
-      {!isAdmin && aba === 'convites'     && equipeId && <TabConvites equipeId={equipeId} isSocio={isSocio} />}
+      {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isGestor={isGestor} isAdmin={isAdmin} />}
+      {!isAdmin && aba === 'convites'     && equipeId && <TabConvites equipeId={equipeId} isGestor={isGestor} />}
       {aba === 'auditoria'                && equipeId && <TabAuditoria equipeId={equipeId} />}
       {!isAdmin && aba === 'matriz'          && equipeId && (
         <>

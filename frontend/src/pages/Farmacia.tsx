@@ -118,10 +118,10 @@ function extrairVolume(med: Medicamento): number | null {
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Farmacia() {
-  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
-  const podeCriar   = isSocio || podeExecutar('farmacia.estoque.criar');
-  const podeEditar  = isSocio || podeExecutar('farmacia.estoque.editar');
-  const podeDeletar = isSocio || podeExecutar('farmacia.estoque.deletar');
+  const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
+  const podeCriar   = isGestor || podeExecutar('farmacia.estoque.criar');
+  const podeEditar  = isGestor || podeExecutar('farmacia.estoque.editar');
+  const podeDeletar = isGestor || podeExecutar('farmacia.estoque.deletar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 

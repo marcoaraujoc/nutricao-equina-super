@@ -4,6 +4,7 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
+const crypto  = require('crypto');
 const router  = express.Router();
 
 const EvolucaoController              = require('../controllers/EvolucaoController');
@@ -22,18 +23,28 @@ const uploadAudio = multer({ dest: 'uploads/audio_tmp/' });
 const MIDIA_DIR = 'uploads/evolucoes/';
 if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 
+// Extensões permitidas para mídia clínica. SVG/HTML são deliberadamente excluídos
+// (vetor de XSS armazenado quando servidos via /uploads).
+const MIDIA_EXT_PERMITIDAS = /\.(jpe?g|png|gif|webp|mp4|webm|ogg|mov|m4v|mp3|wav|m4a|aac)$/i;
+const MIDIA_MIME_PERMITIDOS = /^(image\/(jpeg|png|gif|webp)|video\/(mp4|webm|ogg|quicktime|x-m4v)|audio\/(mpeg|mp3|webm|ogg|wav|mp4|x-m4a|aac))$/i;
+
 const uploadMidia = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, MIDIA_DIR),
     filename:    (_req, file, cb) => {
-      const ext = path.extname(file.originalname);
-      cb(null, `${Date.now()}-${Math.random().toString(36).substring(2, 11)}${ext}`);
+      // Só reaproveita a extensão se ela estiver na whitelist; nunca usa o nome do
+      // usuário no arquivo final (evita path traversal e extensões maliciosas).
+      const extRaw = path.extname(file.originalname).toLowerCase();
+      const ext = MIDIA_EXT_PERMITIDAS.test(extRaw) ? extRaw : '';
+      // crypto.randomBytes → URL impossível de enumerar (capability URL).
+      cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
     },
   }),
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
   fileFilter: (_req, file, cb) => {
-    const allowed = /^(image|video|audio)\//;
-    cb(null, allowed.test(file.mimetype));
+    // Valida mimetype declarado E extensão — o mimetype sozinho é falsificável pelo cliente.
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, MIDIA_MIME_PERMITIDOS.test(file.mimetype) && MIDIA_EXT_PERMITIDAS.test(ext));
   },
 });
 

@@ -23,6 +23,7 @@ import CadastroProprietario from './pages/CadastroProprietario';
 import CadastroTratador     from './pages/CadastroTratador';
 import CadastroFornecedor   from './pages/CadastroFornecedor';
 import CadastroLocalizacao  from './pages/CadastroLocalizacao';
+import CadastroVacina       from './pages/CadastroVacina';
 
 // Pages — Animais
 import Animal      from './pages/Animal';
@@ -56,6 +57,9 @@ import ControleAcesso from './pages/ControleAcesso';
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
 
+// Pages — Agenda / Agendamentos
+import Agendamentos from './pages/Agendamentos';
+
 // Pages — Módulo Clínico
 import Atendimento from './pages/Atendimento';
 
@@ -76,10 +80,12 @@ import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
 import Faturamento from './pages/Faturamento';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
+import { EmpresaProvider } from './contexts/EmpresaContext';
 
 function App() {
   return (
     <AuthProvider>
+      <EmpresaProvider>
       <SelectedAnimalProvider>
         <Router>
           <Toaster
@@ -179,6 +185,9 @@ function App() {
 
                           <Route path="/animais-vet" element={<AnimaisVet />} />
 
+                          {/* Agenda de Atendimentos */}
+                          <Route path="/agendamentos" element={<Agendamentos />} />
+
                           {/* Módulo Clínico */}
                           <Route path="/clinica"                          element={<Atendimento />} />
                           <Route path="/clinica/evolucao"                 element={<Atendimento />} />
@@ -196,6 +205,7 @@ function App() {
                           <Route path="/farmacia"              element={<Farmacia />} />
                           <Route path="/medicamentos"          element={<Medicamentos />} />
                           <Route path="/procedimentos"         element={<Procedimentos />} />
+                          <Route path="/admin/vacinas"         element={<CadastroVacina />} />
                           <Route path="/execucao-prescricao"   element={<ExecucaoPrescricao />} />
 
                           {/* Financeiro */}
@@ -226,6 +236,7 @@ function App() {
           </Routes>
         </Router>
       </SelectedAnimalProvider>
+      </EmpresaProvider>
     </AuthProvider>
   );
 }

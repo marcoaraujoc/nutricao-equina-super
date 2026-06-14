@@ -1,5 +1,5 @@
 // src/components/PermissoesModal.tsx
-// Modal de controle de acesso por membro — usado pelo Veterinário Sócio
+// Modal de controle de acesso por membro — usado pelo Veterinário Gestor
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';

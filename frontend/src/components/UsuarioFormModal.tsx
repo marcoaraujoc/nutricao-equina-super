@@ -4,14 +4,15 @@
 // Usado em: Usuarios.tsx (Novo/Editar Usuário) e Equipe.tsx (Incluir/Editar Membro).
 // Criação sem campo de senha — a senha inicial é a padrão do sistema (Inicial_001),
 // com troca obrigatória no primeiro acesso. Em edição, `permitirSenha` exibe o
-// campo "Nova senha" (admin: qualquer usuário; sócio: membros da própria equipe).
+// campo "Nova senha" (admin: qualquer usuário; gestor: membros da própria equipe).
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import {
   X, AlertCircle, Info, Eye, EyeOff, Loader2,
-  User as UserIcon, MapPin, Users,
+  User as UserIcon, MapPin, Users, Truck,
 } from 'lucide-react';
+import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ export interface UsuarioFormValues {
   fullName: string;
   email: string;
   phone: string;
-  perfil: string;      // VETERINARIO | ESTAGIARIO | PRESTADOR | SOCIO (+ legados em edição)
+  perfil: string;      // VETERINARIO | ESTAGIARIO | PRESTADOR | GESTOR (+ legados em edição)
   senha: string;       // edição com permitirSenha: vazio = não alterar
   ativo: boolean;
   cep: string;
@@ -29,6 +30,20 @@ export interface UsuarioFormValues {
   bairro: string;
   cidade: string;
   estado: string;
+  /** Perfil PRESTADOR (comFornecedor): cadastro Fornecedor selecionado, null = criar novo */
+  fornecedorId?: number | null;
+  /** Perfil PRESTADOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
+  tipoServico?: string;
+}
+
+interface FornecedorDisponivel {
+  id:          number;
+  nome:        string;
+  email:       string | null;
+  telefone:    string | null;
+  tipoServico: string;
+  userId:      number | null;
+  ativo:       boolean;
 }
 
 export const SENHA_PADRAO_INICIAL = 'Inicial_001';
@@ -37,7 +52,7 @@ export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
   { value: 'ESTAGIARIO',  label: 'Estagiário'  },
   { value: 'PRESTADOR',   label: 'Fornecedor'  },
-  { value: 'SOCIO',       label: 'Sócio'       },
+  { value: 'GESTOR',       label: 'Gestor'       },
 ];
 
 // Perfis que não podem ser escolhidos, mas podem existir em usuários antigos (edição)
@@ -67,10 +82,12 @@ interface UsuarioFormModalProps {
   infoNota?: string;
   /** Edição: oculta a nota de senha padrão e exibe o checkbox "Usuário ativo" */
   modoEdicao?: boolean;
-  /** Edição: exibe campo "Nova senha" (admin: todos; sócio: membros da própria equipe) */
+  /** Edição: exibe campo "Nova senha" (admin: todos; gestor: membros da própria equipe) */
   permitirSenha?: boolean;
   /** Desabilita o campo de e-mail (e-mail é o login — edição restrita) */
   emailBloqueado?: boolean;
+  /** Perfil Fornecedor (PRESTADOR): exibe seletor de fornecedores cadastrados disponíveis */
+  comFornecedor?: boolean;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -82,11 +99,55 @@ interface UsuarioFormModalProps {
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
-  initial, salvando, textoBotao, onClose, onSubmit,
+  comFornecedor = false, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const [form, setForm] = useState<UsuarioFormValues>({ ...FORM_VAZIO, ...initial });
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
+
+  // Perfil Fornecedor: cadastros disponíveis (sem conta de login vinculada)
+  const [fornecedores,        setFornecedores]        = useState<FornecedorDisponivel[]>([]);
+  const [loadingFornecedores, setLoadingFornecedores] = useState(false);
+  const [fornecedorId,        setFornecedorId]        = useState<number | ''>('');
+  const [tiposServico,        setTiposServico]        = useState<string[]>([]);
+  const [tipoServico,         setTipoServico]         = useState('');
+
+  const fornecedorAtivo = comFornecedor && !modoEdicao && form.perfil === 'PRESTADOR';
+
+  useEffect(() => {
+    if (!fornecedorAtivo || fornecedores.length > 0 || loadingFornecedores) return;
+    let cancelado = false;
+    (async () => {
+      setLoadingFornecedores(true);
+      try {
+        const [resForn, resTipos] = await Promise.all([
+          api.get('/cadastro/fornecedores'),
+          api.get('/cadastro/fornecedores/tipos'),
+        ]);
+        if (cancelado) return;
+        const lista = (resForn.data?.dados ?? []) as FornecedorDisponivel[];
+        setFornecedores(lista.filter(f => f.ativo && !f.userId)); // disponíveis = sem login vinculado
+        setTiposServico(resTipos.data?.dados ?? []);
+      } catch { /* silencioso */ }
+      finally { if (!cancelado) setLoadingFornecedores(false); }
+    })();
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fornecedorAtivo]);
+
+  const selecionarFornecedor = (id: number | '') => {
+    setFornecedorId(id);
+    if (id === '') return;
+    const f = fornecedores.find(x => x.id === id);
+    if (!f) return;
+    // Pré-preenche os dados da conta com o cadastro do fornecedor (editáveis)
+    setForm(prev => ({
+      ...prev,
+      fullName: f.nome,
+      email:    f.email    ?? prev.email,
+      phone:    f.telefone ?? prev.phone,
+    }));
+  };
 
   const set = (field: keyof UsuarioFormValues, value: string | boolean) =>
     setForm(prev => ({ ...prev, [field]: value }));
@@ -121,15 +182,20 @@ export default function UsuarioFormModal({
     if (!form.email.trim())        { toast.error('Informe o e-mail');         return; }
     if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
     if (!form.phone.trim())        { toast.error('Informe o telefone');       return; }
+    if (fornecedorAtivo && fornecedorId === '' && !tipoServico) {
+      toast.error('Informe o tipo de serviço do fornecedor'); return;
+    }
     if (permitirSenha && form.senha) {
       const erroSenha = validarSenha(form.senha);
       if (erroSenha) { toast.error(erroSenha); return; }
     }
     onSubmit({
       ...form,
-      fullName: form.fullName.trim(),
-      email:    form.email.trim().toLowerCase(),
-      phone:    form.phone.trim(),
+      fullName:     form.fullName.trim(),
+      email:        form.email.trim().toLowerCase(),
+      phone:        form.phone.trim(),
+      fornecedorId: fornecedorAtivo && fornecedorId !== '' ? fornecedorId : null,
+      tipoServico:  fornecedorAtivo && fornecedorId === '' ? tipoServico : undefined,
     });
   };
 
@@ -158,6 +224,54 @@ export default function UsuarioFormModal({
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
+                <label className={labelCls}>Perfil de acesso *</label>
+                <select value={form.perfil}
+                  onChange={e => { set('perfil', e.target.value); setFornecedorId(''); }}
+                  className={inputCls}>
+                  {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </div>
+
+              {fornecedorAtivo && (
+                <div className="sm:col-span-2 bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
+                    <Truck size={13} /> Fornecedor cadastrado
+                  </div>
+                  {loadingFornecedores ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-400 py-1">
+                      <Loader2 size={12} className="animate-spin" /> Buscando fornecedores disponíveis…
+                    </div>
+                  ) : (
+                    <div>
+                      <select value={fornecedorId}
+                        onChange={e => selecionarFornecedor(e.target.value === '' ? '' : Number(e.target.value))}
+                        className={inputCls}>
+                        <option value="">— Cadastrar novo fornecedor —</option>
+                        {fornecedores.map(f => (
+                          <option key={f.id} value={f.id}>{f.nome} · {f.tipoServico}</option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        {fornecedores.length === 0
+                          ? 'Nenhum fornecedor disponível — preencha os dados abaixo para criar um novo cadastro.'
+                          : 'Selecione um cadastro existente (preenche os dados abaixo) ou crie um novo.'}
+                      </p>
+                    </div>
+                  )}
+                  {fornecedorId === '' && (
+                    <div>
+                      <label className={labelCls}>Tipo de Serviço *</label>
+                      <select value={tipoServico} onChange={e => setTipoServico(e.target.value)}
+                        className={`${inputCls} ${!tipoServico ? 'border-amber-200 focus:border-amber-400' : ''}`}>
+                        <option value="">Selecione o tipo de serviço...</option>
+                        {tiposServico.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="sm:col-span-2">
                 <label className={labelCls}>Nome completo *</label>
                 <input type="text" value={form.fullName}
                   onChange={e => set('fullName', e.target.value)}
@@ -179,13 +293,6 @@ export default function UsuarioFormModal({
                 <input type="text" value={form.phone}
                   onChange={e => set('phone', e.target.value)}
                   placeholder="(00) 00000-0000" className={inputCls} />
-              </div>
-
-              <div>
-                <label className={labelCls}>Perfil de acesso</label>
-                <select value={form.perfil} onChange={e => set('perfil', e.target.value)} className={inputCls}>
-                  {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
               </div>
 
               {modoEdicao && permitirSenha && (

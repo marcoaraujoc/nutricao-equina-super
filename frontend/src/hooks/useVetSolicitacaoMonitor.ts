@@ -22,7 +22,7 @@ export function useVetSolicitacaoMonitor(): void {
   const role          = (user?.role     ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
   // Backend controla quem pode receber solicitações (podeReceberSolicitacoes).
-  // SÓCIO convidado tem isConvidado=true mas ainda pode gerenciar vínculos.
+  // GESTOR convidado tem isConvidado=true mas ainda pode gerenciar vínculos.
   const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
 
   const buscar = useCallback(async () => {

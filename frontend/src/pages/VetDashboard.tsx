@@ -244,7 +244,7 @@ export default function VetDashboard() {
   const isVet                                 = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal }                 = useSelectedAnimal();
   const navigate                              = useNavigate();
-  const { podeExecutar, temEquipe, isSocio, loading: loadingPerm } = usePermissoes();
+  const { podeExecutar, temEquipe, isGestor, loading: loadingPerm } = usePermissoes();
 
   const [meusAnimais,    setMeusAnimais]    = useState<AnimalResumido[]>([]);
   const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
@@ -374,7 +374,7 @@ export default function VetDashboard() {
 
   return (
     <>
-      {user?.id && (isSocio || !isConvidado) && (
+      {user?.id && (isGestor || !isConvidado) && (
         <VetNotificationModal
           solicitations={solicitacoes as SolicitacaoNotif[]}
           vetId={Number(user.id)}
@@ -564,11 +564,11 @@ export default function VetDashboard() {
               Nenhum animal sob sua responsabilidade
             </h2>
             <p className="text-gray-500 text-sm mb-6">
-              {isConvidado && !isSocio
+              {isConvidado && !isGestor
                 ? 'Aguarde a atribuição de pacientes pelo responsável da equipe.'
                 : 'Cadastre um paciente ou aguarde solicitações de vínculo.'}
             </p>
-            {(isSocio || !isConvidado) && (
+            {(isGestor || !isConvidado) && (
               <button onClick={() => navigate('/animais')}
                 className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800
                            text-white px-6 py-3 rounded-2xl font-semibold transition-colors">

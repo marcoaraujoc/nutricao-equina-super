@@ -3,9 +3,9 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import PageContainer from '../components/PageContainer';
 
 export default function SubModuloExames() {
-  const { podeExecutar, isSocio, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  if (!loadingPerms && !isSocio && !podeExecutar('atendimento.exames.ler')) {
+  if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) {
     return (
       <PageContainer>
         <div className="text-center py-16">

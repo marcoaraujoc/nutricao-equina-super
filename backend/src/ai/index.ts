@@ -1,34 +1,29 @@
 // src/ai/index.ts
-// Factory + callAI() — ponto único de entrada para inferência de texto.
-//
-// Para adicionar um novo provider:
-//   1. Criar src/ai/providers/XyzProvider.ts implementando AIProvider
-//   2. Adicionar case 'xyz' em getProvider()
-//   3. Definir AI_PROVIDER=xyz no .env
+// Ponto único de entrada para inferência de texto.
+// Chain de fallback: Gemini → OpenAI → Claude → Groq
+// Pula automaticamente qualquer provider sem API key configurada.
 
 import type { AIProvider, AICompletionOptions } from './types';
-import { GroqProvider } from './providers/GroqProvider';
-import { logAiUsage }  from '../services/aiLogger.service';
+import { GeminiProvider }    from './providers/GeminiProvider';
+import { OpenAIProvider }    from './providers/OpenAIProvider';
+import { AnthropicProvider } from './providers/AnthropicProvider';
+import { GroqProvider }      from './providers/GroqProvider';
+import { logAiUsage }        from '../services/aiLogger.service';
 
-// ── Singleton do provider ──────────────────────────────────────────────────────
+// ── Chain de providers ─────────────────────────────────────────────────────────
+// Constrói a lista de providers configurados na ordem de preferência.
+// Adicionar novo provider: criar XyzProvider.ts e adicionar condição aqui.
 
-let _provider: AIProvider | null = null;
-
-export function getProvider(): AIProvider {
-  if (_provider) return _provider;
-
-  const driver = (process.env.AI_PROVIDER ?? 'groq').toLowerCase();
-  switch (driver) {
-    case 'groq':
-      _provider = new GroqProvider();
-      break;
-    default:
-      throw new Error(`AI_PROVIDER "${driver}" não reconhecido. Providers disponíveis: groq`);
-  }
-  return _provider;
+function buildChain(): AIProvider[] {
+  const chain: AIProvider[] = [];
+  if (process.env.GEMINI_API_KEY)    chain.push(new GeminiProvider());
+  if (process.env.OPENAI_API_KEY)    chain.push(new OpenAIProvider());
+  if (process.env.ANTHROPIC_API_KEY) chain.push(new AnthropicProvider());
+  if (process.env.GROQ_API_KEY)      chain.push(new GroqProvider());
+  return chain;
 }
 
-// ── callAI() — wrapper com logging automático ──────────────────────────────────
+// ── callAI() ──────────────────────────────────────────────────────────────────
 
 export interface CallAIOptions extends AICompletionOptions {
   operacao:  string;
@@ -38,10 +33,9 @@ export interface CallAIOptions extends AICompletionOptions {
 }
 
 /**
- * Executa uma chamada de texto ao provider ativo e loga automaticamente em AiUsageLog.
- * Substitui chamarGroqComLog() — provider-agnostic.
- *
- * @returns texto da resposta do modelo
+ * Executa inferência de texto com fallback automático entre providers.
+ * Ordem: Gemini → OpenAI → Claude → Groq (apenas os que tiverem API key configurada).
+ * Loga o uso em AiUsageLog.
  */
 export async function callAI({
   operacao,
@@ -50,42 +44,75 @@ export async function callAI({
   animalId = null,
   ...opts
 }: CallAIOptions): Promise<string> {
-  const provider   = getProvider();
-  const inicio     = Date.now();
-  let sucesso      = true;
-  let erroMensagem: string | null = null;
-  let respostaTexto = '';
-  let tokensEntradaApi: number | null = null;
-  let tokensSaidaApi:   number | null = null;
-  let modelo = opts.modelo ?? provider.defaultModel;
+  const chain = buildChain();
 
-  try {
-    const result = await provider.complete(prompt, opts);
-    respostaTexto    = result.text;
-    tokensEntradaApi = result.tokensEntradaApi ?? null;
-    tokensSaidaApi   = result.tokensSaidaApi   ?? null;
-    modelo           = result.modelo;
-    return respostaTexto;
-
-  } catch (err: unknown) {
-    sucesso      = false;
-    erroMensagem = err instanceof Error ? err.message : String(err);
-    throw err;
-
-  } finally {
-    await logAiUsage({
-      operacao,
-      modelo,
-      provedor:         provider.name,
-      promptTexto:      prompt,
-      respostaTexto,
-      tokensEntradaApi: tokensEntradaApi ?? undefined,
-      tokensSaidaApi:   tokensSaidaApi   ?? undefined,
-      latenciaMs:       Date.now() - inicio,
-      userId:           userId           ?? undefined,
-      animalId:         animalId         ?? undefined,
-      sucesso,
-      erroMensagem:     erroMensagem     ?? undefined,
-    });
+  if (chain.length === 0) {
+    throw new Error(
+      'Nenhum provider de IA configurado. ' +
+      'Defina pelo menos uma chave: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY ou GROQ_API_KEY'
+    );
   }
+
+  const inicio     = Date.now();
+  const tentativas: string[] = [];
+
+  for (const provider of chain) {
+    try {
+      const result = await provider.complete(prompt, opts);
+
+      // Loga o uso do provider bem-sucedido
+      await logAiUsage({
+        operacao,
+        modelo:           result.modelo,
+        provedor:         result.provedor,
+        promptTexto:      prompt,
+        respostaTexto:    result.text,
+        tokensEntradaApi: result.tokensEntradaApi ?? undefined,
+        tokensSaidaApi:   result.tokensSaidaApi   ?? undefined,
+        latenciaMs:       Date.now() - inicio,
+        userId:           userId   ?? undefined,
+        animalId:         animalId ?? undefined,
+        sucesso:          true,
+      });
+
+      if (tentativas.length > 0) {
+        console.info(
+          `[AI] Fallback ativado: ${provider.name} respondeu ` +
+          `(falhas anteriores: ${tentativas.join(', ')})`
+        );
+      }
+
+      return result.text;
+
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[AI] Provider "${provider.name}" falhou: ${msg}`);
+      tentativas.push(provider.name);
+    }
+  }
+
+  // Todos falharam — loga o erro e lança
+  const erroFinal = `Todos os providers de IA falharam: [${tentativas.join(', ')}]`;
+
+  await logAiUsage({
+    operacao,
+    modelo:        'none',
+    provedor:      tentativas.join(','),
+    promptTexto:   prompt,
+    respostaTexto: '',
+    latenciaMs:    Date.now() - inicio,
+    userId:        userId   ?? undefined,
+    animalId:      animalId ?? undefined,
+    sucesso:       false,
+    erroMensagem:  erroFinal,
+  }).catch(() => {});
+
+  throw new Error(erroFinal);
+}
+
+// Mantido para compatibilidade — retorna o primeiro provider configurado
+export function getProvider(): AIProvider {
+  const chain = buildChain();
+  if (chain.length === 0) throw new Error('Nenhum provider de IA configurado');
+  return chain[0];
 }

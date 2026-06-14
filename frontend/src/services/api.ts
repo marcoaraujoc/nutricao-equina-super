@@ -7,6 +7,12 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Contexto ativo do gestor (EmpresaContext) — backend valida o vínculo antes de usar
+  // CNPJ trabalha por empresa (x-empresa-id); CPF trabalha por equipe (x-equipe-id)
+  const empresaId = localStorage.getItem('s2vet_empresa_id');
+  if (empresaId) config.headers['x-empresa-id'] = empresaId;
+  const equipeId = localStorage.getItem('s2vet_equipe_id');
+  if (equipeId) config.headers['x-equipe-id'] = equipeId;
   return config;
 });
 

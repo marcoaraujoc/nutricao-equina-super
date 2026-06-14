@@ -1,19 +1,22 @@
 // src/pages/AnimalDetail.tsx
-import { useState, useEffect } from 'react';
+// Tela do animal — header com dados resumidos, Histórico unificado (evoluções,
+// vacinas, exames, prescrições, encaminhamentos) e painel de Agendamentos.
+
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import {
-  ArrowLeft, FileText, Pill, Syringe,
-  FlaskConical, Share2, Utensils, BarChart2,
+  ArrowLeft, Search, ChevronDown, Loader2, CalendarClock,
+  Clock, User as UserIcon, Plus, X, Check, Trash2, Sparkles,
 } from 'lucide-react';
-import { formatDate } from '../utils/dateUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Solicitacao {
-  status:      string;
-  vetUserId:   number;
+  status:       string;
+  vetUserId:    number;
   veterinario?: { fullName: string; email: string } | null;
 }
 
@@ -30,74 +33,372 @@ interface AnimalData {
   baia?:             string | null;
   local?:            string | null;
   veterinarioNome?:  string | null;
-  veterinarioClinica?: string | null;
   raca?:             { nome: string } | null;
   especie?:          { nome: string } | null;
   user?:             { fullName: string; email: string } | null;
   solicitacoes?:     Solicitacao[];
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
 
-const calcularIdade = (dataNascimento: string): string => {
-  const partes  = dataNascimento.split('T')[0].split('-');
-  const anoNasc = parseInt(partes[0]);
-  const mesNasc = parseInt(partes[1]) - 1;
-  const diaNasc = parseInt(partes[2]);
-  const hoje    = new Date();
-  const nascimento = new Date(anoNasc, mesNasc, diaNasc);
-  const diffMs  = hoje.getTime() - nascimento.getTime();
-  const diffDias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  let diffMeses = (hoje.getFullYear() - anoNasc) * 12 + (hoje.getMonth() - mesNasc);
-  if (hoje.getDate() < diaNasc) diffMeses--;
-  let diffAnos = hoje.getFullYear() - anoNasc;
-  if (hoje.getMonth() < mesNasc || (hoje.getMonth() === mesNasc && hoje.getDate() < diaNasc)) diffAnos--;
-  if (diffDias < 30)  return `${diffDias} ${diffDias === 1 ? 'dia' : 'dias'}`;
-  if (diffMeses < 12) return `${diffMeses} ${diffMeses === 1 ? 'mês' : 'meses'}`;
-  return `${diffAnos} ${diffAnos === 1 ? 'ano' : 'anos'}`;
+interface EventoHistorico {
+  id:          string;
+  origem:      OrigemEvento;
+  data:        string;
+  titulo:      string;
+  badge:       string;
+  status:      string | null;
+  responsavel: string | null;
+  resumo:      string;
+}
+
+type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
+
+interface Agendamento {
+  id:          number;
+  tipo:        TipoAgendamento;
+  titulo:      string;
+  dataHora:    string;
+  observacao:  string | null;
+  status:      string;
+  veterinario: { id: number; fullName: string } | null;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const BADGE_ORIGEM: Record<OrigemEvento, string> = {
+  EVOLUCAO:       'bg-emerald-100 text-emerald-700',
+  VACINA:         'bg-teal-100 text-teal-700',
+  EXAME:          'bg-purple-100 text-purple-700',
+  ENCAMINHAMENTO: 'bg-orange-100 text-orange-700',
+  PRESCRICAO:     'bg-blue-100 text-blue-700',
 };
 
-// ─── Definição dos botões por módulo ─────────────────────────────────────────
+const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
+  VACINA:       'bg-amber-100 text-amber-700',
+  CONSULTA:     'bg-blue-100 text-blue-700',
+  RETORNO:      'bg-teal-100 text-teal-700',
+  EXAME:        'bg-purple-100 text-purple-700',
+  PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
+};
 
-const CLINICO = [
-  { key: 'evolucao',       label: 'Evolução',        icon: FileText,    cor: 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100'         },
-  { key: 'prescricao',     label: 'Prescrição',       icon: Pill,        cor: 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100' },
-  { key: 'vacina',         label: 'Vacinas',          icon: Syringe,     cor: 'bg-teal-50 text-teal-600 border-teal-100 hover:bg-teal-100'         },
-  { key: 'exames',         label: 'Exames',           icon: FlaskConical,cor: 'bg-purple-50 text-purple-600 border-purple-100 hover:bg-purple-100'  },
-  { key: 'encaminhamento', label: 'Encaminhamento',   icon: Share2,      cor: 'bg-orange-50 text-orange-600 border-orange-100 hover:bg-orange-100'  },
-] as const;
+const TIPOS_AGENDAMENTO: TipoAgendamento[] = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 
-const NUTRICIONAL = [
-  { key: 'dieta',      label: 'Dieta',               icon: Utensils,  cor: 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-100'        },
-  { key: 'relatorio',  label: 'Relatório Nutricional',icon: BarChart2, cor: 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100'           },
-] as const;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
+const mesAbrev = (iso: string) =>
+  new Date(iso).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase();
 
-// ─── Componente ───────────────────────────────────────────────────────────────
+const diaDoMes = (iso: string) => new Date(iso).getDate();
+
+const horaDe = (iso: string) =>
+  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+const calcularIdade = (dataNascimento?: string | null, idadeAnos?: number | null): string => {
+  if (dataNascimento) {
+    const nasc = new Date(dataNascimento);
+    const hoje = new Date();
+    let anos = hoje.getFullYear() - nasc.getFullYear();
+    const m = hoje.getMonth() - nasc.getMonth();
+    if (m < 0 || (m === 0 && hoje.getDate() < nasc.getDate())) anos--;
+    if (anos >= 1) return `${anos} ${anos === 1 ? 'ano' : 'anos'}`;
+    const meses = Math.max(0, (hoje.getFullYear() - nasc.getFullYear()) * 12 + hoje.getMonth() - nasc.getMonth());
+    return `${meses} ${meses === 1 ? 'mês' : 'meses'}`;
+  }
+  if (idadeAnos) return `${idadeAnos} ${idadeAnos === 1 ? 'ano' : 'anos'}`;
+  return '—';
+};
+
+// ─── Header — dados do animal ─────────────────────────────────────────────────
+
+function CampoHeader({ label, valor }: { label: string; valor: string }) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[10px] uppercase text-gray-400 tracking-widest font-semibold">{label}</span>
+      <span className="block text-sm font-bold text-gray-900 truncate mt-0.5" title={valor}>{valor}</span>
+    </div>
+  );
+}
+
+function HeaderAnimal({ animal }: { animal: AnimalData }) {
+  const solAceita = animal.solicitacoes?.find(s => s.status === 'ACEITO');
+  const vetNome   = solAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? '—';
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 sm:p-5">
+      <div className="flex gap-4 sm:gap-6">
+        <div className="w-20 h-20 sm:w-28 sm:h-24 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+          {animal.photoUrl
+            ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+            : <div className="w-full h-full flex items-center justify-center text-2xl text-gray-300">🐾</div>}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pb-3 border-b border-gray-50">
+            <CampoHeader label="Nome"    valor={animal.nome} />
+            <CampoHeader label="Espécie" valor={animal.especie?.nome ?? '—'} />
+            <CampoHeader label="Raça"    valor={animal.raca?.nome ?? '—'} />
+            <CampoHeader label="Idade"   valor={calcularIdade(animal.dataNascimento, animal.idadeAnos)} />
+            <CampoHeader label="Peso"    valor={animal.peso ? `${animal.peso} kg` : '—'} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pt-3">
+            <CampoHeader label="Baia"             valor={animal.baia ?? '—'} />
+            <CampoHeader label="Local"            valor={animal.local ?? '—'} />
+            <CampoHeader label="Tipo de Trabalho" valor={animal.tipoExercicio ?? '—'} />
+            <CampoHeader label="Proprietário"     valor={animal.user?.fullName ?? '—'} />
+            <CampoHeader label="Vet. Responsável" valor={vetNome} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Histórico ────────────────────────────────────────────────────────────────
+
+function ItemHistorico({ ev }: { ev: EventoHistorico }) {
+  const [aberto, setAberto] = useState(false);
+
+  return (
+    <div className="border border-gray-100 rounded-2xl bg-white shadow-sm">
+      <button onClick={() => setAberto(v => !v)} className="w-full flex items-start gap-3 sm:gap-4 p-3 sm:p-4 text-left">
+        <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
+          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ev.data)}</span>
+          <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ev.data)}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-gray-900">{ev.titulo}</span>
+            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
+              {ev.badge}
+            </span>
+            {ev.responsavel && (
+              <span className="text-[10px] text-gray-400 font-mono uppercase">por: {ev.responsavel}</span>
+            )}
+          </div>
+          <p className={`text-xs text-gray-500 mt-1 ${aberto ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>
+            {ev.resumo || '—'}
+          </p>
+          {aberto && ev.status && (
+            <p className="text-[10px] text-gray-400 mt-2">
+              Status: <span className="font-semibold text-gray-500">{ev.status}</span>
+              {' · '}{new Date(ev.data).toLocaleDateString('pt-BR')}
+            </p>
+          )}
+        </div>
+        <span className="p-1.5 border border-gray-200 rounded-full text-gray-400 flex-shrink-0 mt-1">
+          <ChevronDown size={14} className={`transition-transform ${aberto ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+    </div>
+  );
+}
+
+// ─── Agendamentos ─────────────────────────────────────────────────────────────
+
+function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
+  ag:            Agendamento;
+  podeGerenciar: boolean;
+  onConcluir:    (id: number) => void;
+  onExcluir:     (id: number) => void;
+}) {
+  return (
+    <div className="border border-gray-200 rounded-2xl p-3 bg-white">
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col items-center justify-center w-11 h-12 border border-gray-200 rounded-xl flex-shrink-0">
+          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ag.dataHora)}</span>
+          <span className="text-base font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ag.dataHora)}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_TIPO_AG[ag.tipo] ?? 'bg-gray-100 text-gray-500'}`}>
+            {ag.tipo}
+          </span>
+          <p className="text-xs font-bold text-gray-900 mt-1.5 leading-snug">{ag.titulo}</p>
+          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-gray-400">
+            <Clock size={10} /> {horaDe(ag.dataHora)}
+          </div>
+          {ag.veterinario && (
+            <div className="flex items-center gap-1 mt-0.5 text-[11px] text-gray-500 font-medium">
+              <UserIcon size={10} /> Vet: {ag.veterinario.fullName}
+            </div>
+          )}
+        </div>
+        {podeGerenciar && (
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            <button onClick={() => onConcluir(ag.id)} title="Concluir"
+              className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+              <Check size={12} />
+            </button>
+            <button onClick={() => onExcluir(ag.id)} title="Excluir"
+              className="p-1 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={12} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
+  animalId: number;
+  onCriado: () => void;
+  onFechar: () => void;
+}) {
+  const [tipo,       setTipo]       = useState<TipoAgendamento>('CONSULTA');
+  const [titulo,     setTitulo]     = useState('');
+  const [data,       setData]       = useState('');
+  const [hora,       setHora]       = useState('09:00');
+  const [observacao, setObservacao] = useState('');
+  const [salvando,   setSalvando]   = useState(false);
+
+  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500';
+
+  const handleSalvar = async () => {
+    if (!titulo.trim()) { toast.error('Informe a descrição do agendamento'); return; }
+    if (!data)          { toast.error('Informe a data'); return; }
+    setSalvando(true);
+    try {
+      await api.post('/clinica/agendamentos', {
+        animalId, tipo,
+        titulo:     titulo.trim(),
+        dataHora:   `${data}T${hora || '09:00'}:00`,
+        observacao: observacao.trim() || undefined,
+      });
+      toast.success('Agendamento criado');
+      onCriado();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean };
+      if (!e.isPermissionError) toast.error('Erro ao criar agendamento');
+    } finally { setSalvando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md max-h-[92vh] flex flex-col border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <h3 className="font-bold text-gray-900">Novo Agendamento</h3>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Tipo *</label>
+            <select value={tipo} onChange={e => setTipo(e.target.value as TipoAgendamento)} className={inputCls}>
+              {TIPOS_AGENDAMENTO.map(t => <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Descrição *</label>
+            <textarea value={titulo} onChange={e => setTitulo(e.target.value)} rows={3}
+              placeholder="Ex: Aplicação da dose anual da vacina..."
+              className={`${inputCls} resize-none`} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Data *</label>
+              <input type="date" value={data} onChange={e => setData(e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Hora</label>
+              <input type="time" value={hora} onChange={e => setHora(e.target.value)} className={inputCls} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Observação</label>
+            <input type="text" value={observacao} onChange={e => setObservacao(e.target.value)}
+              placeholder="Opcional" className={inputCls} />
+          </div>
+        </div>
+        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onFechar} disabled={salvando}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={handleSalvar} disabled={salvando}
+            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2">
+            {salvando && <Loader2 size={13} className="animate-spin" />}
+            Agendar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Página ───────────────────────────────────────────────────────────────────
 
 const AnimalDetail = () => {
-  const { id }     = useParams<{ id: string }>();
-  const navigate   = useNavigate();
-  const { user }   = useAuth();
+  const { id }   = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const [animal,  setAnimal]  = useState<AnimalData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const podeGerenciarAgenda =
+    (user?.role ?? '').toUpperCase() === 'ADMIN' ||
+    ['VETERINARIO', 'ESTAGIARIO'].includes((user?.userType ?? '').toUpperCase());
 
-  const role          = (user?.role      ?? '').toUpperCase();
-  const userTypeUpper = (user?.userType  ?? '').toUpperCase();
-  const temAcessoClinico = ROLES_CLINICAS.includes(role) || ROLES_CLINICAS.includes(userTypeUpper);
+  const [animal,       setAnimal]       = useState<AnimalData | null>(null);
+  const [historico,    setHistorico]    = useState<EventoHistorico[]>([]);
+  const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [busca,        setBusca]        = useState('');
+  const [showNovoAg,   setShowNovoAg]   = useState(false);
+
+  const carregarAgendamentos = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await api.get(`/clinica/agendamentos/animal/${id}?futuros=1`);
+      if (!res.data) return; // GET 403 → null
+      setAgendamentos(res.data.dados ?? []);
+    } catch { /* silencioso */ }
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
-    api.get(`/animais/${id}`)
-      .then(res => setAnimal(res.data?.dados ?? res.data))
-      .catch(err => console.error('Erro ao carregar animal:', err))
-      .finally(() => setLoading(false));
-  }, [id]);
+    setLoading(true);
+    Promise.all([
+      api.get(`/animais/${id}`).then(res => {
+        if (res.data) setAnimal(res.data.dados ?? res.data);
+      }).catch(() => {}),
+      api.get(`/clinica/historico/animal/${id}`).then(res => {
+        if (res.data) setHistorico(res.data.dados ?? []);
+      }).catch(() => {}),
+      carregarAgendamentos(),
+    ]).finally(() => setLoading(false));
+  }, [id, carregarAgendamentos]);
+
+  const handleConcluirAg = async (agId: number) => {
+    try {
+      await api.patch(`/clinica/agendamentos/${agId}/status`, { status: 'CONCLUIDO' });
+      toast.success('Agendamento concluído');
+      carregarAgendamentos();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean };
+      if (!e.isPermissionError) toast.error('Erro ao concluir agendamento');
+    }
+  };
+
+  const handleExcluirAg = async (agId: number) => {
+    try {
+      await api.delete(`/clinica/agendamentos/${agId}`);
+      toast.success('Agendamento excluído');
+      carregarAgendamentos();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean };
+      if (!e.isPermissionError) toast.error('Erro ao excluir agendamento');
+    }
+  };
+
+  const historicoFiltrado = busca.trim()
+    ? historico.filter(ev => {
+        const q = busca.toLowerCase();
+        return ev.titulo.toLowerCase().includes(q)
+          || ev.resumo.toLowerCase().includes(q)
+          || ev.badge.toLowerCase().includes(q)
+          || (ev.responsavel ?? '').toLowerCase().includes(q);
+      })
+    : historico;
 
   if (loading) return (
-    <div className="flex items-center justify-center min-h-screen">
+    <div className="flex items-center justify-center py-32">
       <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
     </div>
   );
@@ -106,242 +407,94 @@ const AnimalDetail = () => {
     <div className="text-center py-20 text-red-500">Animal não encontrado</div>
   );
 
-  const idadeDisplay = animal.dataNascimento
-    ? calcularIdade(animal.dataNascimento)
-    : animal.idadeAnos
-      ? `${animal.idadeAnos} ${animal.idadeAnos === 1 ? 'ano' : 'anos'}`
-      : '-';
-
-  const nrcDisplay = animal.categoriaAnimal
-    ? `${animal.categoriaAnimal} · ${animal.tipoExercicio}`
-    : null;
-
-  // Vet responsável: prioriza solicitação ACEITA, fallback para campo texto
-  const solAceita      = animal.solicitacoes?.find(s => s.status === 'ACEITO');
-  const solPendente    = animal.solicitacoes?.find(s => s.status === 'PENDENTE');
-  const vetNome        = solAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
-  const vetPendente    = solPendente?.veterinario?.fullName ?? null;
-  const temVeterinario = !!vetNome;
-
-  // Navegação para sub-módulos
-  const irParaClinica = (modulo: string) =>
-    navigate(`/clinica/${modulo}/${animal.id}`);
-
-  const irParaDieta = () =>
-    navigate(`/dieta/${animal.id}`);
-
-  const irParaRelatorio = () =>
-    navigate(`/relatorio-nutricional/${animal.id}`);
-
   return (
-    <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-6">
+    <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-4">
 
-      {/* Voltar */}
-      <button
-        onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
-      >
-        <ArrowLeft size={20} />
-        <span className="text-sm sm:text-base">Voltar</span>
-      </button>
+      <div className="flex items-center justify-between">
+        <button onClick={() => navigate(-1)}
+          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium">
+          <ArrowLeft size={18} />
+          <span className="text-sm">Voltar</span>
+        </button>
 
-      {/* ── Card principal: foto + dados ──────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
-
-        {/* Foto + info */}
-        <div className="lg:col-span-7 bg-white rounded-3xl shadow-md p-4 sm:p-8 border border-gray-100">
-          <div className="flex flex-col sm:flex-row gap-5 sm:gap-8">
-            <div className="w-full sm:w-64 h-56 sm:h-80 bg-gray-200 rounded-3xl overflow-hidden flex-shrink-0">
-              <img
-                src={animal.photoUrl || 'https://picsum.photos/id/1015/800/800'}
-                alt={animal.nome}
-                className="w-full h-full object-cover"
-              />
-            </div>
-
-            <div className="flex-1">
-              <h1 className="text-2xl sm:text-4xl font-bold text-gray-900 break-words leading-tight">{animal.nome}</h1>
-              <p className="text-lg sm:text-2xl text-emerald-600 font-medium mt-1">
-                {animal.raca?.nome || animal.especie?.nome || 'Sem raça definida'}
-              </p>
-
-              {/* Linha 1 — dados básicos */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5 mt-6 sm:mt-8">
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Espécie</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">
-                    {animal.especie?.nome || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Raça</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900 truncate block">
-                    {animal.raca?.nome || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Sexo</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">
-                    {animal.sexo || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Nascimento</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">
-                    {animal.dataNascimento ? formatDate(animal.dataNascimento) : '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Idade</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">{idadeDisplay}</span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Peso Atual</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">
-                    {animal.peso || '-'} kg
-                  </span>
-                </div>
-              </div>
-
-              {/* Linha 2 — localização e perfil */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5 mt-4 pt-4 border-t border-gray-100">
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Baia</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900">
-                    {animal.baia || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Local</span>
-                  <span className="text-base sm:text-lg font-semibold text-gray-900 truncate block">
-                    {animal.local || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs uppercase text-gray-500 tracking-wide">Perfil NRC</span>
-                  <span className="text-sm font-semibold text-emerald-600 leading-tight">
-                    {nrcDisplay || 'Não informado'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Proprietário + Veterinário */}
-        <div className="lg:col-span-5 space-y-4 sm:space-y-5">
-
-          {/* Proprietário */}
-          <div className="bg-white rounded-3xl shadow-md p-4 sm:p-6 border border-gray-100">
-            <div className="flex items-center gap-4 mb-3">
-              <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-100 rounded-2xl flex items-center justify-center text-2xl">
-                👤
-              </div>
-              <div>
-                <h3 className="font-semibold text-base text-gray-900">Proprietário</h3>
-                <p className="text-gray-700 text-sm font-medium">
-                  {animal.user?.fullName || user?.fullName || '-'}
-                </p>
-              </div>
-            </div>
-            <div className="text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-gray-400">E-mail</span>
-                <span className="text-gray-700 text-right truncate">
-                  {animal.user?.email || user?.email || '-'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Veterinário */}
-          <div className={`rounded-3xl shadow-md p-4 sm:p-6 border ${
-            temVeterinario
-              ? 'bg-emerald-700 text-white border-emerald-700'
-              : 'bg-white border-gray-100'
-          }`}>
-            <div className="flex items-center gap-4 mb-3">
-              <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center text-2xl ${
-                temVeterinario ? 'bg-white/20' : 'bg-emerald-50'
-              }`}>
-                🩺
-              </div>
-              <div>
-                <h3 className={`font-semibold text-base ${temVeterinario ? 'text-white' : 'text-gray-900'}`}>
-                  Veterinário Responsável
-                </h3>
-                {temVeterinario ? (
-                  <p className="text-emerald-100 text-sm font-medium">Dr(a). {vetNome}</p>
-                ) : vetPendente ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium mt-0.5">
-                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                    Aguardando: {vetPendente}
-                  </span>
-                ) : (
-                  <p className="text-gray-400 text-sm">Não informado</p>
-                )}
-              </div>
-            </div>
-            {temVeterinario && animal.veterinarioClinica && (
-              <div className="text-sm">
-                <div className="flex justify-between">
-                  <span className="text-emerald-200">Clínica</span>
-                  <span className="text-right">{animal.veterinarioClinica}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        {podeGerenciarAgenda && (
+          <button
+            onClick={() => navigate(`/agendamentos?auto=1&animalId=${animal.id}`)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors"
+          >
+            <Sparkles size={15} />
+            Agende com IA
+          </button>
+        )}
       </div>
 
-      {/* ── Botões de acesso rápido ─────────────────────────────────────── */}
-      <div className="space-y-4">
+      {/* Header — dados do animal */}
+      <HeaderAnimal animal={animal} />
 
-        {/* Módulo Clínico — apenas ADMIN, VETERINARIO, ESTAGIARIO */}
-        {temAcessoClinico && (
-          <div className="bg-white rounded-3xl shadow-md border border-gray-100 p-5 sm:p-6">
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">
-              Módulo Clínico
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              {CLINICO.map(({ key, label, icon: Icon, cor }) => (
-                <button
-                  key={key}
-                  onClick={() => irParaClinica(key)}
-                  className={`flex flex-col items-center gap-2.5 p-4 rounded-2xl border transition-all group ${cor}`}
-                >
-                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
-                    <Icon size={20} />
-                  </div>
-                  <span className="text-xs font-semibold text-center leading-tight">{label}</span>
-                </button>
-              ))}
+      {/* Histórico + Agendamentos — items-stretch mantém os dois cards na mesma altura */}
+      <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+
+        {/* Histórico */}
+        <div className="flex-1 min-w-0 w-full bg-white rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-5 py-4 border-b border-gray-50">
+            <div className="flex items-center gap-2">
+              <span className="w-1 h-5 bg-emerald-500 rounded-full" />
+              <h2 className="font-bold text-gray-900">Histórico</h2>
+            </div>
+            <div className="relative w-full sm:w-72">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input type="text" value={busca} onChange={e => setBusca(e.target.value)}
+                placeholder="Buscar no histórico do animal..."
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-full text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-gray-50/50" />
             </div>
           </div>
-        )}
 
-        {/* Módulo Nutricional — todos os perfis */}
-        <div className="bg-white rounded-3xl shadow-md border border-gray-100 p-5 sm:p-6">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">
-            Módulo Nutricional
-          </h3>
-          <div className="grid grid-cols-2 gap-3">
-            {NUTRICIONAL.map(({ key, label, icon: Icon, cor }) => (
-              <button
-                key={key}
-                onClick={key === 'dieta' ? irParaDieta : irParaRelatorio}
-                className={`flex flex-col items-center gap-2.5 p-4 rounded-2xl border transition-all group ${cor}`}
-              >
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
-                  <Icon size={20} />
-                </div>
-                <span className="text-xs font-semibold text-center leading-tight">{label}</span>
+          <div className="p-3 sm:p-4 space-y-2.5">
+            {historicoFiltrado.length === 0 ? (
+              <p className="text-center text-sm text-gray-300 py-12">
+                {historico.length === 0 ? 'Nenhum registro no histórico ainda' : 'Nenhum resultado para a busca'}
+              </p>
+            ) : historicoFiltrado.map(ev => <ItemHistorico key={ev.id} ev={ev} />)}
+          </div>
+        </div>
+
+        {/* Agendamentos */}
+        <div className="w-full lg:w-80 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between px-4 py-4 border-b border-gray-50 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center">
+                <CalendarClock size={15} className="text-emerald-600" />
+              </div>
+              <h2 className="font-bold text-gray-900 text-sm">Agendamentos</h2>
+            </div>
+            {podeGerenciarAgenda && (
+              <button onClick={() => setShowNovoAg(true)} title="Novo agendamento"
+                className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                <Plus size={16} />
               </button>
+            )}
+          </div>
+          {/* flex-1 + min-h-0: a lista ocupa a altura do card (igual ao Histórico) com scroll interno */}
+          <div className="p-3 space-y-2.5 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
+            {agendamentos.length === 0 ? (
+              <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento futuro</p>
+            ) : agendamentos.map(ag => (
+              <CardAgendamento key={ag.id} ag={ag}
+                podeGerenciar={podeGerenciarAgenda}
+                onConcluir={handleConcluirAg}
+                onExcluir={handleExcluirAg} />
             ))}
           </div>
         </div>
-
       </div>
+
+      {showNovoAg && animal && (
+        <ModalNovoAgendamento
+          animalId={animal.id}
+          onCriado={() => { setShowNovoAg(false); carregarAgendamentos(); }}
+          onFechar={() => setShowNovoAg(false)}
+        />
+      )}
     </div>
   );
 };

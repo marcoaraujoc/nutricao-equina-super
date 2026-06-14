@@ -241,10 +241,10 @@ function PainelFatura({
   onStatusChange: () => void;
   faturaIdPaga?: number;
 }) {
-  const { podeExecutar, isSocio } = usePermissoes();
-  const podeEditar  = isSocio || podeExecutar('financeiro.faturas.editar');
-  const podeLancar  = isSocio || podeExecutar('financeiro.faturas.lancar');
-  const podeFechar  = isSocio || podeExecutar('financeiro.faturas.fechar');
+  const { podeExecutar, isGestor } = usePermissoes();
+  const podeEditar  = isGestor || podeExecutar('financeiro.faturas.editar');
+  const podeLancar  = isGestor || podeExecutar('financeiro.faturas.lancar');
+  const podeFechar  = isGestor || podeExecutar('financeiro.faturas.fechar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -759,7 +759,7 @@ function CardProprietario({
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function Faturamento() {
-  const { podeExecutar, isSocio, loading: loadingPerm } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
 
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);

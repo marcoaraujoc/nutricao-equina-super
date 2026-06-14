@@ -48,6 +48,8 @@ export default function AceitarConviteEquipe() {
 
   if (!convite) return null;
 
+  const isGestor = convite.cargo === 'GESTOR';
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 w-full max-w-md">
@@ -61,15 +63,17 @@ export default function AceitarConviteEquipe() {
 
         {/* Título */}
         <h1 className="text-xl font-bold text-gray-900 text-center mb-1">
-          Convite de equipe
+          {isGestor ? 'Seja bem-vindo à S2Vet' : 'Convite de equipe'}
         </h1>
         <p className="text-sm text-gray-500 text-center mb-6">
-          Você foi convidado para fazer parte de uma equipe no S2Vet.
+          {isGestor
+            ? 'Um novo conceito em Administração da sua Empresa'
+            : 'Você foi convidado para fazer parte de uma equipe no S2Vet.'}
         </p>
 
         {/* Card com detalhes do convite */}
         <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 mb-6 space-y-3">
-          {convite.cargo !== 'SOCIO' && (
+          {convite.cargo !== 'GESTOR' && (
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
                 <Building2 size={15} className="text-emerald-700" />
@@ -111,7 +115,7 @@ export default function AceitarConviteEquipe() {
             className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition-colors"
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-            Aceitar e continuar
+            {isGestor ? 'Continuar' : 'Aceitar e continuar'}
           </button>
           <button
             onClick={handleRecusar}
@@ -119,7 +123,7 @@ export default function AceitarConviteEquipe() {
             className="w-full flex items-center justify-center gap-2 border border-gray-200 hover:bg-gray-50 text-gray-500 font-medium py-2.5 rounded-xl transition-colors text-sm"
           >
             <XCircle size={14} />
-            Recusar convite
+            {isGestor ? 'Recusar' : 'Recusar convite'}
           </button>
         </div>
 

@@ -139,13 +139,13 @@ type UserType = 'ADMIN' | 'VETERINARIO' | 'PROPRIETARIO' | 'ESTAGIARIO' | 'FORNE
 ```
 NEGADO (-1) < NENHUM (0) < LEITURA (1) < PROPRIO (2) < EQUIPE (3) < FULL (4)
 NEGADO: bloqueio explícito — sobrepõe qualquer nível positivo em qualquer equipe (deny-wins)
-SOCIO: bypass total — não consulta MatrizPerfil
+GESTOR: bypass total — não consulta MatrizPerfil
 ADMIN: bypass total — não consulta permissões
 ```
 
 ### Cargos na equipe (PerfilEquipe)
 ```
-SOCIO        → userType VETERINARIO, bypass total
+GESTOR        → userType VETERINARIO, bypass total
 VETERINARIO  → userType VETERINARIO, usa MatrizPerfil padrão VET
 ESTAGIARIO   → userType ESTAGIARIO
 PRESTADOR    → userType FORNECEDOR (externo, ex: fisioterapeuta, ferrador)
@@ -154,7 +154,7 @@ PROPRIETARIO → perfil de SISTEMA — não pode ser atribuído a membros de equ
                vinculadas ao proprietário via Animal.empresaId → Equipe
 ```
 
-### ControleAcesso — abas disponíveis para SÓCIO (5 abas)
+### ControleAcesso — abas disponíveis para GESTOR (5 abas)
 ```
 1. Matriz de Perfis  — edita níveis por perfil (VETERINARIO/ESTAGIARIO/PRESTADOR/PROPRIETARIO)
                        itens com locked=true são imutáveis (definidos pelo ADMIN global)
@@ -237,7 +237,19 @@ Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, st
                     dosagem, unidade, via, frequencia, duracaoDias, horaInicio,
                     horariosGerados: JSONB, diasAplicacaoInicio, diasAplicacaoFim)
 VacinaClinica     → registro de vacinas
-EncaminhamentoClinico → encaminhamentos entre especialistas
+EncaminhamentoClinico → encaminhamentos (prestadorId: User FORNECEDOR da equipe, null = destino externo;
+                    status PENDENTE|CONCLUIDO|CANCELADO; urgencia NORMAL|ALTA|URGENTE)
+AgendamentoClinico → agendamentos do animal (tb_agendamentos_clinicos) — tipo CONSULTA|VACINA|
+                    RETORNO|EXAME|PROCEDIMENTO, status AGENDADO|CONCLUIDO|CANCELADO, dataHora,
+                    veterinarioId?, criadoPorId?. Gerenciado por ADMIN/VETERINARIO/ESTAGIARIO;
+                    PROPRIETARIO/FORNECEDOR só visualizam. Migration 20260611190000.
+DesignacaoPrestador → escopo de acesso do prestador por animal (tb_designacoes_prestador)
+                    unique(animalId, prestadorId, equipeId); criada/reativada ao encaminhar para
+                    prestador da equipe; inativada (ativo=false, dataFim) ao concluir/cancelar/excluir
+                    o encaminhamento. FORNECEDOR só acessa animais com designação ativa
+                    (animalAccess.js + AnimalController.listar) — NUNCA herda escopo de equipe.
+                    Fornecedor.userId (unique, nullable) liga o cadastro Fornecedor ao login —
+                    fornece o tipoServico (especialidade) do prestador. Migration 20260611170000.
 Fatura / FaturaItem → financeiro básico
                     Fatura: animalId? (legado, nullable desde migration 20260605), proprietarioId?,
                     mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA|FECHADA)
@@ -251,7 +263,11 @@ VetEspecie        → especialização do vet por espécie
 VetSubespecialidade → subespecialidades do vet
 VetAnimalSolicitacao → vínculo/desvinculo vet-animal (tipo: 'VINCULO'|'DESVINCULO', approvalToken, expiresAt)
 Empresa           → clínicas/empresas cadastradas
-Equipe            → equipes dentro de uma empresa
+                    Gestor pode ter VÁRIAS empresas. unique(ownerId, nome, cnpj) — cnpj NÃO é mais
+                    único global. Duplicata = mesmo owner (e-mail) + mesmo nome + mesmo CPF/CNPJ.
+                    Empresa pessoal (cnpj null): unique do PG não cobre (NULLs distintos) — app
+                    bloqueia em criarEmpresa/setup/convidarGestorAdmin/criarEmpresaEEquipe (insensitive)
+Equipe            → equipes dentro de uma empresa — unique(empresaId, nome)
 MembroEquipe      → membros de cada equipe
 ConviteEquipe     → convites para entrar em equipes
 ModuloSistema     → catálogo estático de módulos/submodulos/ações (slug único, label, ordemExib)
@@ -259,12 +275,12 @@ ModuloSistema     → catálogo estático de módulos/submodulos/ações (slug �
 PermissaoMembro   → permissão por membro+módulo dentro de uma equipe
                     nivel: NENHUM|LEITURA|PROPRIO|EQUIPE|FULL
                     unique(equipeId, userId, moduloSlug)
-PerfilEquipe      → perfis/cargos por equipe (SOCIO, VETERINARIO, ESTAGIARIO, PRESTADOR, PROPRIETARIO + customizados)
+PerfilEquipe      → perfis/cargos por equipe (GESTOR, VETERINARIO, ESTAGIARIO, PRESTADOR, PROPRIETARIO + customizados)
                     PROPRIETARIO é perfil de sistema — não pode ser excluído nem atribuído a membros da equipe
                     PRESTADOR → maps to userType FORNECEDOR (usuário externo da empresa)
 MatrizPerfil      → template de permissões por perfil — propagado a membros ao entrar/trocar cargo
                     unique(equipeId, perfilSlug, moduloSlug)
-                    locked: Boolean — true = definido pelo ADMIN global, sócio não pode alterar
+                    locked: Boolean — true = definido pelo ADMIN global, gestor não pode alterar
                     nivel: NENHUM|LEITURA|PROPRIO|EQUIPE|FULL|NEGADO
                     NEGADO = bloqueio explícito; deny-wins sobre outras equipes
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
@@ -275,7 +291,7 @@ PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — sub
 
 Gerenciado em `backend/src/seeds/002_permissoes_padrao.seed.js` e sincronizado via `node backend/seed.js`.
 Ações disponíveis: `ler`, `criar`, `editar`, `deletar`, `imprimir`, `finalizar`, `executar`, `ativar`, `exportar`, `compartilhar`, `desvincular`, `whatsapp`, `fechar`, `lancar`.
-Níveis: NEGADO (-1) < NENHUM (0) < LEITURA (1) < PROPRIO (2) < EQUIPE (3) < FULL (4). SOCIO tem bypass total. NEGADO bloqueia explicitamente e sobrepõe qualquer nível positivo (deny-wins).
+Níveis: NEGADO (-1) < NENHUM (0) < LEITURA (1) < PROPRIO (2) < EQUIPE (3) < FULL (4). GESTOR tem bypass total. NEGADO bloqueia explicitamente e sobrepõe qualquer nível positivo (deny-wins).
 ControleAcesso UI mostra colunas: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. Demais ações existem no DB mas não aparecem na UI atual.
 ControleAcesso UI suporta nível NEGADO como 3º estado no PermCheck (ciclo NENHUM→EQUIPE→NEGADO→NENHUM, ícone X vermelho).
 Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os módulos com nível NENHUM por padrão.
@@ -407,6 +423,31 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 - `@@unique` composto onde necessário (ex: [animalId, vetUserId])
 
 ### Multi-tenant — status atual (prep concluída, enforcement pendente)
+- `Animal.equipeId` (nullable, FK → Equipe, `ON DELETE SET NULL`, indexed) — migration `20260611150000`
+  - Equipe responsável pelo animal dentro da empresa. Setado junto com `empresaId` em todos os
+    fluxos de vínculo via `getContextoDoVet(vetUserId, reqEmpresaId, reqEquipeId)` (`lib/vetUtils.js`)
+  - Usado para SEGREGAR permissões de PROPRIETARIO por equipe (antes a resolução usava todas as
+    equipes da empresa — grant em uma equipe vazava para proprietários das outras)
+  - Animal legado com `empresaId` mas sem `equipeId` → fallback: todas as equipes da empresa
+  - Backfill na migration: equipe do vet responsável (VINCULO ACEITO); vet em várias equipes → a mais antiga
+  - LISTAGEM segregada por equipe: `AnimalController.listar` e `VeterinarioController.meusAnimais`
+    filtram por `getEquipeScopeDoUsuario(userId, empresaId, reqEquipeId)` (`lib/vetUtils.js`) —
+    contexto x-equipe-id > equipes do usuário na empresa > null (dono sem MembroEquipe = empresa toda).
+    Animal de OUTRA equipe da mesma empresa fica fora da lista mesmo com vínculo direto do vet;
+    pacientes pessoais fora da empresa ativa (vínculo direto) continuam listados
+  - `verificarAcessoAnimal({ animalId, userId, empresaId, equipeId })` — mesma empresa exige equipe
+    do contexto (ou membership na equipe do animal / dono da empresa, quando sem x-equipe-id);
+    vínculo direto do vet ainda garante acesso por ID (paciente próprio). Todos os callers
+    (Animal/Evolucao/PrescricaoController) passam `req.equipeId`
+- `User.equipeId` (nullable, FK → Equipe, `ON DELETE SET NULL`, indexed, `@map("equipe_id")`) — migration `20260611160000`
+  - Equipe que cadastrou o PROPRIETÁRIO (complementa `User.empresaId`). Setado em
+    `ProprietarioController.criar` e na criação de proprietário pelo vet em `AnimalController.criar`
+  - PROPRIETÁRIOS segregados por equipe: `ProprietarioController` (listar/obterPorId/atualizar/
+    removerDaEmpresa) e `FaturaController.listarProprietarios` usam `whereProprietarioNoEscopo`:
+    animal ativo na(s) equipe(s) do escopo OU cadastro direto na equipe; legados sem equipeId →
+    empresa toda. `PermissaoService.getPermissoesProprietarios` filtra animais pela equipe da aba
+  - `removerDaEmpresa` inativa apenas os animais do escopo da equipe ativa (limpa empresaId+equipeId)
+  - Backfill na migration: proprietário cujos animais ativos estão todos numa única equipe herda essa equipe
 - `Animal.empresaId` (nullable, FK → Empresa, `ON DELETE SET NULL`, indexed)
   - Populado automaticamente ao aprovar `VetAnimalSolicitacao` em **ambos** os fluxos
     (proprietário aceita via email: `AnimalController.proprietarioAprovar`;
@@ -769,7 +810,7 @@ New-Item -ItemType Junction `
 - [x] EvolucaoPrint.ts — utilitário de impressão de evoluções clínicas
 - [x] ModuloSistema + PermissaoMembro + AuditoriaPermissao + PermissaoProprietario (migration `20260524`)
 - [x] PermissaoController.js + seeds/002_permissoes_padrao.seed.js
-- [x] RBAC dois níveis: ADMIN global (locked=true em MatrizPerfil, propagado via raw SQL) + Sócio por equipe (locked=false)
+- [x] RBAC dois níveis: ADMIN global (locked=true em MatrizPerfil, propagado via raw SQL) + Gestor por equipe (locked=false)
 - [x] PROPRIETARIO como perfil do sistema na MatrizPerfil — ações restritas a ler/imprimir; minhasPermissoes lê MatrizPerfil das equipes vinculadas aos animais do proprietário (union de níveis)
 - [x] ControleAcesso.tsx refatorado: TabPermissoesGlobais (ADMIN, UserTypes VETERINARIO/ESTAGIARIO/PROPRIETARIO), TabMatriz com lock icon em itens imutáveis, PROPRIETARIO como perfil SISTEMA na lista, sem TabProprietarios
 - [x] MatrizPerfil.locked (campo Boolean, adicionado via raw SQL — `npx prisma generate` necessário após parar backend)
@@ -799,16 +840,40 @@ New-Item -ItemType Junction `
 - [x] Nível NEGADO (ordinal -1, deny-wins) adicionado a MatrizPerfil, PermissaoMembro, frontend `usePermissoes`, ControleAcesso UI
 - [x] Cargo PRESTADOR (userType FORNECEDOR) adicionado ao sistema — PerfilEquipe, MatrizPerfil, seed 002, ControleAcesso UI, `convidarParaEquipe`
 - [x] `getFornecedoresPorEquipe` — endpoint GET `/api/equipes/:equipeId/fornecedores` (busca fornecedores da empresa, exclui já-membros)
-- [x] ControleAcesso.tsx refatorado com 5 abas para SÓCIO: Matriz de Perfis, Equipe, Proprietários, Convites, Logs de Auditoria. TabEquipe com modal 2 passos (tipo → busca/formulário). TabProprietarios lista read-only. TabConvites com cancel.
-- [x] `checkPermission` isolamento por empresa — `listarMembrosPorEquipe` verifica que a equipe pertence à empresa do sócio requisitante
+- [x] ControleAcesso.tsx refatorado com 5 abas para GESTOR: Matriz de Perfis, Equipe, Proprietários, Convites, Logs de Auditoria. TabEquipe com modal 2 passos (tipo → busca/formulário). TabProprietarios lista read-only. TabConvites com cancel.
+- [x] `checkPermission` isolamento por empresa — `listarMembrosPorEquipe` verifica que a equipe pertence à empresa do gestor requisitante
 - [x] `getPermissoesProprietarios` corrigido — filtro por `empresaId` da equipe (era global — vazamento de dados entre empresas)
 - [x] `minhasPermissoes` para PROPRIETARIO — deny-wins explícito: NEGADO de qualquer equipe bloqueia módulo, sem override por nível positivo de outra equipe
 - [x] Permission enforcement em `Dieta.tsx` — guard de página, gating de useEffects em `loadingPerms`, guards em 6 handlers de escrita, UI condicional por `podeCriar`/`podeEditar`/`podeImprimir`
 - [x] `DietaAcoesBar.tsx` — props `podeImprimir`, `podeCompartilhar`, `podeExportar`; botões ocultam/bloqueiam com toast quando sem permissão
 - [x] Axios interceptor 403 — GET resolve com `{ data: null }` silencioso; mutations rejeitam com `isPermissionError: true` (sem log)
 - [x] Console suppression em produção — `main.tsx` sobrescreve `console.*` com noop quando `!import.meta.env.DEV` (escape hatch: `VITE_SUPPRESS_CONSOLE=true` em dev)
-- [x] `UsuarioFormModal.tsx` — formulário compartilhado de criação/edição de usuário (abas Dados/Endereço, busca CEP). Usado em `Usuarios.tsx` (Novo/Editar) e `Equipe.tsx` (Incluir/Editar Membro). Perfil de acesso: VETERINARIO/ESTAGIARIO/PRESTADOR(label Fornecedor)/SOCIO — sem "tipo de usuário" e sem campo senha na criação (padrão `Inicial_001` + `mustChangePassword`); telefone obrigatório. Edição: prop `permitirSenha` exibe "Nova senha" (ADMIN: todos via PUT /users/:id; SÓCIO: membros da equipe via PUT /equipes/membros/:id) com regras de senha do sistema; prop `emailBloqueado` desabilita e-mail (usado na edição de membro). Backend: `POST /users` cria sem senha (default Inicial_001, `mustChangePassword: !senha`, phone obrigatório); `POST /equipes/incluir-membro` aceita fullName/phone/endereço (obrigatórios: nome e telefone) e `cargoToUserType` ganhou `SOCIO→VETERINARIO` (antes caía em ESTAGIARIO); `atualizarMembro` (PUT /equipes/membros/:id) ganhou autorização (ADMIN ou sócio da empresa da equipe; sócio não edita sócio — antes QUALQUER autenticado podia editar/trocar senha — bug crítico) + campos endereço/ativo + validação de senha. `listarMembros` retorna phone/endereço. Usuarios.tsx: tabela com `overflow-x-auto` (estourava à direita). Equipe.tsx: edição antiga chamava PATCH inexistente (404) — corrigido para PUT
+- [x] `UsuarioFormModal.tsx` — formulário compartilhado de criação/edição de usuário (abas Dados/Endereço, busca CEP). Usado em `Usuarios.tsx` (Novo/Editar) e `Equipe.tsx` (Incluir/Editar Membro). Perfil de acesso: VETERINARIO/ESTAGIARIO/PRESTADOR(label Fornecedor)/GESTOR — sem "tipo de usuário" e sem campo senha na criação (padrão `Inicial_001` + `mustChangePassword`); telefone obrigatório. Edição: prop `permitirSenha` exibe "Nova senha" (ADMIN: todos via PUT /users/:id; GESTOR: membros da equipe via PUT /equipes/membros/:id) com regras de senha do sistema; prop `emailBloqueado` desabilita e-mail (usado na edição de membro). Backend: `POST /users` cria sem senha (default Inicial_001, `mustChangePassword: !senha`, phone obrigatório); `POST /equipes/incluir-membro` aceita fullName/phone/endereço (obrigatórios: nome e telefone) e `cargoToUserType` ganhou `GESTOR→VETERINARIO` (antes caía em ESTAGIARIO); `atualizarMembro` (PUT /equipes/membros/:id) ganhou autorização (ADMIN ou gestor da empresa da equipe; gestor não edita gestor — antes QUALQUER autenticado podia editar/trocar senha — bug crítico) + campos endereço/ativo + validação de senha. `listarMembros` retorna phone/endereço. Usuarios.tsx: tabela com `overflow-x-auto` (estourava à direita). Equipe.tsx: edição antiga chamava PATCH inexistente (404) — corrigido para PUT
 - [x] CadastroProprietario.tsx sem campo senha — criação usa padrão `Inicial_001` (`ProprietarioController.criar`: senha opcional, telefone obrigatório no backend); e-mail `enviarBoasVindasProprietario` segue com a senha efetiva; botão "Novo Proprietário" do empty state removido (só header). `POST /users` também envia `enviarBoasVindasProprietario` quando criado sem senha (lógica de e-mail unificada entre Usuários e Proprietários)
+- [x] RBAC por contexto ativo — `minhasPermissoes` e `checkPermission`/`resolveEquipeId` resolvem cargo/permissões da equipe/empresa ATIVA (não mais o vínculo mais recente); bypass de dono restrito à empresa ativa; bypass de dono-da-equipe quando sem MembroEquipe; `PermissaoController` com guard `autorizarGestorDaEquipe` em todas as rotas `/:equipeId` (antes qualquer autenticado podia ler/editar matriz de qualquer equipe — gap crítico)
+- [x] Seletor de contexto ativo (gestor multi-empresa/multi-equipe) — `EmpresaContext.tsx` (localStorage `s2vet_empresa_id`/`s2vet_equipe_id`), headers `x-empresa-id`/`x-equipe-id` no axios, seletor no Sidebar (só com >1 opção; trocar = reload). Empresa CNPJ = opção por empresa; empresa pessoal CPF = opção por equipe. Backend: `auth.js` valida vínculo dos headers antes de setar `req.empresaId`/`req.equipeId`; `getEmpresaDoGestor(userId, req.empresaId)` prioriza a selecionada; `getEquipeAtiva(empresaId, req.equipeId)` em listarConvites/removerConvite; `garantirEquipePadrao`/`getMinhaEquipe`/`listarMembros` preferem a equipe ativa; `AnimalController` usa `req.empresaId` nos vínculos iniciados via request; `Fornecedor.empresaId` (migration `20260611130000`, null = SYSTEM/legado global, CLIENTE escopado à empresa ativa)
+- [x] Gestor multi-empresa/equipe — migration `20260611120000_unique_empresa_equipe_por_gestor`: drop do unique global de `Empresa.cnpj`, add unique(ownerId, nome, cnpj) em Empresa + unique(empresaId, nome) em Equipe. Checks de duplicidade (case-insensitive) em `criarEmpresa`, `criarEquipe`, `setup`, `convidarGestorAdmin` (reuso de empresa por CNPJ agora exige CNPJ+nome; empresa pessoal exige owner+nome) e `EquipeService.criarEmpresaEEquipe` (removido bloqueio "1 empresa por gestor")
+- [x] `Animal.equipeId` (migration `20260611150000`) — segregação de permissões PROPRIETARIO por equipe; `getContextoDoVet` em vetUtils; equipeId setado/limpo em todos os fluxos de vínculo (AnimalController, VeterinarioController, cron server.ts); `getEquipeIdsDoProprietario` compartilhado entre middleware e `minhasPermissoes`; backfill incluído na migration
+- [x] Módulo Encaminhamento + Designação de Prestador (migration `20260611170000_designacao_prestador`) —
+      `DesignacaoPrestador` (escopo de acesso do FORNECEDOR por animal), `Fornecedor.userId`,
+      `EncaminhamentoClinico.prestadorId`, `EncaminhamentoController` + rotas `/api/clinica/encaminhamentos`,
+      branch FORNECEDOR em `animalAccess.js` e `AnimalController.listar` (deny-by-default: prestador só vê
+      animais com designação ativa), `SubModuloEncaminhamento.tsx` completo
+- [x] `Fornecedor.email` (migration `20260611180000_add_fornecedor_email`) — email/telefone obrigatórios
+      na app (nullable p/ legado); CadastroFornecedor.tsx com Documento (CPF/CNPJ) como 1ª seção do modal
+- [x] Vínculo automático `Fornecedor.userId` na inclusão de membro PRESTADOR — `incluirMembroDireto`
+      aceita `fornecedorId` (vincula cadastro existente; 409 se já vinculado a outro user) ou
+      `tipoServico` (cria cadastro CLIENTE novo). Fluxos: UsuarioFormModal `comFornecedor` (Equipe.tsx,
+      perfil de acesso como 1º campo + seletor de fornecedores disponíveis = ativo && !userId) e
+      ControleAcesso TabEquipe passo 2 PRESTADOR (lista tb_fornecedores disponíveis + "Cadastrar novo
+      fornecedor"; inclusão DIRETA via /equipes/incluir-membro — VET/EST seguem via convite)
+- [x] Tela do animal redesenhada (AnimalDetail.tsx) — Histórico unificado + Agendamentos.
+      `AgendamentoClinico` (migration `20260611190000`), `HistoricoController` (agregação de 5 origens),
+      `AgendamentoController` (CRUD com acesso via verificarAcessoAnimal), rotas em `routes/agenda.js`
+      montadas em `/api/clinica`. Botões de acesso rápido aos módulos removidos da tela
+- [ ] Permissões granulares para agendamentos (slug atendimento.agendamentos.* no seed) — hoje o
+      gate é por userType (ADMIN/VET/EST gerenciam; PROPRIETARIO/FORNECEDOR visualizam)
+- [ ] UI de gestão de designações no ControleAcesso (aba Equipe → membro PRESTADOR → animais designados)
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -852,19 +917,23 @@ New-Item -ItemType Junction `
 
 ```javascript
 // permissao.middleware.js
+getEquipeIdsDoProprietario(userId)  // exportado — usado também em minhasPermissoes
+// Equipes vinculadas ao proprietário via seus animais:
+// Animal.equipeId quando presente (segregação por equipe);
+// animal legado sem equipeId → todas as equipes do Animal.empresaId (fallback)
+
 getNivelPermissaoProprietario(userId, moduloSlug)
 // Resolve o nível efetivo de um PROPRIETARIO para um módulo:
-// 1. Busca animais do proprietário com empresaId não-nulo
-// 2. Encontra equipes dessas empresas
-// 3. Lê MatrizPerfil[perfilSlug='PROPRIETARIO', moduloSlug] de cada equipe
-// 4. Se qualquer equipe tem NEGADO → retorna 'NEGADO' (deny-wins)
-// 5. Caso contrário → retorna o nível máximo positivo entre as equipes
-// 6. Se sem animais ou sem equipes → retorna 'NENHUM'
+// 1. equipeIds = getEquipeIdsDoProprietario(userId)
+// 2. Lê MatrizPerfil[perfilSlug='PROPRIETARIO', moduloSlug] dessas equipes
+// 3. Se qualquer equipe tem NEGADO → retorna 'NEGADO' (deny-wins)
+// 4. Caso contrário → retorna o nível máximo positivo entre as equipes
+// 5. Se sem animais ou sem equipes → retorna 'NENHUM'
 
 // EquipeController.js
 getFornecedoresPorEquipe(req, res)
 // GET /equipes/:equipeId/fornecedores
-// Requer: equipe pertence à empresa do sócio requisitante
+// Requer: equipe pertence à empresa do gestor requisitante
 // Retorna: usuários com userType='FORNECEDOR' da empresa, excluindo já-membros da equipe
 
 // AnimalController.js
@@ -964,6 +1033,23 @@ GET/POST    /api/cadastro/localizacoes        → LocalizacaoAnimalController (t
 GET/PUT     /api/cadastro/localizacoes/:id    → obterPorId / atualizar (ADMIN only)
 PATCH       /api/cadastro/localizacoes/:id/toggle → toggleAtivo (ADMIN only, somente inativar)
 
+# clinica/encaminhamentos — prefixo /api/clinica/encaminhamentos (EncaminhamentoController)
+GET    /prestadores/:animalId           → prestadores (cargo PRESTADOR) das equipes do animal,
+                                          com tipoServico (via Fornecedor.userId) + flag jaDesignado
+GET    /animal/:animalId                → lista encaminhamentos (?status=)
+POST   /                                → criar (prestadorId presente → upsert DesignacaoPrestador na transação)
+PATCH  /:id/status                      → PENDENTE|CONCLUIDO|CANCELADO (encerra/reativa designação)
+PUT    /:id                             → editar campos textuais (só PENDENTE)
+DELETE /:id                             → soft delete + inativa designação vinculada
+
+# clinica — histórico e agendamentos (routes/agenda.js, montado em /api/clinica)
+GET    /clinica/historico/animal/:animalId    → HistoricoController — timeline unificada (evoluções,
+                                                vacinas, exames, prescrições-grupos, encaminhamentos)
+GET    /clinica/agendamentos/animal/:animalId → AgendamentoController.listarPorAnimal (?futuros=1)
+POST   /clinica/agendamentos                  → criar (ADMIN/VET/EST; body: animalId, tipo, titulo, dataHora)
+PATCH  /clinica/agendamentos/:id/status       → AGENDADO|CONCLUIDO|CANCELADO
+DELETE /clinica/agendamentos/:id              → soft delete
+
 # Outros prefixos relevantes
 /api/auth          → AuthController (login, refresh, logout)
 /api/users         → UserController (/me, CRUD)
@@ -985,7 +1071,7 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 | `auth.js` | `authenticate` — valida JWT, injeta `req.user` |
 | `tenant.js` | `injectTenant` — injeta `empresaId` no contexto (usado em animais e evolução) |
 | `validate.js` | Roda express-validator, retorna 422 em erros |
-| `permissao.middleware.js` | RBAC por userType. `checkPermission(moduloSlug, nivelMinimo)` — verifica permissão real para todos os roles. ADMIN: bypass. SOCIO: bypass. PROPRIETARIO: chama `getNivelPermissaoProprietario()` — lê MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes vinculadas via Animal.empresaId; aplica deny-wins se NEGADO. `NIVEL_ORDINAL` inclui `NEGADO: -1`. |
+| `permissao.middleware.js` | RBAC por userType. `checkPermission(moduloSlug, nivelMinimo)` — verifica permissão real para todos os roles. ADMIN: bypass. GESTOR: bypass. PROPRIETARIO: chama `getNivelPermissaoProprietario()` — lê MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes vinculadas via Animal.empresaId; aplica deny-wins se NEGADO. `NIVEL_ORDINAL` inclui `NEGADO: -1`. |
 | `requestId.js` | Injeta `x-request-id` em toda requisição |
 
 ### Frontend — Páginas
@@ -1002,7 +1088,7 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 | `MeusAnimais.tsx` | `/meus-animais` — lista animais do PROPRIETARIO + botões Autorizar/Recusar (V→P) |
 | `AnimaisVet.tsx` | `/vet-animais` — lista pacientes do VET + "Buscar Paciente" modal + SolicitacaoCard |
 | `Animal.tsx` | `/animais` — formulário criar/editar animal |
-| `AnimalDetail.tsx` | `/animal/:id` — dashboard do animal (aba única) |
+| `AnimalDetail.tsx` | `/animal/:id` — tela do animal: header compacto (foto + nome/espécie/raça/idade/peso/baia/local/tipo de trabalho/proprietário/vet), painel **Histórico** unificado (GET /clinica/historico/animal/:id, busca client-side, itens expansíveis com badge por origem) e painel **Agendamentos** (futuros; ADMIN/VET/EST criam via modal, concluem e excluem). Substituiu a antiga grade de botões de módulos |
 | `AnimalView.tsx` | visualização detalhada do animal |
 | `Dieta.tsx` | `/dieta` — visualização da dieta do animal selecionado. Controle de acesso completo: guard de página (`nutricao.dietas.ler`), gating de useEffects em `loadingPerms`, guards nos 6 handlers de escrita, UI condicional por `podeCriar`/`podeEditar`. Loaders verificam `if (!res.data) return` (GET 403 → null). |
 | `CriaDieta.tsx` | `/cria-dieta` — formulário de criação/edição de dieta |
@@ -1013,13 +1099,13 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 | `SubModuloPrescricao.tsx` | Prescrições — speech recognition + Whisper offline, fluxo RASCUNHO→ATIVA via `finalizarTodas` |
 | `SubModuloVacina.tsx` | Registro de vacinas do animal |
 | `SubModuloExames.tsx` | Exames clínicos do animal |
-| `SubModuloEncaminhamento.tsx` | Encaminhamentos entre especialistas |
+| `SubModuloEncaminhamento.tsx` | Encaminhamentos — props `{ animalId }`. Destino EQUIPE (lista prestadores via GET /clinica/encaminhamentos/prestadores/:animalId, filtro por tipoServico, badge "já tem acesso") ou EXTERNO (texto livre). Criar com prestador → designação automática + toast de acesso liberado. Concluir/Cancelar/Excluir encerram o acesso do prestador |
 | `AprovarVinculo.tsx` | `/aprovar-vinculo` — vet aprova vínculo via link de email (público) |
 | `AprovarVinculoProprietario.tsx` | `/proprietario/aprovar-vinculo` — proprietário aprova via email (público) |
 | `CadastroProprietario.tsx` | `/cadastro/proprietarios` — CRUD de proprietários com CPF/CNPJ, mensalista, frequência de visitas |
 | `CadastroTratador.tsx` | `/cadastro/tratadores` — CRUD de tratadores (nome, telefone, local de trabalho) |
 | `CadastroLocalizacao.tsx` | `/cadastro/localizacoes` — CRUD global de localizações. ADMIN: cria SYSTEM, edita e inativa tudo. Não-ADMIN: cria CLIENTE (read-only após). Badge SYSTEM/CLIENTE. Filtro por espécie via `TIPO_ESPECIES`. Busca CEP via ViaCEP. |
-| `ControleAcesso.tsx` | `/controle-acesso` — gerenciamento de permissões. Abas para ADMIN: TabPermissoesGlobais (UserTypes VET/EST/PROP). Abas para SÓCIO (5): Matriz de Perfis (TabMatriz, locked items imutáveis), Equipe (TabEquipe, modal 2 passos), Proprietários (TabProprietarios), Convites (TabConvites), Logs de Auditoria. Nível NEGADO como 3º estado no PermCheck (ciclo: NENHUM→EQUIPE→NEGADO→NENHUM). |
+| `ControleAcesso.tsx` | `/controle-acesso` — gerenciamento de permissões. Abas para ADMIN: TabPermissoesGlobais (UserTypes VET/EST/PROP). Abas para GESTOR (5): Matriz de Perfis (TabMatriz, locked items imutáveis), Equipe (TabEquipe, modal 2 passos), Proprietários (TabProprietarios), Convites (TabConvites), Logs de Auditoria. Nível NEGADO como 3º estado no PermCheck (ciclo: NENHUM→EQUIPE→NEGADO→NENHUM). |
 | `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
 | `EquipeManager.tsx` | `/equipe-manager` — admin de equipes |
 | `Alimentos.tsx` | `/alimentos` — banco de alimentos |
@@ -1049,6 +1135,7 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 |---|---|
 | `AuthContext.tsx` | `useAuth()` → `{ user, login, logout, loading }`. `user` tem `{ id, email, fullName, userType }` |
 | `SelectedAnimalContext.tsx` | `useSelectedAnimal()` → `{ selectedAnimal, setSelectedAnimal, refreshSelectedAnimal }` |
+| `EmpresaContext.tsx` | `useEmpresa()` → `{ opcoes, contextoAtivo, trocarContexto, loading }`. Busca `/equipes/empresas` (só VETERINARIO/ADMIN). Opções: empresa CNPJ = 1 por empresa (equipeId null); empresa pessoal/CPF = 1 por equipe. Persiste `s2vet_empresa_id`/`s2vet_equipe_id`; `trocarContexto` faz reload. Seletor no Sidebar quando `opcoes.length > 1` (label "Empresa ativa" ou "Equipe ativa") |
 | `useProprietarioNotificacoes.ts` | Polling 15s em `/animais/minhas-solicitacoes`. Inicializa mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos para detecção retroativa via updatedAt <10min. Só para PROPRIETARIO |
 | `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE e mudanças CANCELADO. Só para VETERINARIO |
 | `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
@@ -1142,7 +1229,7 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 16. req.empresaId — injetado pelo próprio `authenticate` (auth.js) via MembroEquipe lookup.
     NÃO é mais necessário adicionar `injectTenant` por rota (middleware tenant.js é redundante mas inofensivo).
     Se req.empresaId for null, verificarAcessoAnimal cai no check de VetAnimalSolicitacao individual.
-    Sócios de empresa com múltiplos sócios precisam de req.empresaId para acessar animais vinculados a
+    Gestores de empresa com múltiplos gestores precisam de req.empresaId para acessar animais vinculados a
     qualquer vet da empresa — sem ele, apenas o vet diretamente vinculado consegue acesso.
 
 17. Migrations shadow DB — colunas adicionadas fora de migration causam P3006 no `prisma migrate dev`.
@@ -1189,6 +1276,24 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Erros JavaScript (TypeError, etc.) também são suprimidos no console em produção.
     Para reativar em desenvolvimento: setar VITE_SUPPRESS_CONSOLE=true no .env NÃO é o caminho;
     o noop só é ativado quando !DEV OU VITE_SUPPRESS_CONSOLE=true. Em DEV normal, console funciona.
+
+25. Contexto ativo (multi-empresa/multi-equipe): axios envia headers `x-empresa-id` e `x-equipe-id`
+    (localStorage `s2vet_empresa_id`/`s2vet_equipe_id`, gerenciados por EmpresaContext).
+    Empresa CNPJ → gestor trabalha por EMPRESA (1 opção por empresa, só x-empresa-id).
+    Empresa pessoal/CPF (cnpj null) → gestor trabalha por EQUIPE (1 opção por equipe; x-equipe-id
+    define também req.empresaId a partir da equipe). auth.js valida o vínculo (membro da equipe OU
+    owner da empresa) antes de aceitar — valor inválido é ignorado e cai no fallback (MembroEquipe
+    mais recente → ownerId). getEmpresaDoGestor(userId, req.empresaId) exige owner OU cargo GESTOR;
+    getEquipeAtiva(empresaId, req.equipeId) prefere a equipe ativa, senão primeira da empresa
+    (usado em listarConvites/removerConvite; garantirEquipePadrao e getMinhaEquipe seguem a mesma ordem).
+    Seletor no Sidebar só renderiza com opcoes.length > 1; trocar contexto faz window.location.reload().
+    Logout limpa as duas chaves.
+    RBAC por contexto: cargo e permissões PODEM DIFERIR entre equipes/empresas (GESTOR na A,
+    VETERINARIO na B). minhasPermissoes e checkPermission resolvem o vínculo do CONTEXTO ATIVO
+    (equipe ativa > equipe da empresa ativa > mais recente) — nunca união entre equipes (exceto
+    PROPRIETARIO, que mantém union+deny-wins). Bypass de dono de empresa vale APENAS para a
+    empresa ativa. PermissaoController: todas as rotas /:equipeId exigem ADMIN, GESTOR da equipe
+    ou dono da empresa dela (autorizarGestorDaEquipe) — antes só exigiam authenticate (gap).
 ```
 
 ---
@@ -1240,4 +1345,30 @@ Backend recusa iniciar se JWT_SECRET tiver menos de 32 caracteres.
 - [ ] UUIDs em vez de IDs sequenciais (dificulta enumeração via URL)
 - [ ] Renovar JWT_SECRET antes de produção
 - [ ] Configurar ALLOWED_ORIGINS com domínio real em produção
+
+### Varredura de segurança — 2026-06-11 (CORRIGIDA)
+
+> Auditoria de código. SQL injection: **sem vetor** — todas as queries raw
+> (`$queryRawUnsafe`/`$executeRawUnsafe` em PermissaoService, UserController,
+> EquipeController, scripts) usam placeholders parametrizados (`$1`, `$2`…), nenhuma
+> interpolação de input do usuário. Defesas confirmadas ativas: JWT_SECRET validado no
+> startup (≥32), Helmet, CORS allowlist, rate limit (200/min + 20/15min em /auth), bcrypt,
+> login Google valida access_token server-side (GoogleController), conta desativada
+> rejeitada em todo request autenticado. Sem `child_process`/`eval`.
+
+Todos os 7 achados foram tratados (commit de segurança 2026-06-11). Resumo do que foi feito:
+
+| # | Severidade | Status | O que foi feito |
+|---|---|---|---|
+| 1 | **ALTA** | ✅ Mitigado | `/uploads` (server.ts) endurecido: `dotfiles:'deny'`, `index:false`, `X-Content-Type-Options:nosniff`, CSP `default-src 'none'; sandbox`, e `Content-Disposition: attachment` para extensões fora da whitelist de mídia. Nomes de arquivo agora gerados com `crypto.randomBytes` (capability URL não-enumerável) em `routes/evolucao.js` e `LocalStorageProvider`. **Residual:** acesso ainda não é vinculado à sessão (img/video direto não envia Authorization) — auth de sessão por mídia depende da migração para HttpOnly cookie (ver pendência acima). |
+| 2 | **MÉDIA** | ✅ Corrigido | XSS armazenado fechado: `fileFilter` em `routes/evolucao.js` agora valida **mimetype E extensão** (whitelist `MIDIA_EXT_PERMITIDAS`/`MIDIA_MIME_PERMITIDOS`, SVG/HTML rejeitados); nome final nunca usa `originalname`; servido com nosniff + CSP sandbox + attachment. `routes/animais.js` já validava ext+mime. |
+| 3 | **MÉDIA** | ✅ Corrigido | `userType` no registro restrito a PROPRIETARIO/VETERINARIO em **dois pontos**: `auth.validators.js` (`registerRules` — removidos ESTAGIARIO/ADMIN) e `auth/UserController.register` (`userTypeSeguro`, fallback PROPRIETARIO). |
+| 4 | BAIXA | ✅ Corrigido | `AuthController.forgotPassword` responde **sempre 200 genérico** ("se houver conta, enviaremos o link"), inclusive em erro interno. Frontend (`ForgotPassword.tsx`) usa `res.ok` → continua funcionando. |
+| 5 | BAIXA | ✅ Corrigido | Refresh token virou **JWT assinado com expiração 30d** (`generateRefreshToken(userId)` em AuthController/auth.UserController/GoogleController; `REFRESH_SECRET = JWT_REFRESH_SECRET ?? JWT_SECRET+'_refresh'`). `AuthController.refreshToken` faz `jwt.verify` antes do lookup e casa `id`. **Cabe na coluna `refreshToken VarChar(512)` — sem migração.** Tokens legados (hex) falham o verify → cliente refaz login uma vez. |
+| 6 | INFO | ✅ Removido | Método morto `AuthController.googleLogin` (confiava no e-mail do body) removido; comentário alerta para não reintroduzir. Rota `/google` usa só o `GoogleController` validado. |
+| 7 | INFO | ✅ Corrigido | `AuthController.resetPassword` ganhou guard de comprimento (≥8) além do já existente em `resetPasswordRules`. |
+
+> Observação não-segurança (NÃO alterada): CORS `allowedHeaders` (server.ts) não inclui `x-empresa-id`/`x-equipe-id` — pode quebrar preflight cross-origin do seletor de contexto em produção. Adicionar quando for para deploy cross-origin.
+>
+> **Variáveis de ambiente novas (opcional):** `JWT_REFRESH_SECRET` — se não definida, deriva de `JWT_SECRET + '_refresh'` (não quebra nada; defina em produção para isolar os segredos).
 

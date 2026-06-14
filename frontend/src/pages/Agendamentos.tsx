@@ -1,0 +1,1655 @@
+// src/pages/Agendamentos.tsx
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import api from '../services/api';
+import toast from 'react-hot-toast';
+import { useEmpresa } from '../contexts/EmpresaContext';
+import { usePermissoes } from '../hooks/usePermissoes';
+import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+import {
+  CalendarClock, ChevronLeft, ChevronRight, Check,
+  X, Clock, User as UserIcon, RefreshCw, Search,
+  ChevronDown, ChevronUp, AlertTriangle, Loader2, Calendar,
+  Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
+  CheckCircle2, AlertCircle,
+} from 'lucide-react';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
+type StatusAgendamento = 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO';
+type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
+type ViewMode          = 'MES' | 'SEMANA';
+
+interface AgendamentoGlobal {
+  id:          number;
+  tipo:        TipoAgendamento;
+  titulo:      string;
+  dataHora:    string;
+  observacao:  string | null;
+  status:      StatusAgendamento;
+  veterinario: { id: number; fullName: string } | null;
+  animal: {
+    id:      number;
+    nome:    string;
+    especie: { nome: string } | null;
+    user:    { id: number; fullName: string } | null;
+  } | null;
+}
+
+interface AnimalOption {
+  id:      number;
+  nome:    string;
+  especie: { nome: string } | null;
+  user:    { id: number; fullName: string; email: string; phone?: string; cpf?: string } | null;
+}
+
+interface BookingInfo {
+  vetId:   number;
+  vetName: string;
+  hora:    string;
+}
+
+interface BookingForm {
+  animalId:         string;
+  proprietarioNome: string;
+  telefone:         string;
+  cpf:              string;
+}
+
+interface VetMembro {
+  userId:   number;
+  fullName: string;
+  cargo:    string;
+}
+
+type VozEtapa = 'IDLE' | 'GRAVANDO' | 'PROCESSANDO' | 'DISPONIVEL' | 'INDISPONIVEL' | 'ERRO';
+
+interface InterpretacaoResultado {
+  sucesso:     boolean;
+  disponivel?: boolean;
+  dataHora?:   string;
+  data?:       string;
+  hora?:       string;
+  animalId?:   number | null;
+  animal?: {
+    id:      number;
+    nome:    string;
+    especie?: string | null;
+    proprietario?: { fullName: string; email?: string; phone?: string } | null;
+  } | null;
+  vetId?: number | null;
+  vet?:   { id: number; fullName: string; email?: string; phone?: string } | null;
+  confianca?: number;
+  resumo?:    string;
+  conflito?:               { hora: string; animalNome?: string } | null;
+  horariosLivres?:         string[];
+  mensagem?:               string;
+  animalNomeNaoEncontrado?: string | null;
+  vetNomeNaoEncontrado?:    string | null;
+}
+
+interface ConflictWarning {
+  message:   string;
+  onConfirm: () => void;
+}
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
+  { value: 'CONSULTA',     label: 'Consulta',     cor: 'bg-emerald-100 text-emerald-700' },
+  { value: 'VACINA',       label: 'Vacina',       cor: 'bg-teal-100 text-teal-700'       },
+  { value: 'RETORNO',      label: 'Retorno',      cor: 'bg-green-100 text-green-700'     },
+  { value: 'EXAME',        label: 'Exame',        cor: 'bg-cyan-100 text-cyan-700'       },
+  { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600'  },
+];
+
+const HORARIOS = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00'];
+
+const MESES_PT      = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DIAS_PT       = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const DIAS_FULL_PT  = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+
+const MOTIVOS_CANCELAMENTO = [
+  'Imprevisto do proprietário','Animal indisponível',
+  'Profissional indisponível','Reagendamento para outra data','Outro motivo',
+];
+
+const DOT_COR: Record<DiaStatus, string> = {
+  LIVRE:   'bg-emerald-500',
+  PARCIAL: 'bg-amber-400',
+  OCUPADO: 'bg-red-500',
+};
+const DOT_LABEL: Record<DiaStatus, string> = {
+  LIVRE:   'Livre',
+  PARCIAL: 'Parcial',
+  OCUPADO: 'Sem vagas',
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function pad(n: number) { return String(n).padStart(2, '0'); }
+function hoje(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function formatarHora(iso: string) {
+  return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+function formatarDataHora(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function formatarDateInput(iso: string) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function labelDia(dateStr: string) {
+  const [a, m, d] = dateStr.split('-').map(Number);
+  return `${DIAS_FULL_PT[new Date(a, m-1, d).getDay()]}, ${pad(d)}/${pad(m)}/${a}`;
+}
+function corTipo(tipo: TipoAgendamento) { return TIPOS.find(t => t.value === tipo)?.cor ?? 'bg-gray-100 text-gray-700'; }
+function labelTipo(tipo: TipoAgendamento) { return TIPOS.find(t => t.value === tipo)?.label ?? tipo; }
+function formatarDataPT(dateStr: string) {
+  const [a, m, d] = dateStr.split('-').map(Number);
+  return `${d} de ${MESES_PT[m-1]} de ${a}`;
+}
+function dataRelativa(dateStr: string): string {
+  const [a, m, d] = dateStr.split('-').map(Number);
+  const data = new Date(a, m - 1, d);
+  const agora = new Date();
+  const hojeD = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+  const diff  = Math.round((data.getTime() - hojeD.getTime()) / 86400000);
+  if (diff === 0)  return 'hoje';
+  if (diff === 1)  return 'amanhã';
+  if (diff === -1) return 'ontem';
+  if (diff > 1 && diff < 7) return `na ${DIAS_FULL_PT[data.getDay()].toLowerCase()}`;
+  return `em ${pad(d)}/${pad(m)}`;
+}
+
+// ─── Calendário Interativo ────────────────────────────────────────────────────
+
+interface CalendarioProps {
+  selectedDate: string;
+  onChange:     (date: string) => void;
+  statusPorDia: Map<string, DiaStatus>;
+}
+
+function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: CalendarioProps) {
+  const [ano, mes] = selectedDate.split('-').map(Number);
+  const [viewAno, setViewAno]   = useState(ano);
+  const [viewMes, setViewMes]   = useState(mes - 1);
+  const [viewMode, setViewMode] = useState<ViewMode>('MES');
+
+  const dataHoje = hoje();
+
+  function diasDoMes(a: number, m: number): Date[] {
+    const days: Date[] = [];
+    const primeiro = new Date(a, m, 1);
+    const startPad = primeiro.getDay();
+    for (let i = startPad; i > 0; i--) days.push(new Date(a, m, 1-i));
+    const ultimo = new Date(a, m+1, 0).getDate();
+    for (let i = 1; i <= ultimo; i++) days.push(new Date(a, m, i));
+    const total = days.length <= 35 ? 35 : 42;
+    let next = 1;
+    while (days.length < total) days.push(new Date(a, m+1, next++));
+    return days;
+  }
+
+  function navMes(delta: number) {
+    let m = viewMes + delta, a = viewAno;
+    if (m < 0)  { m = 11; a--; }
+    if (m > 11) { m = 0;  a++; }
+    setViewMes(m); setViewAno(a);
+  }
+
+  function getWeekDays(dateStr: string): Date[] {
+    const [a, m, d] = dateStr.split('-').map(Number);
+    const cur = new Date(a, m-1, d);
+    const dow = cur.getDay();
+    return Array.from({ length: 7 }, (_, i) => new Date(a, m-1, d - dow + i));
+  }
+
+  function navSemana(delta: number) {
+    const [a, m, d] = selectedDate.split('-').map(Number);
+    const cur = new Date(a, m-1, d);
+    cur.setDate(cur.getDate() + delta * 7);
+    onChange(`${cur.getFullYear()}-${pad(cur.getMonth()+1)}-${pad(cur.getDate())}`);
+  }
+
+  function weekLabel(days: Date[]): string {
+    const f = days[0], l = days[6];
+    if (f.getMonth() === l.getMonth() && f.getFullYear() === l.getFullYear()) {
+      return `${f.getDate()} – ${l.getDate()} de ${MESES_PT[f.getMonth()]} ${f.getFullYear()}`;
+    }
+    return `${f.getDate()} ${MESES_PT[f.getMonth()].slice(0,3)} – ${l.getDate()} ${MESES_PT[l.getMonth()].slice(0,3)} ${l.getFullYear()}`;
+  }
+
+  const dias     = diasDoMes(viewAno, viewMes);
+  const weekDays = getWeekDays(selectedDate);
+  const navPrev  = () => viewMode === 'MES' ? navMes(-1) : navSemana(-1);
+  const navNext  = () => viewMode === 'MES' ? navMes(1)  : navSemana(1);
+  const header   = viewMode === 'MES' ? `${MESES_PT[viewMes]} ${viewAno}` : weekLabel(weekDays);
+
+  function dayBtn(dStr: string, label: React.ReactNode, isFaded = false) {
+    const isSelected = dStr === selectedDate;
+    const isToday    = dStr === dataHoje;
+    const status     = statusPorDia.get(dStr) ?? null;
+    return { dStr, isSelected, isToday, status, isFaded };
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      {/* Header verde */}
+      <div className="bg-emerald-700 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <button onClick={navPrev} className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 transition-colors">
+            <ChevronLeft size={14} />
+          </button>
+          <span className="text-sm font-bold text-white">{header}</span>
+          <button onClick={navNext} className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 transition-colors">
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="p-3">
+        {/* Legenda de dots — só quando há dados */}
+        {statusPorDia.size > 0 && (
+          <div className="flex items-center gap-3 mb-2 flex-wrap">
+            {(['LIVRE','PARCIAL','OCUPADO'] as DiaStatus[]).map(s => (
+              <span key={s} className="flex items-center gap-1 text-[10px] font-semibold text-gray-500">
+                <span className={`w-2 h-2 rounded-full inline-block ${DOT_COR[s]}`} /> {DOT_LABEL[s]}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Cabeçalho dias da semana */}
+        <div className="grid grid-cols-7 mb-1">
+          {DIAS_PT.map(d => (
+            <div key={d} className="text-center text-[9px] font-bold text-gray-400 uppercase py-1">{d}</div>
+          ))}
+        </div>
+
+        {/* Vista MÊS */}
+        {viewMode === 'MES' && (
+          <div className="grid grid-cols-7 gap-0.5">
+            {dias.map((dia, idx) => {
+              const dStr     = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
+              const isCur    = dia.getMonth() === viewMes;
+              const { isSelected, isToday, status } = dayBtn(dStr, dia.getDate(), !isCur);
+              return (
+                <button
+                  key={idx}
+                  onClick={() => isCur && onChange(dStr)}
+                  className={[
+                    'relative flex flex-col items-center justify-center h-9 rounded-xl text-xs font-semibold transition-all',
+                    !isCur ? 'text-gray-200 cursor-default' : 'cursor-pointer',
+                    isSelected && isCur  ? 'bg-emerald-600 text-white shadow-sm' : '',
+                    !isSelected && isCur && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
+                    !isSelected && isCur && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
+                  ].filter(Boolean).join(' ')}
+                >
+                  {dia.getDate()}
+                  {status && isCur && !isSelected && (
+                    <span className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${DOT_COR[status]}`} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Vista SEMANA */}
+        {viewMode === 'SEMANA' && (
+          <div className="grid grid-cols-7 gap-0.5">
+            {weekDays.map((dia, idx) => {
+              const dStr = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
+              const { isSelected, isToday, status } = dayBtn(dStr, dia.getDate());
+              return (
+                <button
+                  key={idx}
+                  onClick={() => onChange(dStr)}
+                  className={[
+                    'relative flex flex-col items-center justify-center h-12 rounded-xl text-xs font-semibold transition-all cursor-pointer',
+                    isSelected ? 'bg-emerald-600 text-white shadow-sm' : '',
+                    !isSelected && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
+                    !isSelected && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
+                  ].filter(Boolean).join(' ')}
+                >
+                  <span className="text-[9px] opacity-60">{MESES_PT[dia.getMonth()].slice(0,3)}</span>
+                  <span>{dia.getDate()}</span>
+                  {status && !isSelected && (
+                    <span className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${DOT_COR[status]}`} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Toggle Mês / Semana */}
+        <div className="flex mt-3 gap-1 bg-gray-100 rounded-xl p-1">
+          {(['MES', 'SEMANA'] as ViewMode[]).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${
+                viewMode === mode ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {mode === 'MES' ? 'Mês' : 'Semana'}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => onChange(dataHoje)}
+          className="mt-2 w-full text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 rounded-xl transition-colors"
+        >
+          Ir para Hoje
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Componente Principal ─────────────────────────────────────────────────────
+
+export default function Agendamentos() {
+  const { podeExecutar, loading: loadingPerms }     = usePermissoes();
+  const { contextoAtivo }                           = useEmpresa();
+  const location                                    = useLocation();
+  const navigate                                    = useNavigate();
+  const nomeEquipe                                  = contextoAtivo?.label ?? 'sua equipe';
+  const podeCriarAgendamento                        = podeExecutar('atendimento.agendamentos.criar');
+  const podeEditarAgendamento                       = podeExecutar('atendimento.agendamentos.editar');
+  const podeDeletarAgendamento                      = podeExecutar('atendimento.agendamentos.deletar');
+  const podeGerenciar                               = podeCriarAgendamento || podeEditarAgendamento || podeDeletarAgendamento;
+
+  // ── Animal / Proprietário ────────────────────────────────────────────────────
+  const [animais, setAnimais]                   = useState<AnimalOption[]>([]);
+  const [loadingAnimais, setLoadingAnimais]     = useState(false);
+  const [selectedAnimalId, setSelectedAnimalId] = useState('');
+  const [selectedProprId, setSelectedProprId]   = useState('');
+
+  const selectedAnimal = animais.find(a => String(a.id) === selectedAnimalId) ?? null;
+
+  // Lista única de proprietários derivada dos animais
+  const proprietarios = useMemo(() => {
+    const seen = new Set<number>();
+    const list: NonNullable<AnimalOption['user']>[] = [];
+    animais.forEach(a => {
+      if (a.user && !seen.has(a.user.id)) { seen.add(a.user.id); list.push(a.user); }
+    });
+    return list;
+  }, [animais]);
+
+  // Filtra animais pelo proprietário selecionado
+  const animaisFiltradosBar = useMemo(
+    () => selectedProprId ? animais.filter(a => String(a.user?.id) === selectedProprId) : animais,
+    [animais, selectedProprId]
+  );
+
+  // Contato exibido: do animal ou do proprietário selecionado
+  const contatoInfo = selectedAnimal?.user
+    ?? proprietarios.find(p => String(p.id) === selectedProprId)
+    ?? null;
+
+  // ── Vets ────────────────────────────────────────────────────────────────────
+  const [vets, setVets]               = useState<VetMembro[]>([]);
+  const [filtroVetId, setFiltroVetId] = useState('');
+  const [filtroTipo, setFiltroTipo]   = useState('');
+  const [openSlotVetId, setOpenSlotVetId] = useState<number | null>(null);
+
+  // ── Calendar + agendamentos ─────────────────────────────────────────────────
+  const [selectedDate, setSelectedDate] = useState<string>(hoje());
+  const [agendamentos, setAgendamentos] = useState<AgendamentoGlobal[]>([]);
+  const [loading, setLoading]           = useState(false);
+  const [busca, setBusca]               = useState('');
+  const [agendamentosMes, setAgendamentosMes] = useState<AgendamentoGlobal[]>([]);
+  const [mesCarregado, setMesCarregado] = useState('');
+
+  // ── Modais ──────────────────────────────────────────────────────────────────
+  const [booking, setBooking]             = useState<BookingInfo | null>(null);
+  const [comboQuery, setComboQuery]       = useState('');
+  const [comboOpen, setComboOpen]         = useState(false);
+  const comboRef                          = useRef<HTMLDivElement>(null);
+  const [bookingForm, setBookingForm]     = useState<BookingForm>({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+  const [salvando, setSalvando]           = useState(false);
+  const [reagendando, setReagendando]     = useState<AgendamentoGlobal | null>(null);
+  const [novaDataHora, setNovaDataHora]   = useState('');
+  const [salvandoReag, setSalvandoReag]   = useState(false);
+  const [cancelando, setCancelando]       = useState<number | null>(null);
+  const [conflictWarning, setConflictWarning] = useState<ConflictWarning | null>(null);
+
+  // ── Modal Voz/IA ────────────────────────────────────────────────────────────
+  const [escolhaTipo, setEscolhaTipo]         = useState<BookingInfo | null>(null);
+  const [vozAberto, setVozAberto]             = useState(false);
+  const [vozContexto, setVozContexto]         = useState<BookingInfo | null>(null);
+  const [vozEtapa, setVozEtapa]               = useState<VozEtapa>('IDLE');
+  const [vozTranscricao, setVozTranscricao]   = useState('');
+  const [vozTextoManual, setVozTextoManual]   = useState('');
+  const [vozResultado, setVozResultado]       = useState<InterpretacaoResultado | null>(null);
+  const [vozSlotConflito, setVozSlotConflito] = useState<{
+    existingHora: string; vetNome: string; animalNome: string; novaHora: string; novaDataHora: string;
+  } | null>(null);
+  const recognitionRef                        = useRef<any>(null);
+
+  // ── Dropdown de slots ────────────────────────────────────────────────────────
+  const [slotPos, setSlotPos]   = useState<{ top: number; left: number } | null>(null);
+  const slotCloseRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function openSlotMenu(vetId: number, el: HTMLElement) {
+    if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
+    const rect = el.getBoundingClientRect();
+    setSlotPos({ top: rect.top, left: rect.left });
+    setOpenSlotVetId(vetId);
+  }
+  function scheduleCloseSlot() {
+    slotCloseRef.current = setTimeout(() => { setOpenSlotVetId(null); setSlotPos(null); }, 80);
+  }
+  function cancelCloseSlot() {
+    if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
+  }
+
+  // Auto-abre voz quando ?auto=1; pré-seleciona animal quando ?animalId=X
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const auto     = params.get('auto') === '1';
+    const animalQP = params.get('animalId');
+    if (auto) {
+      setVozAberto(true); setVozEtapa('IDLE');
+      setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
+    }
+    if (animalQP) setSelectedAnimalId(animalQP);
+    if (auto || animalQP) navigate('/agendamentos', { replace: true });
+  }, [location.search]);
+
+  // ── statusPorDia — bolinhas só com profissional selecionado ─────────────────
+  // Verde = livre (0 agend.), Amarelo = parcial, Vermelho = sem vagas
+  const statusPorDia = useMemo<Map<string, DiaStatus>>(() => {
+    if (!filtroVetId) return new Map();
+    const vetId = Number(filtroVetId);
+    const contagem = new Map<string, number>();
+    agendamentosMes.forEach(ag => {
+      if (ag.status === 'CANCELADO' || ag.veterinario?.id !== vetId) return;
+      const d = ag.dataHora.slice(0, 10);
+      contagem.set(d, (contagem.get(d) ?? 0) + 1);
+    });
+    const [anoS, mesS] = selectedDate.split('-');
+    const mesN = Number(mesS);
+    const result = new Map<string, DiaStatus>();
+    const diasNoMes = new Date(Number(anoS), mesN, 0).getDate();
+    for (let d = 1; d <= diasNoMes; d++) {
+      const dStr  = `${anoS}-${pad(mesN)}-${pad(d)}`;
+      const count = contagem.get(dStr) ?? 0;
+      if (count === 0)              result.set(dStr, 'LIVRE');
+      else if (count < HORARIOS.length) result.set(dStr, 'PARCIAL');
+      else                          result.set(dStr, 'OCUPADO');
+    }
+    return result;
+  }, [agendamentosMes, filtroVetId, selectedDate]);
+
+  // ── Fetches ─────────────────────────────────────────────────────────────────
+  const fetchAnimais = useCallback(async () => {
+    setLoadingAnimais(true);
+    try {
+      const res = await api.get('/animais');
+      if (!res.data) return;
+      setAnimais((res.data.dados ?? res.data) as AnimalOption[]);
+    } catch { /* silencioso */ }
+    finally { setLoadingAnimais(false); }
+  }, []);
+
+  const fetchVets = useCallback(async () => {
+    try {
+      const res = await api.get('/equipes/membros');
+      if (!res.data) return;
+      const membros = (res.data.dados ?? []) as Array<{ cargo: string; user: { id: number; fullName: string; userType: string } }>;
+      setVets(membros
+        .filter(m => m.user.userType === 'VETERINARIO' || m.cargo === 'GESTOR')
+        .map(m => ({ userId: m.user.id, fullName: m.user.fullName, cargo: m.cargo }))
+      );
+    } catch { /* silencioso */ }
+  }, []);
+
+  const fetchAgendamentos = useCallback(async (date: string) => {
+    setLoading(true);
+    try {
+      const res = await api.get('/clinica/agendamentos', { params: { data: date } });
+      if (!res.data) { setAgendamentos([]); return; }
+      setAgendamentos(res.data.dados ?? []);
+    } catch { toast.error('Erro ao carregar agendamentos'); }
+    finally { setLoading(false); }
+  }, []);
+
+  const fetchMes = useCallback(async (mesAno: string) => {
+    if (mesAno === mesCarregado) return;
+    try {
+      const res = await api.get('/clinica/agendamentos', { params: { mesAno } });
+      if (!res.data) return;
+      setAgendamentosMes(res.data.dados ?? []);
+      setMesCarregado(mesAno);
+    } catch { /* silencioso */ }
+  }, [mesCarregado]);
+
+  useEffect(() => {
+    if (loadingPerms) return;
+    fetchAnimais(); fetchVets();
+  }, [loadingPerms]);
+
+  useEffect(() => {
+    if (loadingPerms) return;
+    fetchAgendamentos(selectedDate);
+    fetchMes(selectedDate.slice(0, 7));
+  }, [selectedDate, loadingPerms]);
+
+  // Fecha combo ao clicar fora
+  useEffect(() => {
+    const fn = (e: MouseEvent) => {
+      if (comboRef.current && !comboRef.current.contains(e.target as Node)) setComboOpen(false);
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, []);
+
+  // ── Slots ────────────────────────────────────────────────────────────────────
+  function slotsOcupados(vetId: number): Set<string> {
+    return new Set(agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora)));
+  }
+  function slotsLivres(vetId: number): string[] {
+    const ocp = slotsOcupados(vetId);
+    return HORARIOS.filter(h => !ocp.has(h));
+  }
+
+  // ── Filtros locais ───────────────────────────────────────────────────────────
+  const listaFiltrada = useMemo(() => agendamentos.filter(ag => {
+    if (filtroVetId && ag.veterinario?.id !== Number(filtroVetId)) return false;
+    if (filtroTipo  && ag.tipo !== filtroTipo) return false;
+    if (!busca.trim()) return true;
+    const q = busca.toLowerCase();
+    return (
+      ag.animal?.nome.toLowerCase().includes(q) ||
+      ag.titulo.toLowerCase().includes(q) ||
+      ag.veterinario?.fullName.toLowerCase().includes(q) ||
+      ag.animal?.user?.fullName.toLowerCase().includes(q)
+    );
+  }), [agendamentos, filtroVetId, filtroTipo, busca]);
+
+  const vetsFiltrados = useMemo(
+    () => filtroVetId ? vets.filter(v => String(v.userId) === filtroVetId) : vets,
+    [vets, filtroVetId]
+  );
+  const animaisCombo = animais.filter(a => !comboQuery || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
+
+  // ── Conflict check ────────────────────────────────────────────────────────────
+  // Verifica se o animal já tem QUALQUER agendamento no dia selecionado (qualquer vet, qualquer hora)
+  function findConflictAnimal(animalId: number): AgendamentoGlobal | null {
+    return agendamentos.find(ag =>
+      ag.animal?.id === animalId &&
+      ag.status !== 'CANCELADO'
+    ) ?? null;
+  }
+
+  function findConflict(animalId: number, vetId: number): AgendamentoGlobal | null {
+    return agendamentos.find(ag =>
+      ag.animal?.id === animalId &&
+      ag.veterinario?.id === vetId &&
+      ag.status !== 'CANCELADO'
+    ) ?? null;
+  }
+
+  // ── Handlers ─────────────────────────────────────────────────────────────────
+  async function criarAgendamentoDireto(animalId: number, animalNome: string, vetId: number, hora: string) {
+    setSalvando(true);
+    try {
+      await api.post('/clinica/agendamentos', {
+        animalId, tipo: 'CONSULTA', titulo: `Consulta - ${animalNome}`,
+        dataHora: new Date(`${selectedDate}T${hora}`).toISOString(), veterinarioId: vetId,
+      });
+      toast.success(`Consulta agendada às ${hora}`);
+      fetchAgendamentos(selectedDate);
+      setMesCarregado('');
+    } catch { toast.error('Erro ao criar agendamento'); }
+    finally { setSalvando(false); }
+  }
+
+  async function handleSlotClick(vetId: number, vetName: string, hora: string) {
+    setOpenSlotVetId(null);
+    if (selectedAnimalId && selectedAnimal) {
+      const conflito = findConflictAnimal(Number(selectedAnimalId));
+      if (conflito) {
+        const quando = dataRelativa(selectedDate);
+        const vetNome = conflito.veterinario?.fullName ?? vetName;
+        const msg = `${selectedAnimal.nome} já tem um agendamento para ${quando} às ${formatarHora(conflito.dataHora)} com ${vetNome}. Deseja criar outro agendamento no mesmo dia?`;
+        setConflictWarning({ message: msg, onConfirm: () => { setConflictWarning(null); criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora); } });
+        return;
+      }
+      criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora);
+    } else {
+      setBooking({ vetId, vetName, hora });
+      setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+      setComboQuery(''); setComboOpen(false);
+    }
+  }
+
+  function handleEscolhaManual() {
+    if (!escolhaTipo) return;
+    setEscolhaTipo(null);
+    setBooking({ ...escolhaTipo });
+    setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+    setComboQuery(''); setComboOpen(false);
+  }
+
+  function handleEscolhaVoz() {
+    if (!escolhaTipo) return;
+    setVozContexto({ ...escolhaTipo });
+    setEscolhaTipo(null);
+    setVozAberto(true); setVozEtapa('IDLE');
+    setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null);
+  }
+
+  function resetVoz() {
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} recognitionRef.current = null; }
+    setVozAberto(false); setVozContexto(null); setVozEtapa('IDLE');
+    setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
+  }
+
+  function iniciarGravacao() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { setVozEtapa('ERRO'); return; }
+    const rec = new SR();
+    rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = (ev: any) => {
+      let t = '';
+      for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript;
+      setVozTranscricao(t);
+    };
+    rec.onerror = () => setVozEtapa('ERRO');
+    rec.start(); recognitionRef.current = rec;
+    setVozEtapa('GRAVANDO'); setVozTranscricao('');
+  }
+
+  function pararGravacao() {
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} recognitionRef.current = null; }
+    setVozEtapa('PROCESSANDO');
+    setTimeout(() => processarVoz(), 200);
+  }
+
+  async function processarVoz(textoOverride?: string) {
+    const texto = textoOverride ?? vozTranscricao ?? vozTextoManual;
+    if (!texto.trim()) { setVozEtapa('ERRO'); return; }
+    setVozEtapa('PROCESSANDO');
+    try {
+      const res = await api.post('/clinica/agendamentos/interpretar', { texto, dataReferencia: selectedDate, vetHint: vozContexto?.vetId, horaHint: vozContexto?.hora });
+      const resultado: InterpretacaoResultado = res.data?.dados ?? res.data;
+      setVozResultado(resultado);
+      setVozEtapa(resultado?.disponivel ? 'DISPONIVEL' : 'INDISPONIVEL');
+    } catch { setVozEtapa('ERRO'); }
+  }
+
+  async function confirmarVoz() {
+    if (!vozResultado) return;
+
+    const animalId   = vozResultado.animalId ?? (selectedAnimalId ? Number(selectedAnimalId) : null);
+    const vetId      = vozResultado.vetId    ?? vozContexto?.vetId ?? null;
+    const dataHora   = vozResultado.dataHora
+      ?? (vozContexto ? new Date(`${selectedDate}T${vozContexto.hora}`).toISOString() : null);
+    const animalNome = vozResultado.animal?.nome ?? selectedAnimal?.nome ?? 'Animal';
+
+    if (!animalId) { toast.error('Animal não identificado pela IA'); return; }
+    if (!dataHora) { toast.error('Data/hora não identificada'); return; }
+
+    setSalvando(true);
+    try {
+      await api.post('/clinica/agendamentos', {
+        animalId, tipo: 'CONSULTA',
+        titulo: `Consulta - ${animalNome}`,
+        dataHora,
+        veterinarioId: vetId,
+      });
+      toast.success('Agendamento confirmado!');
+      resetVoz(); fetchAgendamentos(selectedDate); setMesCarregado('');
+    } catch { toast.error('Erro ao confirmar agendamento'); }
+    finally { setSalvando(false); }
+  }
+
+  async function executarConfirmarBooking() {
+    if (!booking) return;
+    const animal = animais.find(a => String(a.id) === bookingForm.animalId);
+    setSalvando(true);
+    try {
+      await api.post('/clinica/agendamentos', {
+        animalId: Number(bookingForm.animalId), tipo: 'CONSULTA',
+        titulo: `Consulta - ${animal?.nome ?? 'Paciente'}`,
+        dataHora: new Date(`${selectedDate}T${booking.hora}`).toISOString(),
+        veterinarioId: booking.vetId,
+      });
+      toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
+      setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
+    } catch { toast.error('Erro ao criar agendamento'); }
+    finally { setSalvando(false); }
+  }
+
+  async function handleConfirmarBooking(e: React.FormEvent) {
+    e.preventDefault();
+    if (!booking) return;
+    if (!bookingForm.animalId) { toast.error('Selecione um animal'); return; }
+    const conflito = findConflictAnimal(Number(bookingForm.animalId));
+    if (conflito) {
+      const nomeAnimal = animais.find(a => String(a.id) === bookingForm.animalId)?.nome ?? 'este animal';
+      const quando = dataRelativa(selectedDate);
+      const vetNome = conflito.veterinario?.fullName ?? booking.vetName;
+      const msg = `${nomeAnimal} já tem um agendamento para ${quando} às ${formatarHora(conflito.dataHora)} com ${vetNome}. Deseja criar outro agendamento no mesmo dia?`;
+      setConflictWarning({ message: msg, onConfirm: () => { setConflictWarning(null); executarConfirmarBooking(); } });
+      return;
+    }
+    executarConfirmarBooking();
+  }
+
+  async function handleStatus(id: number, novoStatus: string) {
+    try {
+      await api.patch(`/clinica/agendamentos/${id}/status`, { status: novoStatus });
+      toast.success(novoStatus === 'CONCLUIDO' ? 'Confirmado' : 'Cancelado');
+      setCancelando(null);
+      setAgendamentos(prev => prev.map(a => a.id === id ? { ...a, status: novoStatus as StatusAgendamento } : a));
+    } catch { toast.error('Erro ao atualizar'); }
+  }
+
+  async function handleReagendar(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reagendando || !novaDataHora) { toast.error('Informe a nova data/hora'); return; }
+    if (novaDataHora === formatarDateInput(reagendando.dataHora)) { toast.error('A nova data deve ser diferente da atual'); return; }
+    setSalvandoReag(true);
+    try {
+      await api.delete(`/clinica/agendamentos/${reagendando.id}`);
+      await api.post('/clinica/agendamentos', {
+        animalId: reagendando.animal?.id, tipo: reagendando.tipo, titulo: reagendando.titulo,
+        dataHora: new Date(novaDataHora).toISOString(), observacao: reagendando.observacao ?? undefined,
+        veterinarioId: reagendando.veterinario?.id,
+      });
+      toast.success('Reagendado');
+      setReagendando(null); fetchAgendamentos(selectedDate); setMesCarregado('');
+    } catch { toast.error('Erro ao reagendar'); }
+    finally { setSalvandoReag(false); }
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────────
+  return (
+    <PageContainer maxWidth="7xl">
+
+      <BotaoVoltar className="mb-6" />
+
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+          <CalendarClock size={20} className="text-emerald-700" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Portal de Agendamento</h1>
+          <p className="text-sm text-gray-500">Agenda Veterinária · Gestão de consultas e atendimentos</p>
+        </div>
+      </div>
+
+      {/* ── Barra bidirecional Animal ↔ Proprietário ─────────────────────────── */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-5">
+        <div className="flex flex-col md:flex-row md:items-end gap-4">
+
+          {/* Agende por Voz */}
+          {podeGerenciar && (
+            <button
+              onClick={() => {
+                setVozAberto(true); setVozEtapa('IDLE');
+                setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
+              }}
+              className="flex items-center justify-center gap-2 px-5 h-10 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition-colors whitespace-nowrap flex-shrink-0"
+            >
+              <Sparkles size={14} />
+              Agende por Voz
+            </button>
+          )}
+
+          {/* Animal — filtra por proprietário selecionado */}
+          <div className="flex-1 flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+              <UserIcon size={10} /> Animal / Paciente
+            </label>
+            {loadingAnimais ? (
+              <div className="h-10 flex items-center gap-2 pl-3 text-sm text-gray-400">
+                <Loader2 size={14} className="animate-spin" /> Carregando...
+              </div>
+            ) : (
+              <div className="relative">
+                <Search size={12} className="absolute left-3 top-2.5 text-gray-400 pointer-events-none" />
+                <select
+                  value={selectedAnimalId}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setSelectedAnimalId(val);
+                    if (val) {
+                      const a = animais.find(x => String(x.id) === val);
+                      if (a?.user) setSelectedProprId(String(a.user.id));
+                    }
+                  }}
+                  className="w-full pl-8 pr-7 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none cursor-pointer appearance-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  <option value="">Todos os animais</option>
+                  {animaisFiltradosBar.map(a => (
+                    <option key={a.id} value={a.id}>{a.nome}{a.especie?.nome ? ` (${a.especie.nome})` : ''}</option>
+                  ))}
+                </select>
+                <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
+              </div>
+            )}
+          </div>
+
+          {/* Proprietário — filtra animais e auto-seleciona quando único */}
+          <div className="flex-1 flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+              <UserIcon size={10} /> Proprietário / Tutor
+            </label>
+            {loadingAnimais ? (
+              <div className="h-10 flex items-center px-3 border border-gray-100 rounded-xl bg-gray-50">
+                <span className="text-sm text-gray-400">—</span>
+              </div>
+            ) : (
+              <div className="relative">
+                <select
+                  value={selectedProprId}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setSelectedProprId(val);
+                    if (val) {
+                      const deles = animais.filter(a => String(a.user?.id) === val);
+                      if (deles.length === 1) {
+                        setSelectedAnimalId(String(deles[0].id));
+                      } else if (selectedAnimalId) {
+                        const cur = animais.find(a => String(a.id) === selectedAnimalId);
+                        if (cur?.user && String(cur.user.id) !== val) setSelectedAnimalId('');
+                      }
+                    } else {
+                      setSelectedAnimalId('');
+                    }
+                  }}
+                  className="w-full pl-3 pr-7 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none cursor-pointer appearance-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  <option value="">Todos os proprietários</option>
+                  {proprietarios.map(p => (
+                    <option key={p.id} value={p.id}>{p.fullName}</option>
+                  ))}
+                </select>
+                <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
+              </div>
+            )}
+          </div>
+
+          {/* Contato */}
+          <div className="flex-1 flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+              <Phone size={10} /> Contato
+            </label>
+            <div className="h-10 flex items-center px-3 border border-gray-100 rounded-xl bg-gray-50">
+              {contatoInfo?.email ? (
+                <span className="text-sm text-gray-600 truncate">{contatoInfo.email}</span>
+              ) : (
+                <span className="text-sm text-gray-400 italic">
+                  {selectedAnimalId || selectedProprId ? '—' : 'Selecione um animal ou proprietário'}
+                </span>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* ── Layout: Calendário + Painel direito ─────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-5">
+
+        {/* Calendário */}
+        <div className="lg:col-span-4">
+          <CalendarioInterativo
+            selectedDate={selectedDate}
+            onChange={date => { setSelectedDate(date); if (date.slice(0,7) !== mesCarregado) setMesCarregado(''); }}
+            statusPorDia={statusPorDia}
+          />
+        </div>
+
+        {/* Painel direito: Filtros + Profissionais */}
+        <div className="lg:col-span-8 flex flex-col gap-4">
+
+          {/* Filtros — sem campo Status */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Filter size={13} className="text-gray-500" />
+              <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Filtros e Atribuição de Profissional</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Profissional */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-gray-500">Profissional</label>
+                <div className="relative">
+                  <select value={filtroVetId} onChange={e => setFiltroVetId(e.target.value)}
+                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
+                    <option value="">Todos</option>
+                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                  </select>
+                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+              {/* Tipo */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-gray-500">Tipo de Atendimento</label>
+                <div className="relative">
+                  <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
+                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
+                    <option value="">Todas as categorias</option>
+                    {TIPOS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Profissionais de Plantão — Especialidade na 1ª coluna */}
+          <div className="bg-white rounded-2xl border border-gray-200">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Stethoscope size={14} className="text-gray-500" />
+                <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">
+                  Expediente Ativo · {labelDia(selectedDate)}
+                </p>
+              </div>
+              <span className="text-[10px] font-bold text-gray-400">{vetsFiltrados.length} profissional(is)</span>
+            </div>
+
+            {vetsFiltrados.length === 0 ? (
+              <div className="py-10 text-center">
+                <Users size={28} className="mx-auto mb-2 text-gray-300" />
+                <p className="text-sm text-gray-400">Nenhum profissional na equipe</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                      <th className="py-2.5 px-4">Especialidade</th>
+                      <th className="py-2.5 px-4">Profissional</th>
+                      <th className="py-2.5 px-4">Período</th>
+                      <th className="py-2.5 px-4">Dias</th>
+                      <th className="py-2.5 px-4">Horários Disponíveis</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {vetsFiltrados.map(vet => {
+                      const livres = slotsLivres(vet.userId);
+                      const isOpen = openSlotVetId === vet.userId;
+                      return (
+                        <tr key={vet.userId} className="hover:bg-gray-50/50 transition-colors">
+                          {/* Especialidade */}
+                          <td className="py-3 px-4">
+                            <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full whitespace-nowrap">
+                              Clínica Geral
+                            </span>
+                          </td>
+                          {/* Profissional */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500 uppercase flex-shrink-0">
+                                {vet.fullName.slice(0, 2)}
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-gray-900">{vet.fullName}</p>
+                                <p className="text-[10px] text-gray-400">{vet.cargo}</p>
+                              </div>
+                            </div>
+                          </td>
+                          {/* Período */}
+                          <td className="py-3 px-4">
+                            <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
+                              <Clock size={11} className="text-gray-400" /> 08h — 18h
+                            </span>
+                          </td>
+                          {/* Dias */}
+                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">Seg — Sex</td>
+                          {/* Horários */}
+                          <td className="py-3 px-4">
+                            {podeGerenciar ? (
+                              <div
+                                className="inline-block"
+                                onMouseEnter={e => livres.length > 0 && openSlotMenu(vet.userId, e.currentTarget)}
+                                onMouseLeave={scheduleCloseSlot}
+                              >
+                                <button
+                                  disabled={livres.length === 0}
+                                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border ${
+                                    livres.length > 0
+                                      ? 'bg-green-50 hover:bg-green-100 text-green-700 border-green-200'
+                                      : 'bg-red-50 text-red-500 border-red-200 cursor-not-allowed'
+                                  }`}
+                                >
+                                  {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
+                                  {livres.length > 0 && (isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
+                                </button>
+                                {isOpen && livres.length > 0 && slotPos && (
+                                  <div
+                                    style={{ position: 'fixed', top: slotPos.top, left: slotPos.left, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
+                                    onMouseEnter={cancelCloseSlot}
+                                    onMouseLeave={scheduleCloseSlot}
+                                    className="bg-white border border-gray-200 rounded-2xl shadow-xl p-2.5 min-w-[200px]"
+                                  >
+                                    <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Clique para agendar</p>
+                                    <div className="grid grid-cols-3 gap-1">
+                                      {livres.map(hora => (
+                                        <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora)}
+                                          className="px-2 py-1.5 text-[11px] font-bold bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors border border-green-200">
+                                          {hora}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-500">{livres.length} livres</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Lista de Agendamentos ─────────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Calendar size={14} className="text-gray-500" />
+            <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">
+              Agendamentos do Dia · {labelDia(selectedDate)}
+            </p>
+            {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
+          </div>
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-2 text-gray-400" />
+            <input type="text" placeholder="Buscar..." value={busca} onChange={e => setBusca(e.target.value)}
+              className="pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 w-44" />
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-12 flex justify-center"><Loader2 size={28} className="text-emerald-600 animate-spin" /></div>
+        ) : listaFiltrada.length === 0 ? (
+          <div className="py-12 text-center">
+            <CalendarClock size={32} className="text-gray-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-gray-500">Nenhum agendamento para esta data</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {podeGerenciar ? 'Clique em um horário disponível acima.' : 'Selecione outra data no calendário.'}
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {listaFiltrada.map(ag => {
+                const isAgendado  = ag.status === 'AGENDADO';
+                const isConcluido = ag.status === 'CONCLUIDO';
+                const isCancelado = ag.status === 'CANCELADO';
+                return (
+                  <div key={ag.id} className={`p-4 flex flex-col gap-3 ${isCancelado ? 'opacity-60' : ''}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : isConcluido ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{ag.status}</span>
+                      </div>
+                      <span className="text-xs font-bold font-mono text-gray-500">{formatarHora(ag.dataHora)}</span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-gray-900">{ag.titulo}</p>
+                      {ag.animal && <p className="text-xs text-gray-500 mt-0.5">{ag.animal.nome}{ag.animal.especie && <> · {ag.animal.especie.nome}</>}</p>}
+                      {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
+                      {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
+                    </div>
+                    {podeGerenciar && !isCancelado && (
+                      <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
+                        {isAgendado && (
+                          <button onClick={() => handleStatus(ag.id, 'CONCLUIDO')} className="flex items-center gap-1 px-2.5 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-semibold">
+                            <Check size={11} /> Confirmar
+                          </button>
+                        )}
+                        {isAgendado && (
+                          <button onClick={() => { setReagendando(ag); setNovaDataHora(formatarDateInput(ag.dataHora)); }} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
+                            <RefreshCw size={11} /> Reagendar
+                          </button>
+                        )}
+                        {isAgendado && (
+                          <button onClick={() => setCancelando(ag.id)} className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
+                            <X size={11} /> Cancelar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {cancelando === ag.id && (
+                      <div className="bg-red-50 border border-red-100 rounded-xl p-3 flex flex-col gap-2">
+                        <p className="text-xs font-semibold text-red-800">Motivo do cancelamento:</p>
+                        <div className="relative">
+                          <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO')} defaultValue=""
+                            className="w-full text-xs border border-red-200 rounded-xl py-2 pl-3 pr-7 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
+                            <option value="" disabled>Selecione...</option>
+                            {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                          <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-red-400 pointer-events-none" />
+                        </div>
+                        <button onClick={() => setCancelando(null)} className="text-xs text-gray-500 self-end">Desistir</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                    <th className="py-3 px-4">Horário</th>
+                    <th className="py-3 px-4">Animal / Paciente</th>
+                    <th className="py-3 px-4">Título / Tipo</th>
+                    <th className="py-3 px-4">Veterinário</th>
+                    <th className="py-3 px-4">Status</th>
+                    {podeGerenciar && <th className="py-3 px-4 text-center">Ações</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {listaFiltrada.map(ag => {
+                    const isAgendado  = ag.status === 'AGENDADO';
+                    const isConcluido = ag.status === 'CONCLUIDO';
+                    const isCancelado = ag.status === 'CANCELADO';
+                    return (
+                      <tr key={ag.id} className={`hover:bg-gray-50/50 transition-colors ${isCancelado ? 'opacity-60' : ''}`}>
+                        <td className="py-3.5 px-4">
+                          <span className="flex items-center gap-1.5 font-bold font-mono text-emerald-700">
+                            <Clock size={13} /> {formatarHora(ag.dataHora)}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <p className="font-bold text-gray-900">{ag.animal?.nome ?? '—'}</p>
+                          {ag.animal?.especie && <p className="text-xs text-gray-400">{ag.animal.especie.nome}</p>}
+                          {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <p className="font-semibold text-gray-800">{ag.titulo}</p>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-0.5 inline-block ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {ag.veterinario
+                            ? <span className="flex items-center gap-1.5 text-xs text-gray-700"><UserIcon size={12} className="text-gray-400" />{ag.veterinario.fullName}</span>
+                            : <span className="text-xs text-gray-400">Não atribuído</span>}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : isConcluido ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{ag.status}</span>
+                        </td>
+                        {podeGerenciar && (
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {isAgendado && (
+                                <button onClick={() => handleStatus(ag.id, 'CONCLUIDO')} title="Confirmar"
+                                  className="p-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors">
+                                  <Check size={13} />
+                                </button>
+                              )}
+                              {isAgendado && (
+                                <button onClick={() => { setReagendando(ag); setNovaDataHora(formatarDateInput(ag.dataHora)); }} title="Reagendar"
+                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
+                                  <RefreshCw size={13} />
+                                </button>
+                              )}
+                              {isAgendado && (
+                                <button onClick={() => setCancelando(ag.id)} title="Cancelar"
+                                  className="p-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl transition-colors">
+                                  <X size={13} />
+                                </button>
+                              )}
+                            </div>
+                            {cancelando === ag.id && (
+                              <div className="mt-2 bg-red-50 border border-red-100 rounded-xl p-2 flex items-center gap-2">
+                                <AlertTriangle size={11} className="text-red-500 flex-shrink-0" />
+                                <div className="relative flex-1">
+                                  <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO')} defaultValue=""
+                                    className="w-full text-[10px] border border-red-200 rounded-lg py-1 pl-2 pr-5 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
+                                    <option value="" disabled>Motivo...</option>
+                                    {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
+                                  </select>
+                                  <ChevronDown size={9} className="absolute right-1.5 top-2 text-red-400 pointer-events-none" />
+                                </div>
+                                <button onClick={() => setCancelando(null)}><X size={11} className="text-gray-400" /></button>
+                              </div>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Modal: Aviso de Agendamento Duplicado ────────────────────────────── */}
+      {conflictWarning && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-amber-500 px-5 py-4 flex items-center gap-3">
+              <AlertTriangle size={22} className="text-white flex-shrink-0" />
+              <div>
+                <p className="text-[10px] font-bold text-amber-100 uppercase tracking-widest">Atenção</p>
+                <h3 className="text-sm font-bold text-white">Agendamento duplicado</h3>
+              </div>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-gray-700 mb-1">{conflictWarning.message}</p>
+              <p className="text-xs text-gray-500">Deseja continuar mesmo assim e criar o agendamento?</p>
+            </div>
+            <div className="flex gap-3 px-5 pb-5">
+              <button onClick={() => setConflictWarning(null)}
+                className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">
+                Cancelar
+              </button>
+              <button onClick={conflictWarning.onConfirm}
+                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-colors">
+                Continuar assim
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Confirmar Horário ──────────────────────────────────────────── */}
+      {booking && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-6 pt-5 pb-6 relative">
+              <button onClick={() => setBooking(null)}
+                className="absolute top-4 right-4 p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition-colors">
+                <X size={16} />
+              </button>
+              <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest mb-1">Novo Agendamento Clínico</p>
+              <h3 className="text-lg font-bold text-white mb-4">Confirmar Horário de Consulta</h3>
+              <div className="bg-white/15 rounded-2xl px-4 py-3 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-semibold text-emerald-200">Médico Veterinário</p>
+                  <p className="text-sm font-bold text-white">{booking.vetName}</p>
+                  <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 bg-white/20 text-emerald-100 rounded-full">Clínica Geral</span>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[10px] font-semibold text-emerald-200">Dia &amp; Hora</p>
+                  <p className="text-2xl font-bold text-white">{booking.hora}</p>
+                  <p className="text-[11px] text-emerald-200 mt-0.5">{formatarDataPT(selectedDate)}</p>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmarBooking} className="px-6 py-5 flex flex-col gap-5">
+              {/* Animal */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600 flex-shrink-0" />
+                  <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Identificação do Paciente</p>
+                </div>
+                <label className="text-xs font-bold text-gray-600 mb-1.5 block">Selecione o Animal <span className="text-red-500">*</span></label>
+                <div ref={comboRef} className="relative">
+                  <Search size={13} className="absolute left-3 top-3 text-gray-400 pointer-events-none z-10" />
+                  <input type="text" placeholder="Buscar animal..." value={comboQuery} autoComplete="off"
+                    onChange={e => {
+                      setComboQuery(e.target.value); setComboOpen(true);
+                      if (bookingForm.animalId) setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+                    }}
+                    onFocus={() => setComboOpen(true)}
+                    className={`w-full pl-8 pr-9 py-2.5 text-sm border rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none transition-all ${bookingForm.animalId ? 'border-emerald-400 ring-2 ring-emerald-500/20' : 'border-gray-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'}`}
+                  />
+                  {bookingForm.animalId
+                    ? <Check size={14} className="absolute right-3 top-3 text-emerald-600 pointer-events-none" />
+                    : <ChevronDown size={13} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />}
+                  {comboOpen && animaisCombo.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl z-20 max-h-48 overflow-y-auto">
+                      {animaisCombo.slice(0, 40).map(a => (
+                        <button key={a.id} type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            setComboQuery(a.nome + (a.especie?.nome ? ` (${a.especie.nome})` : ''));
+                            setComboOpen(false);
+                            setBookingForm({ animalId: String(a.id), proprietarioNome: a.user?.fullName ?? '', telefone: a.user?.phone ?? '', cpf: a.user?.cpf ?? '' });
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-sm transition-colors border-b border-gray-50 last:border-0 ${String(a.id) === bookingForm.animalId ? 'bg-emerald-50 text-emerald-800' : 'hover:bg-gray-50 text-gray-800'}`}
+                        >
+                          <span className="font-semibold">{a.nome}</span>
+                          {a.especie?.nome && <span className="text-xs text-gray-400 ml-1.5">({a.especie.nome})</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {comboOpen && comboQuery.length > 0 && animaisCombo.length === 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl z-20 px-4 py-3 text-sm text-gray-400 text-center">Nenhum animal encontrado</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Proprietário */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                  <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Informações do Proprietário</p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-600 mb-1.5 block">Nome do Proprietário</label>
+                    <div className="relative">
+                      <UserIcon size={13} className="absolute left-3 top-2.5 text-gray-400" />
+                      <input type="text" placeholder="Nome completo" value={bookingForm.proprietarioNome}
+                        onChange={e => setBookingForm(f => ({ ...f, proprietarioNome: e.target.value }))}
+                        className="w-full pl-8 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 mb-1.5 block">Telefone / WhatsApp</label>
+                      <div className="relative">
+                        <Phone size={13} className="absolute left-3 top-2.5 text-gray-400" />
+                        <input type="text" placeholder="(00) 00000-0000" value={bookingForm.telefone}
+                          onChange={e => setBookingForm(f => ({ ...f, telefone: e.target.value }))}
+                          className="w-full pl-8 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 mb-1.5 block">CPF do Titular</label>
+                      <input type="text" placeholder="000.000.000-00" value={bookingForm.cpf}
+                        onChange={e => setBookingForm(f => ({ ...f, cpf: e.target.value }))}
+                        className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
+                <button type="button" onClick={() => setBooking(null)}
+                  className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={salvando}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
+                  {salvando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Confirmar Agendamento
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Reagendar ─────────────────────────────────────────────────── */}
+      {reagendando && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="bg-emerald-700 px-6 py-5 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest">Reagendar</p>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2"><RefreshCw size={16} /> Nova Data e Horário</h3>
+              </div>
+              <button onClick={() => setReagendando(null)} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+              <p className="text-xs font-bold text-gray-400 uppercase mb-1">Agendamento atual</p>
+              <p className="text-sm font-bold text-gray-900">{reagendando.titulo}</p>
+              <p className="text-xs text-gray-500">{reagendando.animal?.nome} · {formatarDataHora(reagendando.dataHora)}</p>
+            </div>
+            <form onSubmit={handleReagendar} className="p-6 flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-gray-700">Nova Data e Hora <span className="text-red-500">*</span></label>
+                <input type="datetime-local" value={novaDataHora} onChange={e => setNovaDataHora(e.target.value)}
+                  className="text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+              </div>
+              <div className="bg-emerald-50 rounded-xl p-3 text-xs text-emerald-700">O horário anterior será liberado e um novo agendamento será criado.</div>
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
+                <button type="button" onClick={() => setReagendando(null)}
+                  className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Fechar</button>
+                <button type="submit" disabled={salvandoReag}
+                  className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
+                  {salvandoReag ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  Confirmar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Voz / IA ────────────────────────────────────────────────────── */}
+      {vozAberto && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-5 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-emerald-100 uppercase tracking-widest">Agendamento com IA</p>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2"><Sparkles size={16} /> Assistente de Agenda</h3>
+              </div>
+              <button onClick={resetVoz} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
+            </div>
+
+            {vozContexto && (
+              <div className="px-6 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2 text-xs text-emerald-700">
+                <Clock size={13} />
+                <span className="font-semibold">{vozContexto.hora}</span> com <span className="font-semibold">{vozContexto.vetName}</span>
+                <span className="text-emerald-500 ml-1">· {selectedDate}</span>
+              </div>
+            )}
+
+            <div className="p-6">
+              {vozEtapa === 'IDLE' && (
+                <div className="flex flex-col items-center gap-5">
+                  <p className="text-sm text-gray-600 text-center">
+                    Diga o nome do animal, data e horário desejado.<br />
+                    <span className="text-xs text-gray-400">Ex: "Quero agendar o Trovão para sexta às 10h"</span>
+                  </p>
+                  <button onClick={iniciarGravacao}
+                    className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 flex items-center justify-center shadow-lg transition-all">
+                    <Mic size={32} className="text-white" />
+                  </button>
+                  <p className="text-xs text-gray-400">Clique para falar</p>
+                  <div className="w-full border-t border-gray-100 pt-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">Ou digite sua solicitação:</p>
+                    <textarea rows={2} value={vozTextoManual} onChange={e => setVozTextoManual(e.target.value)}
+                      placeholder="Ex: Quero agendar o Trovão para amanhã às 14h com Dr. Carlos"
+                      className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none" />
+                    <button onClick={() => processarVoz(vozTextoManual)} disabled={!vozTextoManual.trim()}
+                      className="mt-2 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-bold rounded-xl transition-colors">
+                      <Wand2 size={15} /> Interpretar com IA
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {vozEtapa === 'GRAVANDO' && (
+                <div className="flex flex-col items-center gap-5">
+                  <div className="relative">
+                    <div className="w-20 h-20 rounded-full bg-red-500 flex items-center justify-center shadow-lg animate-pulse"><MicOff size={32} className="text-white" /></div>
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-400 animate-ping" />
+                  </div>
+                  <p className="text-sm font-bold text-red-600">Gravando...</p>
+                  {vozTranscricao && <p className="text-xs text-gray-500 text-center bg-gray-50 rounded-xl px-4 py-3 max-h-24 overflow-y-auto">{vozTranscricao}</p>}
+                  <button onClick={pararGravacao}
+                    className="flex items-center gap-2 px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-xl transition-colors">
+                    <MicOff size={15} /> Parar e Interpretar
+                  </button>
+                </div>
+              )}
+
+              {vozEtapa === 'PROCESSANDO' && (
+                <div className="flex flex-col items-center gap-5 py-4">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
+                    <Loader2 size={28} className="text-emerald-600 animate-spin" />
+                  </div>
+                  <p className="text-sm text-gray-600">A IA está analisando sua solicitação...</p>
+                  {vozTranscricao && <p className="text-xs text-gray-400 text-center italic">"{vozTranscricao}"</p>}
+                </div>
+              )}
+
+              {vozEtapa === 'DISPONIVEL' && vozResultado && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2 text-emerald-700 font-bold">
+                    <CheckCircle2 size={18} className="text-emerald-600" /> Horário disponível!
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col gap-2">
+                    {vozResultado.animal && <div className="flex justify-between text-sm"><span className="text-gray-500">Animal</span><span className="font-bold text-gray-800">{vozResultado.animal.nome}</span></div>}
+                    {vozResultado.vet    && <div className="flex justify-between text-sm"><span className="text-gray-500">Profissional</span><span className="font-bold text-gray-800">{vozResultado.vet.fullName}</span></div>}
+                    {vozResultado.data   && <div className="flex justify-between text-sm"><span className="text-gray-500">Data</span><span className="font-bold text-gray-800">{vozResultado.data}</span></div>}
+                    {vozResultado.hora   && <div className="flex justify-between text-sm"><span className="text-gray-500">Horário</span><span className="font-bold text-gray-800">{vozResultado.hora}</span></div>}
+                  </div>
+                  {vozResultado.resumo && <p className="text-xs text-gray-500 bg-gray-50 rounded-xl px-3 py-2 italic">"{vozResultado.resumo}"</p>}
+                  <div className="flex gap-2 pt-1">
+                    <button onClick={() => setVozEtapa('IDLE')}
+                      className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Regravar</button>
+                    <button onClick={confirmarVoz} disabled={salvando}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
+                      {salvando ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Confirmar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {vozEtapa === 'INDISPONIVEL' && vozResultado && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2 text-amber-700 font-bold">
+                    <AlertCircle size={18} className="text-amber-500" />
+                    {vozResultado.animalNomeNaoEncontrado
+                      ? `Paciente não é da equipe ${nomeEquipe}`
+                      : vozResultado.vetNomeNaoEncontrado
+                        ? `Especialista não faz parte da equipe ${nomeEquipe}`
+                        : 'Horário ocupado'
+                    }
+                  </div>
+                  {vozResultado.conflito && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800">
+                      <p className="font-semibold leading-snug">
+                        {vozResultado.conflito.animalNome ?? vozResultado.animal?.nome ?? 'O animal'} já tem um agendamento para {dataRelativa(vozResultado.data ?? selectedDate)} às {vozResultado.conflito.hora} com {vozResultado.vet?.fullName ?? 'este profissional'}.
+                      </p>
+                    </div>
+                  )}
+                  {!vozResultado.conflito && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-sm text-amber-800">
+                      {vozResultado.animalNomeNaoEncontrado ? (
+                        <p>
+                          <span className="font-bold">{vozResultado.animalNomeNaoEncontrado}</span> não está sendo atendido pela equipe <span className="font-bold">{nomeEquipe}</span>. Adicione-o no cadastro de pacientes.
+                        </p>
+                      ) : vozResultado.vetNomeNaoEncontrado ? (
+                        <p>
+                          O especialista <span className="font-bold">{vozResultado.vetNomeNaoEncontrado}</span> não faz parte da equipe <span className="font-bold">{nomeEquipe}</span>. Se necessário, adicione-o em cadastro.
+                        </p>
+                      ) : (
+                        <p>{vozResultado.mensagem ?? 'Horário indisponível.'}</p>
+                      )}
+                    </div>
+                  )}
+                  {/* Modal interno de confirmação de segundo slot */}
+                  {vozSlotConflito && (
+                    <div className="bg-white border-2 border-amber-300 rounded-2xl p-4 flex flex-col gap-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0" />
+                        <p className="text-sm text-gray-700">
+                          <span className="font-bold">{vozSlotConflito.animalNome}</span> já tem um agendamento nesse dia às <span className="font-bold">{vozSlotConflito.existingHora}</span> com <span className="font-bold">{vozSlotConflito.vetNome}</span>. Deseja criar outro agendamento às <span className="font-bold">{vozSlotConflito.novaHora}</span>?
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setVozSlotConflito(null)}
+                          className="flex-1 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 text-xs font-semibold rounded-xl transition-colors">
+                          Não, voltar
+                        </button>
+                        <button
+                          onClick={() => {
+                            setVozResultado(r => r ? { ...r, hora: vozSlotConflito.novaHora, disponivel: true, dataHora: vozSlotConflito.novaDataHora } : r);
+                            setVozSlotConflito(null);
+                            setVozEtapa('DISPONIVEL');
+                          }}
+                          className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors">
+                          Sim, agendar às {vozSlotConflito.novaHora}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {!vozSlotConflito && vozResultado.horariosLivres && vozResultado.horariosLivres.length > 0 && (
+                    <div>
+                      <p className="text-xs font-bold text-gray-500 mb-2">Escolha outro horário com o mesmo profissional:</p>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {vozResultado.horariosLivres.map(h => (
+                          <button key={h}
+                            onClick={() => {
+                              if (vozResultado.conflito) {
+                                // Animal já tem outro agendamento com esse vet no dia — pede confirmação
+                                setVozSlotConflito({
+                                  existingHora: vozResultado.conflito!.hora,
+                                  vetNome:      vozResultado.vet?.fullName ?? 'este profissional',
+                                  animalNome:   vozResultado.conflito?.animalNome ?? vozResultado.animal?.nome ?? 'o animal',
+                                  novaHora:     h,
+                                  novaDataHora: `${vozResultado.data ?? selectedDate}T${h}:00`,
+                                });
+                              } else {
+                                setVozResultado(r => r ? { ...r, hora: h, disponivel: true, dataHora: `${vozResultado.data ?? selectedDate}T${h}:00` } : r);
+                                setVozEtapa('DISPONIVEL');
+                              }
+                            }}
+                            className="py-1.5 text-[11px] font-bold bg-green-50 hover:bg-green-100 text-green-700 rounded-xl border border-green-200 transition-colors">
+                            {h}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex gap-2 pt-1">
+                    <button onClick={() => setVozEtapa('IDLE')}
+                      className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Tentar novamente</button>
+                    <button onClick={() => { const ctx = vozContexto; resetVoz(); if (ctx) { setBooking({ ...ctx }); setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' }); setComboQuery(''); setComboOpen(false); } }}
+                      className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-800 text-white text-sm font-bold rounded-xl transition-colors">Agendar Manual</button>
+                  </div>
+                </div>
+              )}
+
+              {vozEtapa === 'ERRO' && (
+                <div className="flex flex-col items-center gap-4 py-2">
+                  <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center">
+                    <AlertCircle size={26} className="text-red-500" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-bold text-red-700">Não foi possível interpretar</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {typeof window !== 'undefined' && !((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+                        ? 'Seu navegador não suporta gravação de voz. Use o campo de texto.'
+                        : 'Tente novamente ou use o formulário manual.'}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <button onClick={() => setVozEtapa('IDLE')}
+                      className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Tentar novamente</button>
+                    <button onClick={() => { const ctx = vozContexto; resetVoz(); if (ctx) setEscolhaTipo(ctx); }}
+                      className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-800 text-white text-sm font-bold rounded-xl transition-colors">Voltar</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+    </PageContainer>
+  );
+}

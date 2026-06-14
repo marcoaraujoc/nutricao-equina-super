@@ -208,6 +208,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     localStorage.removeItem('token');
     localStorage.removeItem('refreshToken');
+    localStorage.removeItem('s2vet_empresa_id');
+    localStorage.removeItem('s2vet_equipe_id');
     setUser(null);
   };
 

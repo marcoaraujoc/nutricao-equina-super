@@ -182,16 +182,16 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
 
 // ─── ViewEvolucaoModal ────────────────────────────────────────────────────────
 
-function ViewEvolucaoModal({ ev, animal, isSocio, onClose, onEditar, onImprimir }: {
+function ViewEvolucaoModal({ ev, animal, isGestor, onClose, onEditar, onImprimir }: {
   ev:         EvolucaoItem;
   animal:     AnimalInfo | null;
-  isSocio:    boolean;
+  isGestor:    boolean;
   onClose:    () => void;
   onEditar?:  () => void;
   onImprimir: () => void;
 }) {
-  const editavel  = ev.status === 'EM_ANDAMENTO' || (ev.status === 'FINALIZADA' && isSocio);
-  const bloqueado = (ev.status === 'FINALIZADA' && !isSocio) || ev.status === 'CANCELADA';
+  const editavel  = ev.status === 'EM_ANDAMENTO' || (ev.status === 'FINALIZADA' && isGestor);
+  const bloqueado = (ev.status === 'FINALIZADA' && !isGestor) || ev.status === 'CANCELADA';
   const midias    = ev.midias ?? [];
 
   return (
@@ -272,7 +272,7 @@ function ViewEvolucaoModal({ ev, animal, isSocio, onClose, onEditar, onImprimir 
             <div className="flex-1 flex items-center justify-center gap-1.5">
               <Lock size={12} className="text-gray-400" />
               <span className="text-xs text-gray-400 italic">
-                {ev.status === 'FINALIZADA' ? 'Finalizada — edição restrita a sócios' : 'Cancelada — somente leitura'}
+                {ev.status === 'FINALIZADA' ? 'Finalizada — edição restrita a gestores' : 'Cancelada — somente leitura'}
               </span>
             </div>
           )}
@@ -769,7 +769,7 @@ interface Props {
 
 export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada }: Props) {
   const { user } = useAuth();
-  const { podeExecutar, isSocio, permissoes, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
@@ -1199,9 +1199,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 const eProprioAutor = ev.veterinarioId === userId;
 
                 // Nível de permissão para editar/excluir/finalizar desta evolução
-                const nivelEditar    = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
-                const nivelDeletar   = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
-                const nivelFinalizar = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
+                const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
+                const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
+                const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
 
                 const podeEditarEsta  = nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' ||
                   (nivelEditar  === 'PROPRIO' && eProprioAutor);
@@ -1344,13 +1344,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <ViewEvolucaoModal
           ev={viewingEv}
           animal={animal}
-          isSocio={isSocio}
+          isGestor={isGestor}
           onClose={() => setViewingEv(null)}
           onEditar={(() => {
-            const nivelEd = isSocio ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
+            const nivelEd = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
             const podeEd  = nivelEd === 'FULL' || nivelEd === 'EQUIPE' ||
               (nivelEd === 'PROPRIO' && viewingEv.veterinarioId === userId);
-            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (viewingEv.status === 'FINALIZADA' && isSocio));
+            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (viewingEv.status === 'FINALIZADA' && isGestor));
             return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
           })()}
           onImprimir={() => handleImprimir(viewingEv)}
