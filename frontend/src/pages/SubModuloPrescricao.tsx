@@ -11,7 +11,7 @@ import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
-import DateInputBR from '../components/DateInputBR';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -252,11 +252,13 @@ interface GrupoModalProps {
   grupo:                PrescricaoGrupo | null; // null = creating new
   canEdit:              boolean;
   canFinalizarCancelar: boolean;
+  podeImprimir?:        boolean;
   onClose:              () => void;
   onSaved:              () => void;
+  isInline?:            boolean;
 }
 
-function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, onClose, onSaved }: GrupoModalProps) {
+function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, onClose, onSaved, isInline = false }: GrupoModalProps) {
   const isCreate   = !grupo;
   const isReadOnly = grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO' || grupo?.status === 'CANCELADO';
   // Abre diretamente na "segunda tela" (form visível) quando editando uma prescrição SALVA
@@ -525,47 +527,52 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
   const showItemForm  = canEdit && !isReadOnly && (isCreate || editandoItem || showAddForm);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-3xl max-h-[95vh] flex flex-col border border-gray-100">
+    <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
+      <div className={isInline ? 'w-full' : 'bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-3xl max-h-[95vh] flex flex-col border border-gray-100'}>
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <div>
-            <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-widest">
-              {isCreate ? 'NOVA PRESCRIÇÃO' : `PRESCRIÇÃO #${grupo!.numeroFormatado}`}
-            </span>
-            <h3 className="font-bold text-gray-900">
-              {isCreate ? 'Criar documento de prescrição' : 'Editar prescrição'}
-            </h3>
-            {grupo && (
-              <span className={`inline-flex mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_GRUPO[grupo.status].cls}`}>
-                {STATUS_GRUPO[grupo.status].label}
+        {/* Header — modal only */}
+        {!isInline && (
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+            <div>
+              <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-widest">
+                {isCreate ? 'NOVA PRESCRIÇÃO' : `PRESCRIÇÃO #${grupo!.numeroFormatado}`}
               </span>
-            )}
+              <h3 className="font-bold text-gray-900">
+                {isCreate ? 'Criar documento de prescrição' : 'Editar prescrição'}
+              </h3>
+              {grupo && (
+                <span className={`inline-flex mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_GRUPO[grupo.status].cls}`}>
+                  {STATUS_GRUPO[grupo.status].label}
+                </span>
+              )}
+            </div>
+            <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0">
+              <X size={18} />
+            </button>
           </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0">
-            <X size={18} />
-          </button>
-        </div>
+        )}
 
-        <div className="flex-1 overflow-y-auto">
+        <div className={isInline ? '' : 'flex-1 overflow-y-auto'}>
 
           {/* Formulário de item — create mode, ao editar item existente, ou ao inserir novo em edit mode */}
           {showItemForm && (
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  {editandoItem ? '↳ EDITANDO ITEM' : '↳ INSERIR ITEM'}
-                </p>
-                {!isCreate && showAddForm && !editandoItem && (
-                  <button onClick={() => { setShowAddForm(false); resetForm(); }}
-                    className="p-1 text-gray-400 hover:text-gray-600">
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
+              {/* Subheader — modal only */}
+              {!isInline && (
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                    {editandoItem ? '↳ EDITANDO ITEM' : '↳ INSERIR ITEM'}
+                  </p>
+                  {!isCreate && showAddForm && !editandoItem && (
+                    <button onClick={() => { setShowAddForm(false); resetForm(); }}
+                      className="p-1 text-gray-400 hover:text-gray-600">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
 
-              {/* Tabs tipo — travado ao editar item existente; troca preserva valores de cada aba */}
+              {/* Tabs tipo */}
               <div className="flex items-center gap-2">
                 {editandoItem ? (
                   <>
@@ -590,8 +597,103 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                 )}
               </div>
 
-              {/* Medicamento / Procedimento — campo único */}
-              <div>
+              {/* Campos: layout 4 colunas (inline+med) ou empilhado (modal ou procedimento) */}
+              {isInline && isMed ? (
+                <div className="grid grid-cols-1 sm:grid-cols-8 gap-3 items-end">
+
+                  {/* MEDICAMENTO (span 3) */}
+                  <div className="sm:col-span-3">
+                    <label className="block text-xs text-gray-500 mb-1">MEDICAMENTO *</label>
+                    <div className="relative">
+                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={form.medicamento}
+                        onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowMedDropdown(true); }}
+                        onFocus={() => setShowMedDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowMedDropdown(false), 150)}
+                        placeholder="Buscar medicamento..."
+                        className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                      />
+                      {showMedDropdown && (
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                          {medicamentos
+                            .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                            .slice(0, 40)
+                            .map(m => {
+                              const qtd = estoqueMap.get(m.id) ?? 0;
+                              return (
+                                <button key={m.id} type="button"
+                                  onMouseDown={() => {
+                                    setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: m.unidade, via: m.vias[0]?.via ?? prev.via }));
+                                    setShowMedDropdown(false);
+                                  }}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
+                                  <span className="font-medium">{m.nome}</span>
+                                  {m.formaFarmaceutica && <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>}
+                                  {qtd > 0 && <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Em estoque</span>}
+                                </button>
+                              );
+                            })}
+                          {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                            <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* DOSAGEM (span 2) */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
+                    <div className="flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                      <input type="number" min="0" step="0.001" value={form.dosagem}
+                        onChange={e => set('dosagem', e.target.value)}
+                        className="flex-1 min-w-[40px] px-3 py-2 text-sm focus:outline-none bg-transparent" />
+                      <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+                      {unidadeCatalogo ? (
+                        <span className="px-2 py-2 text-sm text-gray-700 font-medium flex-shrink-0">{unidadeCatalogo}</span>
+                      ) : (
+                        <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
+                          className="w-20 flex-shrink-0 px-1 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
+                          <option value="">—</option>
+                          {UNIDADES.map(u => <option key={u}>{u}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* VIA ADMINISTRAÇÃO (span 2) */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
+                    <select value={form.via} onChange={e => set('via', e.target.value)}
+                      className={`w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                      <option value="">— Selecionar —</option>
+                      {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
+                    </select>
+                  </div>
+
+                  {/* CLIENTE (span 1) */}
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">CLIENTE</label>
+                    <select
+                      value={form.medicamentoCliente ? 'SIM' : 'NAO'}
+                      onChange={e => set('medicamentoCliente', e.target.value === 'SIM')}
+                      className="w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-white"
+                    >
+                      <option value="NAO">Não</option>
+                      <option value="SIM">Sim</option>
+                    </select>
+                    {form.medicamentoCliente && (
+                      <span className="block text-[11px] text-amber-600 mt-0.5">Sem baixa no estoque</span>
+                    )}
+                  </div>
+
+                </div>
+              ) : (
+                <>
+                {/* Medicamento / Procedimento — campo único (modal ou procedimento) */}
+                <div>
                 <label className="block text-xs text-gray-500 mb-1">
                   {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
                 </label>
@@ -685,20 +787,24 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
 
               {/* Medicamento Cliente */}
               {isMed && (
-                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
-                  <input
-                    type="checkbox"
-                    checked={form.medicamentoCliente}
-                    onChange={e => set('medicamentoCliente', e.target.checked)}
-                    className="w-4 h-4 rounded accent-emerald-600 cursor-pointer"
-                  />
-                  <span className="text-sm text-gray-700 font-medium">Medicamento do Cliente</span>
+                <div className="flex items-center gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">CLIENTE</label>
+                    <select
+                      value={form.medicamentoCliente ? 'SIM' : 'NAO'}
+                      onChange={e => set('medicamentoCliente', e.target.value === 'SIM')}
+                      className="border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500 bg-white"
+                    >
+                      <option value="NAO">Não</option>
+                      <option value="SIM">Sim</option>
+                    </select>
+                  </div>
                   {form.medicamentoCliente && (
-                    <span className="text-[11px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
+                    <span className="text-[11px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium self-end mb-1">
                       Sem baixa no estoque
                     </span>
                   )}
-                </label>
+                </div>
               )}
 
               {/* Dosagem + Via */}
@@ -709,7 +815,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                     <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                       <input type="number" min="0" step="0.001" value={form.dosagem}
                         onChange={e => set('dosagem', e.target.value)}
-                        placeholder="Ex: 1.5"
                         className="flex-1 min-w-0 px-3 py-2 text-sm focus:outline-none bg-transparent" />
                       <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
                       {unidadeCatalogo ? (
@@ -726,32 +831,34 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">VIA DE ADMINISTRAÇÃO</label>
+                    <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
                     <select value={form.via} onChange={e => set('via', e.target.value)}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                      className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
                       <option value="">— Selecionar —</option>
-                      {viasDisponiveis.map(v => <option key={v}>{v}</option>)}
+                      {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
                     </select>
                   </div>
                 </div>
               )}
+                </>
+              )}
 
-              {/* Frequência + Hora + Duração + Início */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div>
+              {/* Frequência + Hora + Duração + Data Início */}
+              <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
+                <div className="col-span-2 sm:col-span-3">
                   <label className="block text-xs text-gray-500 mb-1">FREQUÊNCIA *</label>
                   <select value={form.frequencia} onChange={e => set('frequencia', e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500">
+                    className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
                     <option value="">— Selecionar —</option>
-                    {POSOLOGIAS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
                   </select>
                 </div>
-                <div>
+                <div className="sm:col-span-1">
                   <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
                   <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                 </div>
-                <div>
+                <div className="sm:col-span-2">
                   <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS) *</label>
                   <input type="number" min="1"
                     value={form.duracaoDias}
@@ -759,12 +866,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                     placeholder="Ex: 7"
                     className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1"><Calendar size={9} /> INÍCIO</label>
-                  <DateInputBR
+                <div className="col-span-2 sm:col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">DATA INÍCIO</label>
+                  <input
+                    type="date"
                     value={form.dataInicio}
-                    onChange={v => set('dataInicio', v)}
-                    className="border border-gray-200 rounded-xl px-2 py-2 focus-within:border-emerald-500"
+                    onChange={e => set('dataInicio', e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
@@ -777,13 +885,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
               </div>
 
-              <button
-                onClick={handleAdicionarMais}
-                disabled={saving || formEstaVazio()}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 text-sm font-medium rounded-xl transition-colors">
-                {saving && <Loader2 size={13} className="animate-spin" />}
-                {editandoItem ? 'Atualizar item' : 'Inserir'}
-              </button>
             </div>
           )}
 
@@ -861,7 +962,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
+        <div className={`flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-wrap ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
           <div className="flex items-center gap-2 ml-auto">
             {/* Imprimir — só FINALIZADO */}
             {grupo?.status === 'FINALIZADO' && podeImprimir && (
@@ -879,11 +980,24 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, on
               </button>
             )}
 
-            {/* Fechar / Cancelar */}
-            <button onClick={onClose}
-              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-              {isReadOnly ? 'Fechar' : 'Cancelar'}
-            </button>
+            {/* Inserir / Atualizar item — quando o form está aberto */}
+            {showItemForm && canEdit && !isReadOnly && (
+              <button
+                onClick={handleAdicionarMais}
+                disabled={saving || formEstaVazio()}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 text-sm font-medium rounded-xl transition-colors">
+                {saving && <Loader2 size={13} className="animate-spin" />}
+                {editandoItem ? 'Atualizar item' : 'Inserir'}
+              </button>
+            )}
+
+            {/* Fechar / Cancelar — modal only */}
+            {!isInline && (
+              <button onClick={onClose}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                {isReadOnly ? 'Fechar' : 'Cancelar'}
+              </button>
+            )}
 
             {/* Salvar — create mode ou edit mode SALVO */}
             {canEdit && !isReadOnly && (
@@ -1066,16 +1180,17 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
-  const [grupos,           setGrupos]           = useState<PrescricaoGrupo[]>([]);
-  const [loading,          setLoading]          = useState(false);
-  const [total,            setTotal]            = useState(0);
-  const [salvos,           setSalvos]           = useState(0);
-  const [page,             setPage]             = useState(1);
-  const [limit]                                 = useState(20);
-  const [showModal,        setShowModal]        = useState(false);
-  const [editingGrupo,     setEditingGrupo]     = useState<PrescricaoGrupo | null>(null);
-  const [deletingId,       setDeletingId]       = useState<number | null>(null);
-  const [alertaDireto,     setAlertaDireto]     = useState<{ grupoId: number; alertas: AlertaEstoque[] } | null>(null);
+  const [grupos,             setGrupos]             = useState<PrescricaoGrupo[]>([]);
+  const [loading,            setLoading]            = useState(false);
+  const [total,              setTotal]              = useState(0);
+  const [salvos,             setSalvos]             = useState(0);
+  const [page,               setPage]               = useState(1);
+  const [limit]                                     = useState(20);
+  const [showEditModal,      setShowEditModal]      = useState(false);
+  const [editingGrupo,       setEditingGrupo]       = useState<PrescricaoGrupo | null>(null);
+  const [inlineFormKey,      setInlineFormKey]      = useState(0);
+  const [deletingId,         setDeletingId]         = useState<number | null>(null);
+  const [alertaDireto,       setAlertaDireto]       = useState<{ grupoId: number; alertas: AlertaEstoque[] } | null>(null);
   const [loadingForceDireto, setLoadingForceDireto] = useState(false);
 
   const totalPaginas = Math.ceil(total / limit);
@@ -1093,8 +1208,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
-  const abrirNovo = () => { setEditingGrupo(null); setShowModal(true); };
-  const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowModal(true); };
+  const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
 
   const handleFinalizarDireto = async (grupoId: number) => {
     if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
@@ -1129,7 +1243,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       setLoadingForceDireto(false);
     }
   };
-  const fecharModal = () => { setShowModal(false); setEditingGrupo(null); };
+  const fecharModal = () => { setShowEditModal(false); setEditingGrupo(null); };
   const onSaved = () => { carregar(); onFaturaAtualizada(); };
 
   const handleExcluirCancelar = async (motivo: string) => {
@@ -1149,52 +1263,51 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     } finally { setDeletingId(null); }
   };
 
-  const actionBar = (
+  const actionBar = salvos > 0 && (
     <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
-      {canEdit && (
-        <button onClick={abrirNovo}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors flex-shrink-0">
-          Nova Prescrição
-        </button>
-      )}
-      {salvos > 0 && (
-        <span className="px-3 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-xl flex-shrink-0">
-          {salvos} prescrição{salvos > 1 ? 'ões' : ''} salva{salvos > 1 ? 's' : ''} aguardando finalização
-        </span>
-      )}
+      <span className="px-3 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-xl flex-shrink-0">
+        {salvos} prescrição{salvos > 1 ? 'ões' : ''} salva{salvos > 1 ? 's' : ''} aguardando finalização
+      </span>
     </div>
   );
 
-  if (loading) {
-    return (
-      <>
-        {actionBar}
+  return (
+    <>
+      {/* Formulário inline de criação */}
+      {canEdit && (
+        <GrupoModal
+          key={inlineFormKey}
+          animalId={animalId}
+          animal={animal}
+          grupo={null}
+          canEdit={canEdit}
+          canFinalizarCancelar={canFinalizarCancelar}
+          podeImprimir={podeImprimir}
+          onClose={() => setInlineFormKey(k => k + 1)}
+          onSaved={onSaved}
+          isInline
+        />
+      )}
+
+      {/* Badge de salvos aguardando */}
+      {actionBar}
+
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Prescrições</p>
+        <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
+      </div>
+
+      {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 size={22} className="animate-spin text-emerald-600" />
         </div>
-      </>
-    );
-  }
-
-  if (grupos.length === 0) {
-    return (
-      <>
-        {actionBar}
+      ) : grupos.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <FileText size={38} className="mb-3" />
           <p className="text-sm text-gray-400">Nenhuma prescrição encontrada</p>
-          {canEdit && <p className="text-xs text-gray-300 mt-1">Use "Nova Prescrição" para criar</p>}
         </div>
-        {showModal && (
-          <GrupoModal animalId={animalId} animal={animal} grupo={editingGrupo} canEdit={canEdit} canFinalizarCancelar={canFinalizarCancelar} onClose={fecharModal} onSaved={onSaved} />
-        )}
-      </>
-    );
-  }
-
-  return (
-    <>
-      {actionBar}
+      ) : (
+      <>
 
       {/* Desktop table */}
       <div className="hidden md:block overflow-x-auto">
@@ -1330,9 +1443,21 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         </div>
       )}
 
-      {/* Modais */}
-      {showModal && (
-        <GrupoModal animalId={animalId} animal={animal} grupo={editingGrupo} canEdit={canEdit} onClose={fecharModal} onSaved={onSaved} />
+      </>
+      )}
+
+      {/* Modal de edição de prescrição existente */}
+      {showEditModal && editingGrupo && (
+        <GrupoModal
+          animalId={animalId}
+          animal={animal}
+          grupo={editingGrupo}
+          canEdit={canEdit}
+          canFinalizarCancelar={canFinalizarCancelar}
+          podeImprimir={podeImprimir}
+          onClose={fecharModal}
+          onSaved={onSaved}
+        />
       )}
       {deletingId !== null && (
         <CancelarModal onConfirmar={handleExcluirCancelar} onCancelar={() => setDeletingId(null)} />

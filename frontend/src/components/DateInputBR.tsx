@@ -88,9 +88,9 @@ export default function DateInputBR({
           onClick={openPicker}
           disabled={disabled}
           tabIndex={-1}
-          className="text-gray-400 hover:text-gray-600 disabled:opacity-40 flex-shrink-0 p-0.5"
+          className="text-gray-500 hover:text-emerald-600 disabled:opacity-40 flex-shrink-0 p-0.5"
         >
-          <Calendar size={13} />
+          <Calendar size={14} />
         </button>
       )}
       {/* Input nativo oculto — só abre o calendário */}

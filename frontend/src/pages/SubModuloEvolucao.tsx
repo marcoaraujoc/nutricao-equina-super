@@ -14,7 +14,7 @@ import {
 import { imprimirEvolucao } from '../utils/EvolucaoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
-import DateInputBR from '../components/DateInputBR';
+
 import {
   isMobile     as detectarMobile,
   estaOnline,
@@ -563,46 +563,18 @@ function NovaEvolucaoModal({
   const todasMidias   = [...midias];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg max-h-[92vh] flex flex-col border border-gray-100">
+    <div className="border-b border-gray-100">
+      <div className="p-5 space-y-4">
 
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <div>
-            <h3 className="font-bold text-gray-900">{editingId ? 'Editar Evolução' : 'Nova Evolução'}</h3>
-            {modoOffline && (
-              <div className="flex items-center gap-1 mt-0.5">
-                <WifiOff size={11} className="text-amber-500" />
-                <span className="text-[11px] text-amber-600 font-medium">
-                  Offline — Whisper local{progressModelo > 0 && progressModelo < 100 ? ` (${progressModelo}%)` : ''}
-                </span>
-              </div>
-            )}
-          </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-
-          <div className={`grid gap-3 ${editingId ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {editingId && (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
-              <select value={form.especialidade} onChange={e => onFormChange('especialidade', e.target.value)}
+              <label className="block text-xs text-gray-500 mb-1">Status</label>
+              <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
-                {ESPECIALIDADES.map(esp => <option key={esp}>{esp}</option>)}
+                {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
-            {editingId && (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Status</label>
-                <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
-                  {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
-              </div>
-            )}
-          </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -737,22 +709,21 @@ function NovaEvolucaoModal({
 
         </div>
 
-        <div className="flex gap-2 px-5 pb-5 pt-4 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onClose} disabled={desativado}
-            className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-            className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-700 disabled:text-gray-400 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-            {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
-            {saving && !interpretando ? 'Salvando…' : 'Salvar'}
-          </button>
-          <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-            {interpretando && <Loader2 size={13} className="animate-spin" />}
-            {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar ✓'}
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2 px-5 pb-5 pt-4 border-t border-gray-100">
+        <button onClick={onClose} disabled={desativado}
+          className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
+          Cancelar
+        </button>
+        <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+          className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
+          {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
+          Salvar
+        </button>
+        <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+          className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+          {interpretando && <Loader2 size={13} className="animate-spin" />}
+          {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
+        </button>
       </div>
     </div>
   );
@@ -771,6 +742,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
+  const podeCriar     = isGestor || podeExecutar('atendimento.evolucoes.criar');
+  const podeEditar    = isGestor || podeExecutar('atendimento.evolucoes.editar');
+  const podeFinalizar = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
+  const podeImprimir  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
+
+  const semPermissao = (acao: string) =>
+    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
   const [responsaveis,   setResponsaveis]   = useState<{ id: number; fullName: string }[]>([]);
@@ -785,7 +764,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [filtroDataFim,     setFiltroDataFim]     = useState('');
   const [filtroResponsavel, setFiltroResponsavel] = useState('');
 
-  const [showModal,      setShowModal]      = useState(false);
+  const [showModal,      setShowModal]      = useState(true);
   const [viewingEv,      setViewingEv]      = useState<EvolucaoItem | null>(null);
   const [editingEv,      setEditingEv]      = useState<EvolucaoItem | null>(null);
   const [deletingEv,     setDeletingEv]     = useState<EvolucaoItem | null>(null);
@@ -837,6 +816,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setForm(prev => ({ ...prev, [field]: value }));
 
   const abrirNova = () => {
+    if (!podeCriar) { semPermissao('criar evolução'); return; }
     if (temEvolucaoAberta) {
       toast.error('Finalize ou cancele a evolução em andamento antes de criar uma nova.');
       return;
@@ -848,7 +828,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const fecharModal = () => {
-    setShowModal(false);
+    const wasEditing = !!editingEv;
+    setShowModal(!wasEditing); // Keep form open for new; close when done editing
     setEditingEv(null);
     setForm(FORM_INICIAL);
     setArquivosModal([]);
@@ -875,8 +856,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleSalvar = async () => {
-    if (!form.especialidade || !form.texto.trim()) {
-      toast.error('Especialidade e texto são obrigatórios');
+    if (editingEv ? !podeEditar : !podeCriar) {
+      semPermissao(editingEv ? 'editar evolução' : 'criar evolução'); return;
+    }
+    if (!form.texto.trim()) {
+      toast.error('O texto da evolução é obrigatório');
       return;
     }
     setSavingEv(true);
@@ -910,8 +894,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleFinalizar = async () => {
-    if (!form.especialidade || !form.texto.trim()) {
-      toast.error('Especialidade e texto são obrigatórios');
+    if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
+    if (!form.texto.trim()) {
+      toast.error('O texto da evolução é obrigatório');
       return;
     }
     setSavingEv(true);
@@ -997,6 +982,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleFinalizarDireto = async (ev: EvolucaoItem) => {
+    if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
     if (!confirm(`Finalizar a evolução "${ev.titulo ?? ev.especialidade}"?`)) return;
     setSavingEv(true);
     try {
@@ -1057,6 +1043,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleImprimir = (ev: EvolucaoItem) => {
+    if (!podeImprimir) { semPermissao('imprimir evolução'); return; }
     imprimirEvolucao(ev, animal ? {
       nome:      animal.nome,
       photoUrl:  animal.photoUrl as string | undefined,
@@ -1071,15 +1058,21 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const userId = user?.id ?? 0;
   const role   = user?.role ?? 'USER';
 
-  // Permissões de evolução — derivadas do hook, respeitando nível PROPRIO vs EQUIPE
-  const podeCriarEvolucao = podeExecutar('atendimento.evolucoes.criar');
+  if (!loadingPerms && !isGestor && !podeExecutar('atendimento.evolucoes.ler')) {
+    return (
+      <div className="text-center py-16">
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500">Você não tem permissão para visualizar evoluções.</p>
+      </div>
+    );
+  }
 
   return (
     <>
       {/* Barra de ação e filtros */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
 
-        {podeCriarEvolucao && (
+        {!showModal && podeCriar && (
           <div className="relative flex-shrink-0">
             <button
               onClick={abrirNova}
@@ -1113,22 +1106,21 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <div className="flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
           <div className="flex flex-col px-2 py-1 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Inicial</span>
-            <DateInputBR
+            <input
+              type="date"
               value={filtroDataInicio}
-              onChange={v => { setFiltroDataInicio(v); setPage(1); }}
-              className="w-28"
-              inputClassName="text-xs"
+              onChange={e => { setFiltroDataInicio(e.target.value); setPage(1); }}
+              className="w-32 text-xs text-gray-900 focus:outline-none bg-transparent"
             />
           </div>
           <span className="text-gray-300 text-xs px-1 flex-shrink-0">→</span>
           <div className="flex flex-col px-2 py-1 border-l border-gray-100 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Final</span>
-            <DateInputBR
+            <input
+              type="date"
               value={filtroDataFim}
-              onChange={v => { setFiltroDataFim(v); setPage(1); }}
-              placeholder="DD/MM/YYYY"
-              className="w-28"
-              inputClassName="text-xs"
+              onChange={e => { setFiltroDataFim(e.target.value); setPage(1); }}
+              className="w-32 text-xs text-gray-900 focus:outline-none bg-transparent"
             />
           </div>
         </div>
@@ -1162,7 +1154,27 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         )}
       </div>
 
-      {/* Conteúdo */}
+      {showModal && (!temEvolucaoAberta || editingEv) && (
+        <NovaEvolucaoModal
+          form={form}
+          editingId={editingEv?.id ?? null}
+          midias={editingEv?.midias ?? []}
+          saving={savingEv}
+          interpretando={interpretando}
+          onFormChange={handleFormChange}
+          onSalvar={handleSalvar}
+          onFinalizar={handleFinalizar}
+          onClose={fecharModal}
+          onArquivosChange={setArquivosModal}
+          onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
+        />
+      )}
+
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Evolução Clínica</p>
+        <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 size={24} className="animate-spin text-emerald-600" />
@@ -1171,13 +1183,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <FileText size={40} className="mb-3" />
           <p className="text-sm text-gray-400">Nenhuma evolução encontrada</p>
-          {podeCriarEvolucao && (
-            <button onClick={abrirNova}
-              disabled={temEvolucaoAberta}
-              className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 disabled:bg-gray-300 transition-colors">
-              Nova Evolução
-            </button>
-          )}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -1354,22 +1359,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
           })()}
           onImprimir={() => handleImprimir(viewingEv)}
-        />
-      )}
-
-      {showModal && (
-        <NovaEvolucaoModal
-          form={form}
-          editingId={editingEv?.id ?? null}
-          midias={editingEv?.midias ?? []}
-          saving={savingEv}
-          interpretando={interpretando}
-          onFormChange={handleFormChange}
-          onSalvar={handleSalvar}
-          onFinalizar={handleFinalizar}
-          onClose={fecharModal}
-          onArquivosChange={setArquivosModal}
-          onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
         />
       )}
 

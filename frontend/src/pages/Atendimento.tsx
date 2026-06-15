@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import {
   Pencil, Trash2, Check, X, Loader2,
   FileText, Pill, Syringe, FlaskConical, Share2,
-  Stethoscope, ReceiptText, Search,
+  Stethoscope, ReceiptText, Search, CalendarDays,
 } from 'lucide-react';
 import AnimalCard  from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -19,6 +19,7 @@ import SubModuloPrescricao from './SubModuloPrescricao';
 import SubModuloVacina from './SubModuloVacina';
 import SubModuloExames from './SubModuloExames';
 import SubModuloEncaminhamento from './SubModuloEncaminhamento';
+import SubModuloMinhaAgenda from './SubModuloMinhaAgenda';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,12 +28,13 @@ type SelectedAnimal = NonNullable<ReturnType<typeof useSelectedAnimal>['selected
 type AnimalExtended = SelectedAnimal & {
   dataNascimento?: string | Date | null;
   idadeAnos?:      number | null;
+  baia?:           string | null;
   raca?:           { nome: string } | null;
   user?:           { fullName: string; email: string } | null;
 };
 
 type TipoFatura = 'PROCEDIMENTO' | 'MEDICAMENTO' | 'EXAME' | 'ENCAMINHAMENTO' | 'VACINA';
-type SubModulo  = 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
+type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
 
 interface FaturaItem {
   id:          number;
@@ -56,6 +58,7 @@ interface Fatura {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = [
+  { key: 'agenda',         label: 'Minha Agenda',   icon: <CalendarDays size={13} /> },
   { key: 'evolucao',       label: 'Evolução',       icon: <FileText     size={13} /> },
   { key: 'prescricao',     label: 'Prescrição',     icon: <Pill         size={13} /> },
   { key: 'vacina',         label: 'Vacina',         icon: <Syringe      size={13} /> },
@@ -326,6 +329,7 @@ function SeletorAnimalInteligente({ animais, animalAtual, onSelecionar }: {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function tabFromPath(pathname: string): SubModulo {
+  if (pathname.includes('/agenda'))         return 'agenda';
   if (pathname.includes('/prescricao'))     return 'prescricao';
   if (pathname.includes('/vacina'))         return 'vacina';
   if (pathname.includes('/exames'))         return 'exames';
@@ -390,6 +394,17 @@ const Atendimento = () => {
     navigate(`/clinica/evolucao/${a.id}`);
   };
 
+  const handleSelecionarAnimalFromAgenda = useCallback(async (animalId: number) => {
+    try {
+      const res = await api.get(`/animais/${animalId}`);
+      if (!res.data) return;
+      const a = (res.data?.dados ?? res.data) as AnimalExtended;
+      setAnimal(a);
+      setSelectedAnimal(a);
+      setTodosAnimais(prev => prev.some(x => x.id === a.id) ? prev : [...prev, a]);
+    } catch { /* silencioso */ }
+  }, []);
+
   const handleRemoverItemFatura = async (itemId: number) => {
     try {
       await api.delete(`/clinica/faturas/itens/${itemId}`);
@@ -403,8 +418,9 @@ const Atendimento = () => {
   };
 
   // ── Guard ─────────────────────────────────────────────────────────────────
+  // A aba "Minha Agenda" funciona sem animal selecionado
 
-  if (!effectiveAnimalId) {
+  if (!effectiveAnimalId && activeTab !== 'agenda') {
     return (
       <PageContainer>
         <BotaoVoltar className="mb-4" />
@@ -416,10 +432,16 @@ const Atendimento = () => {
     );
   }
 
-  const animalIdNum = Number(effectiveAnimalId);
+  const animalIdNum = effectiveAnimalId ? Number(effectiveAnimalId) : 0;
 
   const renderSubModulo = () => {
     switch (activeTab) {
+      case 'agenda':
+        return (
+          <SubModuloMinhaAgenda
+            onSelecionarAnimal={handleSelecionarAnimalFromAgenda}
+          />
+        );
       case 'evolucao':
         return (
           <SubModuloEvolucao
@@ -433,12 +455,12 @@ const Atendimento = () => {
         return (
           <SubModuloPrescricao
             animalId={animalIdNum}
-            animal={animal}
+            animal={animal ? { ...animal, photoUrl: animal.photoUrl ?? null } : null}
             onFaturaAtualizada={carregarFatura}
           />
         );
       case 'vacina':         return <SubModuloVacina animalId={animalIdNum} animal={animal} />;
-      case 'exames':         return <SubModuloExames />;
+      case 'exames':         return <SubModuloExames animalId={animalIdNum} animal={animal} />;
       case 'encaminhamento': return <SubModuloEncaminhamento animalId={animalIdNum} />;
     }
   };
@@ -459,39 +481,41 @@ const Atendimento = () => {
       {animal && <AnimalCard animal={animal} />}
 
       {/* ── Desktop ── */}
-      <div className="hidden md:flex gap-4 items-start mt-4">
-        <div className="flex-1 min-w-0">
-          <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
-                navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
-              }} />
-          <div className="bg-white rounded-b-2xl rounded-tr-2xl border border-gray-100 shadow-sm min-h-96 overflow-hidden">
-            {renderSubModulo()}
-          </div>
-        </div>
-        {activeTab !== 'evolucao' && (
-          <div className="w-72 flex-shrink-0 sticky top-4">
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
-              style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
-              <FaturaPanel
-                fatura={fatura}
-                onRemover={handleRemoverItemFatura}
-                onAtualizarValor={handleAtualizarValorFatura}
-                loading={loadingFatura}
-              />
+      <div className="hidden md:block mt-4">
+        <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
+              navigate(effectiveAnimalId && tab !== 'agenda' ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+            }} />
+        <div className="flex gap-4 items-start">
+          <div className="flex-1 min-w-0">
+            <div className="bg-white rounded-b-2xl rounded-tr-2xl border border-gray-100 shadow-sm min-h-96 overflow-hidden">
+              {renderSubModulo()}
             </div>
           </div>
-        )}
+          {activeTab !== 'evolucao' && activeTab !== 'agenda' && (
+            <div className="w-72 flex-shrink-0 sticky top-4">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
+                style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
+                <FaturaPanel
+                  fatura={fatura}
+                  onRemover={handleRemoverItemFatura}
+                  onAtualizarValor={handleAtualizarValorFatura}
+                  loading={loadingFatura}
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Mobile ── */}
       <div className="md:hidden mt-4">
         <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
-                navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+                navigate(effectiveAnimalId && tab !== 'agenda' ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
               }} />
         <div className="bg-white rounded-b-2xl border border-gray-100 shadow-sm overflow-hidden">
           {renderSubModulo()}
         </div>
-        {activeTab !== 'evolucao' && (
+        {activeTab !== 'evolucao' && activeTab !== 'agenda' && (
           <>
             <button onClick={() => setShowFaturaM(true)}
               className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">

@@ -13,7 +13,7 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
-  Sparkles, CalendarPlus,
+  Sparkles, CalendarPlus, CalendarDays,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -347,6 +347,7 @@ export default function Sidebar() {
                       {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
                       {openClinica && (
                         <div className="mt-1 pl-6 space-y-0.5">
+                          {subLink('/clinica/agenda', <CalendarDays size={14} />, 'Minha Agenda', p.startsWith('/clinica/agenda'))}
                           {podeVerEvolucoes  && subLink(
                             animalId ? `/clinica/evolucao/${animalId}` : '/clinica/evolucao',
                             <FileText    size={14} />, 'Evolução',

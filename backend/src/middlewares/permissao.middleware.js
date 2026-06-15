@@ -16,6 +16,7 @@
 
 
 const prisma = require('../lib/prisma').default;
+const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 
 const NIVEL_ORDINAL = {
   NENHUM:  0,
@@ -132,16 +133,31 @@ async function getNivelPermissaoProprietario(userId, moduloSlug) {
 
 /**
  * Busca o nível de permissão de um usuário para um módulo específico.
- * Retorna 'NENHUM' como default seguro se não houver registro.
+ * Prioridade: PermissaoMembro (override individual) → MatrizPerfil (template do cargo) → 'NENHUM'.
+ * Isso garante que o que o gestor configura em ControleAcesso (MatrizPerfil) seja respeitado
+ * mesmo quando o membro entrou na equipe antes do slug existir.
  */
-async function getNivelPermissao(userId, equipeId, moduloSlug) {
+async function getNivelPermissao(userId, equipeId, moduloSlug, cargo = null) {
   const permissao = await prisma.permissaoMembro.findUnique({
-    where: {
-      equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug },
-    },
+    where: { equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug } },
     select: { nivel: true },
   });
-  return permissao?.nivel ?? 'NENHUM';
+  if (permissao) return permissao.nivel;
+
+  if (cargo) {
+    const matriz = await prisma.matrizPerfil.findUnique({
+      where: { equipeId_perfilSlug_moduloSlug: { equipeId, perfilSlug: cargo, moduloSlug } },
+      select: { nivel: true },
+    });
+    if (matriz) return matriz.nivel;
+
+    // Fallback: PERMISSOES_PADRAO quando MatrizPerfil ainda não tem o registro
+    // (mesmo comportamento do ControleAcesso — mostra o padrão antes de o seed rodar)
+    const defaultNivel = PERMISSOES_PADRAO[cargo]?.[moduloSlug];
+    if (defaultNivel) return defaultNivel;
+  }
+
+  return 'NENHUM';
 }
 
 /**
@@ -251,7 +267,7 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return next();
       }
 
-      const nivelAtual = await getNivelPermissao(req.user.id, equipeId, moduloSlug);
+      const nivelAtual = await getNivelPermissao(req.user.id, equipeId, moduloSlug, membro.cargo);
       const ordinalAtual   = NIVEL_ORDINAL[nivelAtual]   ?? 0;
       const ordinalMinimo  = NIVEL_ORDINAL[nivelMinimo]  ?? 0;
 

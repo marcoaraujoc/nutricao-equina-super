@@ -95,6 +95,9 @@ async function registrar(req, res) {
       const loteData = await prisma.loteVacina.findUnique({ where: { id: Number(loteId) } });
       if (!loteData) return res.status(404).json({ error: 'Lote não encontrado' });
       if (loteData.qtdDisponivel <= 0) return res.status(400).json({ error: 'Lote sem saldo disponível' });
+      if (loteData.validade && new Date(loteData.validade) < new Date()) {
+        return res.status(400).json({ error: `Lote ${loteData.lote} está vencido (validade: ${new Date(loteData.validade).toLocaleDateString('pt-BR')}). Selecione um lote dentro da validade.` });
+      }
       loteNumFinal = loteData.lote;
 
       await prisma.loteVacina.update({

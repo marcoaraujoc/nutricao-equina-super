@@ -1,5 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
-const { MODULOS_SISTEMA } = require('./src/seeds/002_permissoes_padrao.seed');
+const { MODULOS_SISTEMA, PERMISSOES_PADRAO } = require('./src/seeds/002_permissoes_padrao.seed');
 
 const prisma = new PrismaClient();
 
@@ -32,6 +32,70 @@ async function main() {
     });
   }
   console.log(`  ✓ Módulos do sistema (${MODULOS_SISTEMA.length} registros)`);
+
+  // ── PerfilEquipe — garante que todos os perfis padrão existem em cada equipe ──
+  // MatrizPerfil tem FK (equipeId, perfilSlug) → PerfilEquipe, então os perfis
+  // precisam existir antes de criar entradas na matriz.
+  const PERFIS_PADRAO = [
+    { slug: 'GESTOR',        label: 'Gestor',        descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
+    { slug: 'VETERINARIO',  label: 'Veterinário',   descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
+    { slug: 'PRESTADOR',    label: 'Prestador',     descricao: 'Prestador de serviços. Acesso configurável pelo gestor da equipe.' },
+    { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.' },
+    { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.' },
+  ];
+
+  const equipes = await prisma.equipe.findMany({ select: { id: true } });
+  let perfilCount = 0;
+  for (const equipe of equipes) {
+    for (const perfil of PERFIS_PADRAO) {
+      const existe = await prisma.perfilEquipe.findFirst({
+        where: { equipeId: equipe.id, slug: perfil.slug },
+      });
+      if (!existe) {
+        await prisma.perfilEquipe.create({
+          data: { equipeId: equipe.id, slug: perfil.slug, label: perfil.label, descricao: perfil.descricao },
+        });
+        perfilCount++;
+      }
+    }
+  }
+  console.log(`  ✓ PerfilEquipe (${perfilCount} perfis criados em ${equipes.length} equipe(s))`);
+
+  // ── MatrizPerfil — sincroniza defaults para todas as equipes existentes ───────
+  // Upsert apenas entradas ausentes (update: {} preserva personalizações do gestor).
+  let matrizCount = 0;
+  for (const equipe of equipes) {
+    for (const [cargo, slugMap] of Object.entries(PERMISSOES_PADRAO)) {
+      for (const [slug, nivel] of Object.entries(slugMap)) {
+        await prisma.matrizPerfil.upsert({
+          where:  { equipeId_perfilSlug_moduloSlug: { equipeId: equipe.id, perfilSlug: cargo, moduloSlug: slug } },
+          update: {},
+          create: { equipeId: equipe.id, perfilSlug: cargo, moduloSlug: slug, nivel, locked: false },
+        });
+        matrizCount++;
+      }
+    }
+  }
+  console.log(`  ✓ MatrizPerfil (${matrizCount} entradas verificadas em ${equipes.length} equipe(s))`);
+
+  // ── PermissaoMembro — backfill para membros existentes ────────────────────────
+  // Cria entradas faltantes (slugs novos adicionados após a entrada do membro).
+  // update: {} garante que personalizações manuais não sejam sobrescritas.
+  const membros = await prisma.membroEquipe.findMany({ select: { userId: true, equipeId: true, cargo: true } });
+  let permCount = 0;
+  for (const membro of membros) {
+    const slugMap = PERMISSOES_PADRAO[membro.cargo];
+    if (!slugMap) continue;
+    for (const [slug, nivel] of Object.entries(slugMap)) {
+      await prisma.permissaoMembro.upsert({
+        where:  { equipeId_userId_moduloSlug: { equipeId: membro.equipeId, userId: membro.userId, moduloSlug: slug } },
+        update: {},
+        create: { equipeId: membro.equipeId, userId: membro.userId, moduloSlug: slug, nivel, atualizadoPor: membro.userId },
+      });
+      permCount++;
+    }
+  }
+  console.log(`  ✓ PermissaoMembro backfill (${permCount} entradas verificadas em ${membros.length} membro(s))`);
 
   console.log('✅ Seed concluído com sucesso!');
 }

@@ -23,7 +23,7 @@ import {
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil, Ban, Mail, Wrench,
+  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
@@ -167,19 +167,28 @@ const USER_TYPE_INFO: Record<UserTypeGerenciado, { label: string; desc: string; 
 };
 
 const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
-  dashboard:      { label: 'Dashboard',            icon: <LayoutDashboard size={14} /> },
-  cadastro:       { label: 'Cadastro',             icon: <Users2          size={14} /> },
-  animais:        { label: 'Animais & Pacientes',  icon: <PawPrint        size={14} /> },
-  atendimento:    { label: 'Atendimento',           icon: <Stethoscope     size={14} /> },
-  enfermagem:     { label: 'Enfermagem',           icon: <Activity        size={14} /> },
-  exames:         { label: 'Exames',               icon: <FlaskConical    size={14} /> },
-  nutricao:       { label: 'Nutrição',             icon: <Apple           size={14} /> },
-  financeiro:     { label: 'Financeiro',           icon: <DollarSign      size={14} /> },
-  equipe:         { label: 'Equipe & Acessos',     icon: <Users           size={14} /> },
-  farmacia:       { label: 'Farmácia',             icon: <FlaskConical    size={14} /> },
-  medicamentos:   { label: 'Medicamentos',         icon: <Pill            size={14} /> },
-  procedimentos:  { label: 'Procedimentos',        icon: <Activity        size={14} /> },
+  dashboard:      { label: 'Dashboard',           icon: <LayoutDashboard size={14} /> },
+  cadastro:       { label: 'Cadastro',            icon: <Users2          size={14} /> },
+  animais:        { label: 'Animais & Pacientes', icon: <PawPrint        size={14} /> },
+  agenda:         { label: 'Agenda',              icon: <CalendarDays    size={14} /> },
+  atendimento:    { label: 'Atendimento',         icon: <Stethoscope     size={14} /> },
+  enfermagem:     { label: 'Enfermagem',          icon: <Activity        size={14} /> },
+  farmacia:       { label: 'Farmácia',            icon: <FlaskConical    size={14} /> },
+  nutricao:       { label: 'Nutricional',         icon: <Apple           size={14} /> },
+  exames:         { label: 'Exames',              icon: <FlaskConical    size={14} /> },
+  financeiro:     { label: 'Financeiro',          icon: <DollarSign      size={14} /> },
+  equipe:         { label: 'Equipe & Acessos',    icon: <Users           size={14} /> },
+  medicamentos:   { label: 'Medicamentos',        icon: <Pill            size={14} /> },
+  procedimentos:  { label: 'Procedimentos',       icon: <Activity        size={14} /> },
 };
+
+// Ordem dos módulos espelhando o Sidebar
+// 'animais' e 'equipe' são filhos de 'cadastro' — ver MODULO_CHILDREN
+const MODULO_ORDER = [
+  'dashboard', 'cadastro', 'agenda', 'atendimento',
+  'enfermagem', 'farmacia', 'nutricao', 'exames', 'financeiro',
+  'medicamentos', 'procedimentos',
+];
 
 const SUBMODULO_LABEL: Record<string, string> = {
   geral:              'Visão Geral',
@@ -296,7 +305,79 @@ interface MatrizBodyProps {
   hideActions?: boolean;
 }
 
+// Módulos absorvidos como filhos de outro módulo no agrupamento visual
+const MODULO_CHILDREN: Record<string, string[]> = { cadastro: ['animais', 'equipe'] };
+const MODULO_ABSORBED = new Set(Object.values(MODULO_CHILDREN).flat());
+
+// Módulos virtuais — extraem submódulos de outro módulo e os exibem como seção própria
+// Os slugs são os mesmos; alterar em um lugar altera no outro
+const VIRTUAL_MODULES: Array<{ key: string; fromModulo: string; submoduloKeys: string[] }> = [
+  { key: 'agenda', fromModulo: 'atendimento', submoduloKeys: ['agendamentos'] },
+];
+
+// Submódulos que recebem label diferente quando exibidos dentro de certo módulo pai
+const SUBMODULO_LABEL_OVERRIDE: Record<string, Record<string, string>> = {
+  atendimento: { agendamentos: 'Minha Agenda' },
+};
+
 function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, saving, saveLabel, hideActions }: MatrizBodyProps) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const toggleModulo = (mod: string) =>
+    setCollapsed(prev => ({ ...prev, [mod]: !prev[mod] }));
+
+  // Entradas reais (excluindo filhos absorvidos)
+  const realEntries = Object.entries(matriz)
+    .filter(([mod]) => !MODULO_ABSORBED.has(mod))
+    .map(([mod, subs]) => ({ key: mod, submodulos: subs, isVirtual: false }));
+
+  // Entradas virtuais (submódulos extraídos de outro módulo pai)
+  // Só renderiza se o módulo-pai tiver os submódulos esperados E o key não existir já como módulo real
+  const virtualEntries = VIRTUAL_MODULES
+    .filter(vm => matriz[vm.fromModulo] && !matriz[vm.key])
+    .map(vm => {
+      const submodulos: MatrizAgrupada[string] = {};
+      for (const sub of vm.submoduloKeys) {
+        if (matriz[vm.fromModulo]?.[sub]) submodulos[sub] = matriz[vm.fromModulo][sub];
+      }
+      return { key: vm.key, submodulos, isVirtual: true };
+    })
+    .filter(({ submodulos }) => Object.keys(submodulos).length > 0);
+
+  const entries = [...realEntries, ...virtualEntries]
+    .sort((a, b) => (MODULO_ORDER.indexOf(a.key) + 1 || 999) - (MODULO_ORDER.indexOf(b.key) + 1 || 999));
+
+  const renderSubmodulos = (submodulos: MatrizAgrupada[string], moduloKey: string) =>
+    Object.entries(submodulos)
+      .sort(([a], [b]) => (SUBMODULO_LABEL[a] ?? a).localeCompare(SUBMODULO_LABEL[b] ?? b, 'pt-BR'))
+      .map(([sub, acoes], si) => {
+        const mapaAcoes = Object.fromEntries(acoes.map(a => [a.acao, a]));
+        const label = SUBMODULO_LABEL_OVERRIDE[moduloKey]?.[sub] ?? SUBMODULO_LABEL[sub] ?? sub;
+        return (
+          <div key={sub} className={si > 0 ? 'border-t border-gray-100' : ''}>
+            <div className="flex items-center px-4 py-3 hover:bg-white/60 transition-colors">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-700">{label}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>
+              </div>
+              {ACAO_COLS.map(c => {
+                const item = mapaAcoes[c.acao];
+                if (!item) return (
+                  <div key={c.acao} className="w-16 flex justify-center">
+                    <div className="w-5 h-5 rounded border-2 border-dashed border-gray-200" title="Não disponível" />
+                  </div>
+                );
+                return (
+                  <div key={c.acao} className="w-16 flex justify-center">
+                    <PermCheck nivel={item.nivel} locked={item.locked} onChange={n => onChange(item.slug, n)} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      });
+
   return (
     <>
       {!hideActions && (
@@ -312,51 +393,51 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-        {Object.entries(matriz).map(([modulo, submodulos]) => (
-          <div key={modulo}>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-gray-500">{MODULO_INFO[modulo]?.icon}</span>
-              <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                {MODULO_INFO[modulo]?.label ?? modulo}
-              </p>
-            </div>
-            <div className="bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center px-4 py-2 border-b border-gray-100 bg-gray-100/60">
-                <div className="flex-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Funcionalidade</div>
-                {ACAO_COLS.map(c => (
-                  <div key={c.acao} className="w-16 text-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">{c.label}</div>
-                ))}
-              </div>
-              {Object.entries(submodulos).map(([sub, acoes], si) => {
-                const mapaAcoes = Object.fromEntries(acoes.map(a => [a.acao, a]));
-                return (
-                  <div key={sub} className={si > 0 ? 'border-t border-gray-100' : ''}>
-                    <div className="flex items-center px-4 py-3 hover:bg-white/60 transition-colors">
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-gray-700">{SUBMODULO_LABEL[sub] ?? sub}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>
-                      </div>
-                      {ACAO_COLS.map(c => {
-                        const item = mapaAcoes[c.acao];
-                        if (!item) return (
-                          <div key={c.acao} className="w-16 flex justify-center">
-                            <div className="w-5 h-5 rounded border-2 border-dashed border-gray-200" title="Não disponível" />
-                          </div>
-                        );
-                        return (
-                          <div key={c.acao} className="w-16 flex justify-center">
-                            <PermCheck nivel={item.nivel} locked={item.locked} onChange={n => onChange(item.slug, n)} />
-                          </div>
-                        );
-                      })}
-                    </div>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        {entries.map(({ key: modulo, submodulos, isVirtual }) => {
+          // Mescla filhos absorvidos (ex: 'animais' e 'equipe' dentro de 'cadastro')
+          // Módulos virtuais já chegam com os submódulos corretos — não precisam de merge
+          const allSubmodulos: MatrizAgrupada[string] = { ...submodulos };
+          if (!isVirtual) {
+            for (const child of MODULO_CHILDREN[modulo] ?? []) {
+              if (matriz[child]) Object.assign(allSubmodulos, matriz[child]);
+            }
+          }
+
+          const isCollapsed = collapsed[modulo] ?? true;
+
+          return (
+            <div key={modulo} className="border border-gray-100 rounded-xl overflow-hidden bg-gray-50">
+              {/* Cabeçalho do módulo — clicável */}
+              <button
+                onClick={() => toggleModulo(modulo)}
+                className="w-full flex items-center gap-2 px-4 py-3 hover:bg-gray-100 transition-colors"
+              >
+                <span className="text-gray-500">{MODULO_INFO[modulo]?.icon}</span>
+                <p className="flex-1 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                  {MODULO_INFO[modulo]?.label ?? modulo}
+                </p>
+                <ChevronDown
+                  size={14}
+                  className={`text-gray-400 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}
+                />
+              </button>
+
+              {/* Corpo — oculto quando recolhido */}
+              {!isCollapsed && (
+                <div className="border-t border-gray-100">
+                  <div className="flex items-center px-4 py-2 border-b border-gray-100 bg-gray-100/60">
+                    <div className="flex-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Funcionalidade</div>
+                    {ACAO_COLS.map(c => (
+                      <div key={c.acao} className="w-16 text-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">{c.label}</div>
+                    ))}
                   </div>
-                );
-              })}
+                  {renderSubmodulos(allSubmodulos, modulo)}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">

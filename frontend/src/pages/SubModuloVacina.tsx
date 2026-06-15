@@ -127,7 +127,6 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
   const [via,           setVia]           = useState('');
   const [observacao,    setObservacao]    = useState('');
   const [fabricanteAuto, setFabricanteAuto] = useState('');
-  const [validadeAuto,   setValidadeAuto]   = useState('');
 
   // ── Data state ─────────────────────────────────────────────────────────────
   const [catalogo,    setCatalogo]    = useState<VacinaCatalogo[]>([]);
@@ -193,21 +192,13 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
       setVia('');
       setLotes([]);
       setLoteId('');
-      setValidadeAuto('');
       return;
     }
     const v = catalogo.find(c => c.id === vacinaId);
     if (v) { setFabricanteAuto(v.fabricante ?? ''); setVia(v.via); }
     setLoteId('');
-    setValidadeAuto('');
     carregarLotes(Number(vacinaId));
   }, [vacinaId, catalogo, carregarLotes]);
-
-  useEffect(() => {
-    if (!loteId) { setValidadeAuto(''); return; }
-    const l = lotes.find(l => l.id === loteId);
-    if (l) setValidadeAuto(formatDate(l.validade));
-  }, [loteId, lotes]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -275,11 +266,11 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
             REGISTRAR APLICAÇÃO DA VACINA
           </p>
 
-          {/* Linha 1: Vacina / Dose / Data / Lote */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          {/* Linha 1: Vacina / Fabricante / Lote */}
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 mb-4">
 
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">ESCOLHA A VACINA *</label>
+            <div className="sm:col-span-2">
+              <label className="block text-xs text-gray-500 mb-1.5 font-medium">VACINA *</label>
               {loadingCat ? (
                 <div className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-400">
                   <Loader2 size={13} className="animate-spin" /> Carregando…
@@ -297,8 +288,37 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
               )}
             </div>
 
+            <div className="sm:col-span-2">
+              <label className="block text-xs text-gray-500 mb-1.5 font-medium">FABRICANTE</label>
+              <input value={fabricanteAuto} readOnly placeholder="Preenchido automaticamente"
+                className="w-full border border-gray-100 rounded-xl px-3 py-2.5 text-sm text-gray-500 bg-gray-50 cursor-default" />
+            </div>
+
+            <div className="sm:col-span-1">
+              <label className="block text-xs text-gray-500 mb-1.5 font-medium">LOTE *</label>
+              <select
+                value={loteId}
+                onChange={e => setLoteId(e.target.value ? Number(e.target.value) : '')}
+                disabled={!vacinaId || lotes.length === 0}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                <option value="">
+                  {!vacinaId ? '—' : lotes.length === 0 ? 'Sem saldo disponível' : 'Selecione…'}
+                </option>
+                {lotes.map(l => (
+                  <option key={l.id} value={l.id}>
+                    {l.lote} (Saldo: {l.qtdDisponivel} ds)
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Linha 2: Dose / Data Aplicação / Via */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">DOSE / REFORÇO</label>
+              <label className="block text-xs text-gray-500 mb-1.5 font-medium">DOSE REFORÇO</label>
               <select value={dose} onChange={e => setDose(e.target.value)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
                 <option value="">Selecione…</option>
@@ -313,46 +333,7 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
             </div>
 
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">LOTE DE VACINA DISPONÍVEL *</label>
-              {!vacinaId ? (
-                <div className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-300 text-xs">
-                  Selecione a vacina primeiro
-                </div>
-              ) : lotes.length === 0 ? (
-                <div className="px-3 py-2.5 border border-amber-200 rounded-xl text-sm text-amber-600 bg-amber-50 text-xs">
-                  Nenhum lote com saldo disponível
-                </div>
-              ) : (
-                <select value={loteId} onChange={e => setLoteId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
-                  <option value="">Selecione…</option>
-                  {lotes.map(l => (
-                    <option key={l.id} value={l.id}>
-                      {l.lote} (Saldo: {l.qtdDisponivel} ds)
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </div>
-
-          {/* Linha 2: Fabricante / Validade / Via */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">FABRICANTE DA VACINA</label>
-              <input value={fabricanteAuto} readOnly placeholder="Preenchido automaticamente"
-                className="w-full border border-gray-100 rounded-xl px-3 py-2.5 text-sm text-gray-500 bg-gray-50 cursor-default" />
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">DT. VALIDADE LOTE</label>
-              <input value={validadeAuto} readOnly placeholder="Preenchido automaticamente"
-                className="w-full border border-gray-100 rounded-xl px-3 py-2.5 text-sm text-gray-500 bg-gray-50 cursor-default" />
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">VIA DE APLICAÇÃO</label>
+              <label className="block text-xs text-gray-500 mb-1.5 font-medium">VIA APLICAÇÃO</label>
               <select value={via} onChange={e => setVia(e.target.value)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
                 <option value="">Selecione…</option>
@@ -372,7 +353,7 @@ export default function SubModuloVacina({ animalId, animal: _animal }: Props) {
               className="flex items-center gap-2 px-6 py-2.5 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
               {saving && <Loader2 size={14} className="animate-spin" />}
               <Syringe size={15} />
-              {saving ? 'Salvando…' : 'Salvar Aplicação de Vacina'}
+              {saving ? 'Salvando…' : 'Salvar'}
             </button>
           </div>
         </div>

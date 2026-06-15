@@ -6,12 +6,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Share2, X, Loader2, Check, Ban, Trash2,
+  Share2, Loader2, Check, Ban,
   UserCheck, ExternalLink, ShieldCheck, AlertTriangle,
 } from 'lucide-react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
-import PageContainer from '../components/PageContainer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,12 +65,10 @@ const formatData = (iso: string) =>
 
 // ─── Item da lista ────────────────────────────────────────────────────────────
 
-function EncaminhamentoItem({ enc, podeEditar, podeExcluir, onStatus, onExcluir }: {
+function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
   enc:         Encaminhamento;
   podeEditar:  boolean;
-  podeExcluir: boolean;
   onStatus:    (id: number, status: StatusEnc) => void;
-  onExcluir:   (id: number) => void;
 }) {
   const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
@@ -121,26 +118,14 @@ function EncaminhamentoItem({ enc, podeEditar, podeExcluir, onStatus, onExcluir 
           </p>
         </div>
 
-        <div className="flex flex-col gap-1 flex-shrink-0">
-          {enc.status === 'PENDENTE' && podeEditar && (
-            <>
-              <button onClick={() => onStatus(enc.id, 'CONCLUIDO')} title="Concluir — encerra o acesso do prestador"
-                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                <Check size={14} />
-              </button>
-              <button onClick={() => onStatus(enc.id, 'CANCELADO')} title="Cancelar — encerra o acesso do prestador"
-                className="p-1.5 text-amber-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors">
-                <Ban size={14} />
-              </button>
-            </>
-          )}
-          {podeExcluir && (
-            <button onClick={() => onExcluir(enc.id)} title="Excluir"
-              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={14} />
-            </button>
-          )}
-        </div>
+        {enc.status === 'PENDENTE' && podeEditar && (
+          <button
+            onClick={() => onStatus(enc.id, 'CANCELADO')}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap"
+          >
+            <Ban size={12} /> Cancelar encaminhamento ao prestador
+          </button>
+        )}
       </div>
     </div>
   );
@@ -156,7 +141,7 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
   const [prestadores,    setPrestadores]    = useState<Prestador[]>([]);
   const [loadingPrest,   setLoadingPrest]   = useState(true);
   const [destinoTipo,    setDestinoTipo]    = useState<DestinoTipo>('EQUIPE');
-  const [filtroServico,  setFiltroServico]  = useState('TODOS');
+  const [filtroServico,  setFiltroServico]  = useState('');
   const [prestadorSel,   setPrestadorSel]   = useState<Prestador | null>(null);
   const [especialidade,  setEspecialidade]  = useState('');
   const [motivo,         setMotivo]         = useState('');
@@ -183,9 +168,9 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
 
   const servicos = [...new Set(prestadores.map(p => p.tipoServico).filter((s): s is string => !!s))].sort();
 
-  const prestadoresFiltrados = filtroServico === 'TODOS'
-    ? prestadores
-    : prestadores.filter(p => p.tipoServico === filtroServico);
+  const prestadoresFiltrados = filtroServico
+    ? prestadores.filter(p => p.tipoServico === filtroServico)
+    : [];
 
   // Um único prestador disponível → pré-seleciona
   useEffect(() => {
@@ -230,17 +215,9 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg max-h-[92vh] flex flex-col border border-gray-100">
+    <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
 
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <h3 className="font-bold text-gray-900">Novo Encaminhamento</h3>
-          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      <div className="p-5 space-y-4">
 
       {/* Tipo de destino */}
       <div className="flex gap-2">
@@ -248,7 +225,7 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
           { key: 'EQUIPE',  label: 'Prestador da equipe', icon: <UserCheck size={13} /> },
           { key: 'EXTERNO', label: 'Profissional externo', icon: <ExternalLink size={13} /> },
         ] as { key: DestinoTipo; label: string; icon: React.ReactNode }[]).map(opt => (
-          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); }}
+          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
               destinoTipo === opt.key
                 ? 'bg-emerald-600 text-white border-emerald-600'
@@ -261,57 +238,57 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
 
       {destinoTipo === 'EQUIPE' ? (
         <div className="space-y-3">
-          {/* Filtro por especialidade */}
-          {servicos.length > 0 && (
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Especialidade</label>
-              <select value={filtroServico}
-                onChange={e => { setFiltroServico(e.target.value); setPrestadorSel(null); }}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600">
-                <option value="TODOS">Todas as especialidades</option>
-                {servicos.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          )}
+          {/* Seletor de especialidade — lista só aparece após selecionar */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Especialidade</label>
+            <select value={filtroServico}
+              onChange={e => { setFiltroServico(e.target.value); setPrestadorSel(null); }}
+              className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!filtroServico ? 'text-gray-400' : 'text-gray-900'}`}>
+              <option value="">— Selecionar —</option>
+              {servicos.map(s => <option key={s} value={s} className="text-gray-900">{s}</option>)}
+            </select>
+          </div>
 
-          {/* Lista de prestadores */}
-          {loadingPrest ? (
-            <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
-          ) : prestadoresFiltrados.length === 0 ? (
-            <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
-              <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-              <span>
-                Nenhum prestador {filtroServico !== 'TODOS' ? `de ${filtroServico} ` : ''}na equipe deste paciente.
-                Inclua o fornecedor pela aba Equipe do Controle de Acesso e tente novamente.
-              </span>
-            </div>
-          ) : (
-            <div className="space-y-1.5 max-h-56 overflow-y-auto">
-              {prestadoresFiltrados.map(p => (
-                <button key={p.userId} onClick={() => selecionarPrestador(p)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
-                    prestadorSel?.userId === p.userId
-                      ? 'border-emerald-500 bg-emerald-50'
-                      : 'border-gray-200 bg-white hover:border-emerald-300'
-                  }`}>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{p.fullName}</p>
-                    <p className="text-[11px] text-gray-400 truncate">
-                      {p.tipoServico ?? 'Especialidade não informada'}
-                      {p.phone ? ` · ${p.phone}` : ''}
-                    </p>
-                  </div>
-                  {p.jaDesignado && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium flex-shrink-0">
-                      já tem acesso
-                    </span>
-                  )}
-                  {prestadorSel?.userId === p.userId && (
-                    <Check size={15} className="text-emerald-600 flex-shrink-0" />
-                  )}
-                </button>
-              ))}
-            </div>
+          {/* Lista de prestadores — só aparece após selecionar especialidade */}
+          {filtroServico && (
+            loadingPrest ? (
+              <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
+            ) : prestadoresFiltrados.length === 0 ? (
+              <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
+                <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                <span>
+                  Nenhum prestador de {filtroServico} na equipe deste paciente.
+                  Inclua o fornecedor pela aba Equipe do Controle de Acesso e tente novamente.
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                {prestadoresFiltrados.map(p => (
+                  <button key={p.userId} onClick={() => selecionarPrestador(p)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
+                      prestadorSel?.userId === p.userId
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : 'border-gray-200 bg-white hover:border-emerald-300'
+                    }`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{p.fullName}</p>
+                      <p className="text-[11px] text-gray-400 truncate">
+                        {p.tipoServico ?? 'Especialidade não informada'}
+                        {p.phone ? ` · ${p.phone}` : ''}
+                      </p>
+                    </div>
+                    {p.jaDesignado && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium flex-shrink-0">
+                        já tem acesso
+                      </span>
+                    )}
+                    {prestadorSel?.userId === p.userId && (
+                      <Check size={15} className="text-emerald-600 flex-shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )
           )}
 
           {prestadorSel && !prestadorSel.jaDesignado && (
@@ -328,9 +305,17 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Especialidade *</label>
-            <input type="text" value={especialidade} onChange={e => setEspecialidade(e.target.value)}
-              placeholder="Ex: Quiropraxia, Oftalmologia..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
+            {servicos.length > 0 ? (
+              <select value={especialidade} onChange={e => setEspecialidade(e.target.value)}
+                className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!especialidade ? 'text-gray-400' : 'text-gray-900'}`}>
+                <option value="">— Selecionar —</option>
+                {servicos.map(s => <option key={s} value={s} className="text-gray-900">{s}</option>)}
+              </select>
+            ) : (
+              <input type="text" value={especialidade} onChange={e => setEspecialidade(e.target.value)}
+                placeholder="Ex: Quiropraxia, Oftalmologia..."
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -376,19 +361,18 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
 
         </div>
 
-        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onFechar}
-            className="px-4 py-2.5 text-sm font-medium text-gray-500 hover:text-gray-700 rounded-2xl transition-colors">
-            Cancelar
-          </button>
-          <button onClick={handleSalvar} disabled={salvando}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            {salvando ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
-            Encaminhar
-          </button>
-        </div>
-
+      <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+        <button onClick={onFechar}
+          className="px-4 py-2.5 text-sm font-medium text-gray-500 hover:text-gray-700 rounded-2xl transition-colors">
+          Cancelar
+        </button>
+        <button onClick={handleSalvar} disabled={salvando}
+          className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
+          {salvando ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
+          Encaminhar
+        </button>
       </div>
+
     </div>
   );
 }
@@ -400,12 +384,10 @@ export default function SubModuloEncaminhamento({ animalId }: Props) {
 
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
   const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
-  const podeExcluir = isGestor || podeExecutar('atendimento.encaminhamentos.deletar');
 
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
   const [loading,          setLoading]         = useState(true);
-  const [showForm,         setShowForm]        = useState(false);
-  const [confirmExcluir,   setConfirmExcluir]  = useState<number | null>(null);
+  const [formKey,          setFormKey]         = useState(0);
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -448,29 +430,15 @@ export default function SubModuloEncaminhamento({ animalId }: Props) {
     }
   };
 
-  const handleExcluir = async (id: number) => {
-    if (!podeExcluir) { semPermissao('excluir encaminhamentos'); return; }
-    try {
-      await api.delete(`/clinica/encaminhamentos/${id}`);
-      toast.success('Encaminhamento excluído');
-      setConfirmExcluir(null);
-      carregar();
-    } catch (err) {
-      const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao excluir encaminhamento');
-    }
-  };
 
   // ── Guard ───────────────────────────────────────────────────────────────────
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.encaminhamentos.ler')) {
     return (
-      <PageContainer>
-        <div className="text-center py-16">
-          <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
-          <p className="text-sm text-gray-500">Você não tem permissão para visualizar encaminhamentos.</p>
-        </div>
-      </PageContainer>
+      <div className="text-center py-16">
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500">Você não tem permissão para visualizar encaminhamentos.</p>
+      </div>
     );
   }
 
@@ -478,31 +446,20 @@ export default function SubModuloEncaminhamento({ animalId }: Props) {
 
   return (
     <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Share2 size={16} className="text-emerald-600" />
-          <span className="text-sm font-semibold text-gray-900">Encaminhamentos</span>
-          {encaminhamentos.length > 0 && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">
-              {encaminhamentos.length}
-            </span>
-          )}
-        </div>
-        {podeCriar && (
-          <button onClick={() => setShowForm(true)}
-            className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            Novo Encaminhamento
-          </button>
-        )}
-      </div>
 
-      {showForm && (
+      {podeCriar && (
         <FormNovoEncaminhamento
+          key={formKey}
           animalId={animalId}
-          onCriado={() => { setShowForm(false); carregar(); }}
-          onFechar={() => setShowForm(false)}
+          onCriado={() => { setFormKey(k => k + 1); carregar(); }}
+          onFechar={() => setFormKey(k => k + 1)}
         />
       )}
+
+      <div className="-mx-4 px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Encaminhamentos</p>
+        <span className="text-xs text-gray-400">{encaminhamentos.length} registro{encaminhamentos.length !== 1 ? 's' : ''}</span>
+      </div>
 
       {loading || loadingPerms ? (
         <div className="flex justify-center py-12">
@@ -525,36 +482,12 @@ export default function SubModuloEncaminhamento({ animalId }: Props) {
               key={enc.id}
               enc={enc}
               podeEditar={podeEditar}
-              podeExcluir={podeExcluir}
               onStatus={handleStatus}
-              onExcluir={(id) => setConfirmExcluir(id)}
             />
           ))}
         </div>
       )}
 
-      {/* Modal de confirmação de exclusão */}
-      {confirmExcluir !== null && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setConfirmExcluir(null)}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-bold text-gray-900 mb-2">Excluir encaminhamento?</h3>
-            <p className="text-xs text-gray-500 mb-4">
-              Se houver prestador designado por este encaminhamento, o acesso dele a este paciente será encerrado.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirmExcluir(null)}
-                className="px-4 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 rounded-xl">
-                Cancelar
-              </button>
-              <button onClick={() => handleExcluir(confirmExcluir)}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-xl">
-                Excluir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

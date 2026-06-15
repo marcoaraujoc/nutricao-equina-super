@@ -12,7 +12,7 @@ import {
   X, Clock, User as UserIcon, RefreshCw, Search,
   ChevronDown, ChevronUp, AlertTriangle, Loader2, Calendar,
   Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, UserCheck, CalendarDays,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -426,6 +426,15 @@ export default function Agendamentos() {
   const [conflictWarning, setConflictWarning] = useState<ConflictWarning | null>(null);
 
   // ── Modal Voz/IA ────────────────────────────────────────────────────────────
+  // ── Trocar profissional / Transferir dia ────────────────────────────────────
+  const [trocandoVetAg,   setTrocandoVetAg]   = useState<AgendamentoGlobal | null>(null);
+  const [trocandoVetIdAg, setTrocandoVetIdAg] = useState('');
+  const [savingTrocaAg,   setSavingTrocaAg]   = useState(false);
+  const [transferindoDia, setTransferindoDia] = useState(false);
+  const [transDeVetId,    setTransDeVetId]    = useState('');
+  const [transParaVetId,  setTransParaVetId]  = useState('');
+  const [savingTransf,    setSavingTransf]    = useState(false);
+
   const [escolhaTipo, setEscolhaTipo]         = useState<BookingInfo | null>(null);
   const [vozAberto, setVozAberto]             = useState(false);
   const [vozContexto, setVozContexto]         = useState<BookingInfo | null>(null);
@@ -561,8 +570,17 @@ export default function Agendamentos() {
     return new Set(agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora)));
   }
   function slotsLivres(vetId: number): string[] {
-    const ocp = slotsOcupados(vetId);
-    return HORARIOS.filter(h => !ocp.has(h));
+    const ocp   = slotsOcupados(vetId);
+    const eHoje = selectedDate === hoje();
+    const agora = eHoje ? new Date() : null;
+    return HORARIOS.filter(h => {
+      if (ocp.has(h)) return false;
+      if (agora) {
+        const [hh, mm] = h.split(':').map(Number);
+        return hh * 60 + mm > agora.getHours() * 60 + agora.getMinutes();
+      }
+      return true;
+    });
   }
 
   // ── Filtros locais ───────────────────────────────────────────────────────────
@@ -750,13 +768,52 @@ export default function Agendamentos() {
     executarConfirmarBooking();
   }
 
-  async function handleStatus(id: number, novoStatus: string) {
+  async function handleStatus(id: number, novoStatus: string, motivo?: string) {
     try {
-      await api.patch(`/clinica/agendamentos/${id}/status`, { status: novoStatus });
+      await api.patch(`/clinica/agendamentos/${id}/status`, { status: novoStatus, motivo });
       toast.success(novoStatus === 'CONCLUIDO' ? 'Confirmado' : 'Cancelado');
       setCancelando(null);
-      setAgendamentos(prev => prev.map(a => a.id === id ? { ...a, status: novoStatus as StatusAgendamento } : a));
+      setAgendamentos(prev => prev.map(a =>
+        a.id === id
+          ? { ...a, status: novoStatus as StatusAgendamento, observacao: novoStatus === 'CANCELADO' && motivo ? motivo : a.observacao }
+          : a
+      ));
     } catch { toast.error('Erro ao atualizar'); }
+  }
+
+  async function handleTrocarVetAg() {
+    if (!trocandoVetAg || !trocandoVetIdAg) { toast.error('Selecione um profissional'); return; }
+    if (trocandoVetIdAg === String(trocandoVetAg.veterinario?.id)) {
+      toast.error('O profissional já é o responsável por este agendamento');
+      return;
+    }
+    setSavingTrocaAg(true);
+    try {
+      await api.patch(`/clinica/agendamentos/${trocandoVetAg.id}`, { veterinarioId: Number(trocandoVetIdAg) });
+      const novoVet = vets.find(v => String(v.userId) === trocandoVetIdAg);
+      toast.success(`Transferido para ${novoVet?.fullName ?? 'novo profissional'}`);
+      setTrocandoVetAg(null);
+      fetchAgendamentos(selectedDate);
+      setMesCarregado('');
+    } catch { toast.error('Erro ao trocar profissional'); }
+    finally { setSavingTrocaAg(false); }
+  }
+
+  async function handleTransferirDia() {
+    if (!transDeVetId || !transParaVetId) { toast.error('Selecione os profissionais'); return; }
+    if (transDeVetId === transParaVetId) { toast.error('Origem e destino devem ser diferentes'); return; }
+    setSavingTransf(true);
+    try {
+      const res = await api.patch('/clinica/agendamentos/transferir-dia', {
+        data: selectedDate, deVetId: Number(transDeVetId), paraVetId: Number(transParaVetId),
+      });
+      const transferidos = res.data?.dados?.transferidos ?? 0;
+      toast.success(`${transferidos} agendamento(s) transferido(s)`);
+      setTransferindoDia(false);
+      fetchAgendamentos(selectedDate);
+      setMesCarregado('');
+    } catch { toast.error('Erro ao transferir agenda do dia'); }
+    finally { setSavingTransf(false); }
   }
 
   async function handleReagendar(e: React.FormEvent) {
@@ -1070,7 +1127,7 @@ export default function Agendamentos() {
 
       {/* ── Lista de Agendamentos ─────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <Calendar size={14} className="text-gray-500" />
             <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">
@@ -1078,10 +1135,20 @@ export default function Agendamentos() {
             </p>
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
-          <div className="relative">
-            <Search size={12} className="absolute left-2.5 top-2 text-gray-400" />
-            <input type="text" placeholder="Buscar..." value={busca} onChange={e => setBusca(e.target.value)}
-              className="pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 w-44" />
+          <div className="flex items-center gap-2">
+            {podeGerenciar && vets.length > 1 && (
+              <button
+                onClick={() => { setTransferindoDia(true); setTransDeVetId(filtroVetId); setTransParaVetId(''); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold transition-colors border border-blue-200 whitespace-nowrap"
+              >
+                <CalendarDays size={12} /> Transferir dia inteiro
+              </button>
+            )}
+            <div className="relative">
+              <Search size={12} className="absolute left-2.5 top-2 text-gray-400" />
+              <input type="text" placeholder="Buscar..." value={busca} onChange={e => setBusca(e.target.value)}
+                className="pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 w-44" />
+            </div>
           </div>
         </div>
 
@@ -1108,7 +1175,18 @@ export default function Agendamentos() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : isConcluido ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{ag.status}</span>
+                        {isCancelado ? (
+                          <span className="relative group cursor-default">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">CANCELADO</span>
+                            {ag.observacao && (
+                              <span className="absolute bottom-full left-0 mb-1 px-2 py-1 bg-gray-800 text-white text-[10px] rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 max-w-[200px] truncate">
+                                {ag.observacao}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>{ag.status}</span>
+                        )}
                       </div>
                       <span className="text-xs font-bold font-mono text-gray-500">{formatarHora(ag.dataHora)}</span>
                     </div>
@@ -1117,6 +1195,9 @@ export default function Agendamentos() {
                       {ag.animal && <p className="text-xs text-gray-500 mt-0.5">{ag.animal.nome}{ag.animal.especie && <> · {ag.animal.especie.nome}</>}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                       {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
+                      {isCancelado && ag.observacao && (
+                        <p className="text-xs text-red-500 mt-0.5 italic">Motivo: {ag.observacao}</p>
+                      )}
                     </div>
                     {podeGerenciar && !isCancelado && (
                       <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
@@ -1130,6 +1211,11 @@ export default function Agendamentos() {
                             <RefreshCw size={11} /> Reagendar
                           </button>
                         )}
+                        {isAgendado && vets.length > 0 && (
+                          <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold">
+                            <UserCheck size={11} /> Trocar prof.
+                          </button>
+                        )}
                         {isAgendado && (
                           <button onClick={() => setCancelando(ag.id)} className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
                             <X size={11} /> Cancelar
@@ -1141,7 +1227,7 @@ export default function Agendamentos() {
                       <div className="bg-red-50 border border-red-100 rounded-xl p-3 flex flex-col gap-2">
                         <p className="text-xs font-semibold text-red-800">Motivo do cancelamento:</p>
                         <div className="relative">
-                          <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO')} defaultValue=""
+                          <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO', e.target.value)} defaultValue=""
                             className="w-full text-xs border border-red-200 rounded-xl py-2 pl-3 pr-7 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
                             <option value="" disabled>Selecione...</option>
                             {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
@@ -1196,7 +1282,19 @@ export default function Agendamentos() {
                             : <span className="text-xs text-gray-400">Não atribuído</span>}
                         </td>
                         <td className="py-3.5 px-4">
-                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : isConcluido ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{ag.status}</span>
+                          {isCancelado ? (
+                            <div className="relative group inline-block cursor-default">
+                              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-700">CANCELADO</span>
+                              {ag.observacao && (
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 bg-gray-800 text-white text-[10px] rounded-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 max-w-[220px] leading-snug">
+                                  <span className="block font-semibold text-gray-300 mb-0.5">Motivo</span>
+                                  {ag.observacao}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>{ag.status}</span>
+                          )}
                         </td>
                         {podeGerenciar && (
                           <td className="py-3.5 px-4">
@@ -1213,6 +1311,12 @@ export default function Agendamentos() {
                                   <RefreshCw size={13} />
                                 </button>
                               )}
+                              {isAgendado && vets.length > 0 && (
+                                <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} title="Trocar profissional"
+                                  className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-colors">
+                                  <UserCheck size={13} />
+                                </button>
+                              )}
                               {isAgendado && (
                                 <button onClick={() => setCancelando(ag.id)} title="Cancelar"
                                   className="p-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl transition-colors">
@@ -1224,7 +1328,7 @@ export default function Agendamentos() {
                               <div className="mt-2 bg-red-50 border border-red-100 rounded-xl p-2 flex items-center gap-2">
                                 <AlertTriangle size={11} className="text-red-500 flex-shrink-0" />
                                 <div className="relative flex-1">
-                                  <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO')} defaultValue=""
+                                  <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO', e.target.value)} defaultValue=""
                                     className="w-full text-[10px] border border-red-200 rounded-lg py-1 pl-2 pr-5 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
                                     <option value="" disabled>Motivo...</option>
                                     {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
@@ -1645,6 +1749,116 @@ export default function Agendamentos() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Trocar profissional (agendamento individual) ─────────────── */}
+      {trocandoVetAg && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm border border-gray-100">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <UserCheck size={16} className="text-blue-600" />
+                <h3 className="font-bold text-gray-900">Trocar profissional</h3>
+              </div>
+              <button onClick={() => setTrocandoVetAg(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">ANIMAL</label>
+                <p className="text-sm font-semibold text-gray-800">{trocandoVetAg.animal?.nome ?? '—'}</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">HORÁRIO</label>
+                <p className="text-sm text-gray-700">{formatarHora(trocandoVetAg.dataHora)} · {trocandoVetAg.titulo}</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">PROFISSIONAL ATUAL</label>
+                <p className="text-sm text-gray-700">{trocandoVetAg.veterinario?.fullName ?? 'Não atribuído'}</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">NOVO PROFISSIONAL *</label>
+                <div className="relative">
+                  <select value={trocandoVetIdAg} onChange={e => setTrocandoVetIdAg(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
+                    <option value="">Selecione...</option>
+                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button onClick={() => setTrocandoVetAg(null)}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={handleTrocarVetAg} disabled={savingTrocaAg || !trocandoVetIdAg}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5">
+                {savingTrocaAg && <Loader2 size={13} className="animate-spin" />}
+                Transferir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Transferir toda a agenda do dia ───────────────────────────── */}
+      {transferindoDia && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm border border-gray-100">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <CalendarDays size={16} className="text-blue-600" />
+                <h3 className="font-bold text-gray-900">Transferir agenda do dia</h3>
+              </div>
+              <button onClick={() => setTransferindoDia(false)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-gray-500">
+                Transfere todos os agendamentos <span className="font-semibold text-amber-700">AGENDADO</span> do dia <span className="font-semibold">{labelDia(selectedDate)}</span> de um profissional para outro.
+              </p>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">DE (profissional atual) *</label>
+                <div className="relative">
+                  <select value={transDeVetId} onChange={e => setTransDeVetId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
+                    <option value="">Selecione...</option>
+                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">PARA (novo profissional) *</label>
+                <div className="relative">
+                  <select value={transParaVetId} onChange={e => setTransParaVetId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
+                    <option value="">Selecione...</option>
+                    {vets.filter(v => String(v.userId) !== transDeVetId).map(v => (
+                      <option key={v.userId} value={v.userId}>{v.fullName}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button onClick={() => setTransferindoDia(false)}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={handleTransferirDia} disabled={savingTransf || !transDeVetId || !transParaVetId}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5">
+                {savingTransf && <Loader2 size={13} className="animate-spin" />}
+                Transferir tudo
+              </button>
             </div>
           </div>
         </div>

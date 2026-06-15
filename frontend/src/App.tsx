@@ -190,6 +190,7 @@ function App() {
 
                           {/* Módulo Clínico */}
                           <Route path="/clinica"                          element={<Atendimento />} />
+                          <Route path="/clinica/agenda"                   element={<Atendimento />} />
                           <Route path="/clinica/evolucao"                 element={<Atendimento />} />
                           <Route path="/clinica/evolucao/:animalId"       element={<Atendimento />} />
                           <Route path="/clinica/prescricao"               element={<Atendimento />} />

@@ -76,24 +76,45 @@ const AgendamentoController = {
           };
         } else {
           // VETERINARIO / ESTAGIARIO
+          // GESTOR vê todos os agendamentos da equipe; demais profissionais só os seus próprios.
+          let isGestor = false;
           if (req.empresaId) {
-            where.animal = { empresaId: Number(req.empresaId) };
-            if (req.equipeId) {
-              where.animal.equipeId = Number(req.equipeId);
-            }
+            const membroWhere = { userId: Number(userId), cargo: 'GESTOR' };
+            if (req.equipeId) membroWhere.equipeId = Number(req.equipeId);
+            else              membroWhere.equipe   = { empresaId: Number(req.empresaId) };
+            isGestor = !!(await prisma.membroEquipe.findFirst({ where: membroWhere, select: { id: true } }));
+          }
+
+          if (isGestor) {
+            // GESTOR: todos os agendamentos da empresa/equipe ativa
+            const animalWhere = { empresaId: Number(req.empresaId) };
+            if (req.equipeId) animalWhere.equipeId = Number(req.equipeId);
+            where.animal = animalWhere;
+          } else if (req.empresaId) {
+            // VET/ESTAGIÁRIO com contexto de empresa: apenas os próprios agendamentos
+            where.veterinarioId = Number(userId);
           } else if (userType === 'VETERINARIO') {
-            where.animal = {
-              solicitacoes: {
-                some: {
-                  vetUserId: Number(userId),
-                  OR: [
-                    { tipo: 'VINCULO',    status: 'ACEITO'   },
-                    { tipo: 'DESVINCULO', status: 'PENDENTE' },
-                    { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-                  ],
+            // Sem contexto de empresa: agendamentos via vínculo direto com o animal
+            where.OR = [
+              {
+                animal: {
+                  solicitacoes: {
+                    some: {
+                      vetUserId: Number(userId),
+                      OR: [
+                        { tipo: 'VINCULO',    status: 'ACEITO'   },
+                        { tipo: 'DESVINCULO', status: 'PENDENTE' },
+                        { tipo: 'TROCA_VET',  status: 'PENDENTE' },
+                      ],
+                    },
+                  },
                 },
               },
-            };
+              { veterinarioId: Number(userId) },
+            ];
+          } else {
+            // ESTAGIÁRIO sem contexto: apenas os explicitamente atribuídos
+            where.veterinarioId = Number(userId);
           }
         }
       } else if (req.empresaId) {
@@ -252,14 +273,14 @@ const AgendamentoController = {
     }
   },
 
-  // PATCH /clinica/agendamentos/:id/status — body: { status }
+  // PATCH /clinica/agendamentos/:id/status — body: { status, motivo? }
   atualizarStatus: async (req, res) => {
     try {
       if (!podeGerenciar(req.user)) {
         return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
       }
 
-      const { status } = req.body;
+      const { status, motivo } = req.body;
       if (!STATUS_VALIDOS.includes(status)) {
         return res.status(400).json({ error: `status deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
       }
@@ -270,10 +291,57 @@ const AgendamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
+      const updateData = { status };
+      if (status === 'CANCELADO' && motivo?.trim()) {
+        updateData.observacao = motivo.trim();
+      }
+
       const atualizado = await prisma.agendamentoClinico.update({
         where:   { id: item.id },
-        data:    { status },
+        data:    updateData,
         include: INCLUDE,
+      });
+
+      res.json({ dados: atualizado });
+    } catch (err) {
+      console.error('Erro ao atualizar agendamento:', err);
+      res.status(500).json({ error: 'Erro ao atualizar agendamento' });
+    }
+  },
+
+  // PATCH /clinica/agendamentos/:id — body: { titulo?, tipo?, dataHora?, observacao? }
+  atualizar: async (req, res) => {
+    try {
+      if (!podeGerenciar(req.user)) {
+        return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
+      }
+
+      const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
+      if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
+
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      const { titulo, tipo, dataHora, observacao, veterinarioId } = req.body;
+      const data = {};
+
+      if (titulo?.trim()) data.titulo = titulo.trim();
+      if (tipo && TIPOS_VALIDOS.includes(tipo)) data.tipo = tipo;
+      if (dataHora) {
+        const quando = new Date(dataHora);
+        if (!isNaN(quando.getTime())) data.dataHora = quando;
+      }
+      if (observacao !== undefined) data.observacao = observacao?.trim() || null;
+      if (veterinarioId !== undefined) data.veterinarioId = veterinarioId === null ? null : Number(veterinarioId);
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
+      }
+
+      const atualizado = await prisma.agendamentoClinico.update({
+        where:   { id: item.id },
+        data,
+        include: INCLUDE_GLOBAL,
       });
 
       res.json({ dados: atualizado });
@@ -483,6 +551,41 @@ const AgendamentoController = {
     } catch (err) {
       console.error('Erro ao excluir agendamento:', err);
       res.status(500).json({ error: 'Erro ao excluir agendamento' });
+    }
+  },
+
+  // PATCH /clinica/agendamentos/transferir-dia — body: { data, deVetId, paraVetId }
+  transferirDia: async (req, res) => {
+    try {
+      if (!podeGerenciar(req.user)) {
+        return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
+      }
+
+      const { data, deVetId, paraVetId } = req.body;
+      if (!data || !deVetId || !paraVetId) {
+        return res.status(400).json({ error: 'data, deVetId e paraVetId são obrigatórios' });
+      }
+      if (Number(deVetId) === Number(paraVetId)) {
+        return res.status(400).json({ error: 'Profissional de origem e destino devem ser diferentes' });
+      }
+
+      const result = await prisma.agendamentoClinico.updateMany({
+        where: {
+          ativo:         true,
+          status:        'AGENDADO',
+          veterinarioId: Number(deVetId),
+          dataHora: {
+            gte: new Date(data + 'T00:00:00'),
+            lte: new Date(data + 'T23:59:59.999'),
+          },
+        },
+        data: { veterinarioId: Number(paraVetId) },
+      });
+
+      res.json({ dados: { transferidos: result.count } });
+    } catch (err) {
+      console.error('Erro ao transferir agenda do dia:', err);
+      res.status(500).json({ error: 'Erro ao transferir agenda do dia' });
     }
   },
 };
