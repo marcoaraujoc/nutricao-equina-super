@@ -1,7 +1,7 @@
 // src/pages/Farmacia.tsx
 // Gestão de estoque por clínica — referencia o catálogo global de Medicamentos
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
@@ -13,7 +13,6 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
-import DateInputBR from '../components/DateInputBR';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -30,18 +29,24 @@ interface Medicamento {
   vias: Via[];
 }
 
+interface FornecedorItem { id: number; nome: string; tipoServico: string }
+
 interface EstoqueItem {
   id: number;
   medicamentoId: number;
   empresaId: number | null;
   valor: number;
+  valorRepassado: number;
   lote: string | null;
   validade: string | null;
   qtdEstoque: number;
   estoqueMinimo: number;
   estoqueAlarmante: number;
   ativo: boolean;
+  fornecedorId: number | null;
+  notaFiscal: string | null;
   medicamento: Medicamento;
+  fornecedor: FornecedorItem | null;
 }
 
 interface Meta { total: number; totalControlados: number; totalAbaixoMinimo: number; totalAbaixoAlarmante: number }
@@ -52,9 +57,11 @@ type FiltroTab = 'todos' | 'critico' | 'alarmante' | 'controlados' | 'inativos';
 
 const FORM_VAZIO = {
   medicamentoId: 0,
-  valor: 0, lote: '', validade: '',
+  valor: 0, valorRepassado: 0, lote: '', validade: '',
   qtdEstoque: 0, estoqueMinimo: 0, estoqueAlarmante: 0,
   ativo: true,
+  fornecedorId: 0,
+  notaFiscal: '',
 };
 
 // ─── ChartMovimentos ──────────────────────────────────────────────────────────
@@ -99,16 +106,13 @@ function ChartMovimentos({ movimentos }: { movimentos: MovimentoEstoque[] }) {
 }
 
 // ─── Helper: extrai volume numérico de nome ou apresentação do medicamento ────
-// Ex: "Catófos 500 ml" → 500  |  "Frasco 1L" → 1  |  "Pen 10.000 UI" → 10000
 
 function extrairVolume(med: Medicamento): number | null {
   for (const texto of [med.apresentacao, med.nome]) {
     if (!texto) continue;
-    // Tenta casar o número seguido da unidade do catálogo (case-insensitive)
     const reUnidade = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*${med.unidade}`, 'i');
     const m1 = texto.match(reUnidade);
     if (m1) return parseFloat(m1[1].replace(',', '.'));
-    // Fallback: qualquer número seguido de unidade farmacêutica comum
     const m2 = texto.match(/(\d+(?:[.,]\d+)?)\s*(?:mL|ml|ML|L(?!\w)|g(?!\w)|mg|mcg|UI|un)/);
     if (m2) return parseFloat(m2[1].replace(',', '.'));
   }
@@ -125,35 +129,39 @@ export default function Farmacia() {
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
-  const [itens,       setItens]       = useState<EstoqueItem[]>([]);
+  const [itens,        setItens]        = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
-  const [meta,        setMeta]        = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
-  const [loading,     setLoading]     = useState(false);
-  const [busca,       setBusca]       = useState('');
-  const [filtroTab,   setFiltroTab]   = useState<FiltroTab>('todos');
+  const [fornecedores, setFornecedores] = useState<FornecedorItem[]>([]);
+  const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
+  const [loading,      setLoading]      = useState(false);
+  const [busca,        setBusca]        = useState('');
+  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todos');
 
-  const [form,        setForm]        = useState({ ...FORM_VAZIO });
-  const [editandoId,  setEditandoId]  = useState<number | null>(null);
-  const [salvando,    setSalvando]    = useState(false);
+  const [form,         setForm]         = useState({ ...FORM_VAZIO });
+  const [editandoId,   setEditandoId]   = useState<number | null>(null);
+  const [salvando,     setSalvando]     = useState(false);
   const [modalFormAberto, setModalFormAberto] = useState(false);
 
-  const [modalHistorico,  setModalHistorico]  = useState<EstoqueItem | null>(null);
-  const [movimentos,      setMovimentos]      = useState<MovimentoEstoque[]>([]);
-  const [loadingMov,      setLoadingMov]      = useState(false);
-  const [confirmExcluir,  setConfirmExcluir]  = useState<EstoqueItem | null>(null);
-  const [valorStr,        setValorStr]        = useState('');
-  const [frascos,         setFrascos]         = useState<number | ''>('');
+  const [modalHistorico, setModalHistorico] = useState<EstoqueItem | null>(null);
+  const [movimentos,     setMovimentos]     = useState<MovimentoEstoque[]>([]);
+  const [loadingMov,     setLoadingMov]     = useState(false);
+  const [confirmExcluir, setConfirmExcluir] = useState<EstoqueItem | null>(null);
+  const [valorStr,             setValorStr]             = useState('');
+  const [valorRepassadoStr,    setValorRepassadoStr]    = useState('');
+  const [repassadoEditado,     setRepassadoEditado]     = useState(false);
+  const [frascos,        setFrascos]        = useState<number | ''>('');
+  const [buscaMed,       setBuscaMed]       = useState('');
+  const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
+  const comboboxRef = useRef<HTMLDivElement>(null);
 
   // ── Busca medicamento selecionado ─────────────────────────────────────────
 
-  const medSelecionado = medicamentos.find((m) => m.id === form.medicamentoId) ?? null;
-  const estoqueExistente = !editandoId && form.medicamentoId
+  const medSelecionado    = medicamentos.find((m) => m.id === form.medicamentoId) ?? null;
+  const estoqueExistente  = !editandoId && form.medicamentoId
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
 
-  // Volume por embalagem detectado automaticamente do nome/apresentação
   const volDetectado  = medSelecionado ? extrairVolume(medSelecionado) : null;
-  // Rótulo do tipo de embalagem (primeira palavra da apresentação: "frasco", "ampola", etc.)
   const tipoEmbalagem = medSelecionado?.apresentacao?.match(/^([A-Za-zÀ-ÿ]+)/i)?.[1]?.toLowerCase() ?? 'unidade';
   const hoje = (() => {
     const d = new Date();
@@ -167,10 +175,25 @@ export default function Farmacia() {
 
   const handleValorChange = (raw: string) => {
     const digits = raw.replace(/\D/g, '');
-    const cents = parseInt(digits || '0', 10);
-    const value = cents / 100;
-    setForm((f) => ({ ...f, valor: value }));
-    setValorStr(value === 0 ? '' : formatarValor(value));
+    const cents  = parseInt(digits || '0', 10);
+    const value  = cents / 100;
+    const formatted = value === 0 ? '' : formatarValor(value);
+    setForm((f) => ({
+      ...f,
+      valor: value,
+      ...(!repassadoEditado && { valorRepassado: value }),
+    }));
+    setValorStr(formatted);
+    if (!repassadoEditado) setValorRepassadoStr(formatted);
+  };
+
+  const handleValorRepassadoChange = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    const cents  = parseInt(digits || '0', 10);
+    const value  = cents / 100;
+    setRepassadoEditado(true);
+    setForm((f) => ({ ...f, valorRepassado: value }));
+    setValorRepassadoStr(value === 0 ? '' : formatarValor(value));
   };
 
   // ── Carregar ──────────────────────────────────────────────────────────────
@@ -184,28 +207,46 @@ export default function Farmacia() {
       else                          params.ativo = 'true';
       if (filtroTab === 'controlados') params.controlado = 'true';
 
-      const [estoqueRes, medRes] = await Promise.all([
+      const [estoqueRes, medRes, fornRes] = await Promise.all([
         api.get('/farmacia/estoque', { params }),
-        api.get('/medicamentos', { params: { ativo: 'true' } }),
+        api.get('/medicamentos', { params: { ativo: 'true', excluirVacinas: 'true', especieDaEmpresa: 'true', limit: '5000' } }),
+        api.get('/cadastro/fornecedores', { params: { ativo: 'true' } }),
       ]);
 
       setItens(estoqueRes.data.dados ?? []);
       setMeta(estoqueRes.data.meta ?? { total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
       setMedicamentos(medRes.data.dados ?? []);
+      setFornecedores(fornRes.data?.dados ?? []);
     } catch { toast.error('Erro ao carregar estoque.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
-  // Reseta frascos ao trocar de medicamento
   useEffect(() => { setFrascos(''); }, [form.medicamentoId]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setDropdownMedAberto(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const medsFiltrados = buscaMed.trim().length === 0
+    ? medicamentos
+    : medicamentos.filter((m) =>
+        m.nome.toLowerCase().includes(buscaMed.toLowerCase()) ||
+        m.formaFarmaceutica.toLowerCase().includes(buscaMed.toLowerCase())
+      );
 
   // ── Filtro local ──────────────────────────────────────────────────────────
 
   const itensFiltrados = (() => {
-    if (filtroTab === 'critico')     return itens.filter((i) => i.qtdEstoque <= i.estoqueMinimo);
-    if (filtroTab === 'alarmante')   return itens.filter((i) => i.qtdEstoque <= i.estoqueAlarmante && i.qtdEstoque > i.estoqueMinimo);
+    if (filtroTab === 'critico')   return itens.filter((i) => i.qtdEstoque <= i.estoqueMinimo);
+    if (filtroTab === 'alarmante') return itens.filter((i) => i.qtdEstoque <= i.estoqueAlarmante && i.qtdEstoque > i.estoqueMinimo);
     return itens;
   })();
 
@@ -232,9 +273,9 @@ export default function Farmacia() {
   const formatValidade = (v: string | null) => {
     if (!v) return '—';
     const [year, month, day] = v.split('T')[0].split('-').map(Number);
-    const d = new Date(year, month - 1, day);
+    const d    = new Date(year, month - 1, day);
     const agora = new Date(); agora.setHours(0, 0, 0, 0);
-    const diff = (d.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24);
+    const diff  = (d.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24);
     const label = formatDate(v);
     if (diff < 0)   return <span className="text-red-600 font-semibold">{label} ⚠</span>;
     if (diff < 30)  return <span className="text-amber-600 font-semibold">{label}</span>;
@@ -245,16 +286,21 @@ export default function Farmacia() {
 
   const preencherEdicao = (item: EstoqueItem) => {
     setForm({
-      medicamentoId:   item.medicamentoId,
-      valor:           item.valor,
-      lote:            item.lote ?? '',
-      validade:        item.validade ? item.validade.split('T')[0] : '',
-      qtdEstoque:      item.qtdEstoque,
-      estoqueMinimo:   item.estoqueMinimo,
+      medicamentoId:    item.medicamentoId,
+      valor:            item.valor,
+      lote:             item.lote ?? '',
+      validade:         item.validade ? item.validade.split('T')[0] : '',
+      qtdEstoque:       item.qtdEstoque,
+      estoqueMinimo:    item.estoqueMinimo,
       estoqueAlarmante: item.estoqueAlarmante,
-      ativo:           item.ativo,
+      ativo:            item.ativo,
+      valorRepassado:   item.valorRepassado ?? 0,
+      fornecedorId:     item.fornecedorId ?? 0,
+      notaFiscal:       item.notaFiscal ?? '',
     });
     setValorStr(formatarValor(item.valor));
+    setValorRepassadoStr(formatarValor(item.valorRepassado ?? 0));
+    setRepassadoEditado(item.valorRepassado !== item.valor);
     setEditandoId(item.id);
     setModalFormAberto(true);
   };
@@ -262,9 +308,13 @@ export default function Farmacia() {
   const limparForm = () => {
     setForm({ ...FORM_VAZIO });
     setValorStr('');
+    setValorRepassadoStr('');
+    setRepassadoEditado(false);
     setEditandoId(null);
     setModalFormAberto(false);
     setFrascos('');
+    setBuscaMed('');
+    setDropdownMedAberto(false);
   };
 
   const salvar = async () => {
@@ -273,7 +323,6 @@ export default function Farmacia() {
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
     if (form.validade && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
 
-    // Lote e validade obrigatórios em todos os casos (novo, existente e edição)
     if (!form.lote || !form.lote.trim()) return toast.error('Lote é obrigatório.');
     if (!form.validade) return toast.error('Validade é obrigatória.');
 
@@ -303,13 +352,16 @@ export default function Farmacia() {
     setSalvando(true);
     try {
       const payload = {
-        medicamentoId:   form.medicamentoId,
-        valor:           form.valor,
-        lote:            form.lote || null,
-        validade:        form.validade || null,
-        estoqueMinimo:   form.estoqueMinimo,
+        medicamentoId:    form.medicamentoId,
+        valor:            form.valor,
+        valorRepassado:   form.valorRepassado,
+        lote:             form.lote || null,
+        validade:         form.validade || null,
+        estoqueMinimo:    form.estoqueMinimo,
         estoqueAlarmante: form.estoqueAlarmante,
-        ativo:           form.ativo,
+        ativo:            form.ativo,
+        fornecedorId:     form.fornecedorId || null,
+        notaFiscal:       form.notaFiscal.trim() || null,
         ...(!editandoId && { qtdEstoque: form.qtdEstoque }),
       };
 
@@ -389,10 +441,10 @@ export default function Farmacia() {
         {/* Cards resumo */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label:'Itens Ativos',  value:meta.total,               color:'text-gray-900', bg:'bg-white' },
-            { label:'Estoque Crítico', value:meta.totalAbaixoMinimo,   color:'text-red-600',  bg:meta.totalAbaixoMinimo>0?'bg-red-50':'bg-white', icon:<AlertTriangle size={12} className="text-red-500" /> },
-            { label:'Alerta Amarelo', value:meta.totalAbaixoAlarmante, color:'text-amber-600',bg:meta.totalAbaixoAlarmante>0?'bg-amber-50':'bg-white', icon:<AlertTriangle size={12} className="text-amber-500" /> },
-            { label:'Controlados',   value:meta.totalControlados,     color:'text-purple-700',bg:'bg-white', icon:<Lock size={12} className="text-purple-500" /> },
+            { label:'Itens Ativos',    value:meta.total,               color:'text-gray-900',   bg:'bg-white' },
+            { label:'Estoque Crítico', value:meta.totalAbaixoMinimo,   color:'text-red-600',    bg:meta.totalAbaixoMinimo>0?'bg-red-50':'bg-white',   icon:<AlertTriangle size={12} className="text-red-500" /> },
+            { label:'Alerta Amarelo',  value:meta.totalAbaixoAlarmante, color:'text-amber-600',  bg:meta.totalAbaixoAlarmante>0?'bg-amber-50':'bg-white', icon:<AlertTriangle size={12} className="text-amber-500" /> },
+            { label:'Controlados',     value:meta.totalControlados,    color:'text-purple-700', bg:'bg-white', icon:<Lock size={12} className="text-purple-500" /> },
           ].map(({ label, value, color, bg, icon }) => (
             <div key={label} className={`${bg} rounded-2xl border border-gray-200 px-4 py-3 shadow-sm`}>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">{icon}{label}</p>
@@ -452,8 +504,8 @@ export default function Farmacia() {
           ) : (
             <div style={{ display:'grid', gridTemplateColumns:'max-content 1fr max-content', rowGap:'6px' }}>
               {itensFiltrados.map((item) => {
-                const nivel = nivelEstoque(item);
-                const borderCls = nivel === 'critico' ? 'border-l-[4px] border-l-red-500 border-red-100'
+                const nivel     = nivelEstoque(item);
+                const borderCls = nivel === 'critico'  ? 'border-l-[4px] border-l-red-500 border-red-100'
                   : nivel === 'alarmante' ? 'border-l-[4px] border-l-amber-400 border-amber-50'
                   : 'border-gray-200';
 
@@ -475,6 +527,7 @@ export default function Farmacia() {
                       <span className="hidden sm:inline text-xs text-gray-400 flex-shrink-0 ml-1">
                         {item.medicamento.formaFarmaceutica} · {item.medicamento.apresentacao}
                         {item.lote && ` · Lote: ${item.lote}`}
+                        {item.fornecedor && ` · ${item.fornecedor.nome}`}
                       </span>
                       {item.validade && (
                         <span className="hidden lg:inline text-xs ml-1 flex items-center gap-0.5 flex-shrink-0">
@@ -520,41 +573,85 @@ export default function Farmacia() {
       {modalFormAberto && (
         <>
           <div className="fixed inset-0 bg-black/50 z-40" onClick={limparForm} />
-          <div className="fixed inset-x-4 top-12 bottom-4 z-50 overflow-y-auto bg-white rounded-2xl shadow-2xl max-w-lg mx-auto flex flex-col">
-            <div className="bg-emerald-700 px-5 py-4 rounded-t-2xl flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-2 text-white">
-                <Plus size={18} />
-                <p className="font-bold text-sm">{editandoId ? 'Editar Estoque' : 'Entrada de Estoque'}</p>
-              </div>
+          <div className="fixed inset-x-4 top-[4vh] z-50 bg-white rounded-2xl shadow-2xl max-w-lg mx-auto flex flex-col max-h-[92vh] overflow-hidden">
+            <div className="bg-emerald-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <p className="font-bold text-sm text-white">{editandoId ? 'Editar Estoque' : 'Entrada de Estoque'}</p>
               <button onClick={limparForm} className="text-white/60 hover:text-white"><X size={18} /></button>
             </div>
 
-            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
+            <div className="p-4 space-y-3 flex-1 overflow-y-auto">
 
               {/* Seletor de Medicamento */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
                   Medicamento <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <select
-                    value={form.medicamentoId || ''}
-                    onChange={(e) => setForm((f) => ({ ...f, medicamentoId: Number(e.target.value) }))}
+                <div className="relative" ref={comboboxRef}>
+                  <button
+                    type="button"
                     disabled={!!editandoId}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 appearance-none pr-8 disabled:bg-gray-100">
-                    <option value="">Selecione o medicamento...</option>
-                    {medicamentos.map((m) => (
-                      <option key={m.id} value={m.id}>{m.nome}</option>
-                    ))}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" />
+                    onClick={() => {
+                      if (!editandoId) {
+                        setDropdownMedAberto((v) => !v);
+                        setBuscaMed('');
+                      }
+                    }}
+                    className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-white">
+                    <span className={medSelecionado ? 'text-gray-900' : 'text-gray-400'}>
+                      {medSelecionado ? medSelecionado.nome : 'Selecione o medicamento...'}
+                    </span>
+                    <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                  </button>
+
+                  {dropdownMedAberto && (
+                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                      <div className="p-2 border-b border-gray-100">
+                        <div className="relative">
+                          <Search size={13} className="absolute left-2.5 top-2 text-gray-400" />
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Buscar medicamento..."
+                            value={buscaMed}
+                            onChange={(e) => setBuscaMed(e.target.value)}
+                            className="w-full pl-7 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                      </div>
+                      <ul className="max-h-44 overflow-y-auto">
+                        {medsFiltrados.length === 0 ? (
+                          <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum medicamento encontrado.</li>
+                        ) : (
+                          medsFiltrados.map((m) => (
+                            <li key={m.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setForm((f) => ({ ...f, medicamentoId: m.id }));
+                                  setDropdownMedAberto(false);
+                                  setBuscaMed('');
+                                }}
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 transition-colors ${
+                                  form.medicamentoId === m.id ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-800'
+                                }`}>
+                                <span className="block truncate">{m.nome}</span>
+                                {m.formaFarmaceutica && (
+                                  <span className="text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
+                                )}
+                              </button>
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Campos auto-preenchidos do catálogo */}
               {medSelecionado && (
-                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-xs text-gray-600 space-y-1">
-                  <p className="font-semibold text-indigo-700 text-[11px] uppercase tracking-wider mb-1.5">Do Catálogo</p>
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-2.5 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-indigo-700 text-[11px] uppercase tracking-wider mb-1">Do Catálogo</p>
                   <div className="grid grid-cols-2 gap-1">
                     <p><span className="text-gray-400">Forma:</span> {medSelecionado.formaFarmaceutica}</p>
                     <p><span className="text-gray-400">Unidade:</span> {medSelecionado.unidade}</p>
@@ -569,19 +666,52 @@ export default function Farmacia() {
 
               {/* Banner: medicamento já existe no estoque */}
               {estoqueExistente && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-gray-700">
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-gray-700">
                   <p>Estoque atual: <span className="font-bold">{estoqueExistente.qtdEstoque} {estoqueExistente.medicamento.unidade}</span></p>
                   <p className="mt-1 text-gray-500">A quantidade informada será somada ao estoque existente.</p>
                 </div>
               )}
 
-              {/* Valor + Lote + Validade */}
+              {/* Fornecedor + Nota Fiscal */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Fornecedor</label>
+                  <select
+                    value={form.fornecedorId}
+                    onChange={(e) => setForm((f) => ({ ...f, fornecedorId: Number(e.target.value) }))}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900">
+                    <option value={0}>Selecione o fornecedor...</option>
+                    {fornecedores.map((f) => (
+                      <option key={f.id} value={f.id}>{f.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Nota Fiscal</label>
+                  <input
+                    type="text"
+                    value={form.notaFiscal}
+                    onChange={(e) => setForm((f) => ({ ...f, notaFiscal: e.target.value }))}
+                    placeholder="Nº da NF"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Valor Comprado + Valor Repassado + Lote + Validade */}
               {!estoqueExistente && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor (R$) <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor Comprado (R$) <span className="text-red-500">*</span></label>
                     <input type="text" inputMode="decimal" value={valorStr}
                       onChange={(e) => handleValorChange(e.target.value)}
+                      placeholder="0,00"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor Repassado (R$)</label>
+                    <input type="text" inputMode="decimal" value={valorRepassadoStr}
+                      onChange={(e) => handleValorRepassadoChange(e.target.value)}
                       placeholder="0,00"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
@@ -594,11 +724,12 @@ export default function Farmacia() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
-                    <DateInputBR
+                    <input
+                      type="date"
                       value={form.validade}
-                      onChange={v => setForm(f => ({ ...f, validade: v }))}
                       min={hoje}
-                      className="border border-gray-300 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500"
+                      onChange={(e) => setForm((f) => ({ ...f, validade: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -614,11 +745,12 @@ export default function Farmacia() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
-                    <DateInputBR
+                    <input
+                      type="date"
                       value={form.validade}
-                      onChange={v => setForm(f => ({ ...f, validade: v }))}
                       min={hoje}
-                      className="border border-gray-300 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500"
+                      onChange={(e) => setForm((f) => ({ ...f, validade: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>

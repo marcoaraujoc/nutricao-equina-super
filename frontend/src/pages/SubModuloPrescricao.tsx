@@ -37,6 +37,13 @@ interface MedicamentoCat {
 interface EstoqueItem {
   medicamentoId: number;
   qtdEstoque: number;
+  medicamento: {
+    id: number;
+    nome: string;
+    formaFarmaceutica: string;
+    unidade: string;
+    vias: { via: string }[];
+  };
 }
 
 interface ItemGrupo {
@@ -88,6 +95,10 @@ interface Props {
   animalId:           number;
   animal?:            PrintAnimalPrescricao | null;
   onFaturaAtualizada: () => void;
+  evolucaoId?:        number;
+  atendimentoNumero?: string;
+  onSalvo?:           () => void;
+  openItemId?:        number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -253,12 +264,13 @@ interface GrupoModalProps {
   canEdit:              boolean;
   canFinalizarCancelar: boolean;
   podeImprimir?:        boolean;
+  evolucaoId?:          number;
   onClose:              () => void;
   onSaved:              () => void;
   isInline?:            boolean;
 }
 
-function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, onClose, onSaved, isInline = false }: GrupoModalProps) {
+function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, evolucaoId, onClose, onSaved, isInline = false }: GrupoModalProps) {
   const isCreate   = !grupo;
   const isReadOnly = grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO' || grupo?.status === 'CANCELADO';
   // Abre diretamente na "segunda tela" (form visível) quando editando uma prescrição SALVA
@@ -321,18 +333,28 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // Load catalogs on mount
   useEffect(() => {
-    api.get('/medicamentos?limit=500&ativo=true').then(r => {
-      setMedicamentos(r.data.dados ?? []);
+    api.get('/farmacia/estoque?ativo=true').then(r => {
+      const itens: EstoqueItem[] = r.data.dados ?? [];
+      const medMap = new Map<number, MedicamentoCat>();
+      const stockMap = new Map<number, number>();
+      itens.forEach(e => {
+        stockMap.set(e.medicamentoId, (stockMap.get(e.medicamentoId) ?? 0) + e.qtdEstoque);
+        if (!medMap.has(e.medicamentoId) && e.medicamento) {
+          medMap.set(e.medicamentoId, {
+            id: e.medicamento.id,
+            nome: e.medicamento.nome,
+            formaFarmaceutica: e.medicamento.formaFarmaceutica,
+            unidade: e.medicamento.unidade,
+            vias: e.medicamento.vias,
+          });
+        }
+      });
+      setMedicamentos([...medMap.values()].sort((a, b) => a.nome.localeCompare(b.nome)));
+      setEstoqueMap(stockMap);
     }).catch(() => {});
     api.get('/procedimentos?limit=500&ativo=true').then(r => {
       const lista: { id: number; nome: string }[] = r.data.dados ?? [];
       setProcedimentos(lista.map(p => ({ id: p.id, nome: p.nome })));
-    }).catch(() => {});
-    api.get('/farmacia/estoque?limit=1000&ativo=true').then(r => {
-      const itens: EstoqueItem[] = r.data.dados ?? [];
-      const map = new Map<number, number>();
-      itens.forEach(e => map.set(e.medicamentoId, e.qtdEstoque));
-      setEstoqueMap(map);
     }).catch(() => {});
   }, []);
 
@@ -379,8 +401,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // ── Adicionar / atualizar item ──────────────────────────────────────────────
 
-  const handleAdicionarMais = async () => {
-    if (!validarForm()) return;
+  const handleAdicionarMais = async (): Promise<boolean> => {
+    if (!validarForm()) return false;
 
     if (isCreate) {
       if (editingLocalIdx !== null) {
@@ -390,10 +412,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         setLocalItens(prev => [...prev, form]);
       }
       clearCurrentType();
-      return;
+      return true;
     }
 
     setSaving(true);
+    let ok = false;
     try {
       if (editingServerId !== null) {
         const res = await api.put(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${editingServerId}`, form);
@@ -407,12 +430,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         setShowAddForm(false);
       }
       clearCurrentType();
+      ok = true;
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao salvar item');
     } finally {
       setSaving(false);
     }
+    return ok;
   };
 
   const handleEditarLocal = (idx: number) => {
@@ -466,7 +491,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (!formEstaVazio() && !validarForm()) return;
     setSaving(true);
     try {
-      await api.post('/clinica/prescricoes/grupos', { animalId, itens });
+      await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
       toast.success('Prescrição salva');
       onSaved(); onClose();
     } catch (err: unknown) {
@@ -485,7 +510,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         const itens = formEstaVazio() ? localItens : [...localItens, form];
         if (itens.length === 0) { toast.error('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
-        const res = await api.post('/clinica/prescricoes/grupos', { animalId, itens });
+        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
         grupoId = res.data.dados.id;
       }
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
@@ -503,6 +528,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   };
 
   const handleFinalizar = () => executarFinalizacao(false);
+
+  const handleSalvarEditMode = async () => {
+    if (!formEstaVazio()) {
+      const ok = await handleAdicionarMais();
+      if (!ok) return;
+    }
+    onSaved();
+    onClose();
+  };
 
   if (alertaEstoque) {
     return (
@@ -553,349 +587,330 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         )}
 
         <div className={isInline ? '' : 'flex-1 overflow-y-auto'}>
+          <div className="px-5 py-3 space-y-3">
 
-          {/* Formulário de item — create mode, ao editar item existente, ou ao inserir novo em edit mode */}
-          {showItemForm && (
-            <div className="px-5 pt-4 pb-3 border-b border-gray-100 space-y-3">
-              {/* Subheader — modal only */}
-              {!isInline && (
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                    {editandoItem ? '↳ EDITANDO ITEM' : '↳ INSERIR ITEM'}
-                  </p>
-                  {!isCreate && showAddForm && !editandoItem && (
-                    <button onClick={() => { setShowAddForm(false); resetForm(); }}
-                      className="p-1 text-gray-400 hover:text-gray-600">
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Tabs tipo */}
-              <div className="flex items-center gap-2">
-                {editandoItem ? (
-                  <>
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl ${
-                      form.tipo === 'MEDICAMENTO' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {form.tipo === 'MEDICAMENTO' ? <Pill size={11} /> : <Activity size={11} />}
-                      {form.tipo === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
-                    </span>
-                    <span className="text-[10px] text-gray-400 italic">tipo travado na edição</span>
-                  </>
-                ) : (
-                  (['MEDICAMENTO', 'PROCEDIMENTO'] as TipoItem[]).map(t => (
-                    <button key={t} onClick={() => switchTipo(t)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
-                        form.tipo === t ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
-                      }`}>
-                      {t === 'MEDICAMENTO' ? <Pill size={11} /> : <Activity size={11} />}
-                      {t === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
-                    </button>
-                  ))
-                )}
-              </div>
-
-              {/* Campos: layout 4 colunas (inline+med) ou empilhado (modal ou procedimento) */}
-              {isInline && isMed ? (
-                <div className="grid grid-cols-1 sm:grid-cols-8 gap-3 items-end">
-
-                  {/* MEDICAMENTO (span 3) */}
-                  <div className="sm:col-span-3">
-                    <label className="block text-xs text-gray-500 mb-1">MEDICAMENTO *</label>
-                    <div className="relative">
-                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                      <input
-                        type="text"
-                        value={form.medicamento}
-                        onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowMedDropdown(true); }}
-                        onFocus={() => setShowMedDropdown(true)}
-                        onBlur={() => setTimeout(() => setShowMedDropdown(false), 150)}
-                        placeholder="Buscar medicamento..."
-                        className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                      />
-                      {showMedDropdown && (
-                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                          {medicamentos
-                            .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                            .slice(0, 40)
-                            .map(m => {
-                              const qtd = estoqueMap.get(m.id) ?? 0;
-                              return (
-                                <button key={m.id} type="button"
-                                  onMouseDown={() => {
-                                    setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: m.unidade, via: m.vias[0]?.via ?? prev.via }));
-                                    setShowMedDropdown(false);
-                                  }}
-                                  className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                                  <span className="font-medium">{m.nome}</span>
-                                  {m.formaFarmaceutica && <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>}
-                                  {qtd > 0 && <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Em estoque</span>}
-                                </button>
-                              );
-                            })}
-                          {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                            <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* DOSAGEM (span 2) */}
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
-                    <div className="flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
-                      <input type="number" min="0" step="0.001" value={form.dosagem}
-                        onChange={e => set('dosagem', e.target.value)}
-                        className="flex-1 min-w-[40px] px-3 py-2 text-sm focus:outline-none bg-transparent" />
-                      <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
-                      {unidadeCatalogo ? (
-                        <span className="px-2 py-2 text-sm text-gray-700 font-medium flex-shrink-0">{unidadeCatalogo}</span>
-                      ) : (
-                        <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
-                          className="w-20 flex-shrink-0 px-1 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                          <option value="">—</option>
-                          {UNIDADES.map(u => <option key={u}>{u}</option>)}
-                        </select>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* VIA ADMINISTRAÇÃO (span 2) */}
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
-                    <select value={form.via} onChange={e => set('via', e.target.value)}
-                      className={`w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
-                      <option value="">— Selecionar —</option>
-                      {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
-                    </select>
-                  </div>
-
-                  {/* CLIENTE (span 1) */}
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">CLIENTE</label>
-                    <select
-                      value={form.medicamentoCliente ? 'SIM' : 'NAO'}
-                      onChange={e => set('medicamentoCliente', e.target.value === 'SIM')}
-                      className="w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-white"
-                    >
-                      <option value="NAO">Não</option>
-                      <option value="SIM">Sim</option>
-                    </select>
-                    {form.medicamentoCliente && (
-                      <span className="block text-[11px] text-amber-600 mt-0.5">Sem baixa no estoque</span>
+            {/* Formulário de item — dentro da área de itens */}
+            {showItemForm && (
+              <div className="space-y-3 pb-3 border-b border-gray-100">
+                {/* Subheader — modal only */}
+                {!isInline && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      {editandoItem ? '↳ EDITANDO ITEM' : '↳ INSERIR ITEM'}
+                    </p>
+                    {!isCreate && showAddForm && !editandoItem && (
+                      <button onClick={() => { setShowAddForm(false); resetForm(); }}
+                        className="p-1 text-gray-400 hover:text-gray-600">
+                        <X size={14} />
+                      </button>
                     )}
                   </div>
+                )}
 
+                {/* Tabs tipo */}
+                <div className="flex items-center gap-2">
+                  {editandoItem ? (
+                    <>
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl ${
+                        form.tipo === 'MEDICAMENTO' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {form.tipo === 'MEDICAMENTO' ? <Pill size={11} /> : <Activity size={11} />}
+                        {form.tipo === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
+                      </span>
+                      <span className="text-[10px] text-gray-400 italic">tipo travado na edição</span>
+                    </>
+                  ) : (
+                    (['MEDICAMENTO', 'PROCEDIMENTO'] as TipoItem[]).map(t => (
+                      <button key={t} onClick={() => switchTipo(t)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
+                          form.tipo === t ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}>
+                        {t === 'MEDICAMENTO' ? <Pill size={11} /> : <Activity size={11} />}
+                        {t === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
+                      </button>
+                    ))
+                  )}
                 </div>
-              ) : (
-                <>
-                {/* Medicamento / Procedimento — campo único (modal ou procedimento) */}
-                <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
-                </label>
-                <div className="relative">
-                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={form.medicamento}
-                    onChange={e => {
-                      set('medicamento', e.target.value);
-                      set('medicamentoCatId', null);
-                      if (isMed) setShowMedDropdown(true);
-                      else       setShowProcDropdown(true);
-                    }}
-                    onFocus={() => {
-                      if (isMed) setShowMedDropdown(true);
-                      else       setShowProcDropdown(true);
-                    }}
-                    onBlur={() => setTimeout(() => {
-                      setShowMedDropdown(false);
-                      setShowProcDropdown(false);
-                    }, 150)}
-                    placeholder={isMed ? 'Buscar medicamento...' : 'Buscar procedimento...'}
-                    className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                  />
-                  {/* Dropdown medicamentos */}
-                  {isMed && showMedDropdown && (
-                    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                      {medicamentos
-                        .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                        .slice(0, 40)
-                        .map(m => {
-                          const qtd = estoqueMap.get(m.id) ?? 0;
-                          return (
+
+                {/* Campos: layout 3 colunas (inline+med) ou empilhado (modal ou procedimento) */}
+                {isInline && isMed ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-7 gap-3 items-end">
+
+                    {/* MEDICAMENTO (span 3) */}
+                    <div className="sm:col-span-3">
+                      <label className="block text-xs text-gray-500 mb-1">MEDICAMENTO *</label>
+                      <div className="relative">
+                        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={form.medicamento}
+                          onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowMedDropdown(true); }}
+                          onFocus={() => setShowMedDropdown(true)}
+                          onBlur={() => setTimeout(() => setShowMedDropdown(false), 150)}
+                          placeholder="Buscar medicamento..."
+                          className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                        />
+                        {showMedDropdown && (
+                          <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                            {medicamentos
+                              .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                              .slice(0, 40)
+                              .map(m => {
+                                const qtd = estoqueMap.get(m.id) ?? 0;
+                                return (
+                                  <button key={m.id} type="button"
+                                    onMouseDown={() => {
+                                      setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: m.unidade, via: m.vias[0]?.via ?? prev.via }));
+                                      setShowMedDropdown(false);
+                                    }}
+                                    className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
+                                    <span className="font-medium">{m.nome}</span>
+                                    {m.formaFarmaceutica && <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>}
+                                    {qtd > 0
+                                      ? <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Estoque: {qtd}</span>
+                                      : <span className="ml-2 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Sem estoque</span>
+                                    }
+                                  </button>
+                                );
+                              })}
+                            {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                              <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* DOSAGEM (span 2) */}
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
+                      <div className="flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                        <input type="number" min="0" step="0.001" value={form.dosagem}
+                          onChange={e => set('dosagem', e.target.value)}
+                          className="flex-1 min-w-[40px] px-3 py-2 text-sm focus:outline-none bg-transparent" />
+                        <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+                        {unidadeCatalogo ? (
+                          <span className="px-2 py-2 text-sm text-gray-700 font-medium flex-shrink-0">{unidadeCatalogo}</span>
+                        ) : (
+                          <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
+                            className="w-20 flex-shrink-0 px-1 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
+                            <option value="">—</option>
+                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* VIA ADMINISTRAÇÃO (span 2) */}
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
+                      <select value={form.via} onChange={e => set('via', e.target.value)}
+                        className={`w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                        <option value="">— Selecionar —</option>
+                        {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
+                      </select>
+                    </div>
+
+                  </div>
+                ) : (
+                  <>
+                  {/* Medicamento / Procedimento — campo único (modal ou procedimento) */}
+                  <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
+                  </label>
+                  <div className="relative">
+                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={form.medicamento}
+                      onChange={e => {
+                        set('medicamento', e.target.value);
+                        set('medicamentoCatId', null);
+                        if (isMed) setShowMedDropdown(true);
+                        else       setShowProcDropdown(true);
+                      }}
+                      onFocus={() => {
+                        if (isMed) setShowMedDropdown(true);
+                        else       setShowProcDropdown(true);
+                      }}
+                      onBlur={() => setTimeout(() => {
+                        setShowMedDropdown(false);
+                        setShowProcDropdown(false);
+                      }, 150)}
+                      placeholder={isMed ? 'Buscar medicamento...' : 'Buscar procedimento...'}
+                      className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                    />
+                    {/* Dropdown medicamentos */}
+                    {isMed && showMedDropdown && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                        {medicamentos
+                          .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                          .slice(0, 40)
+                          .map(m => {
+                            const qtd = estoqueMap.get(m.id) ?? 0;
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                onMouseDown={() => {
+                                  setForm(prev => ({
+                                    ...prev,
+                                    medicamento:      m.nome,
+                                    medicamentoCatId: m.id,
+                                    unidade:          m.unidade,
+                                    via:              m.vias[0]?.via ?? prev.via,
+                                  }));
+                                  setShowMedDropdown(false);
+                                }}
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
+                                <span className="font-medium">{m.nome}</span>
+                                {m.formaFarmaceutica && (
+                                  <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
+                                )}
+                                {qtd > 0
+                                  ? <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Estoque: {qtd}</span>
+                                  : <span className="ml-2 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Sem estoque</span>
+                                }
+                              </button>
+                            );
+                          })}
+                        {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                          <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
+                        )}
+                      </div>
+                    )}
+                    {/* Dropdown procedimentos */}
+                    {!isMed && showProcDropdown && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                        {procedimentos
+                          .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                          .slice(0, 40)
+                          .map(p => (
                             <button
-                              key={m.id}
+                              key={p.id}
                               type="button"
                               onMouseDown={() => {
-                                setForm(prev => ({
-                                  ...prev,
-                                  medicamento:      m.nome,
-                                  medicamentoCatId: m.id,
-                                  unidade:          m.unidade,
-                                  via:              m.vias[0]?.via ?? prev.via,
-                                }));
-                                setShowMedDropdown(false);
+                                set('medicamento', p.nome);
+                                setShowProcDropdown(false);
                               }}
                               className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                              <span className="font-medium">{m.nome}</span>
-                              {m.formaFarmaceutica && (
-                                <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
-                              )}
-                              {qtd > 0 && (
-                                <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                                  Em estoque
-                                </span>
-                              )}
+                              <span className="font-medium">{p.nome}</span>
                             </button>
-                          );
-                        })}
-                      {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                        <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
-                      )}
-                    </div>
-                  )}
-                  {/* Dropdown procedimentos */}
-                  {!isMed && showProcDropdown && (
-                    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                      {procedimentos
-                        .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                        .slice(0, 40)
-                        .map(p => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onMouseDown={() => {
-                              set('medicamento', p.nome);
-                              setShowProcDropdown(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                            <span className="font-medium">{p.nome}</span>
-                          </button>
-                        ))}
-                      {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                        <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Medicamento Cliente */}
-              {isMed && (
-                <div className="flex items-center gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">CLIENTE</label>
-                    <select
-                      value={form.medicamentoCliente ? 'SIM' : 'NAO'}
-                      onChange={e => set('medicamentoCliente', e.target.value === 'SIM')}
-                      className="border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500 bg-white"
-                    >
-                      <option value="NAO">Não</option>
-                      <option value="SIM">Sim</option>
-                    </select>
+                          ))}
+                        {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                          <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {form.medicamentoCliente && (
-                    <span className="text-[11px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium self-end mb-1">
-                      Sem baixa no estoque
-                    </span>
-                  )}
                 </div>
-              )}
 
-              {/* Dosagem + Via */}
-              {isMed && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
-                    <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
-                      <input type="number" min="0" step="0.001" value={form.dosagem}
-                        onChange={e => set('dosagem', e.target.value)}
-                        className="flex-1 min-w-0 px-3 py-2 text-sm focus:outline-none bg-transparent" />
-                      <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
-                      {unidadeCatalogo ? (
-                        <span className="px-2 py-2 text-sm text-gray-700 font-medium flex-shrink-0">
-                          {unidadeCatalogo}
-                        </span>
-                      ) : (
-                        <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
-                          className="px-2 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                          <option value="">—</option>
-                          {UNIDADES.map(u => <option key={u}>{u}</option>)}
-                        </select>
-                      )}
+                {/* Dosagem + Via */}
+                {isMed && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
+                      <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                        <input type="number" min="0" step="0.001" value={form.dosagem}
+                          onChange={e => set('dosagem', e.target.value)}
+                          className="flex-1 min-w-0 px-3 py-2 text-sm focus:outline-none bg-transparent" />
+                        <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+                        {unidadeCatalogo ? (
+                          <span className="px-2 py-2 text-sm text-gray-700 font-medium flex-shrink-0">
+                            {unidadeCatalogo}
+                          </span>
+                        ) : (
+                          <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
+                            className="px-2 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
+                            <option value="">—</option>
+                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
+                      <select value={form.via} onChange={e => set('via', e.target.value)}
+                        className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                        <option value="">— Selecionar —</option>
+                        {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
+                      </select>
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
-                    <select value={form.via} onChange={e => set('via', e.target.value)}
-                      className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                )}
+                  </>
+                )}
+
+                {/* Frequência + Hora + Duração + Data Início */}
+                <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
+                  <div className="col-span-2 sm:col-span-3">
+                    <label className="block text-xs text-gray-500 mb-1">FREQUÊNCIA *</label>
+                    <select value={form.frequencia} onChange={e => set('frequencia', e.target.value)}
+                      className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
                       <option value="">— Selecionar —</option>
-                      {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
+                      {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
                     </select>
                   </div>
+                  <div className="sm:col-span-1">
+                    <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
+                    <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS) *</label>
+                    <input type="number" min="1"
+                      value={form.duracaoDias}
+                      onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="Ex: 7"
+                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
+                  </div>
+                  <div className="col-span-2 sm:col-span-2">
+                    <label className="block text-xs text-gray-500 mb-1">DATA INÍCIO</label>
+                    <input
+                      type="date"
+                      value={form.dataInicio}
+                      onChange={e => set('dataInicio', e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
-              )}
-                </>
-              )}
 
-              {/* Frequência + Hora + Duração + Data Início */}
-              <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
-                <div className="col-span-2 sm:col-span-3">
-                  <label className="block text-xs text-gray-500 mb-1">FREQUÊNCIA *</label>
-                  <select value={form.frequencia} onChange={e => set('frequencia', e.target.value)}
-                    className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
-                    <option value="">— Selecionar —</option>
-                    {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
-                  </select>
+                {/* Observação */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">OBSERVAÇÃO</label>
+                  <textarea value={form.observacao} onChange={e => set('observacao', e.target.value)}
+                    rows={2} maxLength={500} placeholder="Instrução de uso, diluição, etc..."
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
                 </div>
-                <div className="sm:col-span-1">
-                  <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
-                  <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS) *</label>
-                  <input type="number" min="1"
-                    value={form.duracaoDias}
-                    onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
-                    placeholder="Ex: 7"
-                    className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
-                </div>
-                <div className="col-span-2 sm:col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">DATA INÍCIO</label>
-                  <input
-                    type="date"
-                    value={form.dataInicio}
-                    onChange={e => set('dataInicio', e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
+
+                {/* Checkbox medicamento fornecido pelo cliente */}
+                {isMed && (
+                  <div>
+                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={form.medicamentoCliente}
+                        onChange={e => set('medicamentoCliente', e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
+                    </label>
+                    {form.medicamentoCliente && (
+                      <p className="text-xs text-amber-600 mt-1.5 ml-6">Sem baixa no estoque</p>
+                    )}
+                  </div>
+                )}
               </div>
+            )}
 
-              {/* Observação */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">OBSERVAÇÃO</label>
-                <textarea value={form.observacao} onChange={e => set('observacao', e.target.value)}
-                  rows={2} maxLength={500} placeholder="Instrução de uso, diluição, etc..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
-              </div>
-
-            </div>
-          )}
-
-          {/* Lista de itens */}
-          <div className="px-5 py-3">
-            {itensExibidos.length === 0 ? (
+            {/* Lista de itens — empty state só aparece quando o form está fechado */}
+            {!showItemForm && itensExibidos.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-gray-300">
                 <FileText size={28} className="mb-2" />
                 <p className="text-sm text-gray-400">Nenhum item adicionado</p>
               </div>
-            ) : (
+            ) : itensExibidos.length > 0 ? (
               <>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
                   ITENS DA PRESCRIÇÃO ({itensExibidos.length})
@@ -957,7 +972,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   }
                 </div>
               </>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -985,7 +1000,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               <button
                 onClick={handleAdicionarMais}
                 disabled={saving || formEstaVazio()}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 text-sm font-medium rounded-xl transition-colors">
+                className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
                 {saving && <Loader2 size={13} className="animate-spin" />}
                 {editandoItem ? 'Atualizar item' : 'Inserir'}
               </button>
@@ -1001,7 +1016,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
             {/* Salvar — create mode ou edit mode SALVO */}
             {canEdit && !isReadOnly && (
-              <button onClick={isCreate ? handleSalvar : onClose} disabled={saving || finalizing}
+              <button onClick={isCreate ? handleSalvar : handleSalvarEditMode} disabled={saving || finalizing}
                 className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
                 {saving ? <Loader2 size={13} className="animate-spin" /> : null}
                 Salvar
@@ -1165,7 +1180,7 @@ function CancelarModal({
 
 // ─── SubModuloPrescricao ──────────────────────────────────────────────────────
 
-export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada }: Props) {
+export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, atendimentoNumero, onSalvo, openItemId }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -1210,6 +1225,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
 
+  useEffect(() => {
+    if (!openItemId) return;
+    api.get(`/clinica/prescricoes/grupos/${openItemId}`)
+      .then(res => {
+        if (res.data?.dados) { setEditingGrupo(res.data.dados as PrescricaoGrupo); setShowEditModal(true); }
+      })
+      .catch(() => {});
+  }, [openItemId]);
+
   const handleFinalizarDireto = async (grupoId: number) => {
     if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
     try {
@@ -1217,6 +1241,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       toast.success('Prescrição finalizada');
       carregar();
       onFaturaAtualizada();
+      onSalvo?.();
     } catch (err: unknown) {
       const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
       if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
@@ -1236,6 +1261,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       toast.success('Prescrição finalizada');
       carregar();
       onFaturaAtualizada();
+      onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao finalizar prescrição');
@@ -1244,7 +1270,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     }
   };
   const fecharModal = () => { setShowEditModal(false); setEditingGrupo(null); };
-  const onSaved = () => { carregar(); onFaturaAtualizada(); };
+  const onSaved = () => { carregar(); onFaturaAtualizada(); onSalvo?.(); };
 
   const handleExcluirCancelar = async (motivo: string) => {
     if (!podeFinalizar) { semPermissao('cancelar prescrição'); return; }
@@ -1271,6 +1297,18 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     </div>
   );
 
+  if (!evolucaoId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+        <FileText size={32} className="mb-3 text-gray-200" />
+        <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
+        <p className="text-xs mt-1 text-center max-w-xs">
+          Inicie uma evolução na aba Evolução para registrar prescrições neste atendimento.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Formulário inline de criação */}
@@ -1283,6 +1321,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           canEdit={canEdit}
           canFinalizarCancelar={canFinalizarCancelar}
           podeImprimir={podeImprimir}
+          evolucaoId={evolucaoId}
           onClose={() => setInlineFormKey(k => k + 1)}
           onSaved={onSaved}
           isInline

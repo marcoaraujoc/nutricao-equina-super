@@ -182,6 +182,12 @@ const TIPO_ESPECIES_MAP: Record<string, string[] | null> = {
 };
 
 // ─── Componente principal ─────────────────────────────────────────────────────
+function mascaraTelefone(v: string): string {
+  const n = v.replace(/\D/g, '').slice(0, 11);
+  if (n.length <= 10) return n.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3');
+  return n.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+}
+
 const Animal = () => {
   const { refreshSelectedAnimal } = useSelectedAnimal();
   const { user }                  = useAuth();
@@ -224,10 +230,16 @@ const Animal = () => {
   const [salvandoLocal,  setSalvandoLocal]  = useState(false);
 
   // ── Tratador do animal ─────────────────────────────────────────────────────
-  const [tratadores,      setTratadores]      = useState<Tratador[]>([]);
-  const [tratBusca,       setTratBusca]       = useState('');
+  const [tratadores,       setTratadores]       = useState<Tratador[]>([]);
+  const [tratBusca,        setTratBusca]        = useState('');
   const [tratDropdownOpen, setTratDropdownOpen] = useState(false);
-  const [criandoTratador, setCriandoTratador] = useState(false);
+  const [criandoTratador,  setCriandoTratador]  = useState(false);
+  const [modalNovoTrat,    setModalNovoTrat]    = useState(false);
+  const [novoTratNome,     setNovoTratNome]     = useState('');
+  const [novoTratTelefone, setNovoTratTelefone] = useState('');
+  const [novoTratLocId,    setNovoTratLocId]    = useState<number | null>(null);
+  const [novoTratLocBusca, setNovoTratLocBusca] = useState('');
+  const [novoTratLocOpen,  setNovoTratLocOpen]  = useState(false);
 
   // ── Busca por nome (vet, novo cadastro) ────────────────────────────────────
   const [buscandoAnimal,    setBuscandoAnimal]    = useState(false);
@@ -389,7 +401,7 @@ const Animal = () => {
         // Filtrar espécies pelas atendidas na empresa/equipe
         // (vet: suas espécies; gestor: união das espécies dos vets da equipe)
         let especiesVisiveis = todasEspecies;
-        if (isVet) {
+        if (isVet || isGestor) {
           try {
             const espEquipeRes = await api.get('/equipes/minhas-especies');
             const nomes: string[] = espEquipeRes.data?.dados ?? [];
@@ -460,7 +472,7 @@ const Animal = () => {
             setFormProp({
               nomeCompleto: a.user.fullName ?? '',
               email:        a.user.email   ?? '',
-              telefone:     a.user.phone   ?? '',
+              telefone:     a.user.phone ? mascaraTelefone(a.user.phone.replace(/\D/g, '')) : '',
             });
           }
           setAnimalBloqueado(a.bloqueado ?? false);
@@ -510,7 +522,7 @@ const Animal = () => {
             setFormProp({
               nomeCompleto: animal.proprietario.fullName ?? '',
               email:        animal.proprietario.email    ?? '',
-              telefone:     animal.proprietario.phone    ?? '',
+              telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
             });
           }
         } else if (animal.vetDaMinhaEquipe) {
@@ -549,7 +561,7 @@ const Animal = () => {
         setFormProp(p => ({
           ...p,
           nomeCompleto: res.data.fullName ?? '',
-          telefone:     res.data.phone    ?? '',
+          telefone:     res.data.phone ? mascaraTelefone(res.data.phone.replace(/\D/g, '')) : '',
         }));
         setProprietarioExistente(true);
       } else {
@@ -632,20 +644,33 @@ const Animal = () => {
   };
 
   // ── Criar tratador inline ──────────────────────────────────────────────────
-  const handleCriarTratador = async (nome: string) => {
-    if (!nome.trim() || criandoTratador) return;
+  const abrirModalNovoTratador = (nome: string) => {
+    setNovoTratNome(nome);
+    setNovoTratTelefone('');
+    setNovoTratLocId(formData.localizacaoId);
+    const locAtual = localizacoes.find(l => l.id === formData.localizacaoId);
+    setNovoTratLocBusca(locAtual?.nome ?? '');
+    setNovoTratLocOpen(false);
+    setTratDropdownOpen(false);
+    setModalNovoTrat(true);
+  };
+
+  const handleCriarTratador = async () => {
+    if (!novoTratNome.trim()) { toast.error('Nome é obrigatório'); return; }
+    if (!novoTratLocId)       { toast.error('Local de trabalho é obrigatório'); return; }
     setCriandoTratador(true);
     try {
       const res = await api.post('/cadastro/tratadores', {
-        nome: nome.trim(),
-        localizacaoId: formData.localizacaoId ?? undefined,
+        nome:          novoTratNome.trim(),
+        telefone:      novoTratTelefone || undefined,
+        localizacaoId: novoTratLocId,
       });
       if (res.data?.dados) {
         const novo: Tratador = res.data.dados;
         setTratadores(prev => [...prev, novo].sort((a, b) => a.nome.localeCompare(b.nome)));
         setFormData(p => ({ ...p, tratadorId: novo.id }));
         setTratBusca(novo.nome);
-        setTratDropdownOpen(false);
+        setModalNovoTrat(false);
         toast.success('Tratador criado com sucesso!');
       }
     } catch (err: unknown) {
@@ -686,6 +711,10 @@ const Animal = () => {
     if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
       if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
       if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
+      const digsTel = formProp.telefone.replace(/\D/g, '');
+      if (digsTel && (digsTel.length < 10 || digsTel.length > 11)) {
+        toast.error('Telefone inválido — use (00) 00000-0000'); setSubmitting(false); return;
+      }
     }
 
     try {
@@ -1226,11 +1255,10 @@ const Animal = () => {
                   )}
                   {tratBusca.trim() && filteredTrats.length === 0 && (
                     <button type="button"
-                      onMouseDown={() => handleCriarTratador(tratBusca)}
-                      disabled={criandoTratador}
-                      className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100 disabled:opacity-50">
+                      onMouseDown={() => abrirModalNovoTratador(tratBusca)}
+                      className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100">
                       <Plus size={13} />
-                      {criandoTratador ? 'Criando…' : `Criar "${tratBusca}"`}
+                      Criar "{tratBusca}"
                     </button>
                   )}
                 </div>
@@ -1296,7 +1324,7 @@ const Animal = () => {
                       <input
                         type="tel"
                         value={formProp.telefone}
-                        onChange={e => setFormProp(p => ({ ...p, telefone: e.target.value }))}
+                        onChange={e => setFormProp(p => ({ ...p, telefone: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
                         disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
                         className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
@@ -1493,6 +1521,107 @@ const Animal = () => {
               className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >
               {salvandoLocal ? 'Salvando...' : 'Criar local'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── Mini-modal: Novo Tratador ──────────────────────────────────────── */}
+    {modalNovoTrat && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm space-y-4">
+          <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+            <User2 size={16} className="text-emerald-600" />
+            Novo Tratador
+          </h3>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Nome <span className="text-red-500">*</span>
+            </label>
+            <input
+              value={novoTratNome}
+              onChange={e => setNovoTratNome(e.target.value)}
+              className={inputClass}
+              placeholder="Ex.: João da Silva"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
+            <input
+              value={novoTratTelefone}
+              onChange={e => setNovoTratTelefone(mascaraTelefone(e.target.value))}
+              placeholder="(00) 00000-0000"
+              className={inputClass}
+            />
+          </div>
+
+          <div className="relative">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Local de Trabalho <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={novoTratLocBusca}
+                onChange={e => {
+                  setNovoTratLocBusca(e.target.value);
+                  setNovoTratLocOpen(true);
+                  if (novoTratLocId) setNovoTratLocId(null);
+                }}
+                onFocus={() => setNovoTratLocOpen(true)}
+                onBlur={() => setTimeout(() => setNovoTratLocOpen(false), 200)}
+                placeholder="Buscar localização…"
+                className={`${inputClass} pr-8`}
+                autoComplete="off"
+              />
+              {novoTratLocId
+                ? <CheckCircle2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+                : novoTratLocBusca && (
+                  <button type="button"
+                    onMouseDown={() => { setNovoTratLocBusca(''); setNovoTratLocId(null); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-400">
+                    <X size={14} />
+                  </button>
+                )
+              }
+            </div>
+            {novoTratLocOpen && (
+              <div className="absolute z-20 w-full bg-white border border-gray-200 shadow-xl rounded-xl mt-1 max-h-44 overflow-y-auto">
+                {localizacoes
+                  .filter(l => !novoTratLocBusca.trim() || l.nome.toLowerCase().includes(novoTratLocBusca.toLowerCase()))
+                  .map(loc => (
+                    <button key={loc.id} type="button"
+                      onMouseDown={() => { setNovoTratLocId(loc.id); setNovoTratLocBusca(loc.nome); setNovoTratLocOpen(false); }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 text-sm border-b border-gray-50 last:border-0">
+                      <span className="font-medium text-gray-800">{loc.nome}</span>
+                    </button>
+                  ))}
+                {novoTratLocBusca.trim() && localizacoes.filter(l => l.nome.toLowerCase().includes(novoTratLocBusca.toLowerCase())).length === 0 && (
+                  <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{novoTratLocBusca}"</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setModalNovoTrat(false)}
+              className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleCriarTratador}
+              disabled={criandoTratador || !novoTratNome.trim() || !novoTratLocId}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+            >
+              {criandoTratador ? 'Salvando...' : 'Criar tratador'}
             </button>
           </div>
         </div>

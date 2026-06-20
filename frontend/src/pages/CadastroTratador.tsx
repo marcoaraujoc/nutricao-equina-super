@@ -154,7 +154,8 @@ export default function CadastroTratador() {
 
   // ── Salvar ────────────────────────────────────────────────────────────────
   const salvar = async () => {
-    if (!form.nome.trim()) { toast.error('Nome é obrigatório'); return; }
+    if (!form.nome.trim())      { toast.error('Nome é obrigatório'); return; }
+    if (!form.localizacaoId)    { toast.error('Local de trabalho é obrigatório'); return; }
     setSalvando(true);
     try {
       const payload = {
@@ -475,7 +476,7 @@ export default function CadastroTratador() {
               {/* Local de Trabalho — combobox */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Local de Trabalho
+                  Local de Trabalho <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <input
@@ -532,7 +533,7 @@ export default function CadastroTratador() {
                     </div>
                   )}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Opcional — selecione o local onde o tratador trabalha.</p>
+                <p className="text-xs text-gray-400 mt-1">Selecione o local onde o tratador trabalha.</p>
               </div>
             </div>
 

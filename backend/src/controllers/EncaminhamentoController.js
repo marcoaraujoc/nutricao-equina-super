@@ -5,6 +5,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem } = require('../lib/faturaUtils');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -32,6 +33,21 @@ async function getEquipeIdsDoAnimal(animal, reqEquipeId) {
 }
 
 const EncaminhamentoController = {
+
+  // GET /clinica/encaminhamentos/:id
+  obterPorId: async (req, res) => {
+    try {
+      const item = await prisma.encaminhamentoClinico.findUnique({
+        where:   { id: Number(req.params.id) },
+        include: INCLUDE,
+      });
+      if (!item) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
+      res.json({ dados: item });
+    } catch (err) {
+      console.error('Erro ao obter encaminhamento:', err);
+      res.status(500).json({ error: 'Erro ao obter encaminhamento' });
+    }
+  },
 
   // GET /clinica/encaminhamentos/animal/:animalId
   listarPorAnimal: async (req, res) => {
@@ -135,19 +151,29 @@ const EncaminhamentoController = {
   },
 
   // POST /clinica/encaminhamentos
-  // body: { animalId, especialidade, motivo, prestadorId?, veterinarioDestino?,
-  //         clinicaDestino?, urgencia?, observacao? }
+  // body: { animalId, especialidade, motivo, evolucaoId, prestadorId?, veterinarioDestino?,
+  //         clinicaDestino?, urgencia?, observacao?, valor? }
   // prestadorId presente → cria/reativa DesignacaoPrestador (acesso do prestador ao animal)
   criar: async (req, res) => {
     try {
       const {
-        animalId, especialidade, motivo, prestadorId,
-        veterinarioDestino, clinicaDestino, urgencia = 'NORMAL', observacao,
+        animalId, especialidade, motivo, evolucaoId, prestadorId,
+        veterinarioDestino, clinicaDestino, urgencia = 'NORMAL', observacao, valor,
       } = req.body;
 
       if (!animalId || !especialidade || !motivo) {
         return res.status(400).json({ error: 'animalId, especialidade e motivo são obrigatórios' });
       }
+      if (!evolucaoId) {
+        return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
+      }
+
+      // Valida que a evolução existe e pertence ao animal
+      const evolucao = await prisma.evolucaoClinica.findFirst({
+        where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
+        select: { id: true, numero: true, tipoAtendimento: true },
+      });
+      if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
 
       const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
@@ -184,6 +210,7 @@ const EncaminhamentoController = {
             animalId:           Number(animalId),
             veterinarioId:      req.user.id,
             prestadorId:        prestadorId ? Number(prestadorId) : null,
+            evolucaoId:         Number(evolucaoId),
             especialidade,
             motivo,
             veterinarioDestino: veterinarioDestino || null,
@@ -219,6 +246,31 @@ const EncaminhamentoController = {
               criadoPorId:      req.user.id,
             },
           });
+        }
+
+        // Lança na fatura se valor fornecido
+        if (valor && Number(valor) > 0) {
+          const animal = await tx.animal.findUnique({
+            where:  { id: Number(animalId) },
+            select: { userId: true },
+          });
+          if (animal?.userId) {
+            const atendNum  = formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero);
+            const destino   = prestadorId
+              ? (enc.prestador?.fullName ?? especialidade)
+              : (veterinarioDestino || clinicaDestino || 'externo');
+            const descricao = `[${atendNum}] ${especialidade} — ${destino}`;
+            const fatura    = await getOrCreateFatura(tx, animal.userId);
+            await adicionarFaturaItem(tx, {
+              faturaId:     fatura.id,
+              animalId:     Number(animalId),
+              tipo:         'ENCAMINHAMENTO',
+              descricao,
+              valor:        Number(valor),
+              quantidade:   1,
+              veterinarioId: req.user.id,
+            });
+          }
         }
 
         return enc;

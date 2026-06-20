@@ -2,11 +2,13 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem } = require('../lib/faturaUtils');
 
 // ─── Include padrão ───────────────────────────────────────────────────────────
 
 const GRUPO_INCLUDE = {
   veterinario: { select: { id: true, fullName: true, userType: true } },
+  evolucao: { select: { id: true, numero: true, tipoAtendimento: true } },
   itens: {
     where:   { ativo: true },
     include: {
@@ -234,12 +236,20 @@ const obterPorId = async (req, res) => {
 
 const criar = async (req, res) => {
   try {
-    const { animalId, empresaId, itens = [] } = req.body;
+    const { animalId, empresaId, evolucaoId, itens = [] } = req.body;
     const veterinarioId = req.user.id;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
+    if (!evolucaoId) return res.status(400).json({ error: 'evolucaoId é obrigatório.', code: 'EVOLUCAO_REQUIRED' });
     if (!Array.isArray(itens) || itens.length === 0)
       return res.status(400).json({ error: 'Inclua ao menos um item na prescrição.' });
+
+    // Valida que a evolução existe e pertence ao animal
+    const evolucao = await prisma.evolucaoClinica.findFirst({
+      where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
+      select: { id: true },
+    });
+    if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal.', code: 'EVOLUCAO_NOT_FOUND' });
 
     const grupo = await prisma.$transaction(async (tx) => {
       const numero = await proximoNumero(tx, Number(animalId));
@@ -249,6 +259,7 @@ const criar = async (req, res) => {
           numero,
           animalId:     Number(animalId),
           veterinarioId,
+          evolucaoId:   Number(evolucaoId),
           empresaId:    empresaId ? Number(empresaId) : (req.empresaId ?? null),
           status:       'SALVO',
         },
@@ -526,7 +537,11 @@ const executar = async (req, res) => {
 
     const animal = await prisma.animal.findUnique({ where: { id: grupo.animalId }, select: { userId: true } });
     const proprietarioId = animal?.userId ?? null;
-    const mesAtual = new Date().toISOString().slice(0, 7);
+
+    // Prefixo do atendimento para as descrições na fatura
+    const atendNum = grupo.evolucao
+      ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
+      : null;
 
     await prisma.$transaction(async (tx) => {
       await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'EXECUTADO' } });
@@ -534,13 +549,8 @@ const executar = async (req, res) => {
       // Consome reservas e dá baixa no estoque; retorna preços por medicamento
       const precos = await consumirReservas(tx, grupoId, grupo.itens, empresaIdEfetivo);
 
-      // Lança na fatura ABERTA do proprietário, separado por animal
-      let fatura = await tx.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' } });
-      if (!fatura) {
-        fatura = await tx.fatura.create({ data: { proprietarioId, mesReferencia: mesAtual, status: 'ABERTA', total: 0 } });
-      }
-
-      let totalIncremento = 0;
+      // Lança na fatura ABERTA do proprietário usando utilitário compartilhado
+      const fatura = await getOrCreateFatura(tx, proprietarioId);
 
       for (const item of grupo.itens) {
         const qtd            = calcularQuantidadeTotal(item);
@@ -549,30 +559,19 @@ const executar = async (req, res) => {
         const dose = item.dosagem
           ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia} × ${item.duracaoDias}d`
           : item.frequencia;
-        const descricao = item.tipo === 'MEDICAMENTO'
+        const descBase = item.tipo === 'MEDICAMENTO'
           ? `${item.medicamento} — ${dose}`
           : item.medicamento;
+        const descricao = atendNum ? `[${atendNum}] ${descBase}` : descBase;
 
-        await tx.faturaItem.create({
-          data: {
-            faturaId:     fatura.id,
-            animalId:     grupo.animalId,
-            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
-            descricao,
-            valor:        valorUnitario,
-            quantidade:   qtdArredondada,
-            veterinarioId,
-          },
-        });
-
-        totalIncremento += valorUnitario * qtdArredondada;
-      }
-
-      // Atualiza o total da fatura com os valores lançados
-      if (totalIncremento > 0) {
-        await tx.fatura.update({
-          where: { id: fatura.id },
-          data:  { total: { increment: totalIncremento } },
+        await adicionarFaturaItem(tx, {
+          faturaId:     fatura.id,
+          animalId:     grupo.animalId,
+          tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+          descricao,
+          valor:        valorUnitario,
+          quantidade:   qtdArredondada,
+          veterinarioId,
         });
       }
     });

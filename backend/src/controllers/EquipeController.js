@@ -1081,16 +1081,9 @@ const EquipeController = {
         return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já é membro desta equipe.' });
       }
 
-      const conviteAtivo = await prisma.conviteEquipe.findFirst({
-        where: { equipeId: equipe.id, email, status: 'PENDENTE', expiresAt: { gt: new Date() } },
-      });
-      if (conviteAtivo) {
-        return res.status(409).json({ sucesso: false, mensagem: 'Já existe um convite pendente para este e-mail.' });
-      }
-
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      const convite   = await prisma.conviteEquipe.create({
-        data: { equipeId: equipe.id, email, cargo: 'GESTOR', expiresAt },
+      // Inclui diretamente como GESTOR — sem convite, acesso imediato
+      const membro = await prisma.membroEquipe.create({
+        data: { equipeId: equipe.id, userId: convidadoId, cargo: 'GESTOR' },
       });
 
       try {
@@ -1114,14 +1107,16 @@ const EquipeController = {
         );
       }
 
-      emailService.enviarConviteAdmin({
+      emailService.enviarAcessoGestor({
         email,
-        token:        convite.token,
+        nomeGestor:  (fullName ?? empresaNome)?.trim() || email,
+        empresaNome: empresa.nome,
+        equipeName:  equipe.nome,
         usuarioCriado,
         senhaInicial: usuarioCriado ? SENHA_INICIAL : null,
-      }).catch(err => console.error('[emailService] Falha ao enviar convite gestor:', err));
+      }).catch(err => console.error('[emailService] Falha ao enviar e-mail de acesso gestor:', err));
 
-      return res.status(201).json({ sucesso: true, dados: convite, mensagem: 'Convite de gestor enviado por e-mail' });
+      return res.status(201).json({ sucesso: true, dados: membro, mensagem: 'Gestor incluído com sucesso' });
     } catch (err) {
       console.error('Erro ao convidar gestor:', err);
       if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: req.body.cnpj?.trim() ? 'CNPJ já cadastrado para outra empresa.' : 'Conflito de dados ao criar empresa.' });

@@ -7,14 +7,34 @@ const INCLUDE = {
   medicamento: {
     include: { vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } } },
   },
+  fornecedor: { select: { id: true, nome: true, tipoServico: true } },
 };
+
+// ADMIN pode passar ?empresaId= para ver qualquer empresa; demais sempre usam req.empresaId
+function getEmpresaScope(req) {
+  if (req.user?.userType === 'ADMIN') {
+    return req.query?.empresaId ? Number(req.query.empresaId) : (req.empresaId ?? null);
+  }
+  return req.empresaId ?? null;
+}
+
+// Retorna true se o item pertence à empresa do usuário (ADMIN bypassa)
+function pertenceAEmpresa(item, req) {
+  if (req.user?.userType === 'ADMIN') return true;
+  return req.empresaId != null && item.empresaId === req.empresaId;
+}
 
 // ─── Listar estoque da clínica ────────────────────────────────────────────────
 
 const listar = async (req, res) => {
   try {
-    const { busca, ativo, empresaId: empresaQuery } = req.query;
-    const empresaId = empresaQuery ? Number(empresaQuery) : (req.empresaId ?? null);
+    const { busca, ativo } = req.query;
+    const empresaId = getEmpresaScope(req);
+
+    // Não-ADMIN sem empresa ativa não vê nada
+    if (!empresaId && req.user?.userType !== 'ADMIN') {
+      return res.json({ dados: [], meta: { total: 0, totalControlados: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 } });
+    }
 
     const where = {};
     if (ativo !== undefined) where.ativo = ativo === 'true';
@@ -63,6 +83,7 @@ const obterPorId = async (req, res) => {
       include: INCLUDE,
     });
     if (!item) return res.status(404).json({ error: 'Item de estoque não encontrado.' });
+    if (!pertenceAEmpresa(item, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
     return res.json({ dados: item });
   } catch (err) {
     console.error('EstoqueController.obterPorId:', err);
@@ -77,12 +98,15 @@ const criar = async (req, res) => {
     const {
       medicamentoId,
       empresaId,
-      valor         = 0,
+      valor            = 0,
+      valorRepassado   = 0,
       lote,
       validade,
-      qtdEstoque    = 0,
-      estoqueMinimo = 0,
+      qtdEstoque       = 0,
+      estoqueMinimo    = 0,
       estoqueAlarmante = 0,
+      fornecedorId,
+      notaFiscal,
     } = req.body;
 
     if (!medicamentoId)
@@ -100,11 +124,14 @@ const criar = async (req, res) => {
           medicamentoId:    Number(medicamentoId),
           empresaId:        empresaId ? Number(empresaId) : (req.empresaId ?? null),
           valor:            Number(valor),
+          valorRepassado:   Number(valorRepassado),
           lote:             lote?.trim() ?? null,
           validade:         validade ? new Date(validade) : null,
           qtdEstoque:       Number(qtdEstoque),
           estoqueMinimo:    Number(estoqueMinimo),
           estoqueAlarmante: Number(estoqueAlarmante),
+          fornecedorId:     fornecedorId ? Number(fornecedorId) : null,
+          notaFiscal:       notaFiscal?.trim() ?? null,
         },
         include: INCLUDE,
       });
@@ -130,21 +157,25 @@ const criar = async (req, res) => {
 const atualizar = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { valor, lote, validade, estoqueMinimo, estoqueAlarmante, ativo } = req.body;
+    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal } = req.body;
 
     const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Item de estoque não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
 
     if (estoqueMinimo    !== undefined && Number(estoqueMinimo)    < 0) return res.status(400).json({ error: 'Estoque mínimo não pode ser negativo.' });
     if (estoqueAlarmante !== undefined && Number(estoqueAlarmante) < 0) return res.status(400).json({ error: 'Estoque alarmante não pode ser negativo.' });
 
     const data = {};
     if (valor            !== undefined) data.valor            = Number(valor);
+    if (valorRepassado   !== undefined) data.valorRepassado   = Number(valorRepassado);
     if (lote             !== undefined) data.lote             = lote?.trim() ?? null;
     if (validade         !== undefined) data.validade         = validade ? new Date(validade) : null;
     if (estoqueMinimo    !== undefined) data.estoqueMinimo    = Number(estoqueMinimo);
     if (estoqueAlarmante !== undefined) data.estoqueAlarmante = Number(estoqueAlarmante);
     if (ativo            !== undefined) data.ativo            = Boolean(ativo);
+    if (fornecedorId     !== undefined) data.fornecedorId     = fornecedorId ? Number(fornecedorId) : null;
+    if (notaFiscal       !== undefined) data.notaFiscal       = notaFiscal?.trim() ?? null;
 
     const item = await prisma.estoqueClinica.update({ where: { id }, data, include: INCLUDE });
     return res.json({ dados: item });
@@ -161,6 +192,7 @@ const excluir = async (req, res) => {
     const id = Number(req.params.id);
     const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
     await prisma.estoqueClinica.update({ where: { id }, data: { ativo: false } });
     return res.json({ dados: { message: 'Item inativado com sucesso.' } });
   } catch (err) {
@@ -184,6 +216,7 @@ const ajustarEstoque = async (req, res) => {
 
     const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
 
     const delta      = tipo === 'SAIDA' ? -qty : qty;
     const novaQtd    = existe.qtdEstoque + delta;
@@ -208,6 +241,10 @@ const ajustarEstoque = async (req, res) => {
 const listarMovimentos = async (req, res) => {
   try {
     const id = Number(req.params.id);
+    const item = await prisma.estoqueClinica.findUnique({ where: { id }, select: { id: true, empresaId: true } });
+    if (!item) return res.status(404).json({ error: 'Item de estoque não encontrado.' });
+    if (!pertenceAEmpresa(item, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
     const movimentos = await prisma.movimentoEstoque.findMany({
       where:   { estoqueId: id },
       orderBy: { createdAt: 'desc' },

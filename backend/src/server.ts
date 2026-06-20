@@ -164,6 +164,10 @@ const agendaRoutes             = require('./routes/agenda');
 const vacinaAdminRoutes        = require('./routes/vacinaAdmin');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const vacinaClinicaRoutes      = require('./routes/vacinaClinica');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const estoqueVacinaRoutes      = require('./routes/estoqueVacina');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const dashboardRoutes          = require('./routes/dashboard');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -198,6 +202,8 @@ app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
 app.use('/api/cadastro/localizacoes', localizacoesRoutes);
 app.use('/api/admin/vacinas',         vacinaAdminRoutes);
 app.use('/api/clinica/vacinas',       vacinaClinicaRoutes);
+app.use('/api/vacinas/estoque',       estoqueVacinaRoutes);
+app.use('/api/dashboard',             dashboardRoutes);
 
 // Servir arquivos de upload (fotos, mídias clínicas).
 // Acesso por capability URL: os nomes são gerados com crypto.randomBytes (não enumeráveis).

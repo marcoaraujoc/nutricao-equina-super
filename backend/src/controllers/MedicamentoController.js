@@ -7,15 +7,66 @@ const INCLUDE = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
 };
 
+const INCLUDE_VACINA = {
+  vias:    { select: { id: true, via: true }, orderBy: { via: 'asc' } },
+  especies: {
+    select: {
+      id:      true,
+      especie: { select: { id: true, nome: true } },
+    },
+  },
+};
+
+// ─── Helper: verifica duplicata com os 5 campos da chave única ────────────────
+// nome + fabricante + formaFarmaceutica + apresentacao + set de vias
+// excludeId: ignora o próprio registro ao verificar (usado no update)
+
+async function verificarDuplicata(nome, fabricante, formaFarmaceutica, apresentacao, vias, excludeId = null) {
+  const fab = (fabricante ?? '').trim().toLowerCase();
+  const viasNorm = [...vias].map(v => String(v).trim().toLowerCase()).sort().join('|');
+
+  const candidatos = await prisma.medicamento.findMany({
+    where: {
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+      nome:              { equals: nome.trim(),              mode: 'insensitive' },
+      formaFarmaceutica: { equals: formaFarmaceutica.trim(), mode: 'insensitive' },
+      apresentacao:      { equals: apresentacao.trim(),      mode: 'insensitive' },
+    },
+    include: { vias: { select: { via: true } } },
+  });
+
+  return candidatos.some(c => {
+    const cFab  = (c.fabricante ?? '').trim().toLowerCase();
+    const cVias = c.vias.map(v => v.via.trim().toLowerCase()).sort().join('|');
+    return cFab === fab && cVias === viasNorm;
+  });
+}
+
+// ─── Helper: retorna vias atuais de um medicamento ───────────────────────────
+
+async function getViasExistentes(medicamentoId) {
+  const rows = await prisma.medicamentoVia.findMany({
+    where:  { medicamentoId },
+    select: { via: true },
+  });
+  return rows.map(r => r.via);
+}
+
 // ─── Listar ──────────────────────────────────────────────────────────────────
 
 const listar = async (req, res) => {
   try {
-    const { busca, ativo, controlado } = req.query;
+    const { busca, ativo, controlado, especieNome, excluirVacinas, especieDaEmpresa } = req.query;
+    const take = Math.min(Number(req.query.limit)  || 5000, 5000);
+    const skip = Math.max(Number(req.query.offset) || 0,    0);
     const where = {};
 
     if (ativo !== undefined) where.ativo = ativo === 'true';
     if (controlado === 'true') where.controlado = true;
+
+    if (excluirVacinas === 'true') {
+      where.NOT = { classificacao: { contains: 'vacin', mode: 'insensitive' } };
+    }
 
     if (busca) {
       where.OR = [
@@ -25,16 +76,114 @@ const listar = async (req, res) => {
       ];
     }
 
-    const [medicamentos, total, totalControlados] = await Promise.all([
-      prisma.medicamento.findMany({ where, include: INCLUDE, orderBy: { nome: 'asc' } }),
+    if (especieNome) {
+      const ids = await prisma.$queryRawUnsafe(
+        `SELECT DISTINCT me."medicamentoId"
+         FROM schs2vet.tb_medicamento_especies me
+         JOIN schs2vet.tb_especies e ON e.id = me."especieId"
+         WHERE lower(e.nome) = lower($1)`,
+        especieNome
+      );
+      where.id = { in: ids.map((r) => r.medicamentoId) };
+    }
+
+    // Resolve espécies a partir dos animais ativos da empresa/equipe do contexto
+    if (especieDaEmpresa === 'true' && !especieNome) {
+      const empresaId = req.empresaId ?? null;
+      const equipeId  = req.equipeId  ?? null;
+      if (empresaId || equipeId) {
+        const animalWhere = { ativo: true };
+        if (equipeId)  animalWhere.equipeId  = equipeId;
+        else           animalWhere.empresaId = empresaId;
+
+        const animaisEspecies = await prisma.animal.findMany({
+          where:    animalWhere,
+          select:   { especieId: true },
+          distinct: ['especieId'],
+        });
+        const especieIds = animaisEspecies.map((a) => a.especieId);
+
+        if (especieIds.length > 0) {
+          // Filtra medicamentos vinculados a pelo menos uma dessas espécies
+          where.especies = { some: { especieId: { in: especieIds } } };
+        }
+        // Se não há animais ainda, não filtra por espécie (exibe o catálogo completo)
+      }
+    }
+
+    const [medicamentos, total, totalControlados, totalFiltrado] = await Promise.all([
+      prisma.medicamento.findMany({ where, include: INCLUDE_VACINA, orderBy: { nome: 'asc' }, take, skip }),
       prisma.medicamento.count({ where: { ativo: true } }),
       prisma.medicamento.count({ where: { ativo: true, controlado: true } }),
+      prisma.medicamento.count({ where }),
     ]);
 
-    return res.json({ dados: medicamentos, meta: { total, totalControlados } });
+    return res.json({
+      dados: medicamentos,
+      meta: {
+        total,
+        totalControlados,
+        totalFiltrado,
+        offset: skip,
+        limit: take,
+        hasMore: skip + medicamentos.length < totalFiltrado,
+      },
+    });
   } catch (err) {
     console.error('MedicamentoController.listar:', err);
     return res.status(500).json({ error: 'Erro ao listar medicamentos.' });
+  }
+};
+
+// ─── Listar Vacinas (classificacao contém 'vacin') ────────────────────────────
+
+const listarVacinas = async (req, res) => {
+  try {
+    const { busca, ativo } = req.query;
+    const where = {
+      classificacao: { contains: 'vacin', mode: 'insensitive' },
+    };
+
+    if (ativo !== undefined) where.ativo = ativo === 'true';
+
+    if (busca) {
+      where.AND = [
+        { classificacao: { contains: 'vacin', mode: 'insensitive' } },
+        {
+          OR: [
+            { nome:       { contains: busca, mode: 'insensitive' } },
+            { fabricante: { contains: busca, mode: 'insensitive' } },
+          ],
+        },
+      ];
+      delete where.classificacao;
+    }
+
+    const vacinas = await prisma.medicamento.findMany({
+      where,
+      include: INCLUDE_VACINA,
+      orderBy: { nome: 'asc' },
+    });
+
+    return res.json({ dados: vacinas });
+  } catch (err) {
+    console.error('MedicamentoController.listarVacinas:', err);
+    return res.status(500).json({ error: 'Erro ao listar vacinas.' });
+  }
+};
+
+// ─── Listar Espécies ──────────────────────────────────────────────────────────
+
+const listarEspecies = async (_req, res) => {
+  try {
+    const especies = await prisma.especie.findMany({
+      select:  { id: true, nome: true },
+      orderBy: { nome: 'asc' },
+    });
+    return res.json({ dados: especies });
+  } catch (err) {
+    console.error('MedicamentoController.listarEspecies:', err);
+    return res.status(500).json({ error: 'Erro ao listar espécies.' });
   }
 };
 
@@ -44,7 +193,7 @@ const obterPorId = async (req, res) => {
   try {
     const med = await prisma.medicamento.findUnique({
       where: { id: Number(req.params.id) },
-      include: INCLUDE,
+      include: INCLUDE_VACINA,
     });
     if (!med) return res.status(404).json({ error: 'Medicamento não encontrado.' });
     return res.json({ dados: med });
@@ -58,7 +207,11 @@ const obterPorId = async (req, res) => {
 
 const criar = async (req, res) => {
   try {
-    const { nome, formaFarmaceutica, unidade, apresentacao, controlado = false, ativo = true, vias = [] } = req.body;
+    const {
+      nome, formaFarmaceutica, unidade, apresentacao,
+      controlado = false, ativo = true, vias = [],
+      classificacao, fabricante, especieIds = [],
+    } = req.body;
 
     if (!nome || !formaFarmaceutica || !unidade || !apresentacao)
       return res.status(400).json({ error: 'Campos obrigatórios: nome, formaFarmaceutica, unidade, apresentacao.' });
@@ -66,33 +219,29 @@ const criar = async (req, res) => {
     if (!Array.isArray(vias) || vias.length === 0)
       return res.status(400).json({ error: 'Informe ao menos uma via de administração.' });
 
-    const existe = await prisma.medicamento.findFirst({
-      where: {
-        nome:              { equals: nome.trim(),              mode: 'insensitive' },
-        formaFarmaceutica: { equals: formaFarmaceutica.trim(), mode: 'insensitive' },
-        apresentacao:      { equals: apresentacao.trim(),      mode: 'insensitive' },
-      },
-    });
-    if (existe)
-      return res.status(409).json({ error: 'Já existe um medicamento com mesmo nome, forma farmacêutica e apresentação.' });
+    const isDup = await verificarDuplicata(nome, fabricante, formaFarmaceutica, apresentacao, vias);
+    if (isDup)
+      return res.status(409).json({ error: 'Já existe um medicamento com o mesmo nome, fabricante, forma farmacêutica, apresentação e via.' });
 
-    const med = await prisma.medicamento.create({
-      data: {
-        nome:              nome.trim(),
-        formaFarmaceutica: formaFarmaceutica.trim(),
-        unidade:           unidade.trim(),
-        apresentacao:      apresentacao.trim(),
-        controlado:        Boolean(controlado),
-        ativo:             Boolean(ativo),
-        vias: { create: vias.map((v) => ({ via: String(v) })) },
-      },
-      include: INCLUDE,
-    });
+    const createData = {
+      nome:              nome.trim(),
+      formaFarmaceutica: formaFarmaceutica.trim(),
+      unidade:           unidade.trim(),
+      apresentacao:      apresentacao.trim(),
+      controlado:        Boolean(controlado),
+      ativo:             Boolean(ativo),
+      vias:              { create: vias.map((v) => ({ via: String(v) })) },
+    };
+    if (classificacao) createData.classificacao = classificacao.trim();
+    if (fabricante)    createData.fabricante    = fabricante.trim();
+    if (Array.isArray(especieIds) && especieIds.length > 0) {
+      createData.especies = { create: especieIds.map((id) => ({ especieId: Number(id) })) };
+    }
+
+    const med = await prisma.medicamento.create({ data: createData, include: INCLUDE });
 
     return res.status(201).json({ data: med });
   } catch (err) {
-    if (err.code === 'P2002')
-      return res.status(409).json({ error: 'Já existe um medicamento com mesmo nome, forma farmacêutica e apresentação.' });
     console.error('MedicamentoController.criar:', err);
     return res.status(500).json({ error: 'Erro ao criar medicamento.' });
   }
@@ -103,26 +252,24 @@ const criar = async (req, res) => {
 const atualizar = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { nome, formaFarmaceutica, unidade, apresentacao, controlado, ativo, vias } = req.body;
+    const { nome, formaFarmaceutica, unidade, apresentacao, controlado, ativo, vias, classificacao, fabricante, especieIds } = req.body;
 
     const existe = await prisma.medicamento.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Medicamento não encontrado.' });
 
-    if (nome !== undefined || formaFarmaceutica !== undefined || apresentacao !== undefined) {
-      const n = (nome              ?? existe.nome).trim();
-      const f = (formaFarmaceutica ?? existe.formaFarmaceutica).trim();
-      const a = (apresentacao      ?? existe.apresentacao).trim();
+    // Resolve os valores efetivos (enviado no body ou mantém o atual)
+    const nomeEfetivo = nome              ?? existe.nome;
+    const fabEfetivo  = fabricante        !== undefined ? fabricante : existe.fabricante;
+    const formaEfetiva = formaFarmaceutica ?? existe.formaFarmaceutica;
+    const apresEfetiva = apresentacao     ?? existe.apresentacao;
+    const viasEfetivas = Array.isArray(vias) ? vias : await getViasExistentes(id);
 
-      const dup = await prisma.medicamento.findFirst({
-        where: {
-          id:                { not: id },
-          nome:              { equals: n, mode: 'insensitive' },
-          formaFarmaceutica: { equals: f, mode: 'insensitive' },
-          apresentacao:      { equals: a, mode: 'insensitive' },
-        },
-      });
-      if (dup) return res.status(409).json({ error: 'Já existe um medicamento com esse nome/forma/apresentação.' });
-    }
+    const isDup = await verificarDuplicata(
+      nomeEfetivo, fabEfetivo, formaEfetiva, apresEfetiva, viasEfetivas,
+      id  // exclui o próprio registro da checagem
+    );
+    if (isDup)
+      return res.status(409).json({ error: 'Já existe um medicamento com o mesmo nome, fabricante, forma farmacêutica, apresentação e via.' });
 
     const data = {};
     if (nome              !== undefined) data.nome              = nome.trim();
@@ -131,19 +278,36 @@ const atualizar = async (req, res) => {
     if (apresentacao      !== undefined) data.apresentacao      = apresentacao.trim();
     if (controlado        !== undefined) data.controlado        = Boolean(controlado);
     if (ativo             !== undefined) data.ativo             = Boolean(ativo);
+    if (fabricante        !== undefined) data.fabricante        = fabricante?.trim() || null;
+    if (classificacao     !== undefined) data.classificacao     = classificacao?.trim() || null;
 
     const med = await prisma.$transaction(async (tx) => {
       if (Array.isArray(vias)) {
         await tx.medicamentoVia.deleteMany({ where: { medicamentoId: id } });
         data.vias = { create: vias.map((v) => ({ via: String(v) })) };
       }
-      return tx.medicamento.update({ where: { id }, data, include: INCLUDE });
+
+      if (Array.isArray(especieIds)) {
+        await tx.medicamentoEspecie.deleteMany({ where: { medicamentoId: id } });
+      }
+
+      const updated = await tx.medicamento.update({ where: { id }, data, include: INCLUDE });
+
+      if (Array.isArray(especieIds) && especieIds.length > 0) {
+        await tx.medicamentoEspecie.createMany({
+          data: especieIds.map((eid) => ({ medicamentoId: id, especieId: Number(eid) })),
+        });
+      }
+
+      if (Array.isArray(especieIds)) {
+        return tx.medicamento.findUnique({ where: { id }, include: INCLUDE_VACINA });
+      }
+
+      return updated;
     });
 
     return res.json({ dados: med });
   } catch (err) {
-    if (err.code === 'P2002')
-      return res.status(409).json({ error: 'Já existe um medicamento com esse nome/forma/apresentação.' });
     console.error('MedicamentoController.atualizar:', err);
     return res.status(500).json({ error: 'Erro ao atualizar medicamento.' });
   }
@@ -165,4 +329,4 @@ const excluir = async (req, res) => {
   }
 };
 
-module.exports = { listar, obterPorId, criar, atualizar, excluir };
+module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir };

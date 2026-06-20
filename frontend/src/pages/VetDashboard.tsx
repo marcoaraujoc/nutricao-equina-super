@@ -1,5 +1,5 @@
 // src/pages/VetDashboard.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -9,12 +9,34 @@ import toast from 'react-hot-toast';
 import {
   CheckCircle2, XCircle, Clock,
   Unlink, Search, Pencil, LayoutDashboard,
+  CalendarCheck, PawPrint, Users, AlertTriangle,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
+import {
+  Chart as ChartJS,
+  CategoryScale, LinearScale, BarElement, LineElement,
+  PointElement, Title, Tooltip, Legend, Filler,
+} from 'chart.js';
+import { Bar, Line } from 'react-chartjs-2';
+
+ChartJS.register(
+  CategoryScale, LinearScale, BarElement, LineElement,
+  PointElement, Title, Tooltip, Legend, Filler,
+);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface DashboardStats {
+  atendimentosHoje:   number;
+  pacientesAtivos:    number;
+  clientesAtivos:     number;
+  estoqueCritico:     number;
+  atendimentosPorDia: { dia: string; total: number }[];
+  topMedicamentos:    { nome: string; total: number }[];
+  topProcedimentos:   { nome: string; total: number }[];
+}
 
 interface AnimalResumido {
   id:               number;
@@ -66,6 +88,24 @@ const idadeDisplay = (a: AnimalResumido): string =>
   a.dataNascimento ? calcularIdade(a.dataNascimento)
   : a.idadeAnos    ? `${a.idadeAnos} ${a.idadeAnos === 1 ? 'ano' : 'anos'}`
   : '—';
+
+// ─── Chart helpers ────────────────────────────────────────────────────────────
+
+function fillDays(data: { dia: string; total: number }[]): { dia: string; total: number }[] {
+  const map = new Map(data.map(d => [d.dia, d.total]));
+  const hoje = new Date();
+  return Array.from({ length: 30 }, (_, i) => {
+    const d = new Date(hoje);
+    d.setDate(d.getDate() - (29 - i));
+    const key = d.toISOString().slice(0, 10);
+    return { dia: key, total: map.get(key) ?? 0 };
+  });
+}
+
+const fmtDia = (iso: string) => {
+  const [, m, d] = iso.split('-');
+  return `${d}/${m}`;
+};
 
 const nullToUndefined = (a: AnimalResumido) => ({
   ...a,
@@ -248,6 +288,7 @@ export default function VetDashboard() {
 
   const [meusAnimais,    setMeusAnimais]    = useState<AnimalResumido[]>([]);
   const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
+  const [stats,          setStats]          = useState<DashboardStats | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [busca,          setBusca]          = useState('');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
@@ -257,9 +298,10 @@ export default function VetDashboard() {
   const carregar = async () => {
     setLoading(true);
     try {
-      const [animaisRes, solRes] = await Promise.all([
+      const [animaisRes, solRes, statsRes] = await Promise.all([
         api.get('/animais'),
         isVet ? api.get('/veterinarios/solicitacoes?status=PENDENTE') : Promise.resolve({ data: [] }),
+        api.get('/dashboard/stats'),
       ]);
 
       const todasSolicitacoes: Solicitacao[] = solRes.data?.dados ?? [];
@@ -271,6 +313,7 @@ export default function VetDashboard() {
 
       setMeusAnimais(animaisRes.data?.dados ?? []);
       setSolicitacoes(solicitacoesFiltradas);
+      if (statsRes.data?.dados) setStats(statsRes.data.dados);
     } catch {
       toast.error('Erro ao carregar dados');
     } finally {
@@ -326,6 +369,8 @@ export default function VetDashboard() {
       setUnlinking(false);
     }
   };
+
+  const diasData = useMemo(() => fillDays(stats?.atendimentosPorDia ?? []), [stats]);
 
   const animaisFiltrados = meusAnimais.filter(a => {
     const termo = busca.toLowerCase().trim();
@@ -410,6 +455,165 @@ export default function VetDashboard() {
             )}
           </div>
         </div>
+
+        {/* ── Cards Superiores ────────────────────────────────────────────── */}
+        {stats && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Atendimentos Hoje */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center flex-shrink-0">
+                <CalendarCheck size={20} className="text-emerald-600" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-gray-900 leading-none">{stats.atendimentosHoje}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Atendimentos Hoje</p>
+              </div>
+            </div>
+
+            {/* Pacientes Ativos */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                <PawPrint size={20} className="text-blue-600" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pacientesAtivos}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Pacientes Ativos</p>
+              </div>
+            </div>
+
+            {/* Clientes Ativos */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">
+                <Users size={20} className="text-violet-600" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-gray-900 leading-none">{stats.clientesAtivos}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Clientes Ativos</p>
+              </div>
+            </div>
+
+            {/* Estoque Crítico */}
+            <div className={`bg-white rounded-2xl border shadow-sm p-4 flex items-center gap-3 ${
+              stats.estoqueCritico > 0 ? 'border-red-200' : 'border-gray-100'
+            }`}>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                stats.estoqueCritico > 0 ? 'bg-red-50' : 'bg-gray-50'
+              }`}>
+                <AlertTriangle size={20} className={stats.estoqueCritico > 0 ? 'text-red-500' : 'text-gray-400'} />
+              </div>
+              <div>
+                <p className={`text-2xl font-bold leading-none ${
+                  stats.estoqueCritico > 0 ? 'text-red-600' : 'text-gray-900'
+                }`}>{stats.estoqueCritico}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Estoque Crítico</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Gráficos ─────────────────────────────────────────────────────── */}
+        {stats && (
+          <div className="space-y-3">
+            {/* Atendimentos por dia — largura total */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <h2 className="text-sm font-semibold text-gray-700 mb-3">Atendimentos por Dia (últimos 30 dias)</h2>
+              <div className="h-44">
+                <Line
+                  data={{
+                    labels: diasData.map(d => fmtDia(d.dia)),
+                    datasets: [{
+                      label: 'Atendimentos',
+                      data: diasData.map(d => d.total),
+                      borderColor: '#059669',
+                      backgroundColor: 'rgba(5,150,105,0.08)',
+                      borderWidth: 2,
+                      pointRadius: 3,
+                      pointBackgroundColor: '#059669',
+                      fill: true,
+                      tension: 0.4,
+                    }],
+                  }}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { mode: 'index' as const, intersect: false } },
+                    scales: {
+                      x: { grid: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 10 } },
+                      y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 11 } }, grid: { color: '#f3f4f6' } },
+                    },
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Top 10 Procedimentos + Top 10 Medicamentos lado a lado */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Top 10 Procedimentos */}
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                <h2 className="text-sm font-semibold text-gray-700 mb-3">Top 10 Procedimentos</h2>
+                {stats.topProcedimentos.length === 0 ? (
+                  <p className="text-xs text-gray-400 text-center py-8">Nenhum dado disponível</p>
+                ) : (
+                  <div className="h-52">
+                    <Bar
+                      data={{
+                        labels: stats.topProcedimentos.map(p => p.nome),
+                        datasets: [{
+                          label: 'Qtd',
+                          data: stats.topProcedimentos.map(p => p.total),
+                          backgroundColor: 'rgba(139,92,246,0.75)',
+                          borderRadius: 4,
+                        }],
+                      }}
+                      options={{
+                        indexAxis: 'y' as const,
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false }, tooltip: { mode: 'index' as const } },
+                        scales: {
+                          x: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } }, grid: { color: '#f3f4f6' } },
+                          y: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        },
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Top 10 Medicamentos */}
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                <h2 className="text-sm font-semibold text-gray-700 mb-3">Top 10 Medicamentos Prescritos</h2>
+                {stats.topMedicamentos.length === 0 ? (
+                  <p className="text-xs text-gray-400 text-center py-8">Nenhum dado disponível</p>
+                ) : (
+                  <div className="h-52">
+                    <Bar
+                      data={{
+                        labels: stats.topMedicamentos.map(m => m.nome),
+                        datasets: [{
+                          label: 'Qtd',
+                          data: stats.topMedicamentos.map(m => m.total),
+                          backgroundColor: 'rgba(5,150,105,0.75)',
+                          borderRadius: 4,
+                        }],
+                      }}
+                      options={{
+                        indexAxis: 'y' as const,
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false }, tooltip: { mode: 'index' as const } },
+                        scales: {
+                          x: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } }, grid: { color: '#f3f4f6' } },
+                          y: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        },
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Solicitações pendentes ───────────────────────────────────────── */}
         {solicitacoes.length > 0 && (

@@ -43,10 +43,10 @@ const ExameClinicoController = {
   },
 
   // POST /clinica/exames
-  // body: { animalId, tipo, descricao, laboratorio?, tipoAmostra?, indicacaoClinica?, observacao? }
+  // body: { animalId, tipo, descricao, evolucaoId, laboratorio?, tipoAmostra?, indicacaoClinica?, observacao? }
   criar: async (req, res) => {
     try {
-      const { animalId, tipo, descricao, laboratorio, tipoAmostra, indicacaoClinica, observacao } = req.body;
+      const { animalId, tipo, descricao, evolucaoId, laboratorio, tipoAmostra, indicacaoClinica, observacao } = req.body;
 
       if (!animalId || !tipo || !descricao?.trim()) {
         return res.status(400).json({ error: 'animalId, tipo e descricao são obrigatórios' });
@@ -54,12 +54,22 @@ const ExameClinicoController = {
       if (!TIPOS_VALIDOS.includes(tipo)) {
         return res.status(400).json({ error: `tipo deve ser: ${TIPOS_VALIDOS.join(', ')}` });
       }
+      if (!evolucaoId) {
+        return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
+      }
 
       const acesso = await verificarAcessoAnimal({
         animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      // Valida que a evolução existe e pertence ao animal
+      const evolucao = await prisma.evolucaoClinica.findFirst({
+        where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
+        select: { id: true },
+      });
+      if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
 
       // Campos extras armazenados em observacao como JSON
       const extra = {
@@ -73,6 +83,7 @@ const ExameClinicoController = {
         data: {
           animalId:      Number(animalId),
           veterinarioId: req.user.userType === 'VETERINARIO' ? req.user.id : null,
+          evolucaoId:    Number(evolucaoId),
           tipo,
           descricao:     descricao.trim(),
           status:        'SOLICITADO',
@@ -85,6 +96,21 @@ const ExameClinicoController = {
     } catch (err) {
       console.error('Erro ao criar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao criar exame' });
+    }
+  },
+
+  // GET /clinica/exames/:id
+  obterPorId: async (req, res) => {
+    try {
+      const item = await prisma.exameClinico.findUnique({
+        where:   { id: Number(req.params.id) },
+        include: INCLUDE,
+      });
+      if (!item) return res.status(404).json({ error: 'Exame não encontrado' });
+      res.json({ dados: item });
+    } catch (err) {
+      console.error('Erro ao obter exame clínico:', err);
+      res.status(500).json({ error: 'Erro ao obter exame' });
     }
   },
 

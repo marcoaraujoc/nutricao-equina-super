@@ -27,12 +27,13 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
-type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'exames' | 'enfermagem' | 'cadastro';
+type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'vacina' | 'exames' | 'enfermagem' | 'cadastro';
 
 function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/agendamentos'))           return 'agenda';
   if (pathname.startsWith('/clinica'))               return 'clinica';
   if (pathname.startsWith('/execucao-prescricao'))   return 'enfermagem';
+  if (pathname.startsWith('/estoque-vacina'))         return 'vacina';
   if (pathname.startsWith('/farmacia'))              return 'farmacia';
   if (pathname.startsWith('/exames'))                return 'exames';
   if (pathname.startsWith('/cadastro/') || pathname === '/equipe') return 'cadastro';
@@ -87,6 +88,7 @@ export default function Sidebar() {
   const podeVerRelatorio      = podeExecutar('nutricao.relatorios.ler');
   const podeVerFaturas        = podeExecutar('financeiro.faturas.ler');
   const podeVerFarmacia       = podeExecutar('farmacia.estoque.ler');
+  const podeVerEstoqueVacina  = isGestor || podeExecutar('vacina.estoque.ler');
   const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
   const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
   const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
@@ -388,6 +390,20 @@ export default function Sidebar() {
                         </div>
                       )}
                     </div>
+                  )}
+
+                  {/* ── Vacina ────────────────────────────────────────── */}
+                  {podeVerEstoqueVacina && (
+                    <Link
+                      to="/estoque-vacina"
+                      onClick={closeMobile}
+                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
+                        p.startsWith('/estoque-vacina') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <Syringe size={20} />
+                      Vacina
+                    </Link>
                   )}
 
                   {/* ── Farmácia ──────────────────────────────────────── */}

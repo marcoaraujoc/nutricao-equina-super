@@ -14,6 +14,7 @@ import {
 import { imprimirEvolucao } from '../utils/EvolucaoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
+import ConfirmModal from '../components/ConfirmModal';
 
 import {
   isMobile     as detectarMobile,
@@ -65,6 +66,21 @@ interface EvolucaoMidia {
   criadoEm: string;
 }
 
+interface AgendamentoItem {
+  id:       number;
+  titulo:   string;
+  tipo:     string;
+  dataHora: string;
+  numero:   number | null;
+}
+
+interface EvolucaoAtiva {
+  id:               number;
+  numero:           number | null;
+  tipoAtendimento:  string | null;
+  atendimentoNumero: string | null;
+}
+
 interface EvolucaoItem {
   id:               number;
   animalId:         number;
@@ -76,6 +92,9 @@ interface EvolucaoItem {
   status:           EvolucaoStatus;
   texto:            string;
   titulo?:          string | null;
+  numero?:          number | null;
+  tipoAtendimento?: string | null;
+  atendimentoNumero?: string | null;
   dataInicio:       string;
   dataFim?:         string | null;
   dataModificacao?: string | null;
@@ -397,6 +416,7 @@ function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onC
 
 function NovaEvolucaoModal({
   form, editingId, midias, saving, interpretando,
+  agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
   onArquivosChange, onRemoverMidia,
 }: {
@@ -405,6 +425,9 @@ function NovaEvolucaoModal({
   midias:            EvolucaoMidia[];
   saving:            boolean;
   interpretando:     boolean;
+  agendamentos:      AgendamentoItem[];
+  agendamentoId:     number | null;
+  onAgendamentoChange: (id: number | null) => void;
   onFormChange:      (f: keyof FormEvolucao, v: string) => void;
   onSalvar:          () => void;
   onFinalizar:       () => void;
@@ -565,6 +588,25 @@ function NovaEvolucaoModal({
   return (
     <div className="border-b border-gray-100">
       <div className="p-5 space-y-4">
+
+          {!editingId && agendamentos.length > 0 && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Agendamento vinculado</label>
+              <select
+                value={agendamentoId ?? ''}
+                onChange={e => onAgendamentoChange(e.target.value ? Number(e.target.value) : null)}
+                className="w-full border border-emerald-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-emerald-50">
+                <option value="">Sem agendamento (EV-XXXX)</option>
+                {agendamentos.map(a => {
+                  const d = new Date(a.dataHora);
+                  const label = a.numero
+                    ? `AG-${String(a.numero).padStart(4, '0')} — ${a.titulo} (${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`
+                    : `${a.titulo} (${d.toLocaleDateString('pt-BR')})`;
+                  return <option key={a.id} value={a.id}>{label}</option>;
+                })}
+              </select>
+            </div>
+          )}
 
           {editingId && (
             <div>
@@ -736,9 +778,12 @@ interface Props {
   animal:             AnimalInfo | null;
   faturaId:           number | null;
   onFaturaAtualizada: () => void;
+  onEvolucaoChange?:  (ev: EvolucaoAtiva | null) => void;
+  onSalvo?:           () => void;
+  openItemId?:        number;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
@@ -764,6 +809,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [filtroDataFim,     setFiltroDataFim]     = useState('');
   const [filtroResponsavel, setFiltroResponsavel] = useState('');
 
+  const [agendamentosDisponiveis,   setAgendamentosDisponiveis]   = useState<AgendamentoItem[]>([]);
+  const [agendamentoSelecionadoId, setAgendamentoSelecionadoId] = useState<number | null>(null);
+
   const [showModal,      setShowModal]      = useState(true);
   const [viewingEv,      setViewingEv]      = useState<EvolucaoItem | null>(null);
   const [editingEv,      setEditingEv]      = useState<EvolucaoItem | null>(null);
@@ -773,6 +821,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [savingEv,       setSavingEv]       = useState(false);
   const [savingExclusao, setSavingExclusao] = useState(false);
   const [savingCancelamento, setSavingCancelamento] = useState(false);
+  const [confirmFinalizar, setConfirmFinalizar] = useState<EvolucaoItem | null>(null);
   const [interpretando,  setInterpretando]  = useState(false);
   const [acoesLLM,       setAcoesLLM]       = useState<AcaoSelecionavel[]>([]);
   const [showLLM,        setShowLLM]        = useState(false);
@@ -795,11 +844,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       if (filtroResponsavel) params.set('responsavelId', filtroResponsavel);
       if (busca.trim())      params.set('busca',         busca.trim());
       const res = await api.get(`/clinica/evolucoes/animal/${animalId}?${params}`);
-      setEvolucoes(res.data.dados ?? []);
+      const dados: EvolucaoItem[] = res.data.dados ?? [];
+      setEvolucoes(dados);
       setTotal(res.data.total ?? 0);
+      // Notify parent of current EM_ANDAMENTO evolução
+      const aberta = dados.find(e => e.status === 'EM_ANDAMENTO') ?? null;
+      onEvolucaoChange?.(aberta ? {
+        id:               aberta.id,
+        numero:           aberta.numero ?? null,
+        tipoAtendimento:  aberta.tipoAtendimento ?? null,
+        atendimentoNumero: aberta.atendimentoNumero ?? null,
+      } : null);
     } catch { toast.error('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, busca]);
+  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, busca, onEvolucaoChange]);
 
   useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
@@ -810,12 +868,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       .catch(() => {});
   }, [animalId, loadingPerms]);
 
+  useEffect(() => {
+    if (!openItemId) return;
+    api.get(`/clinica/evolucoes/${openItemId}`)
+      .then(res => { if (res.data?.dados) setViewingEv(res.data.dados as EvolucaoItem); })
+      .catch(() => {});
+  }, [openItemId]);
+
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleFormChange = (field: keyof FormEvolucao, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
 
-  const abrirNova = () => {
+  const abrirNova = async () => {
     if (!podeCriar) { semPermissao('criar evolução'); return; }
     if (temEvolucaoAberta) {
       toast.error('Finalize ou cancele a evolução em andamento antes de criar uma nova.');
@@ -824,6 +889,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setArquivosModal([]);
     setForm(FORM_INICIAL);
     setEditingEv(null);
+    setAgendamentoSelecionadoId(null);
+    try {
+      const res = await api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`);
+      setAgendamentosDisponiveis(res.data?.dados ?? []);
+    } catch { setAgendamentosDisponiveis([]); }
     setShowModal(true);
   };
 
@@ -833,6 +903,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setEditingEv(null);
     setForm(FORM_INICIAL);
     setArquivosModal([]);
+    setAgendamentoSelecionadoId(null);
   };
 
   const abrirEdicao = (ev: EvolucaoItem) => {
@@ -877,16 +948,25 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       } else {
         const res = await api.post('/clinica/evolucoes', {
           animalId,
-          especialidade: form.especialidade,
-          texto:         form.texto,
-          status:        'EM_ANDAMENTO',
+          especialidade:  form.especialidade,
+          texto:          form.texto,
+          status:         'EM_ANDAMENTO',
+          agendamentoId:  agendamentoSelecionadoId,
         });
         evolucaoId = res.data.dados?.id as number;
+        const criada = res.data.dados;
+        onEvolucaoChange?.({
+          id:               criada.id,
+          numero:           criada.numero ?? null,
+          tipoAtendimento:  criada.tipoAtendimento ?? null,
+          atendimentoNumero: criada.atendimentoNumero ?? null,
+        });
         toast.success('Evolução registrada');
       }
       if (arquivosModal.length > 0) await uploadMidias(evolucaoId, arquivosModal);
       fecharModal();
       carregarEvolucoes();
+      onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       toast.error(msg ?? 'Erro ao salvar evolução');
@@ -914,11 +994,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       } else {
         const createRes = await api.post('/clinica/evolucoes', {
           animalId,
-          especialidade: form.especialidade,
-          texto:         form.texto,
-          status:        'FINALIZADA',
+          especialidade:  form.especialidade,
+          texto:          form.texto,
+          status:         'FINALIZADA',
+          agendamentoId:  agendamentoSelecionadoId,
         });
         evolucaoId = createRes.data.dados?.id as number | undefined;
+        onEvolucaoChange?.(null);
       }
 
       if (arquivosModal.length > 0 && evolucaoId) await uploadMidias(evolucaoId, arquivosModal);
@@ -970,10 +1052,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const handleCancelarFinalizada = async (justificativa: string) => {
     if (!cancelandoEv) return;
     setSavingCancelamento(true);
+    const eraAtiva = cancelandoEv.status === 'EM_ANDAMENTO';
     try {
       await api.patch(`/clinica/evolucoes/${cancelandoEv.id}/cancelar`, { justificativa });
       setCancelandoEv(null);
       toast.success('Evolução cancelada');
+      if (eraAtiva) onEvolucaoChange?.(null);
       carregarEvolucoes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
@@ -981,9 +1065,15 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     } finally { setSavingCancelamento(false); }
   };
 
-  const handleFinalizarDireto = async (ev: EvolucaoItem) => {
+  const handleFinalizarDireto = (ev: EvolucaoItem) => {
     if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
-    if (!confirm(`Finalizar a evolução "${ev.titulo ?? ev.especialidade}"?`)) return;
+    setConfirmFinalizar(ev);
+  };
+
+  const handleFinalizarConfirmado = async () => {
+    const ev = confirmFinalizar;
+    if (!ev) return;
+    setConfirmFinalizar(null);
     setSavingEv(true);
     try {
       await api.put(`/clinica/evolucoes/${ev.id}`, {
@@ -992,6 +1082,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         status:        'FINALIZADA',
       });
       toast.success('Evolução finalizada');
+      if (ev.status === 'EM_ANDAMENTO') onEvolucaoChange?.(null);
       carregarEvolucoes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
@@ -1161,6 +1252,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           midias={editingEv?.midias ?? []}
           saving={savingEv}
           interpretando={interpretando}
+          agendamentos={agendamentosDisponiveis}
+          agendamentoId={agendamentoSelecionadoId}
+          onAgendamentoChange={setAgendamentoSelecionadoId}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onFinalizar={handleFinalizar}
@@ -1387,6 +1481,16 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           saving={savingFatura}
         />
       )}
+
+      <ConfirmModal
+        open={confirmFinalizar != null}
+        titulo="Finalizar evolução"
+        mensagem={`Finalizar "${confirmFinalizar?.titulo ?? confirmFinalizar?.especialidade}"? Esta ação não poderá ser revertida.`}
+        labelConfirmar="Finalizar"
+        variante="aviso"
+        onConfirmar={handleFinalizarConfirmado}
+        onCancelar={() => setConfirmFinalizar(null)}
+      />
     </>
   );
 }

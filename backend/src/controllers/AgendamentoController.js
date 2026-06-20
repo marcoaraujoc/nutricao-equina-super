@@ -4,6 +4,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
+const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
@@ -149,6 +150,8 @@ const AgendamentoController = {
         where.status   = 'AGENDADO';
         const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
         where.dataHora = { gte: hoje };
+      } else if (req.query.status && STATUS_VALIDOS.includes(req.query.status)) {
+        where.status = req.query.status;
       }
 
       const itens = await prisma.agendamentoClinico.findMany({
@@ -189,22 +192,36 @@ const AgendamentoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      const item = await prisma.agendamentoClinico.create({
-        data: {
-          animalId:      Number(animalId),
-          tipo,
-          titulo:        titulo.trim(),
-          dataHora:      quando,
-          observacao:    observacao?.trim() || null,
-          veterinarioId: veterinarioId
-            ? Number(veterinarioId)
-            : (req.user.userType === 'VETERINARIO' ? req.user.id : null),
-          criadoPorId:   req.user.id,
-        },
-        include: INCLUDE,
+      const item = await prisma.$transaction(async (tx) => {
+        const maxResult = await tx.agendamentoClinico.aggregate({
+          where:   { animalId: Number(animalId), ativo: true },
+          _max:    { numero: true },
+        });
+        const proximoNumero = (maxResult._max.numero ?? 0) + 1;
+
+        return tx.agendamentoClinico.create({
+          data: {
+            animalId:      Number(animalId),
+            tipo,
+            titulo:        titulo.trim(),
+            dataHora:      quando,
+            observacao:    observacao?.trim() || null,
+            numero:        proximoNumero,
+            veterinarioId: veterinarioId
+              ? Number(veterinarioId)
+              : (req.user.userType === 'VETERINARIO' ? req.user.id : null),
+            criadoPorId:   req.user.id,
+          },
+          include: INCLUDE,
+        });
       });
 
-      res.status(201).json({ dados: item });
+      res.status(201).json({
+        dados: {
+          ...item,
+          atendimentoNumero: formatAtendimentoNum('AG', item.numero),
+        },
+      });
 
       // Fire-and-forget: notifica via email + WhatsApp
       setImmediate(async () => {

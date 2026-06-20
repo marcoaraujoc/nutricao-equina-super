@@ -47,4 +47,40 @@ async function interpretarEvolucao(texto, userId = null, animalId = null) {
   }
 }
 
-module.exports = { interpretarEvolucao };
+/**
+ * Gera resumos de uma linha para um lote de eventos do histórico clínico.
+ *
+ * @param {Array}  eventos  — array de eventos do HistoricoController
+ * @param {number} [userId]
+ * @param {number} [animalId]
+ * @returns {Promise<string[]>} — array de resumos (mesmo tamanho que eventos), fallback para titulo em caso de falha
+ */
+async function resumirHistorico(eventos, userId = null, animalId = null) {
+  if (!eventos || eventos.length === 0) return [];
+
+  const { operacaoVers, prompt } = buildPrompt('resumo_historico', eventos);
+  try {
+    const respostaTexto = await callAI({
+      operacao:    operacaoVers,
+      prompt,
+      maxTokens:   600,
+      temperature: 0.2,
+      userId,
+      animalId,
+    });
+
+    const jsonMatch = respostaTexto.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error('Resposta sem JSON array');
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed) || parsed.length !== eventos.length) throw new Error('Array com tamanho inesperado');
+
+    return parsed.map(p => (typeof p.resumo === 'string' ? p.resumo : ''));
+  } catch (err) {
+    console.error('[clinicaLLMService] resumirHistorico falhou:', err.message);
+    // Fallback: retorna o titulo existente de cada evento
+    return eventos.map(e => e.titulo ?? '');
+  }
+}
+
+module.exports = { interpretarEvolucao, resumirHistorico };

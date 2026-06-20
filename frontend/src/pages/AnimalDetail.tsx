@@ -10,6 +10,7 @@ import toast from 'react-hot-toast';
 import {
   ArrowLeft, Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, Plus, X, Check, Trash2, Sparkles,
+  Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -64,6 +65,60 @@ interface Agendamento {
   veterinario: { id: number; fullName: string } | null;
 }
 
+// ─── Detail record types ──────────────────────────────────────────────────────
+
+interface DetalheEvolucao {
+  id: number; titulo: string | null; especialidade: string | null;
+  texto: string; status: string; dataInicio: string;
+  veterinario: { fullName: string } | null;
+  midias?: { id: number; tipo: string; nome: string | null }[];
+}
+
+interface DetalheVacina {
+  id: number; nome: string; fabricante: string | null; lote: string | null;
+  dose: string | null; via: string | null; quantidade: number | null;
+  cliente: boolean; ativo: boolean; dataAplicacao: string;
+  dataReforco: string | null; observacao: string | null;
+  numero: number | null; tipoAtendimento: string | null;
+  motivoInativacao: string | null;
+  veterinario: { fullName: string } | null;
+  loteVacina: { lote: string; validade: string } | null;
+}
+
+interface DetalheExame {
+  id: number; tipo: string; descricao: string | null;
+  resultado: string | null; status: string; dataSolicitacao: string;
+  veterinario: { fullName: string } | null;
+}
+
+interface DetalheEncaminhamento {
+  id: number; especialidade: string; motivo: string; urgencia: string;
+  status: string; dataEncaminhamento: string;
+  destinoExterno: string | null;
+  veterinario: { fullName: string } | null;
+  prestador: { fullName: string } | null;
+}
+
+interface ItemPrescricao {
+  id: number; tipo: string; medicamento: string;
+  dosagem: string | null; unidade: string | null; via: string;
+  frequencia: string; duracaoDias: number; dataInicio: string;
+  observacao: string | null; medicamentoCliente: boolean;
+}
+
+interface DetalhePrescricao {
+  id: number; numero: number; numeroFormatado: string; status: string;
+  createdAt: string; veterinario: { fullName: string };
+  itens: ItemPrescricao[];
+}
+
+type DetalheRecord =
+  | { tipo: 'EVOLUCAO';       dados: DetalheEvolucao }
+  | { tipo: 'VACINA';         dados: DetalheVacina }
+  | { tipo: 'EXAME';          dados: DetalheExame }
+  | { tipo: 'ENCAMINHAMENTO'; dados: DetalheEncaminhamento }
+  | { tipo: 'PRESCRICAO';     dados: DetalhePrescricao };
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BADGE_ORIGEM: Record<OrigemEvento, string> = {
@@ -84,6 +139,15 @@ const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
 
 const TIPOS_AGENDAMENTO: TipoAgendamento[] = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 
+const POSOLOGIAS: Record<string, string> = {
+  '1xDia': '1x/dia', '12em12h': '12 em 12h', '8em8h': '8 em 8h',
+  '6em6h': '6 em 6h', '4em4h': '4 em 4h', '1em1h': '1 em 1h',
+  'continuo': 'Contínuo', 'agora': 'Dose única', 'seNecessario': 'Se necessário',
+  'SOS': 'SOS', '1x2dias': '1x/2 dias', '1x3dias': '1x/3 dias',
+  '1xSemana': '1x/semana', '1x21dias': '1x/21 dias', '1x30dias': '1x/30 dias',
+  '1x90dias': '1x/90 dias',
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const mesAbrev = (iso: string) =>
@@ -93,6 +157,10 @@ const diaDoMes = (iso: string) => new Date(iso).getDate();
 
 const horaDe = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+const formatDate = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
+
+const labelFreq = (v: string) => POSOLOGIAS[v] ?? v;
 
 const calcularIdade = (dataNascimento?: string | null, idadeAnos?: number | null): string => {
   if (dataNascimento) {
@@ -108,6 +176,13 @@ const calcularIdade = (dataNascimento?: string | null, idadeAnos?: number | null
   if (idadeAnos) return `${idadeAnos} ${idadeAnos === 1 ? 'ano' : 'anos'}`;
   return '—';
 };
+
+function parseEventoId(ev: EventoHistorico): { origem: OrigemEvento; numId: number } | null {
+  const [origem, rawId] = ev.id.split('-');
+  const numId = Number(rawId);
+  if (!origem || isNaN(numId)) return null;
+  return { origem: origem.toUpperCase() as OrigemEvento, numId };
+}
 
 // ─── Header — dados do animal ─────────────────────────────────────────────────
 
@@ -153,43 +228,286 @@ function HeaderAnimal({ animal }: { animal: AnimalData }) {
   );
 }
 
-// ─── Histórico ────────────────────────────────────────────────────────────────
+// ─── DetalheModal ─────────────────────────────────────────────────────────────
 
-function ItemHistorico({ ev }: { ev: EventoHistorico }) {
-  const [aberto, setAberto] = useState(false);
+function RowDetalhe({ label, value }: { label: string; value: React.ReactNode }) {
+  if (!value && value !== 0) return null;
+  return (
+    <div className="flex items-start gap-3 py-2.5 border-b border-gray-50 last:border-0">
+      <span className="text-xs text-gray-400 w-32 flex-shrink-0 pt-0.5 font-medium">{label}</span>
+      <span className="text-sm text-gray-800 flex-1">{value}</span>
+    </div>
+  );
+}
+
+function DetalheModalEvolucao({ dados }: { dados: DetalheEvolucao }) {
+  return (
+    <div className="space-y-0">
+      <RowDetalhe label="Especialidade" value={dados.especialidade ?? 'Clínica Geral'} />
+      <RowDetalhe label="Status"        value={dados.status} />
+      <RowDetalhe label="Data"          value={formatDate(dados.dataInicio)} />
+      <RowDetalhe label="Responsável"   value={dados.veterinario?.fullName} />
+      {dados.texto && (
+        <div className="py-2.5 border-b border-gray-50">
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Texto</span>
+          <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{dados.texto}</p>
+        </div>
+      )}
+      {dados.midias && dados.midias.length > 0 && (
+        <RowDetalhe
+          label="Mídias"
+          value={`${dados.midias.length} arquivo${dados.midias.length > 1 ? 's' : ''} anexado${dados.midias.length > 1 ? 's' : ''}`}
+        />
+      )}
+    </div>
+  );
+}
+
+function DetalheModalVacina({ dados }: { dados: DetalheVacina }) {
+  const vcNum = dados.numero != null
+    ? `${dados.tipoAtendimento ?? 'VC'}-${String(dados.numero).padStart(4, '0')}`
+    : null;
+  return (
+    <div className="space-y-0">
+      {vcNum && <RowDetalhe label="Nº Atendimento" value={<span className="font-mono font-bold text-teal-700">{vcNum}</span>} />}
+      {dados.cliente && (
+        <div className="py-2.5 border-b border-gray-50">
+          <span className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
+            Vacina do cliente
+          </span>
+        </div>
+      )}
+      <RowDetalhe label="Status"        value={!dados.ativo ? 'Inativa' : dados.dataReforco && new Date(dados.dataReforco) < new Date() ? 'Vencida' : 'Vigente'} />
+      <RowDetalhe label="Fabricante"    value={dados.fabricante} />
+      <RowDetalhe label="Lote"          value={dados.lote} />
+      {dados.loteVacina && <RowDetalhe label="Val. Lote" value={formatDate(dados.loteVacina.validade)} />}
+      <RowDetalhe label="Tipo dose"     value={dados.dose} />
+      {dados.quantidade != null && dados.quantidade > 1 && <RowDetalhe label="Qtd doses" value={String(dados.quantidade)} />}
+      <RowDetalhe label="Via"           value={dados.via} />
+      <RowDetalhe label="Data aplicação" value={formatDate(dados.dataAplicacao)} />
+      {dados.dataReforco && <RowDetalhe label="Reforço" value={formatDate(dados.dataReforco)} />}
+      <RowDetalhe label="Executor"      value={dados.veterinario?.fullName} />
+      <RowDetalhe label="Observação"    value={dados.observacao} />
+      {!dados.ativo && dados.motivoInativacao && (
+        <div className="py-2.5">
+          <span className="text-xs text-gray-400 font-medium block mb-1">Motivo da inativação</span>
+          <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">{dados.motivoInativacao}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetalheModalExame({ dados }: { dados: DetalheExame }) {
+  return (
+    <div className="space-y-0">
+      <RowDetalhe label="Tipo"          value={dados.tipo} />
+      <RowDetalhe label="Status"        value={dados.status} />
+      <RowDetalhe label="Data"          value={formatDate(dados.dataSolicitacao)} />
+      <RowDetalhe label="Responsável"   value={dados.veterinario?.fullName} />
+      {dados.descricao && (
+        <div className="py-2.5 border-b border-gray-50">
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Descrição</span>
+          <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.descricao}</p>
+        </div>
+      )}
+      {dados.resultado && (
+        <div className="py-2.5">
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Resultado</span>
+          <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.resultado}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetalheModalEncaminhamento({ dados }: { dados: DetalheEncaminhamento }) {
+  const urgenciaCls =
+    dados.urgencia === 'URGENTE' ? 'text-red-600 font-semibold' :
+    dados.urgencia === 'ALTA'    ? 'text-orange-600 font-semibold' :
+    'text-gray-700';
+  return (
+    <div className="space-y-0">
+      <RowDetalhe label="Especialidade" value={dados.especialidade} />
+      <RowDetalhe label="Urgência"      value={<span className={urgenciaCls}>{dados.urgencia}</span>} />
+      <RowDetalhe label="Status"        value={dados.status} />
+      <RowDetalhe label="Data"          value={formatDate(dados.dataEncaminhamento)} />
+      <RowDetalhe label="Responsável"   value={dados.veterinario?.fullName} />
+      <RowDetalhe
+        label="Destino"
+        value={dados.prestador?.fullName ?? dados.destinoExterno ?? <span className="text-gray-400 italic">Externo</span>}
+      />
+      {dados.motivo && (
+        <div className="py-2.5">
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Motivo</span>
+          <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.motivo}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const STATUS_PRESCRICAO: Record<string, { label: string; cls: string }> = {
+  SALVO:                  { label: 'Salvo',          cls: 'bg-amber-100 text-amber-700' },
+  FINALIZADO:             { label: 'Finalizado',     cls: 'bg-emerald-100 text-emerald-700' },
+  EXECUTADO:              { label: 'Executado',      cls: 'bg-blue-100 text-blue-700' },
+  CANCELADO:              { label: 'Cancelado',      cls: 'bg-red-100 text-red-700' },
+  CANCELADO_PARCIALMENTE: { label: 'Cancel. Parcial', cls: 'bg-orange-100 text-orange-700' },
+};
+
+function DetalheModalPrescricao({ dados }: { dados: DetalhePrescricao }) {
+  const st = STATUS_PRESCRICAO[dados.status] ?? { label: dados.status, cls: 'bg-gray-100 text-gray-600' };
+  return (
+    <div className="space-y-0">
+      <RowDetalhe label="Nº Prescrição" value={<span className="font-mono font-bold text-emerald-700">#{dados.numeroFormatado}</span>} />
+      <RowDetalhe label="Status"        value={<span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${st.cls}`}>{st.label}</span>} />
+      <RowDetalhe label="Data"          value={formatDate(dados.createdAt)} />
+      <RowDetalhe label="Veterinário"   value={dados.veterinario.fullName} />
+      {dados.itens.length > 0 && (
+        <div className="pt-3">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+            ITENS ({dados.itens.length})
+          </p>
+          <div className="space-y-2">
+            {dados.itens.map(item => (
+              <div key={item.id} className="border border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                    item.tipo === 'MEDICAMENTO' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {item.tipo === 'MEDICAMENTO' ? <Pill size={9} /> : null}
+                    {item.tipo === 'MEDICAMENTO' ? 'Med' : 'Proc'}
+                  </span>
+                  <span className="text-sm font-semibold text-gray-800">{item.medicamento}</span>
+                  {item.medicamentoCliente && (
+                    <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
+                      Cliente
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+                  {item.dosagem && <span>Dose: {item.dosagem}{item.unidade ? ' ' + item.unidade : ''}</span>}
+                  {item.via     && <span>Via: {item.via}</span>}
+                  {item.frequencia && <span>Freq: {labelFreq(item.frequencia)}</span>}
+                  {item.duracaoDias && <span>Dur: {item.duracaoDias}d</span>}
+                  {item.dataInicio  && <span>Início: {formatDate(item.dataInicio)}</span>}
+                  {item.observacao  && <span>Obs: {item.observacao}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DETALHE_CONFIG: Record<OrigemEvento, { icon: React.ReactNode; title: string; accentCls: string }> = {
+  EVOLUCAO:       { icon: <FileText size={16} />,   title: 'Evolução Clínica',    accentCls: 'text-emerald-600' },
+  VACINA:         { icon: <Syringe size={16} />,    title: 'Vacina',              accentCls: 'text-teal-600'    },
+  EXAME:          { icon: <FlaskConical size={16} />,title: 'Exame Clínico',       accentCls: 'text-purple-600'  },
+  ENCAMINHAMENTO: { icon: <Send size={16} />,        title: 'Encaminhamento',      accentCls: 'text-orange-600'  },
+  PRESCRICAO:     { icon: <Pill size={16} />,        title: 'Prescrição',          accentCls: 'text-blue-600'    },
+};
+
+function DetalheModal({
+  ev, detalhe, loading, onFechar,
+}: {
+  ev:      EventoHistorico;
+  detalhe: DetalheRecord | null;
+  loading: boolean;
+  onFechar: () => void;
+}) {
+  const cfg = DETALHE_CONFIG[ev.origem];
 
   return (
-    <div className="border border-gray-100 rounded-2xl bg-white shadow-sm">
-      <button onClick={() => setAberto(v => !v)} className="w-full flex items-start gap-3 sm:gap-4 p-3 sm:p-4 text-left">
-        <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ev.data)}</span>
-          <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ev.data)}</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-bold text-gray-900">{ev.titulo}</span>
-            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
-              {ev.badge}
-            </span>
-            {ev.responsavel && (
-              <span className="text-[10px] text-gray-400 font-mono uppercase">por: {ev.responsavel}</span>
-            )}
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg max-h-[92vh] flex flex-col border border-gray-100">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <span className={cfg.accentCls}>{cfg.icon}</span>
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{cfg.title}</p>
+              <h3 className="font-bold text-gray-900 text-sm leading-tight">{ev.titulo}</h3>
+            </div>
           </div>
-          <p className={`text-xs text-gray-500 mt-1 ${aberto ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>
-            {ev.resumo || '—'}
-          </p>
-          {aberto && ev.status && (
-            <p className="text-[10px] text-gray-400 mt-2">
-              Status: <span className="font-semibold text-gray-500">{ev.status}</span>
-              {' · '}{new Date(ev.data).toLocaleDateString('pt-BR')}
-            </p>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 size={22} className="animate-spin text-gray-400" />
+            </div>
+          ) : !detalhe ? (
+            <p className="text-center text-sm text-gray-400 py-12">Não foi possível carregar os dados.</p>
+          ) : (
+            <>
+              {detalhe.tipo === 'EVOLUCAO'       && <DetalheModalEvolucao       dados={detalhe.dados} />}
+              {detalhe.tipo === 'VACINA'         && <DetalheModalVacina         dados={detalhe.dados} />}
+              {detalhe.tipo === 'EXAME'          && <DetalheModalExame          dados={detalhe.dados} />}
+              {detalhe.tipo === 'ENCAMINHAMENTO' && <DetalheModalEncaminhamento dados={detalhe.dados} />}
+              {detalhe.tipo === 'PRESCRICAO'     && <DetalheModalPrescricao     dados={detalhe.dados} />}
+            </>
           )}
         </div>
-        <span className="p-1.5 border border-gray-200 rounded-full text-gray-400 flex-shrink-0 mt-1">
-          <ChevronDown size={14} className={`transition-transform ${aberto ? 'rotate-180' : ''}`} />
-        </span>
-      </button>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onFechar}
+            className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Fechar
+          </button>
+        </div>
+      </div>
     </div>
+  );
+}
+
+// ─── Histórico ────────────────────────────────────────────────────────────────
+
+function ItemHistorico({
+  ev, onClick,
+}: {
+  ev:      EventoHistorico;
+  onClick: (ev: EventoHistorico) => void;
+}) {
+  return (
+    <button
+      onClick={() => onClick(ev)}
+      className="w-full flex items-start gap-3 sm:gap-4 p-3 sm:p-4 border border-gray-100 rounded-2xl bg-white shadow-sm hover:border-gray-300 hover:shadow transition-all text-left group"
+    >
+      <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
+        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ev.data)}</span>
+        <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ev.data)}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-bold text-gray-900">{ev.titulo}</span>
+          <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
+            {ev.badge}
+          </span>
+          {ev.responsavel && (
+            <span className="text-[10px] text-gray-400 font-mono uppercase">por: {ev.responsavel}</span>
+          )}
+        </div>
+        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{ev.resumo || '—'}</p>
+        {ev.status && (
+          <p className="text-[10px] text-gray-400 mt-1">
+            Status: <span className="font-semibold text-gray-500">{ev.status}</span>
+            {' · '}{new Date(ev.data).toLocaleDateString('pt-BR')}
+          </p>
+        )}
+      </div>
+      <span className="p-1.5 border border-gray-100 rounded-full text-gray-300 group-hover:text-gray-500 group-hover:border-gray-300 flex-shrink-0 mt-1 transition-colors">
+        <ExternalLink size={13} />
+      </span>
+    </button>
   );
 }
 
@@ -326,6 +644,14 @@ function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
 
 // ─── Página ───────────────────────────────────────────────────────────────────
 
+const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
+  EVOLUCAO:       id => `/clinica/evolucoes/${id}`,
+  VACINA:         id => `/clinica/vacinas/${id}`,
+  EXAME:          id => `/clinica/exames/${id}`,
+  ENCAMINHAMENTO: id => `/clinica/encaminhamentos/${id}`,
+  PRESCRICAO:     id => `/clinica/prescricoes/grupos/${id}`,
+};
+
 const AnimalDetail = () => {
   const { id }   = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -342,11 +668,16 @@ const AnimalDetail = () => {
   const [busca,        setBusca]        = useState('');
   const [showNovoAg,   setShowNovoAg]   = useState(false);
 
+  // Detalhe
+  const [detalheEv,      setDetalheEv]      = useState<EventoHistorico | null>(null);
+  const [detalheRecord,  setDetalheRecord]  = useState<DetalheRecord | null>(null);
+  const [detalheLoading, setDetalheLoading] = useState(false);
+
   const carregarAgendamentos = useCallback(async () => {
     if (!id) return;
     try {
       const res = await api.get(`/clinica/agendamentos/animal/${id}?futuros=1`);
-      if (!res.data) return; // GET 403 → null
+      if (!res.data) return;
       setAgendamentos(res.data.dados ?? []);
     } catch { /* silencioso */ }
   }, [id]);
@@ -385,6 +716,30 @@ const AnimalDetail = () => {
       const e = err as { isPermissionError?: boolean };
       if (!e.isPermissionError) toast.error('Erro ao excluir agendamento');
     }
+  };
+
+  const handleAbrirDetalhe = async (ev: EventoHistorico) => {
+    const parsed = parseEventoId(ev);
+    if (!parsed) return;
+    setDetalheEv(ev);
+    setDetalheRecord(null);
+    setDetalheLoading(true);
+    try {
+      const url = ENDPOINT[parsed.origem](parsed.numId);
+      const res = await api.get(url);
+      if (!res.data) { setDetalheLoading(false); return; }
+      const dados = res.data.dados ?? res.data;
+      setDetalheRecord({ tipo: parsed.origem, dados } as DetalheRecord);
+    } catch {
+      toast.error('Não foi possível carregar os dados do registro.');
+    } finally {
+      setDetalheLoading(false);
+    }
+  };
+
+  const fecharDetalhe = () => {
+    setDetalheEv(null);
+    setDetalheRecord(null);
   };
 
   const historicoFiltrado = busca.trim()
@@ -431,7 +786,7 @@ const AnimalDetail = () => {
       {/* Header — dados do animal */}
       <HeaderAnimal animal={animal} />
 
-      {/* Histórico + Agendamentos — items-stretch mantém os dois cards na mesma altura */}
+      {/* Histórico + Agendamentos */}
       <div className="flex flex-col lg:flex-row gap-4 items-stretch">
 
         {/* Histórico */}
@@ -454,7 +809,9 @@ const AnimalDetail = () => {
               <p className="text-center text-sm text-gray-300 py-12">
                 {historico.length === 0 ? 'Nenhum registro no histórico ainda' : 'Nenhum resultado para a busca'}
               </p>
-            ) : historicoFiltrado.map(ev => <ItemHistorico key={ev.id} ev={ev} />)}
+            ) : historicoFiltrado.map(ev => (
+              <ItemHistorico key={ev.id} ev={ev} onClick={handleAbrirDetalhe} />
+            ))}
           </div>
         </div>
 
@@ -474,7 +831,6 @@ const AnimalDetail = () => {
               </button>
             )}
           </div>
-          {/* flex-1 + min-h-0: a lista ocupa a altura do card (igual ao Histórico) com scroll interno */}
           <div className="p-3 space-y-2.5 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
             {agendamentos.length === 0 ? (
               <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento futuro</p>
@@ -488,11 +844,21 @@ const AnimalDetail = () => {
         </div>
       </div>
 
+      {/* Modais */}
       {showNovoAg && animal && (
         <ModalNovoAgendamento
           animalId={animal.id}
           onCriado={() => { setShowNovoAg(false); carregarAgendamentos(); }}
           onFechar={() => setShowNovoAg(false)}
+        />
+      )}
+
+      {detalheEv && (
+        <DetalheModal
+          ev={detalheEv}
+          detalhe={detalheRecord}
+          loading={detalheLoading}
+          onFechar={fecharDetalhe}
         />
       )}
     </div>

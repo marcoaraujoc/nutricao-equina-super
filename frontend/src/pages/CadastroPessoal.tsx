@@ -14,6 +14,20 @@ type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' |
 
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
+const mascaraTelefone = (v: string): string => {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  if (d.length === 0) return '';
+  if (d.length <= 2)  return `(${d}`;
+  if (d.length <= 6)  return `(${d.slice(0,2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+  return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+};
+
+const mascaraCEP = (v: string): string => {
+  const d = v.replace(/\D/g, '').slice(0, 8);
+  return d.length <= 5 ? d : `${d.slice(0,5)}-${d.slice(5)}`;
+};
+
 const LABEL_TIPO_USUARIO: Record<string, string> = {
   PROPRIETARIO: 'Proprietário(a)',
   VETERINARIO:  'Médico(a) Veterinário(a)',
@@ -201,6 +215,10 @@ export default function CadastroPessoal() {
       toast.error('Telefone é obrigatório');
       return false;
     }
+    if (form.telefone.replace(/\D/g, '').length < 10) {
+      toast.error('Telefone inválido');
+      return false;
+    }
     if (!form.cep.trim()) {
       toast.error('CEP é obrigatório');
       return false;
@@ -243,7 +261,7 @@ export default function CadastroPessoal() {
         return false;
       }
       if (form.subespecialidades.length === 0) {
-        toast.error('Selecione uma subespecialidade');
+        toast.error('Selecione ao menos uma especialidade');
         return false;
       }
     }
@@ -367,7 +385,8 @@ export default function CadastroPessoal() {
               <Label text="Telefone" required />
               <input
                 type="tel" name="telefone" value={form.telefone}
-                onChange={handleChange} className={inputClass}
+                onChange={e => setForm(prev => ({ ...prev, telefone: mascaraTelefone(e.target.value) }))}
+                className={inputClass}
                 placeholder="(11) 99999-9999"
               />
             </div>
@@ -384,13 +403,14 @@ export default function CadastroPessoal() {
           <div>
             <Label text="CEP" required />
             <input
-              type="text" name="cep" maxLength={8} value={form.cep}
+              type="text" name="cep" maxLength={9} value={form.cep}
               onChange={e => {
-                setForm(prev => ({ ...prev, cep: e.target.value }));
-                if (e.target.value.replace(/\D/g, '').length === 8) buscarCep(e.target.value);
+                const masked = mascaraCEP(e.target.value);
+                setForm(prev => ({ ...prev, cep: masked }));
+                if (masked.replace(/\D/g, '').length === 8) buscarCep(masked);
               }}
               className={inputClass}
-              placeholder="00000000"
+              placeholder="00000-000"
             />
           </div>
 
@@ -566,20 +586,30 @@ export default function CadastroPessoal() {
               )}
 
               <div>
-                <Label text="Subespecialidade" required />
-                <select
-                  value={form.subespecialidades[0] ?? ''}
-                  onChange={e => setForm(prev => ({
-                    ...prev,
-                    subespecialidades: e.target.value ? [e.target.value] : [],
-                  }))}
-                  className={inputClass}
-                >
-                  <option value="">Selecione uma subespecialidade</option>
-                  {SUBESPECIALIDADES.map(sub => (
-                    <option key={sub} value={sub}>{sub}</option>
-                  ))}
-                </select>
+                <Label text="Especialidade" required />
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-1">
+                  {SUBESPECIALIDADES.map(sub => {
+                    const selecionada = form.subespecialidades.includes(sub);
+                    return (
+                      <label key={sub}
+                        className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
+                          selecionada
+                            ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
+                        }`}>
+                        <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
+                          checked={selecionada}
+                          onChange={() => setForm(prev => ({
+                            ...prev,
+                            subespecialidades: selecionada
+                              ? prev.subespecialidades.filter(s => s !== sub)
+                              : [...prev.subespecialidades, sub],
+                          }))} />
+                        <span className="text-sm font-medium">{sub}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}

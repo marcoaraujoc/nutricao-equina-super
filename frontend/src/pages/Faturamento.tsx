@@ -27,6 +27,7 @@ interface AnimalResumo {
 interface FaturaItem {
   id: number; faturaId: number; animalId?: number; tipo: string;
   descricao: string; valor: number; quantidade: number;
+  criadoEm?: string;
   veterinario?: { id: number; fullName: string };
   animal?: AnimalResumo;
 }
@@ -210,6 +211,11 @@ function ItemRow({
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-800 truncate">{item.descricao}</p>
         <p className="text-[10px] text-gray-400">
+          {item.criadoEm && (
+            <span className="mr-2 font-medium text-gray-500">
+              {new Date(item.criadoEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+            </span>
+          )}
           Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
         </p>
       </div>

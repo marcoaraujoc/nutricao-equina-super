@@ -21,7 +21,8 @@ export interface UsuarioFormValues {
   fullName: string;
   email: string;
   phone: string;
-  perfil: string;      // VETERINARIO | ESTAGIARIO | PRESTADOR | GESTOR (+ legados em edição)
+  perfil: string;      // cargo primário (primeiro de cargos)
+  cargos: string[];    // todos os cargos selecionados
   senha: string;       // edição com permitirSenha: vazio = não alterar
   ativo: boolean;
   cep: string;
@@ -52,7 +53,6 @@ export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
   { value: 'ESTAGIARIO',  label: 'Estagiário'  },
   { value: 'PRESTADOR',   label: 'Fornecedor'  },
-  { value: 'GESTOR',       label: 'Gestor'       },
 ];
 
 // Perfis que não podem ser escolhidos, mas podem existir em usuários antigos (edição)
@@ -71,8 +71,22 @@ const validarSenha = (s: string): string | null => {
   return null;
 };
 
+const mascaraTelefone = (v: string): string => {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  if (d.length === 0) return '';
+  if (d.length <= 2)  return `(${d}`;
+  if (d.length <= 6)  return `(${d.slice(0,2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+  return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+};
+
+const mascaraCEP = (v: string): string => {
+  const d = v.replace(/\D/g, '').slice(0, 8);
+  return d.length <= 5 ? d : `${d.slice(0,5)}-${d.slice(5)}`;
+};
+
 const FORM_VAZIO: UsuarioFormValues = {
-  fullName: '', email: '', phone: '', perfil: 'VETERINARIO', senha: '', ativo: true,
+  fullName: '', email: '', phone: '', perfil: 'VETERINARIO', cargos: ['VETERINARIO'], senha: '', ativo: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -88,6 +102,8 @@ interface UsuarioFormModalProps {
   emailBloqueado?: boolean;
   /** Perfil Fornecedor (PRESTADOR): exibe seletor de fornecedores cadastrados disponíveis */
   comFornecedor?: boolean;
+  /** Exibe checkboxes multi-seleção de cargo em vez do select único */
+  permitirMultiCargos?: boolean;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -99,9 +115,15 @@ interface UsuarioFormModalProps {
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
-  comFornecedor = false, initial, salvando, textoBotao, onClose, onSubmit,
+  comFornecedor = false, permitirMultiCargos = false, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
-  const [form, setForm] = useState<UsuarioFormValues>({ ...FORM_VAZIO, ...initial });
+  const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
+  const [form, setForm] = useState<UsuarioFormValues>({
+    ...FORM_VAZIO,
+    ...initial,
+    cargos: initCargos,
+    perfil: initCargos[0],
+  });
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
 
@@ -149,16 +171,23 @@ export default function UsuarioFormModal({
     }));
   };
 
-  const set = (field: keyof UsuarioFormValues, value: string | boolean) =>
+  const set = (field: keyof UsuarioFormValues, value: string | boolean | string[]) =>
     setForm(prev => ({ ...prev, [field]: value }));
+
+  const toggleCargo = (valor: string, checked: boolean) => {
+    const atual = form.cargos ?? [form.perfil];
+    const next = checked ? [...atual, valor] : atual.filter(c => c !== valor);
+    if (next.length === 0) return;
+    setForm(prev => ({ ...prev, cargos: next, perfil: next[0] }));
+  };
 
   // Inclui o perfil legado do usuário em edição para o select renderizar corretamente
   const opcoesPerfil = PERFIS_LEGADOS[form.perfil]
     ? [...PERFIS_ACESSO, { value: form.perfil, label: PERFIS_LEGADOS[form.perfil] }]
     : PERFIS_ACESSO;
 
-  const buscarCep = async () => {
-    const cep = form.cep.replace(/\D/g, '');
+  const buscarCep = async (cepValue?: string) => {
+    const cep = (cepValue ?? form.cep).replace(/\D/g, '');
     if (cep.length !== 8) { toast.error('CEP inválido'); return; }
     setBuscandoCEP(true);
     try {
@@ -181,7 +210,12 @@ export default function UsuarioFormModal({
     if (!form.fullName.trim())     { toast.error('Informe o nome');           return; }
     if (!form.email.trim())        { toast.error('Informe o e-mail');         return; }
     if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
-    if (!form.phone.trim())        { toast.error('Informe o telefone');       return; }
+    if (!form.phone.trim())                             { toast.error('Informe o telefone');          return; }
+    if (form.phone.replace(/\D/g, '').length < 10)    { toast.error('Telefone inválido');            return; }
+    const cargosFinais = form.cargos ?? [form.perfil];
+    if (permitirMultiCargos && cargosFinais.length === 0) {
+      toast.error('Selecione ao menos um perfil de acesso'); return;
+    }
     if (fornecedorAtivo && fornecedorId === '' && !tipoServico) {
       toast.error('Informe o tipo de serviço do fornecedor'); return;
     }
@@ -194,6 +228,8 @@ export default function UsuarioFormModal({
       fullName:     form.fullName.trim(),
       email:        form.email.trim().toLowerCase(),
       phone:        form.phone.trim(),
+      cargos:       cargosFinais,
+      perfil:       cargosFinais[0],
       fornecedorId: fornecedorAtivo && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  fornecedorAtivo && fornecedorId === '' ? tipoServico : undefined,
     });
@@ -225,11 +261,29 @@ export default function UsuarioFormModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
                 <label className={labelCls}>Perfil de acesso *</label>
-                <select value={form.perfil}
-                  onChange={e => { set('perfil', e.target.value); setFornecedorId(''); }}
-                  className={inputCls}>
-                  {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
+                {permitirMultiCargos ? (
+                  <div className="flex flex-wrap gap-2 mt-0.5">
+                    {PERFIS_ACESSO.map(p => {
+                      const sel = (form.cargos ?? [form.perfil]).includes(p.value);
+                      return (
+                        <label key={p.value} className={`flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer select-none text-sm transition-colors ${
+                          sel ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                        }`}>
+                          <input type="checkbox" checked={sel}
+                            onChange={e => { toggleCargo(p.value, e.target.checked); setFornecedorId(''); }}
+                            className="w-3.5 h-3.5 accent-emerald-600" />
+                          {p.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <select value={form.perfil}
+                    onChange={e => { set('perfil', e.target.value); set('cargos', [e.target.value]); setFornecedorId(''); }}
+                    className={inputCls}>
+                    {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                )}
               </div>
 
               {fornecedorAtivo && (
@@ -291,7 +345,7 @@ export default function UsuarioFormModal({
               <div>
                 <label className={labelCls}>Telefone *</label>
                 <input type="text" value={form.phone}
-                  onChange={e => set('phone', e.target.value)}
+                  onChange={e => set('phone', mascaraTelefone(e.target.value))}
                   placeholder="(00) 00000-0000" className={inputCls} />
               </div>
 
@@ -352,8 +406,11 @@ export default function UsuarioFormModal({
                 <label className={labelCls}>CEP</label>
                 <div className="relative">
                   <input type="text" value={form.cep}
-                    onChange={e => set('cep', e.target.value)}
-                    onBlur={() => { if (form.cep.replace(/\D/g, '').length === 8) buscarCep(); }}
+                    onChange={e => {
+                      const masked = mascaraCEP(e.target.value);
+                      set('cep', masked);
+                      if (masked.replace(/\D/g, '').length === 8) buscarCep(masked);
+                    }}
                     placeholder="00000-000"
                     className={`${inputCls} pr-8`} />
                   {buscandoCEP && <Loader2 size={12} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}

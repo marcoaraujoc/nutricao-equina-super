@@ -1,15 +1,19 @@
 const { PrismaClient } = require('@prisma/client');
 const { MODULOS_SISTEMA, PERMISSOES_PADRAO } = require('./src/seeds/002_permissoes_padrao.seed');
+const seedMedicamentos = require('./src/seeds/003_medicamentos.seed');
+const seedProcedimentos = require('./src/seeds/004_procedimentos.seed');
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log('🌱 Iniciando seed...');
 
-  // ── Espécies ──────────────────────────────────────────────────────────────────
-  await prisma.especie.upsert({ where: { id: 1 }, update: {}, create: { id: 1, nome: 'Equino' } });
-  await prisma.especie.upsert({ where: { id: 2 }, update: {}, create: { id: 2, nome: 'Canino' } });
-  await prisma.especie.upsert({ where: { id: 3 }, update: {}, create: { id: 3, nome: 'Felino' } });
+  // ── Espécies (sempre no singular; update garante correção de registros antigos) ─
+  await prisma.especie.upsert({ where: { id: 1 }, update: { nome: 'Equino' }, create: { id: 1, nome: 'Equino' } });
+  await prisma.especie.upsert({ where: { id: 2 }, update: { nome: 'Canino' }, create: { id: 2, nome: 'Canino' } });
+  await prisma.especie.upsert({ where: { id: 3 }, update: { nome: 'Felino' }, create: { id: 3, nome: 'Felino' } });
+  await prisma.especie.upsert({ where: { id: 4 }, update: { nome: 'Bovino' }, create: { id: 4, nome: 'Bovino' } });
+  await prisma.especie.upsert({ where: { id: 5 }, update: { nome: 'Réptil' }, create: { id: 5, nome: 'Réptil' } });
   console.log('  ✓ Espécies');
 
   // ── Raças (Equino) ────────────────────────────────────────────────────────────
@@ -96,6 +100,12 @@ async function main() {
     }
   }
   console.log(`  ✓ PermissaoMembro backfill (${permCount} entradas verificadas em ${membros.length} membro(s))`);
+
+  // ── Medicamentos (catálogo) ───────────────────────────────────────────────────
+  await seedMedicamentos(prisma);
+
+  // ── Procedimentos veterinários (catálogo) ─────────────────────────────────────
+  await seedProcedimentos(prisma);
 
   console.log('✅ Seed concluído com sucesso!');
 }

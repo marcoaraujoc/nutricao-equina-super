@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
   Share2, Loader2, Check, Ban,
-  UserCheck, ExternalLink, ShieldCheck, AlertTriangle,
+  UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText,
 } from 'lucide-react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -43,7 +43,10 @@ interface Encaminhamento {
 }
 
 interface Props {
-  animalId: number;
+  animalId:           number;
+  evolucaoId?:        number;
+  atendimentoNumero?: string;
+  onSalvo?:           () => void;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -133,10 +136,11 @@ function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
 
 // ─── Formulário de novo encaminhamento ────────────────────────────────────────
 
-function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
-  animalId: number;
-  onCriado: () => void;
-  onFechar: () => void;
+function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
+  animalId:    number;
+  evolucaoId?: number;
+  onCriado:    () => void;
+  onFechar:    () => void;
 }) {
   const [prestadores,    setPrestadores]    = useState<Prestador[]>([]);
   const [loadingPrest,   setLoadingPrest]   = useState(true);
@@ -186,6 +190,7 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
   };
 
   const handleSalvar = async () => {
+    if (!evolucaoId)           { toast.error('Inicie uma evolução antes de criar um encaminhamento.'); return; }
     if (!motivo.trim())        { toast.error('Informe o motivo do encaminhamento'); return; }
     if (!especialidade.trim()) { toast.error('Informe a especialidade'); return; }
     if (destinoTipo === 'EQUIPE' && !prestadorSel) {
@@ -196,6 +201,7 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
     try {
       await api.post('/clinica/encaminhamentos', {
         animalId,
+        evolucaoId,
         especialidade:      especialidade.trim(),
         motivo:             motivo.trim(),
         urgencia,
@@ -379,7 +385,7 @@ function FormNovoEncaminhamento({ animalId, onCriado, onFechar }: {
 
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
-export default function SubModuloEncaminhamento({ animalId }: Props) {
+export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendimentoNumero, onSalvo }: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
@@ -444,14 +450,28 @@ export default function SubModuloEncaminhamento({ animalId }: Props) {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
+  if (!evolucaoId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+        <FileText size={32} className="mb-3 text-gray-200" />
+        <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
+        <p className="text-xs mt-1 text-center max-w-xs">
+          Inicie uma evolução na aba Evolução para registrar encaminhamentos neste atendimento.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 space-y-4">
+
 
       {podeCriar && (
         <FormNovoEncaminhamento
           key={formKey}
           animalId={animalId}
-          onCriado={() => { setFormKey(k => k + 1); carregar(); }}
+          evolucaoId={evolucaoId}
+          onCriado={() => { setFormKey(k => k + 1); carregar(); onSalvo?.(); }}
           onFechar={() => setFormKey(k => k + 1)}
         />
       )}

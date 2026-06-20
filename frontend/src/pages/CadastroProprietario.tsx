@@ -11,6 +11,7 @@ import {
 import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import ConfirmModal from '../components/ConfirmModal';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -489,6 +490,7 @@ export default function CadastroProprietario() {
   const [editando,      setEditando]      = useState<Proprietario | null>(null);
   const [form,          setForm]          = useState<FormProp>(FORM_INICIAL);
   const [saving,        setSaving]        = useState(false);
+  const [confirmRemov,  setConfirmRemov]  = useState<Proprietario | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -587,11 +589,15 @@ export default function CadastroProprietario() {
     } finally { setSaving(false); }
   };
 
-  const handleRemoverDaEmpresa = async (p: Proprietario) => {
+  const handleRemoverDaEmpresa = (p: Proprietario) => {
     if (!podeRemover) { semPermissao('remover proprietário da empresa'); return; }
-    if (!confirm(
-      `Remover "${p.fullName}" da empresa?\n\nTodos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista.\n\nEle continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
-    )) return;
+    setConfirmRemov(p);
+  };
+
+  const handleRemoverConfirmado = async () => {
+    if (!confirmRemov) return;
+    const p = confirmRemov;
+    setConfirmRemov(null);
     try {
       await api.delete(`/cadastro/proprietarios/${p.id}`);
       toast.success(`Proprietário removido da empresa`);
@@ -790,6 +796,21 @@ export default function CadastroProprietario() {
           onClose={fecharModal}
         />
       )}
+
+      <ConfirmModal
+        open={confirmRemov != null}
+        titulo="Remover proprietário da empresa"
+        mensagem={
+          <>
+            <p>Remover <strong>{confirmRemov?.fullName}</strong> da empresa?</p>
+            <p className="mt-2">Todos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista.</p>
+            <p className="mt-1 text-gray-400 text-xs">Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.</p>
+          </>
+        }
+        labelConfirmar="Remover"
+        onConfirmar={handleRemoverConfirmado}
+        onCancelar={() => setConfirmRemov(null)}
+      />
     </PageContainer>
   );
 }

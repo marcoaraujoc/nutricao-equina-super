@@ -16,10 +16,14 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-router.get('/',     authenticate, MedicamentoController.listar);
-router.get('/:id',  authenticate, MedicamentoController.obterPorId);
-router.post('/',    authenticate, requireAdmin, MedicamentoController.criar);
-router.put('/:id',  authenticate, requireAdmin, MedicamentoController.atualizar);
+// Rotas literais ANTES de /:id para evitar conflito de parâmetro
+router.get('/vacinas',  authenticate, MedicamentoController.listarVacinas);
+router.get('/especies', authenticate, MedicamentoController.listarEspecies);
+
+router.get('/',       authenticate, MedicamentoController.listar);
+router.get('/:id',    authenticate, MedicamentoController.obterPorId);
+router.post('/',      authenticate, requireAdmin, MedicamentoController.criar);
+router.put('/:id',    authenticate, requireAdmin, MedicamentoController.atualizar);
 router.delete('/:id', authenticate, requireAdmin, MedicamentoController.excluir);
 
 module.exports = router;

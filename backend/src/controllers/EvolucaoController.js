@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma').default;
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { formatAtendimentoNum }  = require('../lib/faturaUtils');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INCLUDE PADRÃO — retorna veterinário, modificador e mídias
@@ -87,7 +88,12 @@ const EvolucaoController = {
         prisma.evolucaoClinica.count({ where }),
       ]);
 
-      res.json({ sucesso: true, dados: evolucoes, total });
+      const dados = evolucoes.map(e => ({
+        ...e,
+        atendimentoNumero: formatAtendimentoNum(e.tipoAtendimento, e.numero),
+      }));
+
+      res.json({ sucesso: true, dados, total });
     } catch (error) {
       console.error('Erro ao listar evoluções:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
@@ -155,7 +161,7 @@ const EvolucaoController = {
   // Regra: não permite criar se já existir uma evolução EM_ANDAMENTO para este animal.
 
   criar: async (req, res) => {
-    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO' } = req.body;
+    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO', agendamentoId } = req.body;
     const userId = req.user.id;
 
     if (!animalId)      return res.status(400).json({ sucesso: false, mensagem: 'Animal é obrigatório' });
@@ -190,30 +196,78 @@ const EvolucaoController = {
         });
       }
 
-      const evolucao = await prisma.evolucaoClinica.create({
-        data: {
-          animalId:      Number(animalId),
-          veterinarioId: userId,
-          especialidade,
-          texto:         texto.trim(),
-          status,
-          dataInicio:    new Date(),
-          dataFim:       status === 'FINALIZADA' ? new Date() : null,
-          aprovado:      true,
-          ativo:         true,
-        },
-        include: INCLUDE_PADRAO,
+      const evolucao = await prisma.$transaction(async (tx) => {
+        let numero;
+        let tipoAtendimento;
+        let agendamentoIdFinal = null;
+
+        if (agendamentoId) {
+          // Vinculado a agendamento: herda numero do agendamento e marca como CONCLUIDO
+          const agendamento = await tx.agendamentoClinico.findFirst({
+            where: { id: Number(agendamentoId), animalId: Number(animalId), ativo: true },
+            select: { id: true, numero: true, status: true },
+          });
+          if (!agendamento) {
+            throw Object.assign(new Error('Agendamento não encontrado para este animal'), { statusCode: 404, code: 'AGENDAMENTO_NOT_FOUND' });
+          }
+          if (agendamento.status !== 'AGENDADO') {
+            throw Object.assign(new Error('Agendamento já foi concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
+          }
+          numero = agendamento.numero;
+          tipoAtendimento = 'AG';
+          agendamentoIdFinal = agendamento.id;
+
+          await tx.agendamentoClinico.update({
+            where: { id: agendamento.id },
+            data:  { status: 'CONCLUIDO' },
+          });
+        } else {
+          // Autônomo: sequência EV por animal
+          const maxResult = await tx.evolucaoClinica.aggregate({
+            where: { animalId: Number(animalId), tipoAtendimento: 'EV', ativo: true },
+            _max:  { numero: true },
+          });
+          numero = (maxResult._max.numero ?? 0) + 1;
+          tipoAtendimento = 'EV';
+        }
+
+        return tx.evolucaoClinica.create({
+          data: {
+            animalId:        Number(animalId),
+            veterinarioId:   userId,
+            especialidade,
+            texto:           texto.trim(),
+            status,
+            dataInicio:      new Date(),
+            dataFim:         status === 'FINALIZADA' ? new Date() : null,
+            aprovado:        true,
+            ativo:           true,
+            numero,
+            tipoAtendimento,
+            agendamentoId:   agendamentoIdFinal,
+          },
+          include: INCLUDE_PADRAO,
+        });
       });
 
       await registrarAuditoria(
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_CRIADA | id=${evolucao.id} | animal=${animalId} | status=${status}`
+        `EVOLUCAO_CRIADA | id=${evolucao.id} | animal=${animalId} | num=${evolucao.tipoAtendimento}-${evolucao.numero} | status=${status}`
       );
 
-      res.status(201).json({ sucesso: true, dados: evolucao });
+      res.status(201).json({
+        sucesso: true,
+        dados: {
+          ...evolucao,
+          atendimentoNumero: formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero),
+        },
+      });
     } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ sucesso: false, mensagem: error.message, code: error.code });
+      }
       console.error('Erro ao criar evolução:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }

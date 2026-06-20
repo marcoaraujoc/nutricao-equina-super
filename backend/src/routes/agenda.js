@@ -11,7 +11,9 @@ const { checkPermission }     = require('../middlewares/permissao.middleware');
 
 // Acesso por animal é validado nos controllers via verificarAcessoAnimal
 // (cobre PROPRIETARIO, equipe, vínculo direto do vet e designação de prestador)
-router.get('/historico/animal/:animalId',     authenticate, HistoricoController.listarPorAnimal);
+// /resumo deve vir ANTES de /:animalId para não ser capturado como parâmetro
+router.get('/historico/animal/:animalId/resumo', authenticate, HistoricoController.resumirPorAnimal);
+router.get('/historico/animal/:animalId',        authenticate, HistoricoController.listarPorAnimal);
 
 // /agendamentos (sem parâmetro) deve vir ANTES de /agendamentos/animal/:id
 // /agendamentos/interpretar deve vir ANTES de /agendamentos (evita ambiguidade)

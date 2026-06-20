@@ -1,6 +1,6 @@
 // src/ai/index.ts
 // Ponto único de entrada para inferência de texto.
-// Chain de fallback: Gemini → OpenAI → Claude → Groq
+// Chain de fallback: Claude → Gemini → OpenAI → Groq
 // Pula automaticamente qualquer provider sem API key configurada.
 
 import type { AIProvider, AICompletionOptions } from './types';
@@ -16,9 +16,9 @@ import { logAiUsage }        from '../services/aiLogger.service';
 
 function buildChain(): AIProvider[] {
   const chain: AIProvider[] = [];
+  if (process.env.ANTHROPIC_API_KEY) chain.push(new AnthropicProvider());
   if (process.env.GEMINI_API_KEY)    chain.push(new GeminiProvider());
   if (process.env.OPENAI_API_KEY)    chain.push(new OpenAIProvider());
-  if (process.env.ANTHROPIC_API_KEY) chain.push(new AnthropicProvider());
   if (process.env.GROQ_API_KEY)      chain.push(new GroqProvider());
   return chain;
 }
@@ -34,7 +34,7 @@ export interface CallAIOptions extends AICompletionOptions {
 
 /**
  * Executa inferência de texto com fallback automático entre providers.
- * Ordem: Gemini → OpenAI → Claude → Groq (apenas os que tiverem API key configurada).
+ * Ordem: Claude → Gemini → OpenAI → Groq (apenas os que tiverem API key configurada).
  * Loga o uso em AiUsageLog.
  */
 export async function callAI({

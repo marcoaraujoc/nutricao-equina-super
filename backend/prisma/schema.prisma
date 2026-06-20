@@ -163,6 +163,7 @@ model Especie {
   racas         Raca[]
   exigenciasNRC ExigenciasNRC[]
   vetEspecies   VetEspecie[]
+  medicamentos  MedicamentoEspecie[]
 
   @@map("tb_especies")
   @@schema("schs2vet")
@@ -331,6 +332,7 @@ model ExameClinico {
   id              Int       @id @default(autoincrement())
   animalId        Int
   veterinarioId   Int?
+  evolucaoId      Int?      @map("evolucao_id")
   tipo            String
   descricao       String
   status          String    @default("SOLICITADO")
@@ -341,9 +343,11 @@ model ExameClinico {
   observacao      String?   @db.Text
   ativo           Boolean   @default(true)
 
-  animal      Animal @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?  @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  animal      Animal           @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?            @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica? @relation("EvolucaoExames",          fields: [evolucaoId],    references: [id], onDelete: SetNull)
 
+  @@index([evolucaoId])
   @@map("tb_exames_clinicos")
   @@schema("schs2vet")
 }
@@ -377,10 +381,13 @@ model EvolucaoClinica {
   animalId              Int
   veterinarioId         Int?
   modificadoPorId       Int?
+  agendamentoId         Int?      @map("agendamento_id")
   especialidade         String
   status                String    @default("EM_ANDAMENTO")
   texto                 String    @db.Text
   titulo                String?   @db.VarChar(255)
+  numero                Int?      // sequencial por animal dentro do tipo (EV-0001 ou herdado do AG)
+  tipoAtendimento       String?   @default("EV") @db.VarChar(2) @map("tipo_atendimento") // 'AG' | 'EV'
   dataInicio            DateTime  @default(now())
   dataFim               DateTime?
   dataModificacao       DateTime?
@@ -388,11 +395,17 @@ model EvolucaoClinica {
   justificativaExclusao String?   @db.Text
   aprovado              Boolean   @default(true)
 
-  animal        Animal          @relation("AnimalEvolucoes",       fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario   User?           @relation("EvolucaoVeterinario",   fields: [veterinarioId],   references: [id], onDelete: SetNull)
-  modificadoPor User?           @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id], onDelete: SetNull)
-  midias        EvolucaoMidia[]
+  animal            Animal              @relation("AnimalEvolucoes",       fields: [animalId],        references: [id], onDelete: Cascade)
+  veterinario       User?               @relation("EvolucaoVeterinario",   fields: [veterinarioId],   references: [id], onDelete: SetNull)
+  modificadoPor     User?               @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id], onDelete: SetNull)
+  agendamento       AgendamentoClinico? @relation("AgendamentoEvolucoes",  fields: [agendamentoId],   references: [id], onDelete: SetNull)
+  midias            EvolucaoMidia[]
+  prescricaoGrupos  PrescricaoGrupo[]   @relation("EvolucaoPrescricaoGrupos")
+  vacinasClinicas   VacinaClinica[]     @relation("EvolucaoVacinas")
+  examesClinicos    ExameClinico[]      @relation("EvolucaoExames")
+  encaminhamentos   EncaminhamentoClinico[] @relation("EvolucaoEncaminhamentos")
 
+  @@index([agendamentoId])
   @@map("tb_evolucoes_clinicas")
   @@schema("schs2vet")
 }
@@ -458,6 +471,7 @@ model PrescricaoGrupo {
   animalId        Int
   veterinarioId   Int?
   empresaId       Int?
+  evolucaoId      Int?      @map("evolucao_id")   // evolução que originou este grupo
   status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
   motivoCancelamento String? @db.Text
   finalizadoPorId Int?
@@ -467,10 +481,11 @@ model PrescricaoGrupo {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  animal        Animal           @relation("AnimalPrescricaoGrupos",  fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario   User?            @relation("PrescricaoGrupoVet",      fields: [veterinarioId],   references: [id], onDelete: SetNull)
-  finalizadoPor User?            @relation("PrescricaoGrupoFinaliza",  fields: [finalizadoPorId], references: [id], onDelete: SetNull)
-  executadoPor  User?            @relation("PrescricaoGrupoExecuta",   fields: [executadoPorId],  references: [id], onDelete: SetNull)
+  animal        Animal           @relation("AnimalPrescricaoGrupos",    fields: [animalId],        references: [id], onDelete: Cascade)
+  veterinario   User?            @relation("PrescricaoGrupoVet",        fields: [veterinarioId],   references: [id], onDelete: SetNull)
+  finalizadoPor User?            @relation("PrescricaoGrupoFinaliza",   fields: [finalizadoPorId], references: [id], onDelete: SetNull)
+  executadoPor  User?            @relation("PrescricaoGrupoExecuta",    fields: [executadoPorId],  references: [id], onDelete: SetNull)
+  evolucao      EvolucaoClinica? @relation("EvolucaoPrescricaoGrupos",  fields: [evolucaoId],      references: [id], onDelete: SetNull)
   itens         Prescricao[]     @relation("GrupoPrescricoes")
   reservas      ReservaEstoque[] @relation("GrupoReservas")
 
@@ -478,6 +493,7 @@ model PrescricaoGrupo {
   @@index([animalId])
   @@index([veterinarioId])
   @@index([status])
+  @@index([evolucaoId])
   @@map("tb_prescricao_grupos")
   @@schema("schs2vet")
 }
@@ -499,12 +515,14 @@ model ProcedimentoVeterinario {
   risco            String?  @db.VarChar(20)   // BAIXO | MEDIO | ALTO
   valorCusto       Float?
   valorVenda       Float?
+  especie          String?  @db.VarChar(50)    // Bovino | Equino | Bovino e Equino
   ativo            Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   @@index([ativo])
   @@index([categoria])
+  @@index([especie])
   @@map("tb_procedimentos_vet")
   @@schema("schs2vet")
 }
@@ -526,49 +544,69 @@ model Vacina {
 }
 
 model LoteVacina {
-  id            Int      @id @default(autoincrement())
-  vacinaId      Int      @map("vacina_id")
-  empresaId     Int?     @map("empresa_id")
-  lote          String   @db.VarChar(100)
-  validade      DateTime
-  qtdTotal      Int      @default(0) @map("qtd_total")
-  qtdDisponivel Int      @default(0) @map("qtd_disponivel")
-  ativo         Boolean  @default(true)
-  createdAt     DateTime @default(now()) @map("created_at")
+  id              Int       @id @default(autoincrement())
+  vacinaId        Int?      @map("vacina_id")
+  empresaId       Int?      @map("empresa_id")
+  medicamentoCatId Int?     @map("medicamento_cat_id")
+  lote            String    @db.VarChar(100)
+  validade        DateTime
+  qtdTotal        Int       @default(0) @map("qtd_total")
+  qtdDisponivel   Int       @default(0) @map("qtd_disponivel")
+  dosesPorFrasco  Int       @default(1)  @map("doses_por_frasco")
+  qtdFrascos      Int       @default(0)  @map("qtd_frascos")
+  validadeHoras   Int?      @map("validade_horas")
+  validadeDias    Int       @default(0)  @map("validade_dias")
+  valorUnitario          Float?    @map("valor_unitario")
+  valorUnitarioRepassado Float?    @map("valor_unitario_repassado")
+  dataRecebimento        DateTime? @map("data_recebimento")
+  ativo           Boolean   @default(true)
+  createdAt       DateTime  @default(now()) @map("created_at")
 
-  vacina    Vacina   @relation(fields: [vacinaId],  references: [id], onDelete: Cascade)
-  empresa   Empresa? @relation("LoteVacinaEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
-  aplicacoes VacinaClinica[] @relation("LoteAplicacoes")
+  vacina         Vacina?      @relation(fields: [vacinaId],         references: [id], onDelete: Cascade)
+  medicamentoCat Medicamento? @relation("MedicamentoLotes",         fields: [medicamentoCatId], references: [id], onDelete: SetNull)
+  empresa        Empresa?     @relation("LoteVacinaEmpresa",        fields: [empresaId],        references: [id], onDelete: SetNull)
+  aplicacoes     VacinaClinica[] @relation("LoteAplicacoes")
 
   @@index([vacinaId])
   @@index([empresaId])
+  @@index([medicamentoCatId])
   @@map("tb_lotes_vacina")
   @@schema("schs2vet")
 }
 
 model VacinaClinica {
-  id            Int       @id @default(autoincrement())
-  animalId      Int
-  veterinarioId Int?
-  vacinaId      Int?      @map("vacina_id")
-  loteId        Int?      @map("lote_id")
-  nome          String
-  fabricante    String?
-  lote          String?
-  dose          String?   @db.VarChar(50)
-  via           String?   @db.VarChar(100)
-  dataAplicacao DateTime  @default(now())
-  dataReforco   DateTime?
-  observacao    String?   @db.Text
-  ativo         Boolean   @default(true)
+  id               Int       @id @default(autoincrement())
+  animalId         Int
+  veterinarioId    Int?
+  vacinaId         Int?      @map("vacina_id")
+  loteId           Int?      @map("lote_id")
+  medicamentoCatId Int?      @map("medicamento_cat_id")
+  evolucaoId       Int?      @map("evolucao_id")
+  nome             String
+  fabricante       String?
+  lote             String?
+  dose             String?   @db.VarChar(50)
+  via              String?   @db.VarChar(100)
+  numero           Int?
+  tipoAtendimento  String?   @default("VC") @db.VarChar(2) @map("tipo_atendimento")
+  quantidade       Int?      @default(1)
+  valor            Decimal?  @db.Decimal(10, 2)
+  cliente          Boolean   @default(false)
+  dataAplicacao      DateTime  @default(now())
+  dataReforco        DateTime?
+  observacao         String?   @db.Text
+  ativo              Boolean   @default(true)
+  motivoInativacao   String?   @map("motivo_inativacao") @db.Text
 
-  animal      Animal      @relation("AnimalVacinas",     fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?       @relation("VacinaVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
-  vacina      Vacina?     @relation("VacinaAplicacoes",  fields: [vacinaId],      references: [id], onDelete: SetNull)
-  loteVacina  LoteVacina? @relation("LoteAplicacoes",   fields: [loteId],        references: [id], onDelete: SetNull)
+  animal      Animal           @relation("AnimalVacinas",     fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?            @relation("VacinaVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  vacina      Vacina?          @relation("VacinaAplicacoes",  fields: [vacinaId],      references: [id], onDelete: SetNull)
+  loteVacina  LoteVacina?      @relation("LoteAplicacoes",    fields: [loteId],        references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica? @relation("EvolucaoVacinas",   fields: [evolucaoId],    references: [id], onDelete: SetNull)
 
   @@index([animalId])
   @@index([vacinaId])
+  @@index([evolucaoId])
   @@map("tb_vacinas_clinicas")
   @@schema("schs2vet")
 }
@@ -585,14 +623,17 @@ model AgendamentoClinico {
   observacao    String?  @db.Text
   status        String   @default("AGENDADO") @db.VarChar(20) // AGENDADO|CONCLUIDO|CANCELADO
   ativo         Boolean  @default(true)
+  numero        Int?     // sequencial por animal (AG-0001)
   criadoPorId   Int?     @map("criado_por_id")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt      @map("updated_at")
 
-  animal      Animal @relation("AnimalAgendamentos",       fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?  @relation("AgendamentoVeterinario",   fields: [veterinarioId], references: [id], onDelete: SetNull)
-  criadoPor   User?  @relation("AgendamentoCriadoPor",     fields: [criadoPorId],   references: [id], onDelete: SetNull)
+  animal      Animal               @relation("AnimalAgendamentos",     fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?                @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  criadoPor   User?                @relation("AgendamentoCriadoPor",   fields: [criadoPorId],   references: [id], onDelete: SetNull)
+  evolucoes   EvolucaoClinica[]    @relation("AgendamentoEvolucoes")
 
+  @@unique([animalId, numero])
   @@index([animalId, dataHora])
   @@map("tb_agendamentos_clinicos")
   @@schema("schs2vet")
@@ -603,6 +644,7 @@ model EncaminhamentoClinico {
   animalId           Int
   veterinarioId      Int?
   prestadorId        Int?     @map("prestador_id") // prestador da equipe (User FORNECEDOR) — null = destino externo
+  evolucaoId         Int?     @map("evolucao_id")
   especialidade      String
   motivo             String   @db.Text
   veterinarioDestino String?
@@ -613,12 +655,14 @@ model EncaminhamentoClinico {
   observacao         String?  @db.Text
   ativo              Boolean  @default(true)
 
-  animal      Animal @relation("AnimalEncaminhamentos",      fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?  @relation("EncaminhamentoVeterinario",  fields: [veterinarioId], references: [id], onDelete: SetNull)
-  prestador   User?  @relation("EncaminhamentoPrestador",    fields: [prestadorId],   references: [id], onDelete: SetNull)
+  animal      Animal           @relation("AnimalEncaminhamentos",        fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario User?            @relation("EncaminhamentoVeterinario",    fields: [veterinarioId], references: [id], onDelete: SetNull)
+  prestador   User?            @relation("EncaminhamentoPrestador",      fields: [prestadorId],   references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica? @relation("EvolucaoEncaminhamentos",      fields: [evolucaoId],    references: [id], onDelete: SetNull)
   designacoes DesignacaoPrestador[] @relation("EncaminhamentoDesignacoes")
 
   @@index([prestadorId])
+  @@index([evolucaoId])
   @@map("tb_encaminhamentos_clinicos")
   @@schema("schs2vet")
 }
@@ -1081,23 +1125,43 @@ model CrmvSyncLog {
 // Catálogo global de medicamentos (compartilhado entre clínicas)
 model Medicamento {
   id                Int      @id @default(autoincrement())
-  nome              String   @db.VarChar(255)
-  formaFarmaceutica String   @db.VarChar(100)
-  unidade           String   @db.VarChar(50)
-  apresentacao      String   @db.VarChar(100)
+  nome              String   @db.VarChar(90)
+  formaFarmaceutica String   @db.VarChar(255)
+  unidade           String   @db.VarChar(100)
+  apresentacao      String   @db.VarChar(255)
+  classificacao     String?  @db.VarChar(255)
+  fabricante        String?  @db.VarChar(150)
   controlado        Boolean  @default(false)
   ativo             Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   vias        MedicamentoVia[]
+  especies    MedicamentoEspecie[]
   estoques    EstoqueClinica[]
   prescricoes Prescricao[]     @relation("MedicamentoPrescricoes")
+  lotes       LoteVacina[]     @relation("MedicamentoLotes")
 
-  @@unique([nome, formaFarmaceutica, apresentacao])
+  @@index([nome])
   @@index([ativo])
   @@index([controlado])
   @@map("tb_medicamentos")
+  @@schema("schs2vet")
+}
+
+// Espécies para as quais o medicamento é indicado (relação N:N)
+model MedicamentoEspecie {
+  id            Int         @id @default(autoincrement())
+  medicamentoId Int
+  especieId     Int
+
+  medicamento Medicamento @relation(fields: [medicamentoId], references: [id], onDelete: Cascade)
+  especie     Especie     @relation(fields: [especieId],     references: [id], onDelete: Cascade)
+
+  @@unique([medicamentoId, especieId])
+  @@index([medicamentoId])
+  @@index([especieId])
+  @@map("tb_medicamento_especies")
   @@schema("schs2vet")
 }
 
@@ -1105,7 +1169,7 @@ model Medicamento {
 model MedicamentoVia {
   id            Int         @id @default(autoincrement())
   medicamentoId Int
-  via           String      @db.VarChar(100)
+  via           String      @db.VarChar(255)
 
   medicamento Medicamento @relation(fields: [medicamentoId], references: [id], onDelete: Cascade)
 
@@ -1120,7 +1184,8 @@ model EstoqueClinica {
   id               Int       @id @default(autoincrement())
   medicamentoId    Int
   empresaId        Int?
-  valor            Float     @default(0)        // preço de venda
+  valor            Float     @default(0)        // preço de compra
+  valorRepassado   Float     @default(0)        @map("valor_repassado")
   lote             String?   @db.VarChar(100)
   validade         DateTime?
   qtdEstoque       Int       @default(0)
@@ -1130,13 +1195,18 @@ model EstoqueClinica {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
+  fornecedorId Int?      @map("fornecedor_id")
+  notaFiscal   String?   @db.VarChar(100) @map("nota_fiscal")
+
   medicamento Medicamento      @relation(fields: [medicamentoId], references: [id])
   empresa     Empresa?         @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: SetNull)
+  fornecedor  Fornecedor?      @relation("FornecedorEstoque", fields: [fornecedorId], references: [id], onDelete: SetNull)
   movimentos  MovimentoEstoque[]
   reservas    ReservaEstoque[] @relation("EstoqueReservas")
 
   @@index([medicamentoId])
   @@index([empresaId])
+  @@index([fornecedorId])
   @@index([ativo])
   @@map("tb_estoque_clinica")
   @@schema("schs2vet")
@@ -1205,7 +1275,8 @@ model Fornecedor {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt      @map("updated_at")
 
-  user        User?    @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
+  user     User?            @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
+  estoques EstoqueClinica[] @relation("FornecedorEstoque")
 
   @@index([empresaId])
   @@map("tb_fornecedores")

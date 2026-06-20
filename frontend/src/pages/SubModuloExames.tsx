@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FlaskConical, Scan, Trash2, Eye, Loader2, X,
-  ChevronLeft, ChevronRight, Calendar,
+  ChevronLeft, ChevronRight, Calendar, FileText,
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
+import ConfirmModal from '../components/ConfirmModal';
 import type { AnimalInfo } from './SubModuloEvolucao';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -33,8 +34,12 @@ interface ExameClinico {
 }
 
 interface Props {
-  animalId: number;
-  animal:   AnimalInfo | null;
+  animalId:           number;
+  animal:             AnimalInfo | null;
+  evolucaoId?:        number;
+  atendimentoNumero?: string;
+  onSalvo?:           () => void;
+  openItemId?:        number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -129,7 +134,7 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
 
 // ─── SubModuloExames ──────────────────────────────────────────────────────────
 
-export default function SubModuloExames({ animalId, animal: _animal }: Props) {
+export default function SubModuloExames({ animalId, animal: _animal, evolucaoId, atendimentoNumero, onSalvo, openItemId }: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const datePickerRef     = useRef<HTMLInputElement>(null);
@@ -156,6 +161,7 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
   const [loadingHist, setLoadingHist] = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [viewingEx,   setViewingEx]   = useState<ExameClinico | null>(null);
+  const [confirmId,   setConfirmId]   = useState<number | null>(null);
 
   const [page,  setPage]  = useState(1);
   const limit             = 8;
@@ -186,10 +192,18 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
     carregarHistorico(page);
   }, [carregarHistorico, loadingPerms, page]);
 
+  useEffect(() => {
+    if (!openItemId) return;
+    api.get(`/clinica/exames/${openItemId}`)
+      .then(res => { if (res.data?.dados) setViewingEx(res.data.dados as ExameClinico); })
+      .catch(() => {});
+  }, [openItemId]);
+
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleSalvar = async () => {
     if (!podeCriar)            { semPermissao('registrar exames'); return; }
+    if (!evolucaoId)           { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
     if (!laboratorio.trim())   { toast.error('Informe o laboratório de destino'); return; }
     if (!maskedToISO(dataHoraColeta)) { toast.error('Informe data e hora da coleta (DD/MM/AAAA HH:MM)'); return; }
     if (!dataSolicitacao)      { toast.error('Informe a data da solicitação'); return; }
@@ -201,6 +215,7 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
       await api.post('/clinica/exames', {
         animalId,
         tipo,
+        evolucaoId,
         descricao:        descricao.trim(),
         laboratorio:      laboratorio.trim()      || null,
         dataHoraColeta:   maskedToISO(dataHoraColeta),
@@ -210,6 +225,7 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
         dataSolicitacao,
       });
       toast.success('Exame registrado com sucesso');
+      onSalvo?.();
       setDescricao(''); setLaboratorio(''); setDataHoraColeta(''); setTipoAmostra('');
       setIndicacaoClinica(''); setObservacao(''); setDataSolicitacao(hoje());
       setPage(1);
@@ -220,9 +236,15 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
     } finally { setSaving(false); }
   };
 
-  const handleExcluir = async (id: number) => {
+  const handleExcluirSolicitado = (id: number) => {
     if (!podeDeletar) { semPermissao('excluir registros de exame'); return; }
-    if (!confirm('Remover este registro de exame?')) return;
+    setConfirmId(id);
+  };
+
+  const handleExcluirConfirmado = async () => {
+    if (confirmId == null) return;
+    const id = confirmId;
+    setConfirmId(null);
     try {
       await api.delete(`/clinica/exames/${id}`);
       toast.success('Registro removido');
@@ -245,6 +267,18 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  if (!evolucaoId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+        <FileText size={32} className="mb-3 text-gray-200" />
+        <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
+        <p className="text-xs mt-1 text-center max-w-xs">
+          Inicie uma evolução na aba Evolução para registrar exames neste atendimento.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -486,7 +520,7 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
                       <Eye size={14} />
                     </button>
                     {podeDeletar && (
-                      <button onClick={() => handleExcluir(ex.id)}
+                      <button onClick={() => handleExcluirSolicitado(ex.id)}
                         className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
                         <Trash2 size={14} />
                       </button>
@@ -552,7 +586,7 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
                             <Eye size={14} />
                           </button>
                           {podeDeletar && (
-                            <button onClick={() => handleExcluir(ex.id)}
+                            <button onClick={() => handleExcluirSolicitado(ex.id)}
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                               <Trash2 size={14} />
                             </button>
@@ -586,6 +620,15 @@ export default function SubModuloExames({ animalId, animal: _animal }: Props) {
       )}
 
       {viewingEx && <ViewModal ex={viewingEx} onFechar={() => setViewingEx(null)} />}
+
+      <ConfirmModal
+        open={confirmId != null}
+        titulo="Remover registro de exame"
+        mensagem="Esta ação não pode ser desfeita. Deseja continuar?"
+        labelConfirmar="Remover"
+        onConfirmar={handleExcluirConfirmado}
+        onCancelar={() => setConfirmId(null)}
+      />
     </>
   );
 }

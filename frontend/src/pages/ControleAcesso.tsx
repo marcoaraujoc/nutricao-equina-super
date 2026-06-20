@@ -23,7 +23,7 @@ import {
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays,
+  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, Syringe,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
@@ -174,6 +174,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   atendimento:    { label: 'Atendimento',         icon: <Stethoscope     size={14} /> },
   enfermagem:     { label: 'Enfermagem',          icon: <Activity        size={14} /> },
   farmacia:       { label: 'Farmácia',            icon: <FlaskConical    size={14} /> },
+  vacina:         { label: 'Vacinas',             icon: <Syringe         size={14} /> },
   nutricao:       { label: 'Nutricional',         icon: <Apple           size={14} /> },
   exames:         { label: 'Exames',              icon: <FlaskConical    size={14} /> },
   financeiro:     { label: 'Financeiro',          icon: <DollarSign      size={14} /> },
@@ -186,7 +187,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
 // 'animais' e 'equipe' são filhos de 'cadastro' — ver MODULO_CHILDREN
 const MODULO_ORDER = [
   'dashboard', 'cadastro', 'agenda', 'atendimento',
-  'enfermagem', 'farmacia', 'nutricao', 'exames', 'financeiro',
+  'enfermagem', 'farmacia', 'vacina', 'nutricao', 'exames', 'financeiro',
   'medicamentos', 'procedimentos',
 ];
 
@@ -318,6 +319,7 @@ const VIRTUAL_MODULES: Array<{ key: string; fromModulo: string; submoduloKeys: s
 // Submódulos que recebem label diferente quando exibidos dentro de certo módulo pai
 const SUBMODULO_LABEL_OVERRIDE: Record<string, Record<string, string>> = {
   atendimento: { agendamentos: 'Minha Agenda' },
+  vacina:      { estoque: 'Estoque de Vacinas' },
 };
 
 function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, saving, saveLabel, hideActions }: MatrizBodyProps) {
@@ -1200,7 +1202,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
           cargo:    conviteCargo,
         });
       }
-      toast.success('Convite enviado por e-mail');
+      toast.success(isAdmin ? 'Gestor incluído com sucesso' : 'Convite enviado por e-mail');
       setShowConvite(false);
       resetConviteForm();
       carregar();
@@ -1311,9 +1313,9 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                   carregarPerfis();
                 }
               }}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors"
+              className={`flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-semibold transition-colors ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
             >
-              <Plus size={14} /> {isAdmin ? 'Convidar Gestor' : 'Incluir Membro'}
+              {!isAdmin && <Plus size={14} />} {isAdmin ? 'Incluir Gestor' : 'Incluir Membro'}
             </button>
           </div>
         )}
@@ -1593,14 +1595,14 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
           <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-indigo-100 rounded-xl flex items-center justify-center">
-                  <Plus size={16} className="text-indigo-600" />
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isAdmin ? 'bg-emerald-100' : 'bg-indigo-100'}`}>
+                  <Plus size={16} className={isAdmin ? 'text-emerald-700' : 'text-indigo-600'} />
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-gray-900">
-                    {isAdmin ? 'Convidar Gestor' : conviteCargo === 'PROPRIETARIO' ? 'Incluir Cliente' : 'Incluir Membro'}
+                    {isAdmin ? 'Incluir Gestor' : conviteCargo === 'PROPRIETARIO' ? 'Incluir Cliente' : 'Incluir Membro'}
                   </h2>
-                  <p className="text-xs text-gray-400">Um e-mail de convite será enviado</p>
+                  <p className="text-xs text-gray-400">{isAdmin ? 'Um e-mail informativo será enviado' : 'Um e-mail de convite será enviado'}</p>
                 </div>
               </div>
               <button onClick={() => { setShowConvite(false); resetConviteForm(); }} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
@@ -1628,7 +1630,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                             setBuscandoCnpj(false);
                             if (cnpjTimerRef.current) clearTimeout(cnpjTimerRef.current);
                           }}
-                          className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${conviteTipoDoc === tipo ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
+                          className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${conviteTipoDoc === tipo ? 'bg-emerald-700 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
                           {tipo}
                         </button>
                       ))}
@@ -1649,7 +1651,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           className={inputErrCls(!!conviteDocErro) + ' pr-10'}
                         />
                         {buscandoCnpj && (
-                          <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-indigo-400" />
+                          <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-emerald-500" />
                         )}
                       </div>
                       <FieldError message={conviteDocErro} />
@@ -1662,7 +1664,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       {conviteTipoDoc === 'CNPJ' ? 'Empresa' : 'Equipe'}
                       {selecionadoId ? (
-                        <span className="ml-1.5 text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full">existente</span>
+                        <span className="ml-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">existente</span>
                       ) : criandoNovo ? (
                         <span className="ml-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">nova</span>
                       ) : null}
@@ -1714,7 +1716,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                                   setShowComboDropdown(false);
                                   setComboErro('');
                                 }}
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-indigo-50 transition-colors">
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-emerald-50 transition-colors">
                                 <span className="flex-1 min-w-0">
                                   <span className="block text-sm font-medium text-gray-800 truncate">{item.nome}</span>
                                   {'empresaNome' in item && (item as { empresaNome: string }).empresaNome && (
@@ -1877,9 +1879,9 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
                   {isAdmin ? (
-                    <div className="flex items-center gap-2 px-4 py-2.5 border border-purple-200 bg-purple-50 rounded-xl">
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">GESTOR</span>
-                      <span className="text-sm text-purple-700">Acesso total irrestrito à equipe</span>
+                    <div className="flex items-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl">
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">GESTOR</span>
+                      <span className="text-sm text-emerald-700">Acesso total irrestrito à equipe</span>
                     </div>
                   ) : (
                     <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
@@ -1899,12 +1901,14 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 </div>
               )}
 
-              <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-xs text-blue-700">
+              <div className={`flex items-start gap-2 rounded-xl px-3 py-2 text-xs ${isAdmin ? 'bg-emerald-50 border border-emerald-100 text-emerald-700' : 'bg-blue-50 border border-blue-100 text-blue-700'}`}>
                 <Shield size={12} className="flex-shrink-0 mt-0.5" />
                 <span>
                   {conviteCargo === 'PROPRIETARIO'
                     ? 'O cliente receberá um e-mail com o link de acesso para cadastrar seus animais.'
-                    : 'O profissional receberá um e-mail com o link de acesso e uma senha temporária.'}
+                    : isAdmin
+                      ? 'O gestor terá acesso imediato após o cadastro. Um e-mail informativo será enviado com os dados de acesso.'
+                      : 'O profissional receberá um e-mail com o link de acesso e uma senha temporária.'}
                 </span>
               </div>
             </div>
@@ -1915,9 +1919,9 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 Cancelar
               </button>
               <button onClick={handleConvidar} disabled={enviandoConvite || !conviteEmail.trim()}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
+                className={`flex-1 py-2.5 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
                 {enviandoConvite ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
-                Enviar Convite
+                {isAdmin ? 'Incluir Gestor' : 'Enviar Convite'}
               </button>
             </div>
           </div>

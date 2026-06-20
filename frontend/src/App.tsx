@@ -72,6 +72,7 @@ import AiUsageDashboard from './pages/AiUsageDashboard';
 
 // Pages — Farmácia / Medicamentos / Procedimentos
 import Farmacia            from './pages/Farmacia';
+import EstoqueVacina       from './pages/EstoqueVacina';
 import Medicamentos        from './pages/Medicamentos';
 import Procedimentos       from './pages/Procedimentos';
 import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
@@ -202,7 +203,8 @@ function App() {
                           <Route path="/clinica/encaminhamento"           element={<Atendimento />} />
                           <Route path="/clinica/encaminhamento/:animalId" element={<Atendimento />} />
 
-                          {/* Farmácia */}
+                          {/* Vacina / Farmácia */}
+                          <Route path="/estoque-vacina"        element={<EstoqueVacina />} />
                           <Route path="/farmacia"              element={<Farmacia />} />
                           <Route path="/medicamentos"          element={<Medicamentos />} />
                           <Route path="/procedimentos"         element={<Procedimentos />} />

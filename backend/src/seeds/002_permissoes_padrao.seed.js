@@ -117,6 +117,12 @@ const PERMISSOES_PADRAO = {
     'equipe.membros.ler':    'FULL',
     'equipe.membros.editar': 'FULL',
 
+    'vacina.estoque.ler':      'FULL',
+    'vacina.estoque.criar':    'FULL',
+    'vacina.estoque.editar':   'FULL',
+    'vacina.estoque.deletar':  'FULL',
+    'vacina.estoque.imprimir': 'FULL',
+
     'farmacia.estoque.ler':      'FULL',
     'farmacia.estoque.criar':    'FULL',
     'farmacia.estoque.editar':   'FULL',
@@ -262,6 +268,13 @@ const PERMISSOES_PADRAO = {
     // Equipe (gestão de membros — só gestor pode)
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
+
+    // Vacina — Estoque
+    'vacina.estoque.ler':      'EQUIPE',
+    'vacina.estoque.criar':    'PROPRIO',
+    'vacina.estoque.editar':   'PROPRIO',
+    'vacina.estoque.deletar':  'PROPRIO',
+    'vacina.estoque.imprimir': 'EQUIPE',
 
     // Farmácia — Estoque
     'farmacia.estoque.ler':      'EQUIPE',
@@ -441,6 +454,12 @@ const PERMISSOES_PADRAO = {
     'equipe.membros.ler':    'NENHUM',
     'equipe.membros.editar': 'NENHUM',
 
+    'vacina.estoque.ler':      'NENHUM',
+    'vacina.estoque.criar':    'NENHUM',
+    'vacina.estoque.editar':   'NENHUM',
+    'vacina.estoque.deletar':  'NENHUM',
+    'vacina.estoque.imprimir': 'NENHUM',
+
     'farmacia.estoque.ler':      'NENHUM',
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
@@ -586,6 +605,13 @@ const PERMISSOES_PADRAO = {
     // Equipe
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
+
+    // Vacina — Estoque (Estagiário pode visualizar)
+    'vacina.estoque.ler':      'EQUIPE',
+    'vacina.estoque.criar':    'NENHUM',
+    'vacina.estoque.editar':   'NENHUM',
+    'vacina.estoque.deletar':  'NENHUM',
+    'vacina.estoque.imprimir': 'NENHUM',
 
     // Farmácia — Estoque
     'farmacia.estoque.ler':      'EQUIPE',
@@ -745,6 +771,13 @@ const MODULOS_SISTEMA = [
   // ── Equipe ──────────────────────────────────────────────────────────────────
   { slug: 'equipe.membros.ler',    modulo: 'equipe', submodulo: 'membros', acao: 'ler',    label: 'Equipe — Visualizar', ordemExib: 80 },
   { slug: 'equipe.membros.editar', modulo: 'equipe', submodulo: 'membros', acao: 'editar', label: 'Equipe — Gerenciar',  ordemExib: 81 },
+
+  // ── Vacina — Estoque ────────────────────────────────────────────────────────
+  { slug: 'vacina.estoque.ler',      modulo: 'vacina', submodulo: 'estoque', acao: 'ler',      label: 'Vacina Estoque — Visualizar', ordemExib: 82 },
+  { slug: 'vacina.estoque.criar',    modulo: 'vacina', submodulo: 'estoque', acao: 'criar',    label: 'Vacina Estoque — Cadastrar',  ordemExib: 83 },
+  { slug: 'vacina.estoque.editar',   modulo: 'vacina', submodulo: 'estoque', acao: 'editar',   label: 'Vacina Estoque — Editar',     ordemExib: 83.5 },
+  { slug: 'vacina.estoque.deletar',  modulo: 'vacina', submodulo: 'estoque', acao: 'deletar',  label: 'Vacina Estoque — Excluir',    ordemExib: 84 },
+  { slug: 'vacina.estoque.imprimir', modulo: 'vacina', submodulo: 'estoque', acao: 'imprimir', label: 'Vacina Estoque — Imprimir',   ordemExib: 84.5 },
 
   // ── Farmácia — Estoque ──────────────────────────────────────────────────────
   { slug: 'farmacia.estoque.ler',      modulo: 'farmacia', submodulo: 'estoque', acao: 'ler',      label: 'Estoque — Visualizar', ordemExib: 85 },

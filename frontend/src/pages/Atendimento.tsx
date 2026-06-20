@@ -5,11 +5,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import toast from 'react-hot-toast';
 import {
-  Pencil, Trash2, Check, X, Loader2,
+  X, Loader2,
   FileText, Pill, Syringe, FlaskConical, Share2,
-  Stethoscope, ReceiptText, Search, CalendarDays,
+  History, Search, CalendarDays, CircleDot,
 } from 'lucide-react';
 import AnimalCard  from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -33,26 +32,23 @@ type AnimalExtended = SelectedAnimal & {
   user?:           { fullName: string; email: string } | null;
 };
 
-type TipoFatura = 'PROCEDIMENTO' | 'MEDICAMENTO' | 'EXAME' | 'ENCAMINHAMENTO' | 'VACINA';
-type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
-
-interface FaturaItem {
-  id:          number;
-  faturaId:    number;
-  tipo:        TipoFatura;
-  descricao:   string;
-  valor:       number;
-  quantidade:  number;
-  veterinario: { fullName: string };
-  criadoEm:   string;
+interface EvolucaoAtiva {
+  id:               number;
+  numero:           number | null;
+  tipoAtendimento:  string | null;
+  atendimentoNumero: string | null;
 }
 
-interface Fatura {
-  id:       number;
-  animalId: number;
-  total:    number;
-  status:   string;
-  itens:    FaturaItem[];
+type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
+
+interface ResumoHistoricoItem {
+  id:          string;
+  origem:      string;
+  data:        string;
+  titulo:      string;
+  badge:       string;
+  responsavel: string | null;
+  resumo:      string;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -66,32 +62,12 @@ const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = 
   { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2       size={13} /> },
 ];
 
-const TIPO_COLORS: Record<TipoFatura, string> = {
-  PROCEDIMENTO:   'bg-emerald-100 text-emerald-700',
-  MEDICAMENTO:    'bg-blue-100 text-blue-700',
-  EXAME:          'bg-purple-100 text-purple-700',
-  ENCAMINHAMENTO: 'bg-orange-100 text-orange-700',
-  VACINA:         'bg-teal-100 text-teal-700',
-};
-
-const TIPO_ICONS: Record<TipoFatura, React.ReactNode> = {
-  PROCEDIMENTO:   <Stethoscope  size={11} />,
-  MEDICAMENTO:    <Pill         size={11} />,
-  EXAME:          <FlaskConical size={11} />,
-  ENCAMINHAMENTO: <Share2       size={11} />,
-  VACINA:         <Syringe      size={11} />,
-};
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const formatCurrency = (v: number) =>
-  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-const getIniciais = (nome: string): string => {
-  const p = nome.trim().split(' ').filter(Boolean);
-  return p.length === 1
-    ? p[0].substring(0, 2).toUpperCase()
-    : (p[0][0] + p[p.length - 1][0]).toUpperCase();
+const ORIGEM_COLOR: Record<string, string> = {
+  EVOLUCAO:        'bg-emerald-100 text-emerald-700',
+  VACINA:          'bg-teal-100 text-teal-700',
+  EXAME:           'bg-purple-100 text-purple-700',
+  PRESCRICAO:      'bg-blue-100 text-blue-700',
+  ENCAMINHAMENTO:  'bg-orange-100 text-orange-700',
 };
 
 // ─── SubMenuClinico ───────────────────────────────────────────────────────────
@@ -116,120 +92,76 @@ function SubMenuClinico({ activeTab, onChange }: {
   );
 }
 
-// ─── FaturaPanel ─────────────────────────────────────────────────────────────
+// ─── HistoricoResumidoPanel ───────────────────────────────────────────────────
 
-function FaturaPanel({ fatura, onRemover, onAtualizarValor, loading }: {
-  fatura:           Fatura | null;
-  onRemover:        (id: number) => void;
-  onAtualizarValor: (id: number, valor: number) => Promise<void>;
-  loading:          boolean;
+const ORIGEM_TO_TAB: Record<string, SubModulo> = {
+  EVOLUCAO:       'evolucao',
+  VACINA:         'vacina',
+  EXAME:          'exames',
+  PRESCRICAO:     'prescricao',
+  ENCAMINHAMENTO: 'encaminhamento',
+};
+
+function HistoricoResumidoPanel({
+  animalId,
+  refreshKey,
+  onItemClick,
+}: {
+  animalId:    number;
+  refreshKey:  number;
+  onItemClick: (tab: SubModulo, itemId: number) => void;
 }) {
-  const itens = fatura?.itens ?? [];
+  const [itens,      setItens]      = useState<ResumoHistoricoItem[]>([]);
+  const [carregando, setCarregando] = useState(false);
 
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editValor, setEditValor] = useState('');
-  const [savingVal, setSavingVal] = useState(false);
-
-  const iniciarEdicao = (item: FaturaItem) => {
-    setEditingId(item.id);
-    setEditValor(item.valor > 0 ? String(item.valor) : '');
-  };
-
-  const salvarValor = async (itemId: number) => {
-    const v = parseFloat(editValor.replace(',', '.'));
-    if (isNaN(v) || v < 0) { toast.error('Valor inválido'); return; }
-    setSavingVal(true);
-    try {
-      await onAtualizarValor(itemId, v);
-      setEditingId(null);
-    } catch { toast.error('Erro ao atualizar valor'); }
-    finally { setSavingVal(false); }
-  };
+  useEffect(() => {
+    if (!animalId) return;
+    setCarregando(true);
+    api.get(`/clinica/historico/animal/${animalId}`, { params: { limit: 30 } })
+      .then(res => { if (res.data) setItens(res.data.dados ?? []); })
+      .catch(() => {})
+      .finally(() => setCarregando(false));
+  }, [animalId, refreshKey]);
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 flex-shrink-0">
-        <ReceiptText size={15} className="text-emerald-600" />
-        <span className="font-semibold text-sm text-gray-900">Fatura</span>
-        {fatura && (
-          <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${
-            fatura.status === 'ABERTA' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
-          }`}>{fatura.status}</span>
-        )}
+        <History size={15} className="text-emerald-600" />
+        <span className="font-semibold text-sm text-gray-900">Histórico do Paciente</span>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">
-        {loading ? (
+        {carregando ? (
           <div className="flex justify-center py-10">
             <Loader2 size={20} className="animate-spin text-emerald-600" />
           </div>
         ) : itens.length === 0 ? (
-          <p className="text-center text-gray-300 text-xs py-10">Nenhum item na fatura</p>
+          <p className="text-center text-gray-300 text-xs py-10">Nenhum registro encontrado</p>
         ) : (
-          <div className="space-y-px px-3">
-            {itens.map(item => (
-              <div key={item.id} className="flex items-start gap-2 py-2 border-b border-gray-50 last:border-0">
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 mt-0.5 ${TIPO_COLORS[item.tipo]}`}>
-                  {TIPO_ICONS[item.tipo]}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-gray-800 leading-snug line-clamp-2">{item.descricao}</p>
-
-                  {editingId === item.id ? (
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="text-xs text-gray-400">R$</span>
-                      <input
-                        autoFocus type="number" min="0" step="0.01"
-                        value={editValor}
-                        onChange={e => setEditValor(e.target.value)}
-                        placeholder="0,00"
-                        className="w-24 border border-emerald-300 rounded-lg px-2 py-0.5 text-xs text-gray-900 focus:outline-none focus:border-emerald-500" />
-                      <button onClick={() => salvarValor(item.id)} disabled={savingVal}
-                        className="p-0.5 text-emerald-600 hover:text-emerald-800">
-                        {savingVal ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
-                      </button>
-                      <button onClick={() => setEditingId(null)} className="p-0.5 text-gray-400 hover:text-gray-600">
-                        <X size={11} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className={`text-xs font-bold ${item.valor > 0 ? 'text-emerald-700' : 'text-gray-300'}`}>
-                        {item.valor > 0 ? formatCurrency(item.valor * item.quantidade) : '—'}
-                      </span>
-                      {item.quantidade > 1 && item.valor > 0 && (
-                        <span className="text-xs text-gray-400">×{item.quantidade}</span>
-                      )}
-                      <span className="text-[10px] text-gray-400 font-mono bg-gray-100 px-1 rounded">
-                        {getIniciais(item.veterinario.fullName)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {editingId !== item.id && (
-                  <div className="flex items-center gap-0.5 flex-shrink-0 mt-0.5">
-                    <button onClick={() => iniciarEdicao(item)} title="Editar valor"
-                      className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
-                      <Pencil size={12} />
-                    </button>
-                    <button onClick={() => onRemover(item.id)} title="Remover item"
-                      className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={12} />
-                    </button>
+          <div className="px-3 space-y-0">
+            {itens.map(item => {
+              const tab = ORIGEM_TO_TAB[item.origem];
+              const data = new Date(item.data).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => { if (tab) onItemClick(tab, parseInt(item.id.split('-')[1])); }}
+                  className="w-full flex items-start gap-2.5 py-2.5 border-b border-gray-50 last:border-0 text-left hover:bg-emerald-50/50 rounded-lg px-1 transition-colors group"
+                >
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5 ${ORIGEM_COLOR[item.origem] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {data}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-gray-800 truncate group-hover:text-emerald-700 transition-colors">{item.titulo}</p>
+                    {item.resumo && (
+                      <p className="text-[11px] text-gray-400 truncate mt-0.5">{item.resumo}</p>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
-      </div>
-
-      <div className="border-t border-gray-100 px-4 py-3 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Total</span>
-          <span className="text-base font-bold text-gray-900">{formatCurrency(fatura?.total ?? 0)}</span>
-        </div>
       </div>
     </div>
   );
@@ -347,12 +279,15 @@ const Atendimento = () => {
 
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
 
-  const [animal,        setAnimal]        = useState<AnimalExtended | null>(null);
-  const [todosAnimais,  setTodosAnimais]  = useState<AnimalExtended[]>([]);
-  const [fatura,        setFatura]        = useState<Fatura | null>(null);
-  const [loadingFatura, setLoadingFatura] = useState(true);
-  const [activeTab,     setActiveTab]     = useState<SubModulo>(() => tabFromPath(location.pathname));
-  const [showFaturaM,   setShowFaturaM]   = useState(false);
+  const [animal,          setAnimal]          = useState<AnimalExtended | null>(null);
+  const [todosAnimais,    setTodosAnimais]    = useState<AnimalExtended[]>([]);
+  const [activeTab,       setActiveTab]       = useState<SubModulo>(() => tabFromPath(location.pathname));
+  const [showHistoricoM,  setShowHistoricoM]  = useState(false);
+  const [evolucaoAtiva,   setEvolucaoAtiva]   = useState<EvolucaoAtiva | null>(null);
+  const [historicoKey,    setHistoricoKey]    = useState(0);
+  const [openItemId,      setOpenItemId]      = useState<number | null>(null);
+
+  const refreshHistorico = () => setHistoricoKey(k => k + 1);
 
   // Sincroniza aba quando o usuário navega pelo Sidebar
   useEffect(() => {
@@ -371,19 +306,29 @@ const Atendimento = () => {
     } catch (err) { console.error('Erro ao carregar animal:', err); }
   }, [effectiveAnimalId]);
 
-  const carregarFatura = useCallback(async () => {
+  const carregarEvolucaoAtiva = useCallback(async () => {
     if (!effectiveAnimalId) return;
-    setLoadingFatura(true);
     try {
-      const res = await api.get(`/clinica/faturas/animal/${effectiveAnimalId}`);
-      setFatura(res.data.dados);
+      const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=1&page=1`);
+      const dados = res.data?.dados ?? [];
+      if (dados.length > 0) {
+        const ev = dados[0];
+        setEvolucaoAtiva({
+          id:               ev.id,
+          numero:           ev.numero ?? null,
+          tipoAtendimento:  ev.tipoAtendimento ?? null,
+          atendimentoNumero: ev.atendimentoNumero ?? null,
+        });
+      } else {
+        setEvolucaoAtiva(null);
+      }
     } catch { /* silencioso */ }
-    finally { setLoadingFatura(false); }
   }, [effectiveAnimalId]);
 
   useEffect(() => {
+    setEvolucaoAtiva(null);
     carregarAnimal();
-    carregarFatura();
+    carregarEvolucaoAtiva();
     api.get('/animais').then(res => setTodosAnimais(res.data?.dados ?? [])).catch(() => {});
   }, [effectiveAnimalId]);
 
@@ -404,18 +349,6 @@ const Atendimento = () => {
       setTodosAnimais(prev => prev.some(x => x.id === a.id) ? prev : [...prev, a]);
     } catch { /* silencioso */ }
   }, []);
-
-  const handleRemoverItemFatura = async (itemId: number) => {
-    try {
-      await api.delete(`/clinica/faturas/itens/${itemId}`);
-      carregarFatura();
-    } catch { toast.error('Erro ao remover item'); }
-  };
-
-  const handleAtualizarValorFatura = async (itemId: number, valor: number) => {
-    await api.put(`/clinica/faturas/itens/${itemId}`, { valor });
-    carregarFatura();
-  };
 
   // ── Guard ─────────────────────────────────────────────────────────────────
   // A aba "Minha Agenda" funciona sem animal selecionado
@@ -447,8 +380,11 @@ const Atendimento = () => {
           <SubModuloEvolucao
             animalId={animalIdNum}
             animal={animal}
-            faturaId={fatura?.id ?? null}
-            onFaturaAtualizada={carregarFatura}
+            faturaId={null}
+            onFaturaAtualizada={() => {}}
+            onEvolucaoChange={setEvolucaoAtiva}
+            onSalvo={refreshHistorico}
+            openItemId={openItemId}
           />
         );
       case 'prescricao':
@@ -456,12 +392,44 @@ const Atendimento = () => {
           <SubModuloPrescricao
             animalId={animalIdNum}
             animal={animal ? { ...animal, photoUrl: animal.photoUrl ?? null } : null}
-            onFaturaAtualizada={carregarFatura}
+            onFaturaAtualizada={() => {}}
+            evolucaoId={evolucaoAtiva?.id}
+            atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
+            onSalvo={refreshHistorico}
+            openItemId={openItemId}
           />
         );
-      case 'vacina':         return <SubModuloVacina animalId={animalIdNum} animal={animal} />;
-      case 'exames':         return <SubModuloExames animalId={animalIdNum} animal={animal} />;
-      case 'encaminhamento': return <SubModuloEncaminhamento animalId={animalIdNum} />;
+      case 'vacina':
+        return (
+          <SubModuloVacina
+            animalId={animalIdNum}
+            animal={animal}
+            evolucaoId={evolucaoAtiva?.id}
+            atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
+            onSalvo={refreshHistorico}
+            openItemId={openItemId}
+          />
+        );
+      case 'exames':
+        return (
+          <SubModuloExames
+            animalId={animalIdNum}
+            animal={animal}
+            evolucaoId={evolucaoAtiva?.id}
+            atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
+            onSalvo={refreshHistorico}
+            openItemId={openItemId}
+          />
+        );
+      case 'encaminhamento':
+        return (
+          <SubModuloEncaminhamento
+            animalId={animalIdNum}
+            evolucaoId={evolucaoAtiva?.id}
+            atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
+            onSalvo={refreshHistorico}
+          />
+        );
     }
   };
 
@@ -480,9 +448,17 @@ const Atendimento = () => {
 
       {animal && <AnimalCard animal={animal} />}
 
+      {evolucaoAtiva && (
+        <div className="flex items-center gap-2 mt-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-sm text-emerald-800 font-medium">
+          <CircleDot size={15} className="text-emerald-500 flex-shrink-0 animate-pulse" />
+          Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero}</span> em andamento
+        </div>
+      )}
+
       {/* ── Desktop ── */}
       <div className="hidden md:block mt-4">
         <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
+              setOpenItemId(null);
               navigate(effectiveAnimalId && tab !== 'agenda' ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
             }} />
         <div className="flex gap-4 items-start">
@@ -491,15 +467,18 @@ const Atendimento = () => {
               {renderSubModulo()}
             </div>
           </div>
-          {activeTab !== 'evolucao' && activeTab !== 'agenda' && (
+          {activeTab !== 'agenda' && animalIdNum > 0 && (
             <div className="w-72 flex-shrink-0 sticky top-4">
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col"
                 style={{ maxHeight: 'calc(100vh - 240px)', height: 'calc(100vh - 240px)' }}>
-                <FaturaPanel
-                  fatura={fatura}
-                  onRemover={handleRemoverItemFatura}
-                  onAtualizarValor={handleAtualizarValorFatura}
-                  loading={loadingFatura}
+                <HistoricoResumidoPanel
+                  animalId={animalIdNum}
+                  refreshKey={historicoKey}
+                  onItemClick={(tab, itemId) => {
+                    setOpenItemId(itemId);
+                    setActiveTab(tab);
+                    navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+                  }}
                 />
               </div>
             </div>
@@ -510,31 +489,36 @@ const Atendimento = () => {
       {/* ── Mobile ── */}
       <div className="md:hidden mt-4">
         <SubMenuClinico activeTab={activeTab} onChange={(tab) => {
+                setOpenItemId(null);
                 navigate(effectiveAnimalId && tab !== 'agenda' ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
               }} />
         <div className="bg-white rounded-b-2xl border border-gray-100 shadow-sm overflow-hidden">
           {renderSubModulo()}
         </div>
-        {activeTab !== 'evolucao' && activeTab !== 'agenda' && (
+        {activeTab !== 'agenda' && animalIdNum > 0 && (
           <>
-            <button onClick={() => setShowFaturaM(true)}
+            <button onClick={() => setShowHistoricoM(true)}
               className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">
-              <ReceiptText size={16} />
-              {formatCurrency(fatura?.total ?? 0)}
+              <History size={16} />
+              Histórico
             </button>
-            {showFaturaM && (
-              <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowFaturaM(false)}>
+            {showHistoricoM && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowHistoricoM(false)}>
                 <div className="bg-white rounded-t-2xl w-full max-h-[75vh] flex flex-col" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
-                    <span className="font-bold text-gray-900 text-sm">Fatura</span>
-                    <button onClick={() => setShowFaturaM(false)} className="p-1 text-gray-400"><X size={18} /></button>
+                    <span className="font-bold text-gray-900 text-sm">Histórico do Paciente</span>
+                    <button onClick={() => setShowHistoricoM(false)} className="p-1 text-gray-400"><X size={18} /></button>
                   </div>
                   <div className="flex-1 overflow-y-auto">
-                    <FaturaPanel
-                      fatura={fatura}
-                      onRemover={handleRemoverItemFatura}
-                      onAtualizarValor={handleAtualizarValorFatura}
-                      loading={loadingFatura}
+                    <HistoricoResumidoPanel
+                      animalId={animalIdNum}
+                      refreshKey={historicoKey}
+                      onItemClick={(tab, itemId) => {
+                        setOpenItemId(itemId);
+                        setShowHistoricoM(false);
+                        setActiveTab(tab);
+                        navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+                      }}
                     />
                   </div>
                 </div>

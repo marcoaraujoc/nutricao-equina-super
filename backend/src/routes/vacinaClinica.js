@@ -12,6 +12,7 @@ router.get('/lotes-disponiveis/:vacinaId',    ctrl.listarLotesDisponiveis);
 // Aplicações por animal
 router.get('/animal/:animalId',               ctrl.listarPorAnimal);
 router.post('/',                              ctrl.registrar);
+router.get('/:id',                            ctrl.obterPorId);
 router.delete('/:id',                         ctrl.excluir);
 
 module.exports = router;

@@ -22,6 +22,7 @@ interface Via {
 interface Medicamento {
   id:                number;
   nome:              string;
+  fabricante:        string | null;
   formaFarmaceutica: string;
   unidade:           string;
   apresentacao:      string;
@@ -32,6 +33,7 @@ interface Medicamento {
 
 interface FormMedicamento {
   nome:              string;
+  fabricante:        string;
   formaFarmaceutica: string;
   unidade:           string;
   apresentacao:      string;
@@ -69,7 +71,7 @@ const APRESENTACOES = [
 ];
 
 const FORM_INICIAL: FormMedicamento = {
-  nome: '', formaFarmaceutica: '', unidade: 'mg',
+  nome: '', fabricante: '', formaFarmaceutica: '', unidade: 'mg',
   apresentacao: '', controlado: false, ativo: true, vias: ['Oral'],
 };
 
@@ -200,6 +202,7 @@ function MedicamentoModal({
     editando
       ? {
           nome:              editando.nome,
+          fabricante:        editando.fabricante ?? '',
           formaFarmaceutica: editando.formaFarmaceutica,
           unidade:           editando.unidade,
           apresentacao:      editando.apresentacao,
@@ -255,6 +258,16 @@ function MedicamentoModal({
             <input
               type="text" value={form.nome} onChange={e => set('nome', e.target.value)}
               placeholder="Ex: Dipirona sódica"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          {/* Fabricante / Laboratório */}
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">FABRICANTE / LABORATÓRIO</label>
+            <input
+              type="text" value={form.fabricante} onChange={e => set('fabricante', e.target.value)}
+              placeholder="Ex: Zoetis, MSD, Ceva, Ourofino..."
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -348,30 +361,65 @@ export default function Medicamentos() {
   const { podeExecutar, loading: loadingPerm } = usePermissoes();
   const { user } = useAuth();
 
-  const [medicamentos,  setMedicamentos]  = useState<Medicamento[]>([]);
-  const [loading,       setLoading]       = useState(false);
-  const [total,         setTotal]         = useState(0);
-  const [totalControl,  setTotalControl]  = useState(0);
-  const [busca,         setBusca]         = useState('');
-  const [filtroAtivo,   setFiltroAtivo]   = useState<'ativos' | 'todos'>('ativos');
+  const [medicamentos,   setMedicamentos]   = useState<Medicamento[]>([]);
+  const [loading,        setLoading]        = useState(false);
+  const [loadingMore,    setLoadingMore]    = useState(false);
+  const [total,          setTotal]          = useState(0);
+  const [totalControl,   setTotalControl]   = useState(0);
+  const [busca,          setBusca]          = useState('');
+  const [debouncedBusca, setDebouncedBusca] = useState('');
+  const [filtroAtivo,    setFiltroAtivo]    = useState<'ativos' | 'todos'>('ativos');
+  const loadVersion = useRef(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBusca(busca), 400);
+    return () => clearTimeout(t);
+  }, [busca]);
   const [showModal,     setShowModal]     = useState(false);
   const [editando,      setEditando]      = useState<Medicamento | null>(null);
   const [saving,        setSaving]        = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
   const carregar = useCallback(async () => {
+    const version = ++loadVersion.current;
     setLoading(true);
+    setLoadingMore(false);
+
+    const buildParams = (offset: number, limit: number) => {
+      const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (debouncedBusca.trim()) p.set('busca', debouncedBusca.trim());
+      if (filtroAtivo === 'ativos') p.set('ativo', 'true');
+      return p;
+    };
+
     try {
-      const params = new URLSearchParams({ limit: '200' });
-      if (busca.trim()) params.set('busca', busca.trim());
-      if (filtroAtivo === 'ativos') params.set('ativo', 'true');
-      const res = await api.get(`/medicamentos?${params}`);
-      setMedicamentos(res.data.dados ?? []);
-      setTotal(res.data.meta?.total ?? (res.data.dados?.length ?? 0));
+      // Primeira página — 30 registros, libera a tela rapidamente
+      const res = await api.get(`/medicamentos?${buildParams(0, 30)}`);
+      if (loadVersion.current !== version) return;
+
+      const dados = res.data.dados ?? [];
+      setMedicamentos(dados);
+      setTotal(res.data.meta?.total ?? 0);
       setTotalControl(res.data.meta?.totalControlados ?? 0);
-    } catch { toast.error('Erro ao carregar catálogo'); }
-    finally { setLoading(false); }
-  }, [busca, filtroAtivo]);
+      setLoading(false);
+
+      // Background: carrega o restante sem bloquear a UI
+      if (res.data.meta?.hasMore) {
+        setLoadingMore(true);
+        try {
+          const res2 = await api.get(`/medicamentos?${buildParams(30, 470)}`);
+          if (loadVersion.current !== version) return;
+          setMedicamentos(prev => [...prev, ...(res2.data.dados ?? [])]);
+        } catch { /* silencioso */ }
+        finally { if (loadVersion.current === version) setLoadingMore(false); }
+      }
+    } catch {
+      if (loadVersion.current === version) {
+        toast.error('Erro ao carregar catálogo');
+        setLoading(false);
+      }
+    }
+  }, [debouncedBusca, filtroAtivo]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -499,6 +547,7 @@ export default function Medicamentos() {
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
                     <th className="px-4 py-3 text-left   text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
+                    <th className="px-4 py-3 text-left   text-xs font-semibold text-gray-500 uppercase tracking-wide">Fabricante</th>
                     <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Forma</th>
                     <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Unidade</th>
                     <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Apresentação</th>
@@ -519,6 +568,9 @@ export default function Medicamentos() {
                             </span>
                           )}
                         </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-xs text-gray-500">{m.fabricante ?? <span className="text-gray-300">—</span>}</p>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <p className="text-xs text-gray-700">{m.formaFarmaceutica}</p>
@@ -573,7 +625,7 @@ export default function Medicamentos() {
                         {m.nome}
                         {m.controlado && <ShieldCheck size={11} className="text-orange-500 flex-shrink-0" />}
                       </p>
-                      <p className="text-xs text-gray-500">{m.formaFarmaceutica} • {m.unidade}</p>
+                      <p className="text-xs text-gray-500">{m.fabricante ? `${m.fabricante} · ` : ''}{m.formaFarmaceutica} • {m.unidade}</p>
                     </div>
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium flex-shrink-0 ${
                       m.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
@@ -601,6 +653,14 @@ export default function Medicamentos() {
                 </div>
               ))}
             </div>
+
+            {/* Indicador de carga em background */}
+            {loadingMore && (
+              <div className="flex items-center justify-center gap-2 py-3 border-t border-gray-50">
+                <Loader2 size={13} className="animate-spin text-indigo-400" />
+                <span className="text-xs text-gray-400">Carregando restante do catálogo…</span>
+              </div>
+            )}
           </>
         )}
       </div>

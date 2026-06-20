@@ -209,6 +209,33 @@ Texto da evolução:
 ${texto.slice(0, 8000)}`,
   },
 
+  // ── Histórico clínico: resumo de linha do tempo ──────────────────────────────
+  // v1: sumariza lote de eventos numa linha cada
+  'resumo_historico': {
+    version: 'v1',
+    build: (eventos) => `Você é um assistente clínico veterinário. Para cada evento do histórico clínico abaixo, gere um resumo de UMA linha (máximo 90 caracteres) em português, descrevendo objetivamente o que foi feito ou observado.
+
+Regras:
+- Máximo 90 caracteres por resumo
+- Sem markdown, sem bullets, apenas texto simples
+- Use linguagem clínica concisa
+- Para evoluções: resuma o principal achado ou conduta clínica
+- Para vacinas: mencione o nome da vacina e tipo se disponível
+- Para exames: mencione o tipo e resultado resumido se disponível
+- Para prescrições: mencione os principais medicamentos/procedimentos
+- Para encaminhamentos: mencione a especialidade e motivo resumido
+
+Retorne APENAS um JSON array com exatamente ${eventos.length} itens, sem markdown, sem explicações:
+[{"resumo":"..."}]
+
+Eventos:
+${JSON.stringify(eventos.map(e => ({
+  tipo: e.origem,
+  titulo: e.titulo,
+  detalhe: typeof e.resumo === 'string' ? e.resumo.slice(0, 400) : null,
+})))}`,
+  },
+
   // ── Composição alimentar: rótulo em imagem (Gemini Vision) ──────────────────
   'parse_composicao_visao': {
     version: 'v1',

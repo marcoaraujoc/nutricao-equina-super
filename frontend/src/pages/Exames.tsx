@@ -12,6 +12,7 @@ import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
+import ConfirmModal from '../components/ConfirmModal';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -28,7 +29,8 @@ const Exames = () => {
   const [currentAnimal, setCurrentAnimal] = useState<any>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId,  setEditingId]  = useState<number | null>(null);
+  const [confirmId,  setConfirmId]  = useState<number | null>(null);
   const [editValues, setEditValues] = useState<any>({});
   const [nutrientes, setNutrientes] = useState<any[]>([]);
   const [filtroData,      setFiltroData]      = useState('');
@@ -105,14 +107,20 @@ const Exames = () => {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = (id: number) => {
     if (!podeDeletar) { semPermissao('excluir exame'); return; }
-    if (!confirm('Deseja realmente excluir este exame?')) return;
+    setConfirmId(id);
+  };
+
+  const handleDeleteConfirmado = async () => {
+    if (confirmId == null) return;
+    const id = confirmId;
+    setConfirmId(null);
     try {
       await api.delete(`/exames/${id}`);
       setExames(exames.filter(ex => ex.id !== id));
     } catch (error) {
-      alert('Erro ao excluir o exame');
+      toast.error('Erro ao excluir o exame');
       console.error(error);
     }
   };
@@ -347,6 +355,14 @@ const Exames = () => {
           </table>
         </div>
       </div>
+      <ConfirmModal
+        open={confirmId != null}
+        titulo="Excluir exame"
+        mensagem="Deseja realmente excluir este exame? Esta ação não pode ser desfeita."
+        labelConfirmar="Excluir"
+        onConfirmar={handleDeleteConfirmado}
+        onCancelar={() => setConfirmId(null)}
+      />
     </PageContainer>
   );
 };

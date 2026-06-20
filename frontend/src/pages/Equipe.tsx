@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import {
   Users2, Mail, Trash2, ToggleLeft, ToggleRight,
   Loader2, X, CheckCircle2,
-  ShieldCheck, Pencil, ChevronDown, Check,
+  ShieldCheck, Pencil, Check,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import PermissoesModal from '../components/PermissoesModal';
@@ -19,6 +19,7 @@ import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioF
 interface Membro {
   id:        number;
   cargo:     string;
+  cargos?:   string[];
   createdAt: string;
   user: {
     id:       number;
@@ -81,7 +82,7 @@ export default function Equipe() {
   const [removendoId,   setRemovendoId]                   = useState<number | null>(null);
   const [confirmRemover,setConfirmRemover]                = useState<Membro | null>(null);
   const [editandoId,    setEditandoId]                    = useState<number | null>(null);
-  const [editCargo,     setEditCargo]                     = useState('');
+  const [editCargos,    setEditCargos]                    = useState<string[]>([]);
   const [salvandoCargo, setSalvandoCargo]                 = useState(false);
   const [permissoesModal, setPermissoesModal]             = useState<Membro | null>(null);
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
@@ -170,12 +171,12 @@ export default function Equipe() {
     finally { setRemovendoId(null); }
   };
 
-  const handleSalvarCargo = async (membro: Membro) => {
-    if (!equipeId) return;
+  const handleSalvarCargos = async (membro: Membro) => {
+    if (!equipeId || editCargos.length === 0) return;
     setSalvandoCargo(true);
     try {
-      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: editCargo });
-      toast.success('Cargo atualizado');
+      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargos`, { cargos: editCargos });
+      toast.success('Cargo(s) atualizado(s)');
       setEditandoId(null); carregarMembros();
     } catch { toast.error('Erro ao atualizar cargo'); }
     finally { setSalvandoCargo(false); }
@@ -185,9 +186,10 @@ export default function Equipe() {
     if (!membroEditando) return;
     setSalvandoEdicao(true);
     try {
+      const cargos = values.cargos?.length ? values.cargos : [values.perfil];
       await api.put(`/equipes/membros/${membroEditando.id}`, {
         fullName:    values.fullName,
-        cargo:       values.perfil,
+        cargo:       cargos[0],
         phone:       values.phone,
         ativo:       values.ativo,
         senha:       values.senha || undefined,
@@ -198,6 +200,9 @@ export default function Equipe() {
         cidade:      values.cidade.trim()      || null,
         estado:      values.estado.trim()      || null,
       });
+      if (equipeId) {
+        await api.patch(`/equipes/${equipeId}/membros/${membroEditando.user.id}/cargos`, { cargos });
+      }
       toast.success('Perfil atualizado');
       setMembroEditando(null);
       carregarMembros();
@@ -318,35 +323,60 @@ export default function Equipe() {
                     <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                   </div>
 
-                  {/* Cargo editável para Gestor (apenas membros não-gestor) */}
+                  {/* Cargo(s) editável para Gestor (apenas membros não-gestor) */}
                   {isGestor && editandoId === m.id ? (
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <div className="relative">
-                        <select value={editCargo} onChange={e => setEditCargo(e.target.value)}
-                          className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 appearance-none pr-6">
-                          {CARGO_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                        </select>
-                        <ChevronDown size={10} className="absolute right-1.5 top-2.5 text-gray-400 pointer-events-none" />
+                    <div className="flex items-start gap-1.5 flex-shrink-0">
+                      <div className="bg-white border border-gray-200 rounded-xl p-2 shadow-sm">
+                        {CARGO_OPTIONS.map(c => {
+                          const sel = editCargos.includes(c.value);
+                          return (
+                            <label key={c.value} className="flex items-center gap-1.5 py-0.5 cursor-pointer select-none">
+                              <input
+                                type="checkbox" checked={sel}
+                                onChange={e => {
+                                  const next = e.target.checked
+                                    ? [...editCargos, c.value]
+                                    : editCargos.filter(x => x !== c.value);
+                                  if (next.length > 0) setEditCargos(next);
+                                }}
+                                className="w-3 h-3 accent-emerald-600"
+                              />
+                              <span className="text-xs text-gray-700">{c.label}</span>
+                            </label>
+                          );
+                        })}
                       </div>
-                      <button onClick={() => handleSalvarCargo(m)} disabled={salvandoCargo}
-                        className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
-                        {salvandoCargo ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                      </button>
-                      <button onClick={() => setEditandoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
-                        <X size={12} />
-                      </button>
+                      <div className="flex flex-col gap-1">
+                        <button onClick={() => handleSalvarCargos(m)} disabled={salvandoCargo}
+                          className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
+                          {salvandoCargo ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                        </button>
+                        <button onClick={() => setEditandoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                          <X size={12} />
+                        </button>
+                      </div>
                     </div>
                   ) : (
-                    <span
-                      className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        ativo ? badgeCargo(m.cargo) : 'bg-gray-100 text-gray-400'
-                      } ${isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'cursor-pointer hover:opacity-80' : ''}`}
-                      onClick={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? () => { setEditandoId(m.id); setEditCargo(m.cargo); } : undefined}
-                      title={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'Clique para editar cargo' : undefined}
+                    <div
+                      className={`hidden sm:flex flex-wrap items-center gap-1 ${
+                        isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'cursor-pointer' : ''
+                      }`}
+                      onClick={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR'
+                        ? () => { setEditandoId(m.id); setEditCargos(m.cargos?.length ? m.cargos : [m.cargo]); }
+                        : undefined}
+                      title={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'Clique para editar cargos' : undefined}
                     >
-                      {labelCargo(m.cargo)}
-                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && <Pencil size={9} className="opacity-50" />}
-                    </span>
+                      {(m.cargos?.length ? m.cargos : [m.cargo]).map(c => (
+                        <span key={c} className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                          ativo ? badgeCargo(c) : 'bg-gray-100 text-gray-400'
+                        }`}>
+                          {labelCargo(c)}
+                        </span>
+                      ))}
+                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
+                        <Pencil size={9} className="text-gray-400 opacity-50" />
+                      )}
+                    </div>
                   )}
 
                   <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
@@ -425,6 +455,7 @@ export default function Equipe() {
           titulo="Editar Membro"
           modoEdicao
           permitirSenha={isGestor}
+          permitirMultiCargos
           emailBloqueado
           textoBotao="Salvar"
           salvando={salvandoEdicao}
@@ -435,6 +466,7 @@ export default function Equipe() {
             email:       membroEditando.user.email,
             phone:       membroEditando.user.phone       ?? '',
             perfil:      membroEditando.cargo,
+            cargos:      membroEditando.cargos?.length ? membroEditando.cargos : [membroEditando.cargo],
             ativo:       membroEditando.user.ativo !== false,
             cep:         membroEditando.user.cep         ?? '',
             endereco:    membroEditando.user.endereco    ?? '',
