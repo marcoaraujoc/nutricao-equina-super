@@ -79,7 +79,7 @@ const EncaminhamentoController = {
   },
 
   // GET /clinica/encaminhamentos/prestadores/:animalId
-  // Prestadores (cargo PRESTADOR) das equipes do escopo do animal, com a
+  // Fornecedores (cargo FORNECEDOR) das equipes do escopo do animal, com a
   // especialidade (tipoServico) do cadastro Fornecedor vinculado ao login.
   listarPrestadores: async (req, res) => {
     try {
@@ -101,7 +101,7 @@ const EncaminhamentoController = {
       const membros = await prisma.membroEquipe.findMany({
         where: {
           equipeId: { in: equipeIds },
-          OR: [{ cargo: 'PRESTADOR' }, { cargos: { has: 'PRESTADOR' } }],
+          OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
           user: { ativo: true },
         },
         select: {
@@ -191,12 +191,12 @@ const EncaminhamentoController = {
           where: {
             userId:   Number(prestadorId),
             equipeId: { in: equipeIds.length ? equipeIds : [-1] },
-            OR: [{ cargo: 'PRESTADOR' }, { cargos: { has: 'PRESTADOR' } }],
+            OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
           },
           select: { equipeId: true },
         });
         if (memberships.length === 0) {
-          return res.status(400).json({ error: 'Prestador não é membro PRESTADOR de uma equipe deste animal' });
+          return res.status(400).json({ error: 'Fornecedor não é membro FORNECEDOR de uma equipe deste animal' });
         }
         // Preferir a equipe do animal quando o prestador pertence a ela
         equipeDesignacao =

@@ -575,7 +575,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 mb-4">
 
             <div className="sm:col-span-3" ref={comboboxRef}>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">VACINA *</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VACINA *</label>
               {loadingCat ? (
                 <div className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-400">
                   <Loader2 size={13} className="animate-spin" /> Carregando…
@@ -638,7 +638,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">LOTE</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">LOTE</label>
               {!medicamentoId ? (
                 <div className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-300 bg-gray-50">
                   Selecione a vacina primeiro
@@ -682,7 +682,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
           {/* Linha 2: Tipo Dose / Via */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">TIPO DOSE</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">TIPO DOSE</label>
               <select value={dose} onChange={e => setDose(e.target.value)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
                 <option value="">Selecione…</option>
@@ -690,7 +690,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">VIA APLICAÇÃO</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VIA APLICAÇÃO</label>
               <select value={via} onChange={e => setVia(e.target.value)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
                 <option value="">Selecione…</option>
@@ -702,12 +702,12 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
           {/* Linha 3: Data Aplicação / Qtd Doses */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">DATA APLICAÇÃO</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">DATA APLICAÇÃO</label>
               <input type="date" value={dataAplicacao} onChange={e => setDataAplicacao(e.target.value)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500" />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">QTD DOSES</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">QTD DOSES</label>
               <input
                 type="number" min={1} value={qtd}
                 onChange={e => setQtd(Math.max(1, Number(e.target.value)))}
@@ -718,7 +718,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
 
           {/* Linha 4: Observação */}
           <div className="mb-3">
-            <label className="block text-xs text-gray-500 mb-1.5 font-medium">OBSERVAÇÃO</label>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">OBSERVAÇÃO</label>
             <input
               type="text" value={observacao}
               onChange={e => setObservacao(e.target.value)}

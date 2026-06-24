@@ -1,19 +1,47 @@
-// frontend/src/pages/SubModuloExames.tsx — requisições de exames clínicos
+// frontend/src/pages/SubModuloExames.tsx — requisições de exames clínicos com catálogo
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   FlaskConical, Scan, Trash2, Eye, Loader2, X,
-  ChevronLeft, ChevronRight, Calendar, FileText,
+  ChevronLeft, ChevronRight, FileText, Check, Plus,
+  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2,
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ConfirmModal from '../components/ConfirmModal';
 import type { AnimalInfo } from './SubModuloEvolucao';
+import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
+
+// ─── Types catálogo ───────────────────────────────────────────────────────────
+
+interface LabItem      { id: number; nome: string; contato?: string | null }
+interface GrupoItem    { id: number; nome: string; ordem: number }
+interface ExameItemCat { id: number; nome: string; sigla?: string | null; tiposAmostra: string[] }
+
+const TIPOS_AMOSTRA = [
+  { value: 'Sangue Total com EDTA',  label: 'Sangue Total com EDTA (Tubo Roxo)' },
+  { value: 'Soro Sanguíneo',         label: 'Soro Sanguíneo (Tubo Amarelo/Vermelho)' },
+  { value: 'Plasma Fluoreto',        label: 'Plasma Fluoreto (Tubo Cinza) — Glicose / Lactato' },
+  { value: 'Plasma Citratado',       label: 'Plasma Citratado (Tubo Azul) — Coagulograma' },
+  { value: 'Urina',                  label: 'Urina' },
+  { value: 'Fezes',                  label: 'Fezes Frescas' },
+  { value: 'Swab',                   label: 'Swab / Secreção / Suabe' },
+  { value: 'Raspado Cutâneo',        label: 'Raspado Cutâneo' },
+  { value: 'Líquido Cavitário',      label: 'Líquido Cavitário (Pleural / Peritoneal / Sinovial)' },
+  { value: 'Líquor',                 label: 'Líquor (LCR)' },
+  { value: 'Fragmento / Biópsia',    label: 'Fragmento / Biópsia' },
+] as const;
+
+// ─── Catalog imagem (dinâmico via API) ───────────────────────────────────────
+
+interface ImagemGrupoItem { id: number; nome: string; categoria: string; ordem: number }
+interface ImagemExameItemCat { id: number; codigo: string; nome: string; sigla: string | null; especie: string }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TipoExame = 'Laboratorial' | 'Bioquímico' | 'Imagem';
+type TipoExame  = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
+type MainTab    = 'laboratorial' | 'imagem';
 
 interface ExtraInfo {
   laboratorio:      string | null;
@@ -21,17 +49,41 @@ interface ExtraInfo {
   tipoAmostra:      string | null;
   indicacaoClinica: string | null;
   obs:              string | null;
+  grupoNome?:       string | null;
+  grupos?:          { tipo: TipoExame }[] | null;
+}
+
+interface PendingExamGroup {
+  localId:          string;
+  tipo:             TipoExame;
+  descricao:        string;
+  laboratorio:      string | null;
+  dataHoraColeta:   string | null;
+  tipoAmostra:      string | null;
+  qtdAmostra:       number | null;
+  indicacaoClinica: string | null;
+  observacao:       string | null;
+  grupoNome:        string | null;
+  dataSolicitacao:  string;
+  laudoCompra:      null;
+  examsDisplay:     string[];
+  labNomeDisplay:   string;
 }
 
 interface ExameClinico {
   id:              number;
+  numero:          number | null;
   tipo:            TipoExame;
   descricao:       string;
   status:          string;
   observacao:      string | null;
+  qtdAmostra:      number | null;
   dataSolicitacao: string;
   veterinario:     { id: number; fullName: string } | null;
 }
+
+const fmtNumero = (n: number | null | undefined) =>
+  n != null ? `#${String(n).padStart(3, '0')}` : '—';
 
 interface Props {
   animalId:           number;
@@ -42,43 +94,98 @@ interface Props {
   openItemId?:        number;
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const TIPOS: { key: TipoExame; label: string; icon: typeof FlaskConical; badge: string }[] = [
-  { key: 'Laboratorial', label: 'Laboratorial', icon: FlaskConical, badge: 'bg-blue-100 text-blue-700'       },
-  { key: 'Imagem',       label: 'Imagem',        icon: Scan,         badge: 'bg-emerald-100 text-emerald-700' },
-];
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const hoje = () => new Date().toISOString().slice(0, 10);
+
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
 
-// Máscara DD/MM/AAAA HH:MM — sem dependência de locale do SO
-function maskDatetime(val: string): string {
-  const d = val.replace(/\D/g, '').slice(0, 12);
-  let r = d.slice(0, 2);
-  if (d.length > 2)  r += '/' + d.slice(2, 4);
-  if (d.length > 4)  r += '/' + d.slice(4, 8);
-  if (d.length > 8)  r += ' ' + d.slice(8, 10);
-  if (d.length > 10) r += ':' + d.slice(10, 12);
-  return r;
-}
-
-function maskedToISO(masked: string): string | null {
-  const d = masked.replace(/\D/g, '');
-  if (d.length < 12) return null;
-  const h = parseInt(d.slice(8, 10), 10);
-  const m = parseInt(d.slice(10, 12), 10);
-  if (h > 23 || m > 59) return null;
-  return `${d.slice(4, 8)}-${d.slice(2, 4)}-${d.slice(0, 2)}T${d.slice(8, 10)}:${d.slice(10, 12)}`;
-}
-
 function parseExtra(obs: string | null): ExtraInfo {
   if (!obs) return { laboratorio: null, dataHoraColeta: null, tipoAmostra: null, indicacaoClinica: null, obs: null };
-  try { return JSON.parse(obs) as ExtraInfo; } catch { return { laboratorio: null, dataHoraColeta: null, tipoAmostra: null, indicacaoClinica: null, obs }; }
+  try   { return JSON.parse(obs) as ExtraInfo; }
+  catch { return { laboratorio: null, dataHoraColeta: null, tipoAmostra: null, indicacaoClinica: null, obs }; }
 }
 
-// ─── Row helper ───────────────────────────────────────────────────────────────
+function sugerirTipoAmostra(exams: string[]): string {
+  const lower = exams.map(e => e.toLowerCase());
+  const tipos: string[] = [];
+
+  const hasHema  = lower.some(e => e.includes('hemograma') || e.includes('hematócrito') || e.includes('hematozo') || e.includes('vhs'));
+  const hasGlic  = lower.some(e => e.includes('glicose') || e.includes('lactato'));
+  const hasFibri = lower.some(e => e.includes('fibrinogênio'));
+  const hasUrina = lower.some(e => e.includes('eas') || e.includes('urina'));
+  const hasFezes = lower.some(e => e.includes('fezes') || e.includes('parasitol'));
+  const hasSoro  = lower.some(e =>
+    !e.includes('hemograma') && !e.includes('hematócrito') &&
+    !e.includes('glicose') && !e.includes('lactato') &&
+    !e.includes('eas') && !e.includes('urina') &&
+    !e.includes('fezes') && !e.includes('fibrinogênio')
+  );
+
+  if (hasFibri) tipos.push('Sangue com Citrato (Tubo Azul)');
+  if (hasHema)  tipos.push('Sangue Total com EDTA (Tubo Roxo)');
+  if (hasGlic)  tipos.push('Plasma Fluoreto (Tubo Cinza)');
+  if (hasSoro)  tipos.push('Soro Sanguíneo (Tubo Amarelo/Vermelho)');
+  if (hasUrina) tipos.push('Urina');
+  if (hasFezes) tipos.push('Fezes Frescas');
+
+  return [...new Set(tipos)].join(' + ') || '';
+}
+
+// ─── ExamCheckList ────────────────────────────────────────────────────────────
+
+function ExamCheckList({
+  items, selected, onToggle,
+}: {
+  items:    string[];
+  selected: string[];
+  onToggle: (name: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+      {items.map(item => {
+        const checked = selected.includes(item);
+        return (
+          <button
+            key={item}
+            type="button"
+            onClick={() => onToggle(item)}
+            className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border text-sm text-left transition-colors ${
+              checked
+                ? 'bg-blue-50 border-blue-300 text-blue-800'
+                : 'bg-white border-gray-200 text-gray-700 hover:border-gray-400 hover:bg-gray-50'
+            }`}
+          >
+            <span className={`w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-colors ${
+              checked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
+            }`}>
+              {checked && <Check size={10} className="text-white" strokeWidth={3} />}
+            </span>
+            <span className="leading-snug">{item}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── ViewModal ────────────────────────────────────────────────────────────────
+
+const TIPOS_META: Record<TipoExame, { badge: string }> = {
+  Laboratorial: { badge: 'bg-blue-100 text-blue-700' },
+  Bioquímico:   { badge: 'bg-violet-100 text-violet-700' },
+  Imagem:       { badge: 'bg-emerald-100 text-emerald-700' },
+  Compra:       { badge: 'bg-amber-100 text-amber-700' },
+};
+
+const STATUS_EXAME: Record<string, { label: string; cls: string }> = {
+  SOLICITADO:  { label: 'Solicitado',  cls: 'bg-amber-100 text-amber-700' },
+  COLETADO:    { label: 'Coletado',    cls: 'bg-blue-100 text-blue-700' },
+  EM_ANALISE:  { label: 'Em Análise',  cls: 'bg-violet-100 text-violet-700' },
+  RESULTADO:   { label: 'Resultado',   cls: 'bg-emerald-100 text-emerald-700' },
+  CANCELADO:   { label: 'Cancelado',   cls: 'bg-red-100 text-red-700' },
+};
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -89,15 +196,15 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── ViewModal ────────────────────────────────────────────────────────────────
-
 function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void }) {
-  const extra = parseExtra(ex.observacao);
-  const tipoMeta = TIPOS.find(t => t.key === ex.tipo);
+  const extra    = parseExtra(ex.observacao);
+  const tipoMeta = TIPOS_META[ex.tipo];
+  const isMulti  = ex.descricao.includes(', ');
+  const examList = isMulti ? ex.descricao.split(', ') : null;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg border border-gray-100">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
             <FlaskConical size={16} className="text-blue-600" />
@@ -105,19 +212,33 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
           </div>
           <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
-        <div className="p-5 space-y-3">
+        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
           <div className="flex items-center gap-2 mb-1">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
               {ex.tipo}
             </span>
             <span className="text-xs text-gray-400">{ex.status}</span>
           </div>
-          <Row label="Exame"        value={ex.descricao} />
+
+          {examList ? (
+            <div>
+              <p className="text-xs text-gray-400 mb-1.5">Exames solicitados ({examList.length})</p>
+              <div className="flex flex-wrap gap-1.5">
+                {examList.map(e => (
+                  <span key={e} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">{e}</span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <Row label="Exame" value={ex.descricao} />
+          )}
+
           {extra.laboratorio      && <Row label="Laboratório"        value={extra.laboratorio} />}
           {extra.dataHoraColeta   && <Row label="Data/Hora Coleta"   value={new Date(extra.dataHoraColeta).toLocaleString('pt-BR')} />}
           {extra.tipoAmostra      && <Row label="Tipo de Amostra"    value={extra.tipoAmostra} />}
-          {extra.indicacaoClinica && <Row label="Indicação Clínica" value={extra.indicacaoClinica} />}
-          {extra.obs              && <Row label="Preparo / Obs."    value={extra.obs} />}
+          {ex.qtdAmostra != null  && <Row label="Qtd. de Amostras"   value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />}
+          {extra.indicacaoClinica && <Row label="Indicação Clínica"  value={extra.indicacaoClinica} />}
+          {extra.obs              && <Row label="Preparo / Obs."     value={extra.obs} />}
           <Row label="Solicitado em" value={formatDate(ex.dataSolicitacao)} />
           {ex.veterinario && <Row label="Solicitado por" value={ex.veterinario.fullName} />}
         </div>
@@ -132,28 +253,100 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
   );
 }
 
+// ─── PendingGroupCard ─────────────────────────────────────────────────────────
+
+function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemove: () => void }) {
+  const tipoMeta = TIPOS_META[group.tipo];
+  return (
+    <div className="flex items-start gap-3 p-3 bg-white border border-amber-200 rounded-xl">
+      <div className="w-7 h-7 bg-amber-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+        {group.tipo === 'Imagem' ? <Scan size={13} className="text-emerald-700" /> : <FlaskConical size={13} className="text-blue-700" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
+            {group.tipo}
+          </span>
+          {group.labNomeDisplay && (
+            <span className="text-[10px] text-gray-500">{group.labNomeDisplay}</span>
+          )}
+          {group.grupoNome && (
+            <span className="text-[10px] text-gray-500">· {group.grupoNome}</span>
+          )}
+        </div>
+        {group.examsDisplay.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {group.examsDisplay.slice(0, 5).map(e => (
+              <span key={e} className="text-[10px] bg-blue-50 border border-blue-200 text-blue-700 px-1.5 py-0.5 rounded-full">{e}</span>
+            ))}
+            {group.examsDisplay.length > 5 && (
+              <span className="text-[10px] text-gray-400">+{group.examsDisplay.length - 5} mais</span>
+            )}
+          </div>
+        )}
+        {group.tipoAmostra && group.tipoAmostra !== 'Exame Físico' && (
+          <p className="text-[10px] text-gray-500 mt-0.5">Amostra: {group.tipoAmostra}</p>
+        )}
+      </div>
+      <button onClick={onRemove} className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0 transition-colors">
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 // ─── SubModuloExames ──────────────────────────────────────────────────────────
 
-export default function SubModuloExames({ animalId, animal: _animal, evolucaoId, atendimentoNumero, onSalvo, openItemId }: Props) {
+export default function SubModuloExames({
+  animalId, animal, evolucaoId, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId,
+}: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const datePickerRef     = useRef<HTMLInputElement>(null);
-  const dataHoraColetaRef = useRef('');
-  const pendingDateRef    = useRef('');
+  const procDropdownRef    = useRef<HTMLDivElement>(null);
+  const procSearchRef      = useRef<HTMLInputElement>(null);
+  const imagemDropdownRef  = useRef<HTMLDivElement>(null);
+  const imagemSearchRef    = useRef<HTMLInputElement>(null);
 
-  // ── Form state ─────────────────────────────────────────────────────────────
-  const [tipo,             setTipo]             = useState<TipoExame>('Laboratorial');
-  const [descricao,        setDescricao]        = useState('');
-  const [laboratorio,      setLaboratorio]      = useState('');
-  const [dataHoraColeta,   setDataHoraColeta]   = useState('');
-  dataHoraColetaRef.current = dataHoraColeta;
-  const [showTimePicker,   setShowTimePicker]   = useState(false);
-  const [pickerH,          setPickerH]          = useState('');
-  const [pickerM,          setPickerM]          = useState('');
+  // ── Tab state ──────────────────────────────────────────────────────────────
+  const [mainTab,      setMainTab]      = useState<MainTab>('laboratorial');
+  const [showProcDrop, setShowProcDrop] = useState(false);
+  const [procSearch,   setProcSearch]   = useState('');
+
+  // ── Catálogo dinâmico de laboratórios ─────────────────────────────────────
+  const OUTROS_ID = -1; // sentinela para "Outros laboratórios"
+  const [labs,          setLabs]          = useState<LabItem[]>([]);
+  const [labId,         setLabId]         = useState<number | null>(null);
+  const [outroLabNome,  setOutroLabNome]  = useState('');
+  const [grupos,        setGrupos]        = useState<GrupoItem[]>([]);
+  const [grupoId,       setGrupoId]       = useState<number | null>(null);
+  const [grupoNome,     setGrupoNome]     = useState('');
+  const [examesCat,     setExamesCat]     = useState<ExameItemCat[]>([]);
+  const [loadingLabs,   setLoadingLabs]   = useState(false);
+  const [loadingGrupos, setLoadingGrupos] = useState(false);
+  const [loadingExames, setLoadingExames] = useState(false);
+
+  // ── Catálogo dinâmico de exames de imagem ─────────────────────────────────
+  const [imagemGrupos,        setImagemGrupos]        = useState<ImagemGrupoItem[]>([]);
+  const [imagemGrupoId,       setImagemGrupoId]       = useState<number | null>(null);
+  const [imagemGrupoNome,     setImagemGrupoNome]     = useState('');
+  const [imagemExamesCat,     setImagemExamesCat]     = useState<ImagemExameItemCat[]>([]);
+  const [loadingImagemGrupos, setLoadingImagemGrupos] = useState(false);
+  const [loadingImagemExames, setLoadingImagemExames] = useState(false);
+  const [imagemProcSearch,    setImagemProcSearch]    = useState('');
+  const [showImagemProcDrop,  setShowImagemProcDrop]  = useState(false);
+
+  // ── Selection ──────────────────────────────────────────────────────────────
+  const [selectedExams,   setSelectedExams]   = useState<string[]>([]);
+  const [customExamText,  setCustomExamText]  = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
+
+  // ── Common form fields ────────────────────────────────────────────────────
+  const [dataSolicitacao,  setDataSolicitacao]  = useState(hoje());
+  const [dataHoraColeta,   setDataHoraColeta]   = useState(() => new Date().toISOString().slice(0, 16));
   const [tipoAmostra,      setTipoAmostra]      = useState('');
+  const [qtdAmostra,       setQtdAmostra]       = useState<number>(1);
   const [indicacaoClinica, setIndicacaoClinica] = useState('');
   const [observacao,       setObservacao]       = useState('');
-  const [dataSolicitacao,  setDataSolicitacao]  = useState(hoje());
 
   // ── Data state ─────────────────────────────────────────────────────────────
   const [historico,   setHistorico]   = useState<ExameClinico[]>([]);
@@ -163,9 +356,11 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
   const [viewingEx,   setViewingEx]   = useState<ExameClinico | null>(null);
   const [confirmId,   setConfirmId]   = useState<number | null>(null);
 
-  const [page,  setPage]  = useState(1);
-  const limit             = 8;
-  const totalPags         = Math.ceil(total / limit);
+  const [pendingGroups, setPendingGroups] = useState<PendingExamGroup[]>([]);
+
+  const [page,      setPage]    = useState(1);
+  const limit                   = 8;
+  const totalPags               = Math.ceil(total / limit);
 
   const podeCriar   = isGestor || podeExecutar('atendimento.exames.criar');
   const podeDeletar = isGestor || podeExecutar('atendimento.exames.deletar');
@@ -173,6 +368,133 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável.`);
 
+  // Tipos de amostra que têm pelo menos um exame no grupo carregado
+  // Fallback para lista completa enquanto os dados não estão populados (tiposAmostra=[])
+  const tiposDisponiveisNoGrupo = useMemo(() => {
+    if (examesCat.length === 0) return TIPOS_AMOSTRA;
+    const set = new Set(examesCat.flatMap(e => e.tiposAmostra ?? []));
+    return set.size === 0 ? TIPOS_AMOSTRA : TIPOS_AMOSTRA.filter(t => set.has(t.value));
+  }, [examesCat]);
+
+  // Quantidade de exames do grupo compatíveis com cada tipo de amostra
+  const countPorTipoAmostra = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const exam of examesCat) {
+      for (const tipo of (exam.tiposAmostra ?? [])) {
+        map[tipo] = (map[tipo] ?? 0) + 1;
+      }
+    }
+    return map;
+  }, [examesCat]);
+
+  // Nome do laboratório que vai para o registro salvo
+  const laboratorioNomeSalvo = labId === OUTROS_ID
+    ? (outroLabNome.trim() || 'Outro laboratório')
+    : (labs.find(l => l.id === labId)?.nome ?? '');
+
+  // ── Effects ────────────────────────────────────────────────────────────────
+
+  // Carrega lista de labs ao montar
+  useEffect(() => {
+    setLoadingLabs(true);
+    api.get('/clinica/laboratorios')
+      .then(res => { if (res.data) setLabs(res.data.dados ?? []); })
+      .catch(() => {})
+      .finally(() => setLoadingLabs(false));
+  }, []);
+
+  // Carrega grupos de exames de imagem quando a aba imagem é ativada
+  useEffect(() => {
+    if (mainTab !== 'imagem' || imagemGrupos.length > 0) return;
+    setLoadingImagemGrupos(true);
+    api.get('/clinica/imagem-exames/grupos')
+      .then(res => { if (res.data) setImagemGrupos(res.data.dados ?? []); })
+      .catch(() => {})
+      .finally(() => setLoadingImagemGrupos(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainTab]);
+
+  // Carrega itens ao trocar grupo de imagem
+  useEffect(() => {
+    setImagemExamesCat([]);
+    setSelectedExams([]);
+    if (imagemGrupoId == null) return;
+    setLoadingImagemExames(true);
+    api.get(`/clinica/imagem-exames/grupos/${imagemGrupoId}/itens`)
+      .then(res => { if (res.data) setImagemExamesCat(res.data.dados ?? []); })
+      .catch(() => {})
+      .finally(() => setLoadingImagemExames(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imagemGrupoId]);
+
+  // Carrega grupos ao trocar de lab
+  useEffect(() => {
+    setGrupos([]);
+    setGrupoId(null);
+    setGrupoNome('');
+    setExamesCat([]);
+    setSelectedExams([]);
+    if (labId == null) return;
+
+    setLoadingGrupos(true);
+    const url = labId === OUTROS_ID
+      ? '/clinica/laboratorios/grupos-todos'
+      : `/clinica/laboratorios/${labId}/grupos`;
+    api.get(url)
+      .then(res => {
+        if (res.data) setGrupos(res.data.dados ?? []);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingGrupos(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labId]);
+
+  // Carrega exames ao trocar de grupo
+  useEffect(() => {
+    setExamesCat([]);
+    setSelectedExams([]);
+    if (grupoId == null || grupos.length === 0) return;
+
+    setLoadingExames(true);
+    const url = labId === OUTROS_ID
+      ? `/clinica/laboratorios/itens-todos?grupo=${encodeURIComponent(grupoNome)}`
+      : `/clinica/laboratorios/grupos/${grupoId}/itens`;
+    api.get(url)
+      .then(res => { if (res.data) setExamesCat(res.data.dados ?? []); })
+      .catch(() => {})
+      .finally(() => setLoadingExames(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grupoId, grupoNome]);
+
+
+  useEffect(() => {
+    setSelectedExams([]);
+    setCustomExamText('');
+    setShowCustomInput(false);
+  }, [mainTab]);
+
+  useEffect(() => {
+    if (!showProcDrop) { setProcSearch(''); return; }
+    const handler = (e: MouseEvent) => {
+      if (!procDropdownRef.current?.contains(e.target as Node)) {
+        setShowProcDrop(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showProcDrop]);
+
+  // Click-outside para dropdown de exames de imagem
+  useEffect(() => {
+    if (!showImagemProcDrop) { setImagemProcSearch(''); return; }
+    const handler = (e: MouseEvent) => {
+      if (!imagemDropdownRef.current?.contains(e.target as Node)) {
+        setShowImagemProcDrop(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showImagemProcDrop]);
 
   // ── Loader ─────────────────────────────────────────────────────────────────
 
@@ -201,38 +523,151 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleSalvar = async () => {
-    if (!podeCriar)            { semPermissao('registrar exames'); return; }
-    if (!evolucaoId)           { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
-    if (!laboratorio.trim())   { toast.error('Informe o laboratório de destino'); return; }
-    if (!maskedToISO(dataHoraColeta)) { toast.error('Informe data e hora da coleta (DD/MM/AAAA HH:MM)'); return; }
-    if (!dataSolicitacao)      { toast.error('Informe a data da solicitação'); return; }
-    if (!descricao.trim())     { toast.error('Informe o nome do exame'); return; }
-    if (!tipoAmostra.trim())   { toast.error('Informe o tipo de amostra'); return; }
+  const toggleExam = (name: string) =>
+    setSelectedExams(prev => prev.includes(name) ? prev.filter(e => e !== name) : [...prev, name]);
+
+  const addCustomExam = () => {
+    const trimmed = customExamText.trim();
+    if (!trimmed) return;
+    if (!selectedExams.includes(trimmed)) setSelectedExams(prev => [...prev, trimmed]);
+    setCustomExamText('');
+    setShowCustomInput(false);
+  };
+
+  const removeSelectedExam = (name: string) =>
+    setSelectedExams(prev => prev.filter(e => e !== name));
+
+  const validateCurrentForm = (): boolean => {
+    if (selectedExams.length === 0)                                { toast.error('Selecione ao menos um exame'); return false; }
+    if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { toast.error('Selecione o laboratório de destino'); return false; }
+    if (mainTab === 'laboratorial' && !dataHoraColeta)              { toast.error('Informe a data e hora da coleta'); return false; }
+    if (mainTab === 'laboratorial' && !tipoAmostra.trim())          { toast.error('Informe o tipo de amostra'); return false; }
+    return true;
+  };
+
+  const buildCurrentGroup = (): PendingExamGroup => {
+    const tipo: TipoExame = mainTab === 'imagem' ? 'Imagem' : 'Laboratorial';
+    return {
+      localId:          `${Date.now()}-${Math.random()}`,
+      tipo,
+      descricao:        selectedExams.join(', '),
+      laboratorio:      laboratorioNomeSalvo.trim() || null,
+      dataHoraColeta:   dataHoraColeta || null,
+      tipoAmostra:      tipoAmostra.trim() || null,
+      qtdAmostra:       mainTab === 'laboratorial' ? qtdAmostra : null,
+      indicacaoClinica: indicacaoClinica.trim() || null,
+      observacao:       observacao.trim() || null,
+      grupoNome:        mainTab === 'laboratorial' ? (grupoNome || null) : (imagemGrupoNome || null),
+      dataSolicitacao,
+      laudoCompra:      null,
+      examsDisplay:     [...selectedExams],
+      labNomeDisplay:   mainTab === 'laboratorial' ? laboratorioNomeSalvo : (outroLabNome || ''),
+    };
+  };
+
+  const resetCurrentForm = () => {
+    if (mainTab === 'imagem') {
+      setSelectedExams([]);
+      setOutroLabNome('');
+      setImagemGrupoId(null);
+      setImagemGrupoNome('');
+      setImagemExamesCat([]);
+      setImagemProcSearch('');
+      setShowImagemProcDrop(false);
+      setIndicacaoClinica('');
+      setObservacao('');
+    } else {
+      setSelectedExams([]);
+      setLabId(null);
+      setOutroLabNome('');
+      setGrupoId(null);
+      setGrupoNome('');
+      setExamesCat([]);
+      setGrupos([]);
+      setDataHoraColeta(new Date().toISOString().slice(0, 16));
+      setTipoAmostra('');
+      setQtdAmostra(1);
+      setIndicacaoClinica('');
+      setObservacao('');
+    }
+    setDataSolicitacao(hoje());
+  };
+
+  const handleInserir = () => {
+    if (!podeCriar)  { semPermissao('registrar exames'); return; }
+    if (!evolucaoId) { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
+    if (!validateCurrentForm()) return;
+    setPendingGroups(prev => [...prev, buildCurrentGroup()]);
+    resetCurrentForm();
+  };
+
+  const handleFinalizar = async () => {
+    if (!podeCriar)  { semPermissao('registrar exames'); return; }
+    if (!evolucaoId) { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
+
+    let rawGroups = [...pendingGroups];
+    if (canSave) {
+      if (!validateCurrentForm()) return;
+      rawGroups = [...rawGroups, buildCurrentGroup()];
+    }
+    if (rawGroups.length === 0) { toast.error('Selecione ao menos um exame para finalizar'); return; }
+
+    // Um único registro com todos os grupos.
+    // Cada grupo inclui tipo + laboratório para que a impressão gere
+    // uma página por laboratório/tipo distinto.
+    const allDescricao   = rawGroups.map(g => g.descricao).filter(Boolean).join(', ');
+    const tipoRecord     = rawGroups[0].tipo;
+    const labPrimario    = rawGroups.find(g => g.laboratorio)?.laboratorio ?? null;
+    const dataColeta     = rawGroups.find(g => g.dataHoraColeta)?.dataHoraColeta ?? null;
+    const tipoAmostraPri = rawGroups.find(g => g.tipoAmostra)?.tipoAmostra ?? null;
+    const qtdTotal       = rawGroups.reduce<number | null>(
+      (s, g) => g.qtdAmostra != null ? (s ?? 0) + g.qtdAmostra : s, null
+    );
+    const indicacoes = rawGroups.map(g => g.indicacaoClinica).filter(Boolean).join('; ') || null;
+
+    const gruposPayload = rawGroups.map(g => ({
+      tipo:             g.tipo,
+      laboratorio:      g.laboratorio,
+      dataHoraColeta:   g.dataHoraColeta,
+      nome:             g.grupoNome,
+      exames:           g.examsDisplay,
+      tipoAmostra:      g.tipoAmostra,
+      qtdAmostra:       g.qtdAmostra,
+      indicacaoClinica: g.indicacaoClinica,
+      obs:              g.observacao,
+      laudoCompra:      g.laudoCompra,
+    }));
 
     setSaving(true);
     try {
       await api.post('/clinica/exames', {
         animalId,
-        tipo,
+        tipo:             tipoRecord,
         evolucaoId,
-        descricao:        descricao.trim(),
-        laboratorio:      laboratorio.trim()      || null,
-        dataHoraColeta:   maskedToISO(dataHoraColeta),
-        tipoAmostra:      tipoAmostra.trim()      || null,
-        indicacaoClinica: indicacaoClinica.trim() || null,
-        observacao:       observacao.trim()        || null,
-        dataSolicitacao,
+        descricao:        allDescricao,
+        laboratorio:      labPrimario,
+        dataHoraColeta:   dataColeta,
+        tipoAmostra:      tipoAmostraPri,
+        qtdAmostra:       qtdTotal,
+        indicacaoClinica: indicacoes,
+        observacao:       null,
+        grupoNome:        null,
+        dataSolicitacao:  rawGroups[0].dataSolicitacao,
+        grupos:           gruposPayload,
       });
-      toast.success('Exame registrado com sucesso');
-      onSalvo?.();
-      setDescricao(''); setLaboratorio(''); setDataHoraColeta(''); setTipoAmostra('');
-      setIndicacaoClinica(''); setObservacao(''); setDataSolicitacao(hoje());
+      const nExames = rawGroups.reduce((s, g) => s + g.examsDisplay.length, 0);
+      const msg = rawGroups.length > 1
+        ? `Pedido criado com ${rawGroups.length} grupos (${nExames} exames)`
+        : 'Pedido de exame criado com sucesso';
+      toast.success(msg);
+      setPendingGroups([]);
+      resetCurrentForm();
       setPage(1);
       carregarHistorico(1);
+      onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao registrar exame');
+      toast.error(msg ?? 'Erro ao finalizar exames');
     } finally { setSaving(false); }
   };
 
@@ -255,6 +690,44 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
     }
   };
 
+  const imprimirExame = (ex: ExameClinico) => imprimirExameUtil(ex, animal);
+
+  const compartilharWhatsApp = (ex: ExameClinico) => {
+    const extra = parseExtra(ex.observacao);
+    const examList = ex.descricao.split(', ');
+    const texto = [
+      `*Requisição de Exame Clínico*`,
+      `Tipo: ${ex.tipo}`,
+      `Data: ${formatDate(ex.dataSolicitacao)}`,
+      extra.laboratorio      ? `Laboratório: ${extra.laboratorio}` : '',
+      extra.tipoAmostra      ? `Amostra: ${extra.tipoAmostra}` : '',
+      extra.indicacaoClinica ? `Indicação: ${extra.indicacaoClinica}` : '',
+      `\n*Exames (${examList.length}):*`,
+      ...examList.map(e => `• ${e}`),
+      extra.obs ? `\n${extra.obs}` : '',
+    ].filter(Boolean).join('\n');
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
+  };
+
+  const compartilharEmail = (ex: ExameClinico) => {
+    const extra = parseExtra(ex.observacao);
+    const examList = ex.descricao.split(', ');
+    const assunto = `Requisição de Exame - ${ex.tipo} - ${formatDate(ex.dataSolicitacao)}`;
+    const corpo = [
+      `Requisição de Exame Clínico`,
+      `Tipo: ${ex.tipo}`,
+      `Data: ${formatDate(ex.dataSolicitacao)}`,
+      extra.laboratorio      ? `Laboratório: ${extra.laboratorio}` : '',
+      extra.dataHoraColeta   ? `Data/Hora coleta: ${new Date(extra.dataHoraColeta).toLocaleString('pt-BR')}` : '',
+      extra.tipoAmostra      ? `Tipo de amostra: ${extra.tipoAmostra}` : '',
+      extra.indicacaoClinica ? `Indicação clínica: ${extra.indicacaoClinica}` : '',
+      extra.obs              ? `Instruções/Preparo: ${extra.obs}` : '',
+      `\nExames Solicitados (${examList.length}):`,
+      ...examList.map(e => `• ${e}`),
+    ].filter(Boolean).join('\n');
+    window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo)}`;
+  };
+
   // ── Guard ──────────────────────────────────────────────────────────────────
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) {
@@ -266,216 +739,684 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ─── Derived ──────────────────────────────────────────────────────────────
 
-  if (!evolucaoId) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-        <FileText size={32} className="mb-3 text-gray-200" />
-        <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
-        <p className="text-xs mt-1 text-center max-w-xs">
-          Inicie uma evolução na aba Evolução para registrar exames neste atendimento.
-        </p>
-      </div>
-    );
-  }
+  const canSave = mainTab === 'imagem'
+    ? selectedExams.length > 0
+    : selectedExams.length > 0 && laboratorioNomeSalvo.trim().length > 0 &&
+      !!dataHoraColeta && tipoAmostra.trim().length > 0;
+
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <>
-      {/* ── Formulário de registro ─────────────────────────────────────────── */}
+      {/* ── Formulário ────────────────────────────────────────────────────── */}
       {podeCriar && (
-        <div className="p-5 border-b border-gray-100">
-          {/* Tipo de exame */}
-          <div className="flex gap-2 mb-5">
-            {TIPOS.map(t => {
-              const Icon  = t.icon;
-              const ativo = tipo === t.key;
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setTipo(t.key)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
-                    ativo
-                      ? 'bg-emerald-700 text-white'
-                      : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Icon size={11} />
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Linha 1: Laboratório / Data e Hora Coleta / Data Solicitação */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-4">
-            <div className="flex-1">
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">LABORATÓRIO DE DESTINO *</label>
-              <input
-                type="text"
-                value={laboratorio}
-                onChange={e => setLaboratorio(e.target.value)}
-                placeholder="Ex: VetLab Diagnósticos"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-              />
+        <div className="border-b border-gray-100">
+          {!evolucaoId ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4">
+              <FileText size={28} className="mb-2 text-gray-200" />
+              <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
+              <p className="text-xs mt-1 text-center max-w-xs">
+                Inicie uma evolução na aba Evolução para poder registrar exames neste atendimento.
+              </p>
             </div>
-            <div className="shrink-0 w-fit">
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium whitespace-nowrap">DATA E HORA COLETA *</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={dataHoraColeta}
-                  onChange={e => setDataHoraColeta(maskDatetime(e.target.value))}
-                  placeholder="DD/MM/YYYY HH24:MI"
-                  maxLength={16}
-                  className="w-full border border-gray-200 rounded-xl pl-3 pr-9 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => datePickerRef.current?.showPicker()}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-900 hover:text-blue-600 transition-colors"
-                >
-                  <Calendar size={15} />
-                </button>
-                <input
-                  ref={datePickerRef}
-                  type="date"
-                  tabIndex={-1}
-                  className="absolute inset-0 opacity-0 pointer-events-none w-0 h-0"
-                  onChange={e => {
-                    if (!e.target.value) return;
-                    const [y, m, d] = e.target.value.split('-');
-                    pendingDateRef.current = `${d}${m}${y}`;
-                    const horaDigits = dataHoraColetaRef.current.replace(/\D/g, '').slice(8);
-                    setDataHoraColeta(maskDatetime(`${d}${m}${y}${horaDigits}`));
-                    setPickerH(''); setPickerM('');
-                    setShowTimePicker(true);
-                  }}
-                />
-                {showTimePicker && (
-                  <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-3 min-w-[160px]">
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold mb-2 tracking-wide">Hora da coleta</p>
-                    <div className="flex items-center gap-1.5 mb-3">
-                      <input
-                        type="text"
-                        value={pickerH}
-                        onChange={e => setPickerH(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                        placeholder="HH"
-                        maxLength={2}
-                        className="w-12 text-center border border-gray-200 rounded-lg px-1 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-                      />
-                      <span className="text-gray-500 font-bold">:</span>
-                      <input
-                        type="text"
-                        value={pickerM}
-                        onChange={e => setPickerM(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                        placeholder="MM"
-                        maxLength={2}
-                        className="w-12 text-center border border-gray-200 rounded-lg px-1 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+          ) : (
+            <div className="p-4 space-y-4">
+
+                {/* Main tabs */}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setMainTab('laboratorial')}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
+                      mainTab === 'laboratorial'
+                        ? 'bg-blue-700 text-white border-blue-700'
+                        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                    }`}>
+                    <FlaskConical size={12} /> Laboratorial
+                  </button>
+                  <button type="button" onClick={() => setMainTab('imagem')}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
+                      mainTab === 'imagem'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                    }`}>
+                    <Scan size={12} /> Imagem / Complementar
+                  </button>
+                </div>
+
+                {/* ── Laboratorial / Imagem ───────────────────────────── */}
+                {mainTab !== 'compra' && (
+                  <div className="space-y-4">
+
+                    {/* Laboratório de Análises */}
+                    <div className="space-y-2">
+                      {mainTab === 'laboratorial' && (labId === OUTROS_ID ? (
+                        /* Outro Laboratório: select + nome + datas na mesma linha */
+                        <div className="flex flex-wrap gap-2 items-end">
+                          <div className="relative flex-[2] min-w-[160px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Laboratório *
+                            </label>
+                            {loadingLabs ? (
+                              <div className="flex items-center gap-1.5 h-10 px-3 border border-gray-200 rounded-xl text-xs text-gray-400">
+                                <Loader2 size={12} className="animate-spin" /> Carregando...
+                              </div>
+                            ) : (
+                              <>
+                                <select
+                                  value={labId ?? ''}
+                                  onChange={e => {
+                                    const val = e.target.value;
+                                    setLabId(val === '' ? null : Number(val));
+                                    setOutroLabNome('');
+                                  }}
+                                  className="w-full appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 pr-8 bg-white"
+                                >
+                                  <option value="">Selecione o laboratório...</option>
+                                  {labs.map(lab => (
+                                    <option key={lab.id} value={lab.id}>{lab.nome}</option>
+                                  ))}
+                                  <option value={OUTROS_ID}>Outro Laboratório</option>
+                                </select>
+                                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                              </>
+                            )}
+                          </div>
+                          <div className="flex-[2] min-w-[140px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Nome do Laboratório *
+                            </label>
+                            <input
+                              type="text"
+                              value={outroLabNome}
+                              onChange={e => setOutroLabNome(e.target.value)}
+                              placeholder="Nome do laboratório..."
+                              autoFocus
+                              className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                          <div className="flex-1 min-w-[130px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Data da Solicitação *
+                            </label>
+                            <input
+                              type="date"
+                              value={dataSolicitacao}
+                              onChange={e => setDataSolicitacao(e.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                          <div className="flex-[1.5] min-w-[170px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Data e Hora da Coleta *
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={dataHoraColeta}
+                              onChange={e => setDataHoraColeta(e.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        /* Laboratorial: select + datas na mesma linha */
+                        <div className="flex flex-wrap gap-2 items-end">
+                          <div className="relative flex-[2] min-w-[160px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Laboratório
+                            </label>
+                            {loadingLabs ? (
+                              <div className="flex items-center gap-1.5 h-10 px-3 border border-gray-200 rounded-xl text-xs text-gray-400">
+                                <Loader2 size={12} className="animate-spin" /> Carregando...
+                              </div>
+                            ) : (
+                              <>
+                                <select
+                                  value={labId ?? ''}
+                                  onChange={e => {
+                                    const val = e.target.value;
+                                    setLabId(val === '' ? null : Number(val));
+                                    setOutroLabNome('');
+                                  }}
+                                  className="w-full appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 pr-8 bg-white"
+                                >
+                                  <option value="">Selecione o laboratório...</option>
+                                  {labs.map(lab => (
+                                    <option key={lab.id} value={lab.id}>{lab.nome}</option>
+                                  ))}
+                                  <option value={OUTROS_ID}>Outro Laboratório</option>
+                                </select>
+                                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                              </>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-[130px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Data da Solicitação *
+                            </label>
+                            <input
+                              type="date"
+                              value={dataSolicitacao}
+                              onChange={e => setDataSolicitacao(e.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                          <div className="flex-[1.5] min-w-[170px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Data e Hora da Coleta *
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={dataHoraColeta}
+                              onChange={e => setDataHoraColeta(e.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+                      ))}
+
+                    </div>
+
+                    {/* Área de Exame + Tipo de Amostra + Qtd — só laboratorial */}
+                    {mainTab === 'laboratorial' && (
+                      <div className="flex flex-wrap gap-3 items-end">
+                        {/* Área de Exame — só para laboratorial */}
+                        {mainTab !== 'imagem' && (
+                          <div className="flex-[2] min-w-[160px]">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                              Área de Exame *
+                            </label>
+                            {loadingGrupos ? (
+                              <div className="flex items-center gap-1.5 h-10 px-3 border border-gray-200 rounded-xl text-xs text-gray-400">
+                                <Loader2 size={12} className="animate-spin" /> Carregando grupos...
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <select
+                                  value={grupoId ?? ''}
+                                  onChange={e => {
+                                    const gid = Number(e.target.value);
+                                    const g = grupos.find(x => x.id === gid);
+                                    setGrupoId(gid || null);
+                                    setGrupoNome(g?.nome ?? '');
+                                    setShowProcDrop(false);
+                                  }}
+                                  disabled={labId == null || grupos.length === 0}
+                                  className="w-full appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 pr-8 bg-white disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-50"
+                                >
+                                  <option value="">
+                                    {labId == null
+                                      ? 'Selecione primeiro o laboratório...'
+                                      : grupos.length === 0
+                                        ? 'Nenhuma área disponível'
+                                        : 'Selecione a área...'}
+                                  </option>
+                                  {grupos.map(g => (
+                                    <option key={g.id} value={g.id}>{g.nome}</option>
+                                  ))}
+                                </select>
+                                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {/* Tipo de Amostra */}
+                        <div className="flex-[2] min-w-[160px]">
+                          <div className="h-5 flex items-center gap-2 mb-1">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                              Tipo de Amostra *
+                            </label>
+                            {tipoAmostra && countPorTipoAmostra[tipoAmostra] != null && (
+                              <span className="text-[11px] font-semibold bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full border border-violet-200 whitespace-nowrap">
+                                {countPorTipoAmostra[tipoAmostra]} exame{countPorTipoAmostra[tipoAmostra] !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <select
+                              value={tipoAmostra}
+                              onChange={e => setTipoAmostra(e.target.value)}
+                              className="w-full appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 pr-8 bg-white"
+                            >
+                              <option value="">Selecione o tipo de amostra...</option>
+                              {tiposDisponiveisNoGrupo.map(t => {
+                                const cnt = countPorTipoAmostra[t.value];
+                                return (
+                                  <option key={t.value} value={t.value}>
+                                    {t.label}{cnt != null ? ` — ${cnt} exame${cnt !== 1 ? 's' : ''}` : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                          </div>
+                        </div>
+                        {/* Qtd. Amostras */}
+                        <div className="flex-1 min-w-[100px]">
+                          <div className="h-5 flex items-center mb-1">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                              Qtd. de Amostras *
+                            </label>
+                          </div>
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            value={qtdAmostra}
+                            onChange={e => setQtdAmostra(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 text-center focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Exames do grupo selecionado */}
+                    {mainTab === 'laboratorial' && (() => {
+                      const examesFiltrados = examesCat;
+                      const totalDisp = examesFiltrados.length;
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                              {grupoNome ? `Exames — ${grupoNome}` : 'Exames'}
+                            </label>
+                            {grupoId != null && !loadingExames && (
+                              <span className="text-[11px] font-semibold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full border border-blue-200">
+                                {totalDisp} disponíveis
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            {grupoId == null ? (
+                              <p className="text-xs text-gray-400 italic py-2">
+                                Selecione a área de exame acima para ver os exames disponíveis.
+                              </p>
+                            ) : loadingExames ? (
+                              <div className="flex items-center gap-1.5 text-xs text-gray-400 py-2">
+                                <Loader2 size={12} className="animate-spin" /> Carregando exames...
+                              </div>
+                            ) : totalDisp === 0 ? (
+                              <p className="text-xs text-gray-400 italic py-2">
+                                Nenhum exame cadastrado neste grupo.
+                              </p>
+                            ) : (
+                              <>
+                                <div className="relative" ref={procDropdownRef}>
+                                  {/* Trigger / campo de busca */}
+                                  {showProcDrop ? (
+                                    <div className="flex items-center gap-2 px-3 py-2.5 border border-blue-400 rounded-xl bg-white">
+                                      <FlaskConical size={14} className="text-blue-400 flex-shrink-0" />
+                                      <input
+                                        ref={procSearchRef}
+                                        autoFocus
+                                        type="text"
+                                        value={procSearch}
+                                        onChange={e => setProcSearch(e.target.value)}
+                                        placeholder={`Buscar em ${grupoNome}...`}
+                                        className="flex-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 placeholder:italic"
+                                      />
+                                      {procSearch && (
+                                        <button
+                                          type="button"
+                                          onMouseDown={e => { e.preventDefault(); setProcSearch(''); procSearchRef.current?.focus(); }}
+                                          className="text-gray-400 hover:text-gray-600"
+                                        >
+                                          <X size={12} />
+                                        </button>
+                                      )}
+                                      <ChevronDown size={14} className="text-gray-400 rotate-180 flex-shrink-0" />
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowProcDrop(true)}
+                                      className="w-full flex items-center justify-between px-3 py-2.5 border border-gray-200 rounded-xl bg-white text-sm hover:border-blue-400 transition-colors"
+                                    >
+                                      <div className="flex items-center gap-2 text-gray-400 italic">
+                                        <FlaskConical size={14} className="text-gray-300 flex-shrink-0" />
+                                        <span className="text-left truncate">
+                                          {selectedExams.length === 0
+                                            ? `Clique e digite para buscar em ${grupoNome}...`
+                                            : `${selectedExams.length} de ${totalDisp} exame(s) marcado(s)`
+                                          }
+                                        </span>
+                                      </div>
+                                      <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                                    </button>
+                                  )}
+
+                                  {/* Lista filtrada */}
+                                  {showProcDrop && (() => {
+                                    const visíveis = procSearch.trim()
+                                      ? examesFiltrados.filter(e =>
+                                          e.nome.toLowerCase().includes(procSearch.toLowerCase())
+                                        )
+                                      : examesFiltrados;
+                                    return (
+                                      <div className="absolute top-full left-0 right-0 z-30 bg-white border border-gray-200 rounded-xl shadow-xl mt-1 max-h-56 overflow-y-auto">
+                                        {visíveis.length === 0 ? (
+                                          <p className="text-xs text-gray-400 italic px-4 py-3">
+                                            Nenhum resultado para &ldquo;{procSearch}&rdquo;
+                                          </p>
+                                        ) : visíveis.map(item => {
+                                          const checked = selectedExams.includes(item.nome);
+                                          return (
+                                            <label
+                                              key={item.id}
+                                              onMouseDown={e => e.preventDefault()}
+                                              onClick={() => toggleExam(item.nome)}
+                                              className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${checked ? 'bg-blue-50/60' : ''}`}
+                                            >
+                                              <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                                                checked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
+                                              }`}>
+                                                {checked && <Check size={10} className="text-white" strokeWidth={3} />}
+                                              </div>
+                                              <span className={`text-sm ${checked ? 'text-blue-800 font-medium' : 'text-gray-700'}`}>{item.nome}</span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Imagem: catálogo dinâmico por grupo */}
+                    {mainTab === 'imagem' && (
+                      <div className="space-y-3">
+                        {/* Seletor de grupo */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                            Categoria de Exame
+                          </label>
+                          {loadingImagemGrupos ? (
+                            <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                              <Loader2 size={13} className="animate-spin" /> Carregando categorias...
+                            </div>
+                          ) : (
+                            <select
+                              value={imagemGrupoId ?? ''}
+                              onChange={e => {
+                                const gid = Number(e.target.value);
+                                const g = imagemGrupos.find(x => x.id === gid);
+                                setImagemGrupoId(gid || null);
+                                setImagemGrupoNome(g?.nome ?? '');
+                                setShowImagemProcDrop(false);
+                              }}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 focus:outline-none focus:border-emerald-400 bg-white"
+                            >
+                              <option value="">Selecione a categoria...</option>
+                              {imagemGrupos.map(g => (
+                                <option key={g.id} value={g.id}>{g.nome}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+
+                        {/* Busca de exame — mesmo padrão do laboratorial */}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                              {imagemGrupoNome ? `Exames — ${imagemGrupoNome}` : 'Exames'}
+                            </label>
+                            {imagemGrupoId != null && !loadingImagemExames && (
+                              <span className="text-[11px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">
+                                {imagemExamesCat.length} disponíveis
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            {imagemGrupoId == null ? (
+                              <p className="text-xs text-gray-400 italic py-2">
+                                Selecione a categoria acima para ver os exames disponíveis.
+                              </p>
+                            ) : loadingImagemExames ? (
+                              <div className="flex items-center gap-1.5 text-xs text-gray-400 py-2">
+                                <Loader2 size={12} className="animate-spin" /> Carregando exames...
+                              </div>
+                            ) : imagemExamesCat.length === 0 ? (
+                              <p className="text-xs text-gray-400 italic py-2">
+                                Nenhum exame cadastrado nesta categoria.
+                              </p>
+                            ) : (
+                              <div className="relative" ref={imagemDropdownRef}>
+                                {showImagemProcDrop ? (
+                                  <div className="flex items-center gap-2 px-3 py-2.5 border border-emerald-400 rounded-xl bg-white">
+                                    <Scan size={14} className="text-emerald-400 flex-shrink-0" />
+                                    <input
+                                      ref={imagemSearchRef}
+                                      autoFocus
+                                      type="text"
+                                      value={imagemProcSearch}
+                                      onChange={e => setImagemProcSearch(e.target.value)}
+                                      placeholder={`Buscar em ${imagemGrupoNome}...`}
+                                      className="flex-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 placeholder:italic"
+                                    />
+                                    {imagemProcSearch && (
+                                      <button
+                                        type="button"
+                                        onMouseDown={e => { e.preventDefault(); setImagemProcSearch(''); imagemSearchRef.current?.focus(); }}
+                                        className="text-gray-400 hover:text-gray-600"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    )}
+                                    <ChevronDown size={14} className="text-gray-400 rotate-180 flex-shrink-0" />
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowImagemProcDrop(true)}
+                                    className="w-full flex items-center justify-between px-3 py-2.5 border border-gray-200 rounded-xl bg-white text-sm hover:border-emerald-400 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-2 text-gray-400 italic">
+                                      <Scan size={14} className="text-gray-300 flex-shrink-0" />
+                                      <span className="text-left truncate">
+                                        {selectedExams.length === 0
+                                          ? `Clique e digite para buscar em ${imagemGrupoNome}...`
+                                          : `${selectedExams.length} de ${imagemExamesCat.length} exame(s) marcado(s)`
+                                        }
+                                      </span>
+                                    </div>
+                                    <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                                  </button>
+                                )}
+
+                                {showImagemProcDrop && (() => {
+                                  const visíveis = imagemProcSearch.trim()
+                                    ? imagemExamesCat.filter(e =>
+                                        e.nome.toLowerCase().includes(imagemProcSearch.toLowerCase()) ||
+                                        e.codigo.toLowerCase().includes(imagemProcSearch.toLowerCase())
+                                      )
+                                    : imagemExamesCat;
+                                  return (
+                                    <div className="absolute top-full left-0 right-0 z-30 bg-white border border-gray-200 rounded-xl shadow-xl mt-1 max-h-56 overflow-y-auto">
+                                      {visíveis.length === 0 ? (
+                                        <p className="text-xs text-gray-400 italic px-4 py-3">
+                                          Nenhum resultado para &ldquo;{imagemProcSearch}&rdquo;
+                                        </p>
+                                      ) : visíveis.map(ex => {
+                                        const checked = selectedExams.includes(ex.nome);
+                                        return (
+                                          <label
+                                            key={ex.id}
+                                            onMouseDown={e => e.preventDefault()}
+                                            onClick={() => toggleExam(ex.nome)}
+                                            className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${checked ? 'bg-emerald-50/60' : ''}`}
+                                          >
+                                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                                              checked ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'
+                                            }`}>
+                                              {checked && <Check size={10} className="text-white" strokeWidth={3} />}
+                                            </div>
+                                            <span className={`text-sm ${checked ? 'text-emerald-800 font-medium' : 'text-gray-700'}`}>{ex.nome}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Exames selecionados */}
+                    {selectedExams.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                            Exames selecionados ({selectedExams.length})
+                          </p>
+                          <button type="button" onClick={() => setSelectedExams([])}
+                            className="text-[11px] text-blue-500 hover:text-blue-700 font-medium">
+                            Limpar tudo
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedExams.map((e, idx) => (
+                            <span key={e}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-blue-200 bg-blue-50 text-blue-800 text-xs font-medium">
+                              <span className="w-4 h-4 flex-shrink-0 flex items-center justify-center rounded-full bg-blue-600 text-white text-[9px] font-bold">
+                                {idx + 1}
+                              </span>
+                              {e}
+                              <button type="button" onClick={() => removeSelectedExam(e)}
+                                className="text-blue-400 hover:text-blue-700 transition-colors flex-shrink-0">
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Adicionar exame não listado — link clicável */}
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomInput(v => !v)}
+                        className="flex items-center gap-1.5 text-xs text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
+                      >
+                        <Plus size={13} />
+                        Adicionar exame não listado
+                      </button>
+                      {showCustomInput && (
+                        <input
+                          type="text"
+                          value={customExamText}
+                          onChange={e => setCustomExamText(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomExam(); } }}
+                          placeholder="Nome do exame e pressione Enter para adicionar..."
+                          autoFocus
+                          className="w-full border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400"
+                        />
+                      )}
+                    </div>
+
+                    {/* Indicação / Suspeita Clínica */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                        Indicação / Suspeita Clínica
+                      </label>
+                      <textarea
+                        value={indicacaoClinica}
+                        onChange={e => setIndicacaoClinica(e.target.value)}
+                        placeholder="Ex: Suspeita de hemoparasitose, anemia, check-up anual..."
+                        rows={2}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none"
                       />
                     </div>
-                    <div className="flex gap-2">
-                      {(['AM', 'PM'] as const).map(period => (
-                        <button
-                          key={period}
-                          type="button"
-                          onClick={() => {
-                            let h = parseInt(pickerH || '0', 10);
-                            const m = (pickerM || '00').padStart(2, '0');
-                            if (period === 'PM' && h < 12) h += 12;
-                            if (period === 'AM' && h === 12) h = 0;
-                            const dateDigits = pendingDateRef.current || dataHoraColetaRef.current.replace(/\D/g, '').slice(0, 8);
-                            setDataHoraColeta(maskDatetime(`${dateDigits}${String(h).padStart(2, '0')}${m}`));
-                            setShowTimePicker(false);
-                          }}
-                          className="flex-1 py-1.5 text-sm font-semibold rounded-lg border border-gray-200 text-gray-700 hover:bg-blue-50 hover:border-blue-400 hover:text-blue-700 transition-colors"
-                        >
-                          {period}
-                        </button>
-                      ))}
+
+                    {/* Instruções de Preparo / Obs */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                        Instruções de Preparo / Obs
+                      </label>
+                      <textarea
+                        value={observacao}
+                        onChange={e => setObservacao(e.target.value)}
+                        placeholder="Ex: Jejum hídrico e alimentar de 8h..."
+                        rows={2}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none"
+                      />
+                    </div>
+
+                    {/* Botões Inserir / Finalizar */}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={handleInserir}
+                        disabled={saving || !canSave}
+                        className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      >
+                        Inserir
+                      </button>
+                      <button
+                        onClick={handleFinalizar}
+                        disabled={saving || (pendingGroups.length === 0 && !canSave)}
+                        className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5"
+                      >
+                        {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                        {pendingGroups.length > 0 ? `Finalizar (${pendingGroups.length})` : 'Finalizar'}
+                      </button>
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
-            <div className="shrink-0 w-fit">
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium whitespace-nowrap">DATA DA SOLICITAÇÃO *</label>
-              <input
-                type="date"
-                value={dataSolicitacao}
-                onChange={e => setDataSolicitacao(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
 
-          {/* Linha 2: Exame / Tipo de Amostra */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">EXAME *</label>
-              <input
-                type="text"
-                value={descricao}
-                onChange={e => setDescricao(e.target.value)}
-                placeholder="Ex: Hemograma completo"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-              />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 font-medium">TIPO DE AMOSTRA *</label>
-              <input
-                type="text"
-                value={tipoAmostra}
-                onChange={e => setTipoAmostra(e.target.value)}
-                placeholder="Ex: Sangue total com EDTA"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-              />
+          )}
+        </div>
+      )}
+
+      {/* ── Grupos pendentes ────────────────────────────────────────────────── */}
+      {pendingGroups.length > 0 && (
+        <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/40">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
+                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} aguardando finalização
+              </span>
             </div>
-          </div>
-
-          {/* Indicação Clínica */}
-          <div className="mb-4">
-            <label className="block text-xs text-gray-500 mb-1.5 font-medium">INDICAÇÃO CLÍNICA</label>
-            <input
-              type="text"
-              value={indicacaoClinica}
-              onChange={e => setIndicacaoClinica(e.target.value)}
-              placeholder="Ex: Suspeita de infecção, check-up pré-anestésico"
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-            />
-          </div>
-
-          {/* Observação / Preparo */}
-          <div className="mb-5">
-            <label className="block text-xs text-gray-500 mb-1.5 font-medium">OBSERVAÇÃO / PREPARO</label>
-            <textarea
-              rows={2}
-              value={observacao}
-              onChange={e => setObservacao(e.target.value)}
-              placeholder="Ex: Jejum de 8h. Trazer em caixa de transporte silenciosa."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 resize-none"
-            />
-          </div>
-
-          <div className="flex justify-end">
             <button
-              onClick={handleSalvar}
-              disabled={saving || !descricao.trim() || !laboratorio.trim() || !maskedToISO(dataHoraColeta) || !tipoAmostra.trim()}
-              className="flex items-center gap-2 px-6 py-2.5 bg-blue-700 hover:bg-blue-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors"
+              onClick={() => setPendingGroups([])}
+              className="text-xs text-red-400 hover:text-red-600 font-medium transition-colors"
             >
-              {saving && <Loader2 size={14} className="animate-spin" />}
-              <FlaskConical size={15} />
-              {saving ? 'Salvando…' : 'Salvar'}
+              Limpar
             </button>
           </div>
+          <div className="space-y-2">
+            {pendingGroups.map(g => (
+              <PendingGroupCard
+                key={g.localId}
+                group={g}
+                onRemove={() => setPendingGroups(prev => prev.filter(x => x.localId !== g.localId))}
+              />
+            ))}
+          </div>
+          <button
+            onClick={handleFinalizar}
+            disabled={saving}
+            className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 bg-blue-700 hover:bg-blue-800 disabled:bg-gray-300 text-white font-semibold text-sm rounded-xl transition-colors"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            <CheckCircle2 size={14} />
+            {saving ? 'Salvando…' : `Finalizar ${pendingGroups.length} grupo${pendingGroups.length !== 1 ? 's' : ''}`}
+          </button>
         </div>
       )}
 
       {/* ── Histórico ──────────────────────────────────────────────────────── */}
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Exames</p>
-        <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
+        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Histórico de Exames</p>
+        <span className="text-xs text-gray-400">{total} requisição{total !== 1 ? 'ões' : ''}</span>
       </div>
 
       {loadingHist ? (
@@ -493,34 +1434,64 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
           <div className="md:hidden divide-y divide-gray-50">
             {historico.map(ex => {
               const extra    = parseExtra(ex.observacao);
-              const tipoMeta = TIPOS.find(t => t.key === ex.tipo);
+              const examCount = (ex.descricao.match(/,/g) ?? []).length + 1;
+              const tiposUnicos: TipoExame[] = extra.grupos && extra.grupos.length > 0
+                ? [...new Set(extra.grupos.map(g => g.tipo))]
+                : [ex.tipo];
               return (
                 <div key={ex.id} className="flex items-start gap-3 px-4 py-3">
                   <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <FlaskConical size={14} className="text-blue-700" />
+                    {tiposUnicos.includes('Imagem') ? <Scan size={14} className="text-emerald-700" /> : <FlaskConical size={14} className="text-blue-700" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${tipoMeta?.badge ?? ''}`}>
-                        {ex.tipo}
+                    <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                      {tiposUnicos.map(tipo => (
+                        <span key={tipo} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPOS_META[tipo]?.badge ?? ''}`}>
+                          {tipo}
+                        </span>
+                      ))}
+                      <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200">
+                        {fmtNumero(ex.numero)}
                       </span>
+                      {examCount > 1 && (
+                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full border border-blue-200">
+                          {examCount} exames
+                        </span>
+                      )}
+                      {ex.status && (STATUS_EXAME[ex.status] ? (
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
+                          {STATUS_EXAME[ex.status].label}
+                        </span>
+                      ) : (
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+                          {ex.status}
+                        </span>
+                      ))}
                     </div>
-                    <p className="text-sm font-semibold text-gray-900 truncate">{ex.descricao}</p>
-                    {extra.laboratorio && (
-                      <p className="text-xs text-gray-400">{extra.laboratorio}</p>
-                    )}
+                    <p className="text-sm font-semibold text-gray-900 line-clamp-2">{ex.descricao}</p>
+                    {extra.laboratorio && <p className="text-xs text-gray-400">{extra.laboratorio}</p>}
                     <p className="text-xs text-gray-400">{formatDate(ex.dataSolicitacao)}</p>
-                    {ex.veterinario && (
-                      <p className="text-[11px] text-gray-400">Por: {ex.veterinario.fullName}</p>
-                    )}
+                    {ex.veterinario && <p className="text-[11px] text-gray-400">Por: {ex.veterinario.fullName}</p>}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => setViewingEx(ex)}
+                    <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
                       className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
                       <Eye size={14} />
                     </button>
+                    <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
+                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
+                      <Printer size={14} />
+                    </button>
+                    <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
+                      className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg">
+                      <MessageCircle size={14} />
+                    </button>
+                    <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
+                      className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg">
+                      <Mail size={14} />
+                    </button>
                     {podeDeletar && (
-                      <button onClick={() => handleExcluirSolicitado(ex.id)}
+                      <button onClick={() => handleExcluirSolicitado(ex.id)} title="Remover"
                         className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
                         <Trash2 size={14} />
                       </button>
@@ -536,31 +1507,46 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exame</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Laboratório</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amostra</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Indicação Clínica</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Solicitante</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Nº Exame</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tipo</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Exames</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Laboratório</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Amostra</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Status</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Solicitante</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {historico.map(ex => {
                   const extra    = parseExtra(ex.observacao);
-                  const tipoMeta = TIPOS.find(t => t.key === ex.tipo);
+                  const examCount = (ex.descricao.match(/,/g) ?? []).length + 1;
+                  const tiposUnicos: TipoExame[] = extra.grupos && extra.grupos.length > 0
+                    ? [...new Set(extra.grupos.map(g => g.tipo))]
+                    : [ex.tipo];
                   return (
                     <tr key={ex.id} className="hover:bg-gray-50/60 transition-colors">
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
-                          {tipoMeta && <tipoMeta.icon size={10} />}
-                          {ex.tipo}
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200">
+                          {fmtNumero(ex.numero)}
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="text-sm font-medium text-gray-900">{ex.descricao}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">{ex.status}</p>
+                        <div className="flex flex-wrap gap-1">
+                          {tiposUnicos.map(tipo => (
+                            <span key={tipo} className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full ${TIPOS_META[tipo]?.badge ?? 'bg-gray-100 text-gray-600'}`}>
+                              {tipo === 'Imagem' ? <Scan size={10} /> : <FlaskConical size={10} />}
+                              {tipo}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 max-w-[220px]">
+                        <p className="text-sm font-medium text-gray-900 line-clamp-2">{ex.descricao}</p>
+                        {examCount > 1 && (
+                          <span className="text-[10px] text-blue-600 font-semibold">{examCount} exames</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {extra.laboratorio ?? <span className="text-gray-300">—</span>}
@@ -568,25 +1554,43 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {extra.tipoAmostra ?? <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-600 max-w-[200px]">
-                        <span className="line-clamp-2">
-                          {extra.indicacaoClinica ?? <span className="text-gray-300">—</span>}
-                        </span>
-                      </td>
                       <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
                         {formatDate(ex.dataSolicitacao)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {ex.status && (STATUS_EXAME[ex.status] ? (
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
+                            {STATUS_EXAME[ex.status].label}
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+                            {ex.status}
+                          </span>
+                        ))}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {ex.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => setViewingEx(ex)}
+                          <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
                             className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
+                          <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
+                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                            <Printer size={14} />
+                          </button>
+                          <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
+                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                            <MessageCircle size={14} />
+                          </button>
+                          <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
+                            className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                            <Mail size={14} />
+                          </button>
                           {podeDeletar && (
-                            <button onClick={() => handleExcluirSolicitado(ex.id)}
+                            <button onClick={() => handleExcluirSolicitado(ex.id)} title="Remover"
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                               <Trash2 size={14} />
                             </button>
@@ -602,7 +1606,7 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
-              <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
+              <span className="text-xs text-gray-400">{total} requisição{total !== 1 ? 'ões' : ''}</span>
               <div className="flex items-center gap-3">
                 <button disabled={page === 1} onClick={() => setPage(p => p - 1)}
                   className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
@@ -623,7 +1627,7 @@ export default function SubModuloExames({ animalId, animal: _animal, evolucaoId,
 
       <ConfirmModal
         open={confirmId != null}
-        titulo="Remover registro de exame"
+        titulo="Remover requisição de exame"
         mensagem="Esta ação não pode ser desfeita. Deseja continuar?"
         labelConfirmar="Remover"
         onConfirmar={handleExcluirConfirmado}

@@ -4,7 +4,7 @@
 const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 
-const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem'];
+const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -46,7 +46,7 @@ const ExameClinicoController = {
   // body: { animalId, tipo, descricao, evolucaoId, laboratorio?, tipoAmostra?, indicacaoClinica?, observacao? }
   criar: async (req, res) => {
     try {
-      const { animalId, tipo, descricao, evolucaoId, laboratorio, tipoAmostra, indicacaoClinica, observacao } = req.body;
+      const { animalId, tipo, descricao, evolucaoId, laboratorio, tipoAmostra, qtdAmostra, indicacaoClinica, observacao, grupoNome, grupos } = req.body;
 
       if (!animalId || !tipo || !descricao?.trim()) {
         return res.status(400).json({ error: 'animalId, tipo e descricao são obrigatórios' });
@@ -54,7 +54,8 @@ const ExameClinicoController = {
       if (!TIPOS_VALIDOS.includes(tipo)) {
         return res.status(400).json({ error: `tipo deve ser: ${TIPOS_VALIDOS.join(', ')}` });
       }
-      if (!evolucaoId) {
+      // evolucaoId obrigatório apenas fora do fluxo autônomo de Compra
+      if (!evolucaoId && tipo !== 'Compra') {
         return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
       }
 
@@ -64,32 +65,49 @@ const ExameClinicoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      // Valida que a evolução existe e pertence ao animal
-      const evolucao = await prisma.evolucaoClinica.findFirst({
-        where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-        select: { id: true },
-      });
-      if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
+      // Valida evolução apenas quando fornecida
+      if (evolucaoId) {
+        const evolucao = await prisma.evolucaoClinica.findFirst({
+          where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
+          select: { id: true },
+        });
+        if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
+      }
 
       // Campos extras armazenados em observacao como JSON
+      const { dataHoraColeta, dataSolicitacao } = req.body;
       const extra = {
         laboratorio:      laboratorio?.trim()      || null,
+        dataHoraColeta:   dataHoraColeta           || null,
         tipoAmostra:      tipoAmostra?.trim()      || null,
         indicacaoClinica: indicacaoClinica?.trim() || null,
         obs:              observacao?.trim()        || null,
+        grupoNome:        grupoNome?.trim()         || null,
+        grupos:           Array.isArray(grupos) && grupos.length >= 1 ? grupos : null,
       };
 
-      const item = await prisma.exameClinico.create({
-        data: {
-          animalId:      Number(animalId),
-          veterinarioId: req.user.userType === 'VETERINARIO' ? req.user.id : null,
-          evolucaoId:    Number(evolucaoId),
-          tipo,
-          descricao:     descricao.trim(),
-          status:        'SOLICITADO',
-          observacao:    JSON.stringify(extra),
-        },
-        include: INCLUDE,
+      const item = await prisma.$transaction(async (tx) => {
+        const maxResult = await tx.exameClinico.aggregate({
+          where: { animalId: Number(animalId) },
+          _max:  { numero: true },
+        });
+        const proximoNumero = (maxResult._max.numero ?? 0) + 1;
+
+        return tx.exameClinico.create({
+          data: {
+            animalId:        Number(animalId),
+            veterinarioId:   req.user.userType === 'VETERINARIO' ? req.user.id : null,
+            evolucaoId:      evolucaoId ? Number(evolucaoId) : null,
+            tipo,
+            descricao:       descricao.trim(),
+            status:          'SOLICITADO',
+            observacao:      JSON.stringify(extra),
+            qtdAmostra:      qtdAmostra != null ? Number(qtdAmostra) : null,
+            numero:          proximoNumero,
+            dataSolicitacao: dataSolicitacao ? new Date(dataSolicitacao) : new Date(),
+          },
+          include: INCLUDE,
+        });
       });
 
       res.status(201).json({ dados: item });

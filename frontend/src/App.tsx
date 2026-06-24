@@ -61,7 +61,9 @@ import RelatorioNutricional from './pages/RelatorioNutricional';
 import Agendamentos from './pages/Agendamentos';
 
 // Pages — Módulo Clínico
-import Atendimento from './pages/Atendimento';
+import Atendimento  from './pages/Atendimento';
+import ExameCompra  from './pages/ExameCompra';
+import Resenha      from './pages/Resenha';
 
 // Pages — Análise / Debug
 import Analise    from './pages/Analise';
@@ -184,7 +186,11 @@ function App() {
                           {/* Usuários */}
                           <Route path="/usuarios" element={<Usuarios />} />
 
-                          <Route path="/animais-vet" element={<AnimaisVet />} />
+                          <Route path="/animais-vet"              element={<AnimaisVet />} />
+                          <Route path="/exame-compra"            element={<ExameCompra />} />
+                          <Route path="/exame-compra/:animalId"  element={<ExameCompra />} />
+                          <Route path="/resenha"                 element={<Resenha />} />
+                          <Route path="/resenha/:animalId"       element={<Resenha />} />
 
                           {/* Agenda de Atendimentos */}
                           <Route path="/agendamentos" element={<Agendamentos />} />

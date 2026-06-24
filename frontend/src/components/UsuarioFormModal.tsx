@@ -31,9 +31,9 @@ export interface UsuarioFormValues {
   bairro: string;
   cidade: string;
   estado: string;
-  /** Perfil PRESTADOR (comFornecedor): cadastro Fornecedor selecionado, null = criar novo */
+  /** Perfil FORNECEDOR (comFornecedor): cadastro Fornecedor selecionado, null = criar novo */
   fornecedorId?: number | null;
-  /** Perfil PRESTADOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
+  /** Perfil FORNECEDOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
   tipoServico?: string;
 }
 
@@ -52,7 +52,7 @@ export const SENHA_PADRAO_INICIAL = 'Inicial_001';
 export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
   { value: 'ESTAGIARIO',  label: 'Estagiário'  },
-  { value: 'PRESTADOR',   label: 'Fornecedor'  },
+  { value: 'FORNECEDOR',   label: 'Fornecedor'  },
 ];
 
 // Perfis que não podem ser escolhidos, mas podem existir em usuários antigos (edição)
@@ -100,7 +100,7 @@ interface UsuarioFormModalProps {
   permitirSenha?: boolean;
   /** Desabilita o campo de e-mail (e-mail é o login — edição restrita) */
   emailBloqueado?: boolean;
-  /** Perfil Fornecedor (PRESTADOR): exibe seletor de fornecedores cadastrados disponíveis */
+  /** Perfil Fornecedor (FORNECEDOR): exibe seletor de fornecedores cadastrados disponíveis */
   comFornecedor?: boolean;
   /** Exibe checkboxes multi-seleção de cargo em vez do select único */
   permitirMultiCargos?: boolean;
@@ -134,7 +134,7 @@ export default function UsuarioFormModal({
   const [tiposServico,        setTiposServico]        = useState<string[]>([]);
   const [tipoServico,         setTipoServico]         = useState('');
 
-  const fornecedorAtivo = comFornecedor && !modoEdicao && form.perfil === 'PRESTADOR';
+  const fornecedorAtivo = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
   useEffect(() => {
     if (!fornecedorAtivo || fornecedores.length > 0 || loadingFornecedores) return;

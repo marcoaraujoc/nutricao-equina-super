@@ -7,9 +7,10 @@ import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Lock, ArrowLeft,
+  Phone, MapPin, BadgeCheck, AlertCircle, Lock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
@@ -108,7 +109,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  tipoServico: TipoServico | '';
+  tipoServico: TipoServico[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -119,7 +120,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoServico: '',
+  tipoServico: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -288,12 +289,36 @@ function ModalFornecedor({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Tipo de Serviço *</label>
-                <select value={form.tipoServico}
-                  onChange={e => onFormChange({ tipoServico: e.target.value as TipoServico })}
-                  className={`${inputCls} ${!form.tipoServico ? 'border-amber-200 focus:border-amber-400' : ''}`}>
-                  <option value="">Selecione o tipo de serviço...</option>
-                  {TIPOS_SERVICO.map(t => <option key={t} value={t}>{t}</option>)}
+                <select
+                  value=""
+                  onChange={e => {
+                    const val = e.target.value as TipoServico;
+                    if (val && !form.tipoServico.includes(val))
+                      onFormChange({ tipoServico: [...form.tipoServico, val] });
+                  }}
+                  className={`${inputCls} ${form.tipoServico.length === 0 ? 'border-amber-200 focus:border-amber-400' : ''}`}
+                >
+                  <option value="">Adicionar tipo de serviço...</option>
+                  {TIPOS_SERVICO.filter(t => !form.tipoServico.includes(t)).map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
                 </select>
+                {form.tipoServico.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {form.tipoServico.map(t => (
+                      <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                        {t}
+                        <button
+                          type="button"
+                          onClick={() => onFormChange({ tipoServico: form.tipoServico.filter(x => x !== t) })}
+                          className="ml-0.5 hover:text-emerald-900 transition-colors"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -425,8 +450,9 @@ export default function CadastroFornecedor() {
       cnpj:        f.cnpj ? mascaraCNPJ(f.cnpj.replace(/\D/g,'')) : '',
       telefone:    f.telefone ? mascaraTelefone(f.telefone.replace(/\D/g,'')) : '',
       email:       f.email ?? '',
-      tipoServico: (TIPOS_SERVICO as readonly string[]).includes(f.tipoServico)
-        ? f.tipoServico as TipoServico : '',
+      tipoServico: f.tipoServico
+        ? (f.tipoServico.split(',').map(t => t.trim()).filter(t => (TIPOS_SERVICO as readonly string[]).includes(t)) as TipoServico[])
+        : [],
       cep:         f.cep         ? mascaraCEP(f.cep.replace(/\D/g,'')) : '',
       endereco:    f.endereco    ?? '',
       complemento: f.complemento ?? '',
@@ -444,7 +470,7 @@ export default function CadastroFornecedor() {
     if (editando && !isAdmin) { semPermissao('alterar fornecedor'); return; }
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
     if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
-    if (!form.tipoServico)       { toast.error('Tipo de serviço é obrigatório'); return; }
+    if (form.tipoServico.length === 0) { toast.error('Selecione ao menos um tipo de serviço'); return; }
     if (!form.email.trim())      { toast.error('E-mail é obrigatório'); return; }
     if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
@@ -464,7 +490,7 @@ export default function CadastroFornecedor() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim().toLowerCase(),
-      tipoServico: form.tipoServico || null,
+      tipoServico: form.tipoServico.length > 0 ? form.tipoServico.join(',') : null,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -516,19 +542,13 @@ export default function CadastroFornecedor() {
   return (
     <PageContainer maxWidth="7xl">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)}
-            className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-2xl transition-colors flex-shrink-0"
-            title="Voltar">
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <Truck size={24} className="text-emerald-600" /> Fornecedores / Profissionais
-            </h1>
-            <p className="text-sm text-gray-500 mt-0.5">Catálogo global de profissionais e prestadores</p>
-          </div>
+      <BotaoVoltar />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-2 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Truck size={24} className="text-emerald-600" /> Fornecedores / Profissionais
+          </h1>
+          <p className="text-sm text-gray-500 mt-0.5">Catálogo global de profissionais e prestadores</p>
         </div>
         {podeCriar && (
           <button onClick={abrirNovo}
@@ -554,12 +574,6 @@ export default function CadastroFornecedor() {
         <div className="flex flex-col items-center justify-center py-20">
           <Truck size={40} className="mb-3 text-gray-200" />
           <p className="text-sm text-gray-400">Nenhum fornecedor encontrado</p>
-          {podeCriar && (
-            <button onClick={abrirNovo}
-              className="mt-4 px-4 py-2 bg-emerald-700 text-white text-sm font-medium rounded-xl hover:bg-emerald-800 transition-colors">
-              Novo Cadastro
-            </button>
-          )}
         </div>
       ) : (
         <>
@@ -587,9 +601,13 @@ export default function CadastroFornecedor() {
                       </p>
                     )}
                     <p className="text-xs text-gray-400 mt-0.5">{f.cnpj ?? f.cpf ?? '—'}</p>
-                    <span className="inline-block mt-1 text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
-                      {f.tipoServico}
-                    </span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {f.tipoServico.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                        <span key={t} className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${f.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
                     {f.ativo ? 'Ativo' : 'Inativo'}
@@ -647,9 +665,13 @@ export default function CadastroFornecedor() {
                         : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-[11px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
-                        {f.tipoServico}
-                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {f.tipoServico.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                          <span key={t} className="text-[11px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                            {t}
+                          </span>
+                        ))}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <BadgeEntrada tipo={f.tipoEntrada} />

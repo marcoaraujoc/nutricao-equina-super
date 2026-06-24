@@ -52,7 +52,7 @@ const USER_TYPES = [
 const PERFIL_TO_USERTYPE: Record<string, string> = {
   VETERINARIO:  'VETERINARIO',
   ESTAGIARIO:   'ESTAGIARIO',
-  PRESTADOR:    'FORNECEDOR',
+  FORNECEDOR:   'FORNECEDOR',
   GESTOR:        'VETERINARIO',
   PROPRIETARIO: 'PROPRIETARIO',
   ADMIN:        'ADMIN',
@@ -66,7 +66,7 @@ const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label 
 // userType/cargo do usuário → valor do select "Perfil de acesso"
 const perfilDoUsuario = (u: Usuario): string =>
   u.cargoEquipe === 'GESTOR' ? 'GESTOR'
-  : u.userType === 'FORNECEDOR' ? 'PRESTADOR'
+  : u.userType === 'FORNECEDOR' ? 'FORNECEDOR'
   : u.userType;
 
 // ─── Componente ───────────────────────────────────────────────────────────────

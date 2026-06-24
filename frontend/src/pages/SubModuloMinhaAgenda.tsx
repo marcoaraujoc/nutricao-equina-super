@@ -2,10 +2,11 @@
 // Aba "Minha Agenda" do módulo Atendimento — atendimentos do dia
 
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban } from 'lucide-react';
+import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,9 @@ function dataHoje(): string {
 // ─── SubModuloMinhaAgenda ─────────────────────────────────────────────────────
 
 export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const podeEditar = isGestor || podeExecutar('atendimento.agendamentos.editar');
+
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
   const [loading,      setLoading]      = useState(false);
   const [vets,         setVets]         = useState<VetMembro[]>([]);
@@ -125,7 +129,11 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
     }
   }, [hoje]);
 
-  useEffect(() => { carregar(); fetchVets(); }, [carregar, fetchVets]);
+  useEffect(() => {
+    if (loadingPerms) return;
+    carregar();
+    fetchVets();
+  }, [carregar, fetchVets, loadingPerms]);
 
   // ── Concluir ───────────────────────────────────────────────────────────────
 
@@ -217,6 +225,15 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  if (!loadingPerms && !isGestor && !podeExecutar('atendimento.agendamentos.ler')) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+        <ShieldCheck size={36} className="mb-3 opacity-30" />
+        <p className="text-sm">Sem permissão para visualizar agendamentos.</p>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -224,8 +241,6 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       </div>
     );
   }
-
-  const isGestor = vets.some(v => v.userId === user?.id && v.cargo === 'GESTOR');
 
   // GESTOR: vê toda a equipe (com filtro opcional por profissional)
   // VET/ESTAGIÁRIO: vê apenas os próprios agendamentos
@@ -321,25 +336,25 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
-                      {isAgendado && (
+                      {isAgendado && podeEditar && (
                         <button onClick={() => abrirEditar(ag)} title="Alterar"
                           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                           <Pencil size={13} />
                         </button>
                       )}
-                      {isAgendado && (
+                      {isAgendado && podeEditar && (
                         <button onClick={() => handleConcluir(ag.id)} title="Concluir"
                           className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
                           <CheckCircle2 size={13} />
                         </button>
                       )}
-                      {isAgendado && vets.length > 0 && (
+                      {isAgendado && podeEditar && vets.length > 0 && (
                         <button onClick={() => abrirTrocarVet(ag)} title="Trocar profissional"
                           className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Users size={13} />
                         </button>
                       )}
-                      {isAgendado && (
+                      {isAgendado && podeEditar && (
                         cancelandoId === ag.id ? (
                           <div className="flex items-center gap-1">
                             <button onClick={() => handleCancelar(ag.id)}
@@ -402,7 +417,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
               <div className="flex items-center justify-between mt-2">
                 <span className="font-mono text-sm font-semibold text-gray-800">{formatHora(ag.dataHora)}</span>
-                {isAgendado && (
+                {isAgendado && podeEditar && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     <button onClick={() => abrirEditar(ag)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
@@ -458,12 +473,12 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
             <div className="px-5 py-4 space-y-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">ANIMAL</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">ANIMAL</label>
                 <p className="text-sm font-semibold text-gray-800">{editando.animal.nome}</p>
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">TIPO</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">TIPO</label>
                 <select value={editTipo} onChange={e => setEditTipo(e.target.value as TipoAgendamento)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
                   {TIPOS_LIST.map(t => (
@@ -473,26 +488,26 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">TÍTULO / PROCEDIMENTO *</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">TÍTULO / PROCEDIMENTO *</label>
                 <input type="text" value={editTitulo} onChange={e => setEditTitulo(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">DATA</label>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA</label>
                   <input type="date" value={editData} onChange={e => setEditData(e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">HORÁRIO</label>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">HORÁRIO</label>
                   <input type="time" value={editHora} onChange={e => setEditHora(e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">OBSERVAÇÃO</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">OBSERVAÇÃO</label>
                 <textarea value={editObs} onChange={e => setEditObs(e.target.value)} rows={2}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
               </div>
@@ -531,19 +546,19 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
             <div className="px-5 py-4 space-y-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">ANIMAL</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">ANIMAL</label>
                 <p className="text-sm font-semibold text-gray-800">{trocandoVet.animal.nome}</p>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">HORÁRIO</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">HORÁRIO</label>
                 <p className="text-sm text-gray-700">{formatHora(trocandoVet.dataHora)} · {trocandoVet.titulo}</p>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">PROFISSIONAL ATUAL</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">PROFISSIONAL ATUAL</label>
                 <p className="text-sm text-gray-700">{trocandoVet.veterinario?.fullName ?? 'Não atribuído'}</p>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">NOVO PROFISSIONAL *</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">NOVO PROFISSIONAL *</label>
                 <select value={trocandoVetId} onChange={e => setTrocandoVetId(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
                   <option value="">Selecione...</option>

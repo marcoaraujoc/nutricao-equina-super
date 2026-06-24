@@ -27,19 +27,23 @@ const NRC_CATEGORIAS: Record<string, string[]> = {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FormData {
-  nome:              string;
-  especieId:         number;
-  racaId:            number | null;
-  peso:              string;
-  dataNascimento:    string;
-  idadeAnos:         string;
-  sexo:              string;
-  categoriaAnimal:   string;
-  tipoExercicio:     string;
-  veterinarioUserId: number | null;
-  localizacaoId:     number | null;
-  tratadorId:        number | null;
-  baia:              string;
+  nome:               string;
+  especieId:          number;
+  racaId:             number | null;
+  peso:               string;
+  dataNascimento:     string;
+  idadeAnos:          string;
+  sexo:               string;
+  categoriaAnimal:    string;
+  tipoExercicio:      string;
+  veterinarioUserId:  number | null;
+  localizacaoId:      number | null;
+  tratadorId:         number | null;
+  baia:               string;
+  pelagem:            string;
+  altura:             string;
+  registroPassaporte: string;
+  finalidade:         string;
 }
 
 interface Tratador {
@@ -263,6 +267,7 @@ const Animal = () => {
     categoriaAnimal: '', tipoExercicio: '',
     veterinarioUserId: null,
     localizacaoId: null, tratadorId: null, baia: '',
+    pelagem: '', altura: '', registroPassaporte: '', finalidade: '',
   });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
@@ -453,9 +458,13 @@ const Animal = () => {
             categoriaAnimal:   a.categoriaAnimal  ?? '',
             tipoExercicio:     a.tipoExercicio    ?? '',
             veterinarioUserId: vetCarregadoId,
-            localizacaoId:     a.localizacaoId    ?? null,
-            tratadorId:        a.tratadorId       ?? null,
-            baia:              a.baia             ?? '',
+            localizacaoId:     a.localizacaoId      ?? null,
+            tratadorId:        a.tratadorId         ?? null,
+            baia:              a.baia               ?? '',
+            pelagem:           a.pelagem            ?? '',
+            altura:            a.altura             ?? '',
+            registroPassaporte: a.registroPassaporte ?? '',
+            finalidade:        a.finalidade          ?? '',
           });
           // Pré-preenche o texto da busca de localização
           if (a.localizacao?.nome) {
@@ -739,6 +748,10 @@ const Animal = () => {
         tratadorId:         formData.tratadorId    ?? null,
         local:              locBusca.trim() || null,
         baia:               formData.baia.trim() || null,
+        pelagem:            formData.pelagem.trim()            || null,
+        altura:             formData.altura.trim()             || null,
+        registroPassaporte: formData.registroPassaporte.trim() || null,
+        finalidade:         formData.finalidade.trim()         || null,
         // Vet vinculando animal existente sem vet
         ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
           animalExistenteId: animalEncontrado.id,
@@ -756,6 +769,8 @@ const Animal = () => {
           pedirAutorizacao,
         }),
       };
+
+      let createdAnimalId: number | null = null;
 
       if (photoFile) {
         const fd = new FormData();
@@ -777,13 +792,15 @@ const Animal = () => {
         if (isEditMode) {
           await api.put(`/animais/${id}`, fd, cfg);
         } else {
-          await api.post('/animais', fd, cfg);
+          const res = await api.post('/animais', fd, cfg);
+          createdAnimalId = res.data?.dados?.id ?? null;
         }
       } else {
         if (isEditMode) {
           await api.put(`/animais/${id}`, payload);
         } else {
-          await api.post('/animais', payload);
+          const res = await api.post('/animais', payload);
+          createdAnimalId = res.data?.dados?.id ?? null;
         }
       }
 
@@ -798,9 +815,12 @@ const Animal = () => {
       toast.success(msgSucesso);
       await refreshSelectedAnimal();
 
+      const returnTo = (location.state as { nome?: string; returnTo?: string } | null)?.returnTo;
       if (!isEditMode && localStorage.getItem('s2vet_ob') === 'a') {
         localStorage.setItem('s2vet_ob', 'd');
         navigate('/');
+      } else if (returnTo && !isEditMode) {
+        navigate(createdAnimalId ? `${returnTo}/${createdAnimalId}` : returnTo);
       } else if (isVet) {
         navigate('/animais-vet');
       } else {
@@ -983,139 +1003,7 @@ const Animal = () => {
               )}
             </div>
 
-            {/* ── 2. Espécie + Raça ────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
-                <select
-                  value={formData.especieId}
-                  onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
-                  className={inputClass}
-                >
-                  <option value={0} disabled>Selecione a espécie</option>
-                  {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Raça <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={formData.racaId || ''}
-                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
-                  className={inputClass}
-                >
-                  <option value="">Selecione</option>
-                  {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                </select>
-              </div>
-            </div>
-
-
-            {/* ── 3. Peso + Idade + Data de nascimento ─────────────────────── */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Peso (kg) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number" step="0.1" min="0.1" placeholder="Ex: 450"
-                  value={formData.peso}
-                  onChange={e => setFormData({ ...formData, peso: e.target.value })}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
-                </label>
-                <input
-                  type="number" min="1" step="1" placeholder="Ex: 5"
-                  value={formData.idadeAnos}
-                  disabled={!!formData.dataNascimento}
-                  onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
-                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                />
-                {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
-              </div>
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
-                </label>
-                <div className="relative">
-                  <input
-                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
-                    value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
-                    onChange={handleDateTextChange}
-                    className={`${inputClass} pr-10`}
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
-                    <Calendar size={18} className="text-emerald-600 pointer-events-none" />
-                    <input
-                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
-                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
-                      onChange={e => {
-                        if (!e.target.value) return;
-                        const d = new Date(e.target.value + 'T00:00');
-                        const h = new Date(); h.setHours(0, 0, 0, 0);
-                        if (d > h) { toast.error('Data futura não permitida.'); return; }
-                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
-                      }}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                  </div>
-                </div>
-                {formData.dataNascimento && (
-                  <button type="button" onClick={() => setFormData({ ...formData, dataNascimento: '' })}
-                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors">
-                    Limpar data
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* ── 4. Perfil NRC — equinos ───────────────────────────────────── */}
-            {isEquino && (
-              <>
-                <div className="pt-2 border-t border-gray-100">
-                  <p className="text-sm font-semibold text-gray-600 mb-1">Perfil NRC</p>
-                  {!temIdadeOuData && <p className="text-xs text-amber-600">Informe a idade ou data para ver as categorias.</p>}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Categoria <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={formData.categoriaAnimal}
-                      onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
-                      disabled={!temIdadeOuData}
-                      className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                    >
-                      <option value="">Selecione a categoria</option>
-                      {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                  {formData.categoriaAnimal && tiposDisponiveis.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Tipo / Estágio <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        value={formData.tipoExercicio}
-                        onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
-                        className={inputClass}
-                      >
-                        <option value="">Selecione o tipo</option>
-                        {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {/* ── 5. Local do Animal + Baia ─────────────────────────────────── */}
+            {/* ── 2. Local do Animal + Baia ────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div className="relative">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1197,7 +1085,211 @@ const Animal = () => {
               )}
             </div>
 
-            {/* ── 6. Tratador ──────────────────────────────────────────────── */}
+            {/* ── 3. Espécie + Raça ─────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
+                <select
+                  value={formData.especieId}
+                  onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
+                  className={inputClass}
+                >
+                  <option value={0} disabled>Selecione a espécie</option>
+                  {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Raça <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.racaId || ''}
+                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
+                  className={inputClass}
+                >
+                  <option value="">Selecione</option>
+                  {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                </select>
+              </div>
+            </div>
+
+
+            {/* ── 4. Peso + Idade + Data de nascimento ─────────────────────── */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Peso (kg) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number" step="0.1" min="0.1" placeholder="Ex: 450"
+                  value={formData.peso}
+                  onChange={e => setFormData({ ...formData, peso: e.target.value })}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                </label>
+                <input
+                  type="number" min="1" step="1" placeholder="Ex: 5"
+                  value={formData.idadeAnos}
+                  disabled={!!formData.dataNascimento}
+                  onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
+                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                />
+                {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
+                    value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
+                    onChange={handleDateTextChange}
+                    className={`${inputClass} pr-10`}
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
+                    <Calendar size={18} className="text-emerald-600 pointer-events-none" />
+                    <input
+                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
+                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
+                      onChange={e => {
+                        if (!e.target.value) return;
+                        const d = new Date(e.target.value + 'T00:00');
+                        const h = new Date(); h.setHours(0, 0, 0, 0);
+                        if (d > h) { toast.error('Data futura não permitida.'); return; }
+                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                  </div>
+                </div>
+                {formData.dataNascimento && (
+                  <button type="button" onClick={() => setFormData({ ...formData, dataNascimento: '' })}
+                    className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                    Limpar data
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* ── 5. Identificação / Resenha ───────────────────────────────── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pelagem</label>
+                <select
+                  value={formData.pelagem}
+                  onChange={e => setFormData(p => ({ ...p, pelagem: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">— selecione —</option>
+                  <option>Alazão</option>
+                  <option>Apaloosa</option>
+                  <option>Baio</option>
+                  <option>Castanho</option>
+                  <option>Gateado/Dun</option>
+                  <option>Isabel (Champagne/Cremello)</option>
+                  <option>Murzelo</option>
+                  <option>Overo</option>
+                  <option>Palomino</option>
+                  <option>Pampa/Pampeano (Pinto/Paint)</option>
+                  <option>Preto (Tordilho preto/Zaino)</option>
+                  <option>Ruão (Roano/Roan)</option>
+                  <option>Tobiano</option>
+                  <option>Tordilho</option>
+                  <option>Zebrado</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Altura (cernelha)</label>
+                <input
+                  type="text"
+                  placeholder="Ex.: 1,65 m / 16,1 h"
+                  value={formData.altura}
+                  onChange={e => setFormData(p => ({ ...p, altura: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Registro / Passaporte N°</label>
+                <input
+                  type="text"
+                  placeholder="Número do registro ou passaporte"
+                  value={formData.registroPassaporte}
+                  onChange={e => setFormData(p => ({ ...p, registroPassaporte: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Finalidade</label>
+                <select
+                  value={formData.finalidade}
+                  onChange={e => setFormData(p => ({ ...p, finalidade: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">— selecione —</option>
+                  <option>Adestramento</option>
+                  <option>Barril</option>
+                  <option>CCE (Concurso Completo de Equitação)</option>
+                  <option>Enduro</option>
+                  <option>Laço</option>
+                  <option>Manga Larga</option>
+                  <option>Polo</option>
+                  <option>Salto</option>
+                  <option>Vaquejada</option>
+                  <option>Reprodução</option>
+                  <option>Trabalho/Tração</option>
+                  <option>Outro</option>
+                </select>
+              </div>
+            </div>
+
+            {/* ── 6. Perfil NRC — equinos ───────────────────────────────────── */}
+            {isEquino && (
+              <>
+                <div className="pt-2 border-t border-gray-100">
+                  <p className="text-sm font-semibold text-gray-600 mb-1">Perfil NRC</p>
+                  {!temIdadeOuData && <p className="text-xs text-amber-600">Informe a idade ou data para ver as categorias.</p>}
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Categoria <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={formData.categoriaAnimal}
+                      onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
+                      disabled={!temIdadeOuData}
+                      className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                    >
+                      <option value="">Selecione a categoria</option>
+                      {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  {formData.categoriaAnimal && tiposDisponiveis.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Tipo / Estágio <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.tipoExercicio}
+                        onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione o tipo</option>
+                        {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+
+            {/* ── 7. Tratador ───────────────────────────────────────────────── */}
             <div className="relative">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 <span className="flex items-center gap-1">
@@ -1265,7 +1357,7 @@ const Animal = () => {
               )}
             </div>
 
-            {/* ── 7. Proprietário (apenas vets) ────────────────────────────── */}
+            {/* ── 8. Proprietário (apenas vets) ────────────────────────────── */}
             {isVet && (
               <div className="pt-4 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Proprietário</p>
@@ -1381,7 +1473,7 @@ const Animal = () => {
               </div>
             )}
 
-            {/* ── 8. Veterinário (apenas proprietários) ────────────────────── */}
+            {/* ── 9. Veterinário (apenas proprietários) ────────────────────── */}
             {!isVet && (
               <div className="pt-2 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-600 mb-3">Veterinário Responsável</p>

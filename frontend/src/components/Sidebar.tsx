@@ -24,7 +24,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 const CLS_MODULE_ACTIVE  = 'bg-emerald-50 text-emerald-600';
 const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
-const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
+const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
 type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'vacina' | 'exames' | 'enfermagem' | 'cadastro';
@@ -76,19 +76,22 @@ export default function Sidebar() {
   // PROPRIETARIO recebe permissões reais do backend (só o que o vet/empresa concedeu).
   const { podeExecutar, isGestor } = usePermissoes();
 
-  // ADMIN sempre vê Administração. GESTOR (cargo=GESTOR em MembroEquipe) também vê.
-  // Vets comuns só veem se não forem convidados.
-  const podeVerAdministracao = isAdmin || isGestor || (isVet && !user?.isConvidado);
-  const podeVerDashboard      = podeExecutar('dashboard.geral.ler');
-  const podeVerAnimais        = podeExecutar('animais.ler');
-  const podeVerExames         = podeExecutar('atendimento.exames.ler');
-  const podeVerEvolucoes      = podeExecutar('atendimento.evolucoes.ler');
-  const podeVerPrescricoes    = podeExecutar('atendimento.prescricoes.ler');
-  const podeVerDieta          = podeExecutar('nutricao.dietas.ler');
-  const podeVerRelatorio      = podeExecutar('nutricao.relatorios.ler');
-  const podeVerFaturas        = podeExecutar('financeiro.faturas.ler');
-  const podeVerFarmacia       = podeExecutar('farmacia.estoque.ler');
-  const podeVerEstoqueVacina  = isGestor || podeExecutar('vacina.estoque.ler');
+  const isEstagiario           = role === 'ESTAGIARIO' || userTypeUpper === 'ESTAGIARIO';
+  const isVetOuSuperior        = isVet || isAdmin || isGestor;
+
+  const podeVerAdministracao   = isAdmin || isGestor;
+  const podeVerDashboard       = podeExecutar('dashboard.geral.ler');
+  const podeVerAnimais         = podeExecutar('animais.ler');
+  const podeVerExames          = podeExecutar('atendimento.exames.ler');
+  const podeVerEvolucoes       = podeExecutar('atendimento.evolucoes.ler');
+  const podeVerPrescricoes     = podeExecutar('atendimento.prescricoes.ler');
+  const podeVerVacinas         = podeExecutar('atendimento.vacinas.ler');
+  const podeVerEncaminhamentos = podeExecutar('atendimento.encaminhamentos.ler');
+  const podeVerDieta           = podeExecutar('nutricao.dietas.ler');
+  const podeVerRelatorio       = podeExecutar('nutricao.relatorios.ler');
+  const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
+  const podeVerFarmacia        = podeExecutar('farmacia.estoque.ler');
+  const podeVerEstoqueVacina   = isGestor || podeExecutar('vacina.estoque.ler');
   const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
   const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
   const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
@@ -102,7 +105,7 @@ export default function Sidebar() {
     ROLES_CLINICAS.includes(role) || ROLES_CLINICAS.includes(userTypeUpper) ||
     (isProprietario && (podeVerEvolucoes || podeVerPrescricoes || podeVerExames));
 
-  const temAcessoAtendimento  = podeVerEvolucoes || podeVerPrescricoes || podeVerExames;
+  const temAcessoAtendimento = podeVerEvolucoes || podeVerPrescricoes || podeVerExames || podeVerVacinas || podeVerEncaminhamentos;
   const temAcessoNutricional  = podeVerDieta || podeVerRelatorio || isAdmin;
   const temAlgumModulo        =
     (temAcessoClinico && temAcessoAtendimento) ||
@@ -110,6 +113,19 @@ export default function Sidebar() {
     podeVerFarmacia                            ||
     temAcessoNutricional                       ||
     podeVerFaturas;
+
+  // Itens visíveis no accordion Cadastro e na seção Geral
+  const temAlgumCadastroItem =
+    (temAcessoClinico && podeVerAnimais) ||
+    !temAcessoClinico ||           // proprietários: sempre mostra meus-animais
+    !isEstagiario ||               // não-estagiários: sempre mostra Cadastro Pessoal
+    podeVerEquipe ||
+    podeVerFornecedores ||
+    podeVerLocalizacoes ||
+    podeVerProprietarios ||
+    podeVerTratadores;
+
+  const temAlgumGeralItem = podeVerDashboard || temAlgumCadastroItem;
   const animalId         = selectedAnimal?.id;
 
   const activeSection = detectSection(location.pathname);
@@ -256,62 +272,66 @@ export default function Sidebar() {
         <nav className="flex-1 min-h-0 px-3 py-4 space-y-4 overflow-y-auto">
 
           {/* ═══ GERAL ═══════════════════════════════════════════════════════ */}
-          <div>
-            <button onClick={() => toggle(setOpenGeral)}
-              className="flex items-center justify-between w-full px-5 py-2.5 text-xs font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
-              Geral
-              <ChevronDown className={`w-4 h-4 transition-transform ${openGeral ? 'rotate-180' : ''}`} />
-            </button>
+          {temAlgumGeralItem && (
+            <div>
+              <button onClick={() => toggle(setOpenGeral)}
+                className="flex items-center justify-between w-full px-5 py-2.5 text-xs font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
+                Geral
+                <ChevronDown className={`w-4 h-4 transition-transform ${openGeral ? 'rotate-180' : ''}`} />
+              </button>
 
-            {openGeral && (
-              <div className="mt-1 space-y-0.5 pl-4">
-                {podeVerDashboard && navLink('/', <LayoutDashboard size={20} />, 'Dashboard', isGeralActive('/'))}
+              {openGeral && (
+                <div className="mt-1 space-y-0.5 pl-4">
+                  {podeVerDashboard && navLink('/', <LayoutDashboard size={20} />, 'Dashboard', isGeralActive('/'))}
 
-                {/* ── Cadastro sub-accordion ─────────────────────────────── */}
-                <div>
-                  <button onClick={() => toggle(setOpenCadastro)}
-                    className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                      activeSection === 'cadastro' || p.startsWith('/cadastro-pessoal') ||
-                      p.startsWith('/animais-vet') || p.startsWith('/meus-animais')
-                        ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
-                    }`}>
-                    <span className="flex items-center gap-3"><FolderOpen size={20} /> Cadastro</span>
-                    <ChevronDown className={`w-4 h-4 transition-transform ${openCadastro ? 'rotate-180' : ''}`} />
-                  </button>
+                  {/* ── Cadastro sub-accordion ─────────────────────────────── */}
+                  {temAlgumCadastroItem && (
+                    <div>
+                      <button onClick={() => toggle(setOpenCadastro)}
+                        className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
+                          activeSection === 'cadastro' || p.startsWith('/cadastro-pessoal') ||
+                          p.startsWith('/animais-vet') || p.startsWith('/meus-animais')
+                            ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                        }`}>
+                        <span className="flex items-center gap-3"><FolderOpen size={20} /> Cadastro</span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openCadastro ? 'rotate-180' : ''}`} />
+                      </button>
 
-                  {openCadastro && (
-                    <div className="mt-1 pl-6 space-y-0.5">
-                      {temAcessoClinico
-                        ? (podeVerAnimais && (
-                          <Link key="/animais-vet" to="/animais-vet" onClick={closeMobile}
-                            className={`flex items-center gap-3 px-5 py-2.5 rounded-2xl text-sm transition-colors ${
-                              p.startsWith('/animais-vet') ? 'bg-emerald-100 text-emerald-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
-                            }`}>
-                            <Zap size={14} className="flex-shrink-0" />
-                            <span className="flex-1">Pacientes</span>
-                            {isVet && pendentesCount > 0 && (
-                              <span className="bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none flex-shrink-0">
-                                {pendentesCount > 9 ? '9+' : pendentesCount}
-                              </span>
-                            )}
-                          </Link>
-                        ))
-                        : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
-                      }
+                      {openCadastro && (
+                        <div className="mt-1 pl-6 space-y-0.5">
+                          {temAcessoClinico
+                            ? (podeVerAnimais && (
+                              <Link key="/animais-vet" to="/animais-vet" onClick={closeMobile}
+                                className={`flex items-center gap-3 px-5 py-2.5 rounded-2xl text-sm transition-colors ${
+                                  p.startsWith('/animais-vet') ? 'bg-emerald-100 text-emerald-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
+                                }`}>
+                                <Zap size={14} className="flex-shrink-0" />
+                                <span className="flex-1">Pacientes</span>
+                                {isVet && pendentesCount > 0 && (
+                                  <span className="bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none flex-shrink-0">
+                                    {pendentesCount > 9 ? '9+' : pendentesCount}
+                                  </span>
+                                )}
+                              </Link>
+                            ))
+                            : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
+                          }
 
-                      {subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
-                      {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
-                      {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
-                      {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
-                      {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
-                      {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
+                          {!isEstagiario && subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
+                          {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
+                          {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
+                          {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
+                          {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
+                          {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
 
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ═══ MÓDULOS ═════════════════════════════════════════════════════ */}
           {isNewUser ? (
@@ -331,7 +351,7 @@ export default function Sidebar() {
                 <div className="mt-1 pl-4 space-y-0.5">
 
                   {/* ── Agenda ───────────────────────────────────────── */}
-                  {temAcessoClinico && (
+                  {temAcessoClinico && isVetOuSuperior && (
                     <button
                       onClick={() => { closeMobile(); navigate('/agendamentos'); }}
                       className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
@@ -349,7 +369,7 @@ export default function Sidebar() {
                       {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
                       {openClinica && (
                         <div className="mt-1 pl-6 space-y-0.5">
-                          {subLink('/clinica/agenda', <CalendarDays size={14} />, 'Minha Agenda', p.startsWith('/clinica/agenda'))}
+                          {isVetOuSuperior && subLink('/clinica/agenda', <CalendarDays size={14} />, 'Minha Agenda', p.startsWith('/clinica/agenda'))}
                           {podeVerEvolucoes  && subLink(
                             animalId ? `/clinica/evolucao/${animalId}` : '/clinica/evolucao',
                             <FileText    size={14} />, 'Evolução',
@@ -360,7 +380,7 @@ export default function Sidebar() {
                             <Pill        size={14} />, 'Prescrição',
                             p.startsWith('/clinica/prescricao'),
                           )}
-                          {subLink(
+                          {podeVerVacinas && subLink(
                             animalId ? `/clinica/vacina/${animalId}` : '/clinica/vacina',
                             <Syringe     size={14} />, 'Vacinas',
                             p.startsWith('/clinica/vacina'),
@@ -370,7 +390,7 @@ export default function Sidebar() {
                             <FlaskConical size={14} />, 'Pedido Exames',
                             p.startsWith('/clinica/exames'),
                           )}
-                          {subLink(
+                          {podeVerEncaminhamentos && subLink(
                             animalId ? `/clinica/encaminhamento/${animalId}` : '/clinica/encaminhamento',
                             <Share2      size={14} />, 'Encaminhamento',
                             p.startsWith('/clinica/encaminhamento'),

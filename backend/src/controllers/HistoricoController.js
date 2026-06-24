@@ -9,6 +9,20 @@ const { resumirHistorico } = require('../services/clinicaLLMService');
 
 const VET_SELECT = { select: { id: true, fullName: true } };
 
+const EXAM_ORIGEM = {
+  'Laboratorial': 'EXAME_LAB',
+  'Bioquímico':   'EXAME_BIO',
+  'Imagem':       'EXAME_IMG',
+  'Compra':       'EXAME_COMPRA',
+};
+
+const EXAM_ABREV = {
+  'Laboratorial': 'Lab',
+  'Bioquímico':   'Bioquím',
+  'Imagem':       'Img',
+  'Compra':       'Compra',
+};
+
 const HistoricoController = {
 
   // GET /clinica/historico/animal/:animalId?limit=100
@@ -35,8 +49,8 @@ const HistoricoController = {
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO' },
-          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, veterinario: VET_SELECT },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] } },
+          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
@@ -80,16 +94,37 @@ const HistoricoController = {
             v.observacao,
           ].filter(Boolean).join(' · '),
         })),
-        ...exames.map(x => ({
-          id:          `exame-${x.id}`,
-          origem:      'EXAME',
-          data:        x.dataSolicitacao,
-          titulo:      x.tipo,
-          badge:       'Exame',
-          status:      x.status,
-          responsavel: x.veterinario?.fullName ?? null,
-          resumo:      x.resultado || x.descricao,
-        })),
+        ...exames.map(x => {
+          const origemEx = EXAM_ORIGEM[x.tipo] ?? 'EXAME';
+
+          // Extrai todos os tipos únicos dos grupos salvos no observacao (JSON)
+          let tipos = [x.tipo];
+          try {
+            if (x.observacao) {
+              const extra = JSON.parse(x.observacao);
+              if (Array.isArray(extra.grupos) && extra.grupos.length > 0) {
+                const fromGrupos = [...new Set(extra.grupos.map(g => g.tipo).filter(Boolean))];
+                if (fromGrupos.length > 0) tipos = fromGrupos;
+              }
+            }
+          } catch { /* JSON inválido — mantém tipo do registro */ }
+
+          const tiposLabel = tipos.map(t => EXAM_ABREV[t] ?? t).join('/');
+          const titulo     = x.numero != null
+            ? `Exame nº ${String(x.numero).padStart(3, '0')} — ${tiposLabel}`
+            : tiposLabel;
+
+          return {
+            id:          `${origemEx.toLowerCase()}-${x.id}`,
+            origem:      origemEx,
+            data:        x.dataSolicitacao,
+            titulo,
+            badge:       tiposLabel,
+            status:      x.status,
+            responsavel: x.veterinario?.fullName ?? null,
+            resumo:      x.descricao || x.resultado || null,
+          };
+        }),
         ...encaminhamentos.map(en => ({
           id:          `encaminhamento-${en.id}`,
           origem:      'ENCAMINHAMENTO',
@@ -145,8 +180,8 @@ const HistoricoController = {
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO' },
-          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, veterinario: VET_SELECT },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] } },
+          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
@@ -179,13 +214,33 @@ const HistoricoController = {
           titulo:  v.nome,
           resumo:  [v.fabricante ? `Fabricante: ${v.fabricante}` : null, v.observacao].filter(Boolean).join('. '),
         })),
-        ...exames.map(x => ({
-          id:      `exame-${x.id}`,
-          origem:  'EXAME',
-          data:    x.dataSolicitacao,
-          titulo:  x.tipo,
-          resumo:  x.resultado || x.descricao,
-        })),
+        ...exames.map(x => {
+          const origemEx = EXAM_ORIGEM[x.tipo] ?? 'EXAME';
+
+          let tipos = [x.tipo];
+          try {
+            if (x.observacao) {
+              const extra = JSON.parse(x.observacao);
+              if (Array.isArray(extra.grupos) && extra.grupos.length > 0) {
+                const fromGrupos = [...new Set(extra.grupos.map(g => g.tipo).filter(Boolean))];
+                if (fromGrupos.length > 0) tipos = fromGrupos;
+              }
+            }
+          } catch { /* mantém tipo do registro */ }
+
+          const tiposLabel = tipos.map(t => EXAM_ABREV[t] ?? t).join('/');
+          const titulo     = x.numero != null
+            ? `Exame nº ${String(x.numero).padStart(3, '0')} — ${tiposLabel}`
+            : tiposLabel;
+
+          return {
+            id:     `${origemEx.toLowerCase()}-${x.id}`,
+            origem: origemEx,
+            data:   x.dataSolicitacao,
+            titulo,
+            resumo: x.descricao || x.resultado || null,
+          };
+        }),
         ...encaminhamentos.map(en => ({
           id:      `encaminhamento-${en.id}`,
           origem:  'ENCAMINHAMENTO',

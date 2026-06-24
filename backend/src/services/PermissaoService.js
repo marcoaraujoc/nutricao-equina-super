@@ -24,7 +24,7 @@ const USER_TYPES_GERENCIADOS = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIET
 const PERFIS_PADRAO = [
   { slug: 'GESTOR',        label: 'Gestor',        descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
   { slug: 'VETERINARIO',  label: 'Veterinário',   descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
-  { slug: 'PRESTADOR',    label: 'Prestador',     descricao: 'Prestador de serviços. Acesso configurável pelo gestor da equipe.' },
+  { slug: 'FORNECEDOR',   label: 'Fornecedor',    descricao: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.' },
   { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.' },
   { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.' },
 ];
@@ -221,13 +221,47 @@ async function salvarMatrizPorCargo({ equipeId, cargo, permissoes, atualizadoPor
   // GESTOR tem bypass total — não mantém PermissaoMembro; apenas a MatrizPerfil é informacional
   if (cargo === 'GESTOR') return { membros: 0, alteracoes: 0 };
 
-  const membros = await prisma.membroEquipe.findMany({ where: { equipeId, cargo } });
+  // Inclui membros que têm o cargo como primário OU como secundário (cargos array)
+  const membros = await prisma.membroEquipe.findMany({
+    where: { equipeId, OR: [{ cargo }, { cargos: { has: cargo } }] },
+    select: { userId: true, cargo: true, cargos: true },
+  });
+
+  const NIVEL_ORD_PROP = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+  const slugsAlterados = Object.keys(permissoes);
   let totalAlteracoes = 0;
+
   for (const membro of membros) {
+    const todosCargos = membro.cargos && membro.cargos.length > 0 ? membro.cargos : [membro.cargo];
+    let alteracoesEfetivas;
+
+    if (todosCargos.length === 1) {
+      // Cargo único — usa os valores da matriz diretamente
+      alteracoesEfetivas = permissoes;
+    } else {
+      // Multi-cargo: recalcula a união para os slugs afetados, preservando contribuição dos demais cargos.
+      // NEGADO em qualquer cargo vence (deny-wins).
+      const matrizTodos = await prisma.matrizPerfil.findMany({
+        where: { equipeId, perfilSlug: { in: todosCargos }, moduloSlug: { in: slugsAlterados } },
+      });
+      alteracoesEfetivas = {};
+      for (const slug of slugsAlterados) {
+        const niveisSlug = matrizTodos.filter(m => m.moduloSlug === slug);
+        if (niveisSlug.some(m => m.nivel === 'NEGADO')) {
+          alteracoesEfetivas[slug] = 'NEGADO';
+          continue;
+        }
+        const maxNivel = niveisSlug.reduce((max, m) => {
+          return (NIVEL_ORD_PROP[m.nivel] ?? 0) > (NIVEL_ORD_PROP[max] ?? 0) ? m.nivel : max;
+        }, 'NENHUM');
+        alteracoesEfetivas[slug] = maxNivel;
+      }
+    }
+
     const res = await atualizarPermissoes({
       equipeId,
       alvoUserId: membro.userId,
-      alteracoes: permissoes,
+      alteracoes: alteracoesEfetivas,
       atualizadoPorId,
       atualizadoPorNome,
       ipOrigem,
@@ -325,14 +359,42 @@ async function salvarMatrizGlobalUserType({ userType, permissoes }) {
     equipesAtualizadas++;
 
     // Propaga para PermissaoMembro (exceto PROPRIETARIO e GESTOR — ambos têm bypass ou sem registros)
+    // Inclui membros com o cargo como primário OU como secundário (cargos array — multi-cargo).
+    // Para multi-cargo: recalcula a união com os demais cargos (mesmo algoritmo do salvarMatrizPorCargo).
     if (userType !== 'PROPRIETARIO' && userType !== 'GESTOR') {
       const membros = await prisma.membroEquipe.findMany({
-        where:  { equipeId: equipe.id, cargo: userType },
-        select: { userId: true },
+        where:  { equipeId: equipe.id, OR: [{ cargo: userType }, { cargos: { has: userType } }] },
+        select: { userId: true, cargo: true, cargos: true },
       });
+      const NIVEL_ORD_PROP = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+      const slugsAlterados = Object.keys(permissoes);
       const agora = new Date();
       for (const membro of membros) {
-        const membroUpserts = Object.entries(permissoes).map(([moduloSlug, nivel]) =>
+        const todosCargos = membro.cargos && membro.cargos.length > 0 ? membro.cargos : [membro.cargo];
+        let alteracoesEfetivas;
+
+        if (todosCargos.length === 1) {
+          alteracoesEfetivas = permissoes;
+        } else {
+          // Multi-cargo: recomputa a união para os slugs afetados considerando todos os cargos.
+          const matrizTodos = await prisma.matrizPerfil.findMany({
+            where: { equipeId: equipe.id, perfilSlug: { in: todosCargos }, moduloSlug: { in: slugsAlterados } },
+          });
+          alteracoesEfetivas = {};
+          for (const slug of slugsAlterados) {
+            const niveisSlug = matrizTodos.filter(m => m.moduloSlug === slug);
+            if (niveisSlug.some(m => m.nivel === 'NEGADO')) {
+              alteracoesEfetivas[slug] = 'NEGADO';
+              continue;
+            }
+            const maxNivel = niveisSlug.reduce((max, m) => {
+              return (NIVEL_ORD_PROP[m.nivel] ?? 0) > (NIVEL_ORD_PROP[max] ?? 0) ? m.nivel : max;
+            }, 'NENHUM');
+            alteracoesEfetivas[slug] = maxNivel;
+          }
+        }
+
+        const membroUpserts = Object.entries(alteracoesEfetivas).map(([moduloSlug, nivel]) =>
           prisma.permissaoMembro.upsert({
             where:  { equipeId_userId_moduloSlug: { equipeId: equipe.id, userId: membro.userId, moduloSlug } },
             update: { nivel, updatedAt: agora },
@@ -510,6 +572,7 @@ async function getPermissoesProprietarios({ equipeId }) {
 
 module.exports = {
   aplicarPermissoesPadrao,
+  garantirPerfisPadrao,
   getPermissoesMembro,
   atualizarPermissoes,
   getAuditoriaPermissoes,

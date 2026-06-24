@@ -23,6 +23,8 @@ interface Animal {
 interface SelectedAnimalContextType {
   selectedAnimal: Animal | null;
   setSelectedAnimal: (animal: Animal | null) => void;
+  selectedAnimals: Animal[];
+  toggleAnimalSelection: (animal: Animal) => void;
   refreshSelectedAnimal: () => Promise<void>;
   clearSelectedAnimal: () => void;
   hasAnimals: boolean;
@@ -35,6 +37,7 @@ const SelectedAnimalContext = createContext<SelectedAnimalContextType | undefine
 export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
   const [selectedAnimal, setSelectedAnimalState] = useState<Animal | null>(null);
+  const [selectedAnimals, setSelectedAnimalsState] = useState<Animal[]>([]);
   const [hasAnimals, setHasAnimals] = useState(false);
   const [hasSingleAnimal, setHasSingleAnimal] = useState(false);
   const [cadastroCompleto, setCadastroCompleto] = useState(false);
@@ -95,6 +98,10 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       }
 
       setSelectedAnimalState(toSelect);
+      setSelectedAnimalsState(prev => {
+        if (prev.length > 0) return prev;
+        return [toSelect];
+      });
     } catch (error) {
       console.error('Erro ao carregar dados no context:', error);
     }
@@ -115,8 +122,16 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
     }
   };
 
+  const toggleAnimalSelection = (animal: Animal) => {
+    setSelectedAnimalsState(prev => {
+      const exists = prev.some(a => a.id === animal.id);
+      return exists ? prev.filter(a => a.id !== animal.id) : [...prev, animal];
+    });
+  };
+
   const clearSelectedAnimal = () => {
     setSelectedAnimalState(null);
+    setSelectedAnimalsState([]);
     localStorage.removeItem('lastSelectedAnimalId');
   };
 
@@ -125,6 +140,8 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       value={{
         selectedAnimal,
         setSelectedAnimal,
+        selectedAnimals,
+        toggleAnimalSelection,
         refreshSelectedAnimal,
         clearSelectedAnimal,
         hasAnimals,

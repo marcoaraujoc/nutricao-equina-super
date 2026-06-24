@@ -54,18 +54,22 @@ interface ResumoHistoricoItem {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = [
-  { key: 'agenda',         label: 'Minha Agenda',   icon: <CalendarDays size={13} /> },
-  { key: 'evolucao',       label: 'Evolução',       icon: <FileText     size={13} /> },
-  { key: 'prescricao',     label: 'Prescrição',     icon: <Pill         size={13} /> },
-  { key: 'vacina',         label: 'Vacina',         icon: <Syringe      size={13} /> },
-  { key: 'exames',         label: 'Exames',         icon: <FlaskConical size={13} /> },
-  { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2       size={13} /> },
+  { key: 'agenda',         label: 'Minha Agenda',   icon: <CalendarDays size={15} /> },
+  { key: 'evolucao',       label: 'Evolução',       icon: <FileText     size={15} /> },
+  { key: 'prescricao',     label: 'Prescrição',     icon: <Pill         size={15} /> },
+  { key: 'vacina',         label: 'Vacina',         icon: <Syringe      size={15} /> },
+  { key: 'exames',         label: 'Exames',         icon: <FlaskConical size={15} /> },
+  { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2       size={15} /> },
 ];
 
 const ORIGEM_COLOR: Record<string, string> = {
   EVOLUCAO:        'bg-emerald-100 text-emerald-700',
   VACINA:          'bg-teal-100 text-teal-700',
   EXAME:           'bg-purple-100 text-purple-700',
+  EXAME_LAB:       'bg-blue-100 text-blue-700',
+  EXAME_IMG:       'bg-sky-100 text-sky-700',
+  EXAME_BIO:       'bg-violet-100 text-violet-700',
+  EXAME_COMPRA:    'bg-amber-100 text-amber-700',
   PRESCRICAO:      'bg-blue-100 text-blue-700',
   ENCAMINHAMENTO:  'bg-orange-100 text-orange-700',
 };
@@ -80,7 +84,7 @@ function SubMenuClinico({ activeTab, onChange }: {
     <div className="flex overflow-x-auto gap-1 flex-shrink-0" style={{ scrollbarWidth: 'none' }}>
       {SUB_MODULOS.map(m => (
         <button key={m.key} onClick={() => onChange(m.key)}
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-t-xl whitespace-nowrap transition-colors flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 py-2 text-[15px] font-medium rounded-t-xl whitespace-nowrap transition-colors flex-shrink-0 ${
             activeTab === m.key
               ? 'bg-white text-emerald-700 border border-gray-100 border-b-white shadow-sm'
               : 'text-gray-500 hover:text-gray-700 hover:bg-white/60'
@@ -98,6 +102,10 @@ const ORIGEM_TO_TAB: Record<string, SubModulo> = {
   EVOLUCAO:       'evolucao',
   VACINA:         'vacina',
   EXAME:          'exames',
+  EXAME_LAB:      'exames',
+  EXAME_IMG:      'exames',
+  EXAME_BIO:      'exames',
+  EXAME_COMPRA:   'exames',
   PRESCRICAO:     'prescricao',
   ENCAMINHAMENTO: 'encaminhamento',
 };
@@ -499,7 +507,7 @@ const Atendimento = () => {
           <>
             <button onClick={() => setShowHistoricoM(true)}
               className="fixed bottom-6 right-4 flex items-center gap-2 px-4 py-3 bg-emerald-700 text-white rounded-2xl shadow-lg font-semibold text-sm z-40">
-              <History size={16} />
+              <History size={15} />
               Histórico
             </button>
             {showHistoricoM && (

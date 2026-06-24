@@ -12,6 +12,7 @@ import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
+import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -491,17 +492,23 @@ export default function CadastroProprietario() {
   const [form,          setForm]          = useState<FormProp>(FORM_INICIAL);
   const [saving,        setSaving]        = useState(false);
   const [confirmRemov,  setConfirmRemov]  = useState<Proprietario | null>(null);
+  const [filtroAtivo,   setFiltroAtivo]   = useState<'ativo' | 'inativo' | 'all'>('ativo');
+  const [showInfo,      setShowInfo]      = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (busca.trim()) params.set('busca', busca.trim());
-      const res = await api.get(`/cadastro/proprietarios?${params}`);
+      const res = await api.get('/cadastro/proprietarios', {
+        params: {
+          busca: busca || undefined,
+          ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false',
+        },
+      });
+      if (!res.data) return;
       setProprietarios(res.data.dados ?? []);
     } catch { toast.error('Erro ao carregar proprietários'); }
     finally { setLoading(false); }
-  }, [busca]);
+  }, [busca, filtroAtivo]);
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
@@ -631,116 +638,102 @@ export default function CadastroProprietario() {
 
   return (
     <PageContainer maxWidth="7xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users size={24} className="text-emerald-600" /> Proprietários
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">Cadastro de proprietários de animais</p>
-        </div>
-        {podeCriar && (
-          <button onClick={abrirNovo}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            Novo Proprietário
+      <BotaoVoltar />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-6 flex-wrap">
+        <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
+          <Users size={22} className="text-emerald-600" /> Proprietários
+        </h1>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowInfo(v => !v)}
+            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
+            title="Informações sobre este cadastro">
+            <Info size={18} />
           </button>
-        )}
+          {podeCriar && (
+            <button onClick={abrirNovo}
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
+              Novo Proprietário
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Busca */}
-      <div className="relative mb-4">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Buscar por nome, CPF, CNPJ ou cidade..."
-          value={busca}
-          onChange={e => setBusca(e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors"
-        />
+      {/* ── Info banner ─────────────────────────────────────────────────────── */}
+      {showInfo && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
+          <strong>Regras deste cadastro:</strong>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            <li>Proprietários criados aqui recebem e-mail de boas-vindas com senha inicial.</li>
+            <li>A senha padrão é <strong>Inicial_001</strong> — troca obrigatória no primeiro acesso.</li>
+            <li>Proprietários são associados à empresa/equipe ativa no momento do cadastro.</li>
+            <li>A remoção da empresa não exclui o proprietário do sistema.</li>
+          </ul>
+        </div>
+      )}
+
+      {/* ── Filtros ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar por nome, CPF, CNPJ ou cidade…"
+            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+          />
+          {busca && (
+            <button onClick={() => setBusca('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        <select
+          value={filtroAtivo}
+          onChange={e => setFiltroAtivo(e.target.value as 'ativo' | 'inativo' | 'all')}
+          className="px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
+        >
+          <option value="ativo">Somente ativos</option>
+          <option value="inativo">Somente inativos</option>
+          <option value="all">Todos</option>
+        </select>
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-emerald-600" />
-        </div>
-      ) : proprietarios.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-gray-300">
-          <Users size={40} className="mb-3" />
-          <p className="text-sm text-gray-400">Nenhum proprietário encontrado</p>
-        </div>
-      ) : (
-        <>
-          {/* Mobile — cards */}
-          <div className="md:hidden space-y-3">
-            {proprietarios.map(p => (
-              <div key={p.id} className={`bg-white rounded-2xl border p-4 shadow-sm ${isAdmin && !p.ativo ? 'opacity-60' : 'border-gray-100'}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{p.fullName}</p>
-                    <p className="text-xs text-gray-500 truncate">{p.email}</p>
-                    {p.phone && <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5"><Phone size={10} />{p.phone}</p>}
-                    {p.cidade && <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5"><MapPin size={10} />{p.cidade}{p.estado ? ` — ${p.estado}` : ''}</p>}
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {p.mensalista && (
-                        <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">Mensalista</span>
-                      )}
-                      {p.frequenciaVisitas && (
-                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
-                          {p.frequenciaVisitas}x/sem
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {isAdmin && (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                      {p.ativo ? 'Ativo' : 'Inativo'}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                  {podeEditar && (
-                    <button onClick={() => abrirEdicao(p)}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                      <Pencil size={11} /> Editar
-                    </button>
-                  )}
-                  {podeRemover && (
-                    <button onClick={() => handleRemoverDaEmpresa(p)}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-red-100 rounded-lg text-xs text-red-500 hover:bg-red-50 transition-colors">
-                      <Trash2 size={11} /> Remover da empresa
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
+      {/* ── Tabela desktop ────────────────────────────────────────────────────── */}
+      <div className="hidden md:block">
+        {loading ? (
+          <div className="flex justify-center py-16"><Loader2 size={32} className="animate-spin text-emerald-500" /></div>
+        ) : proprietarios.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <Users size={48} className="mx-auto mb-3 opacity-30" />
+            <p>Nenhum proprietário encontrado.</p>
           </div>
-
-          {/* Desktop — tabela */}
-          <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        ) : (
+          <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Documento</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cidade</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Contrato</th>
-                  {isAdmin && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>}
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Documento</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Cidade</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Contrato</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-gray-100">
                 {proprietarios.map(p => (
-                  <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${isAdmin && !p.ativo ? 'opacity-60' : ''}`}>
+                  <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${!p.ativo ? 'opacity-50' : ''}`}>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{p.fullName}</p>
+                      <p className="font-medium text-gray-800">{p.fullName}</p>
                       <p className="text-xs text-gray-400 truncate max-w-[200px]">{p.email}</p>
                     </td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{labelDoc(p)}</td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                      {p.phone ?? <span className="text-gray-300">—</span>}
+                      {p.phone ?? <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-600">
-                      {p.cidade ? `${p.cidade}${p.estado ? `/${p.estado}` : ''}` : <span className="text-gray-300">—</span>}
+                      {p.cidade ? `${p.cidade}${p.estado ? `/${p.estado}` : ''}` : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
@@ -752,29 +745,30 @@ export default function CadastroProprietario() {
                             {p.frequenciaVisitas}x/semana
                           </span>
                         )}
-                        {!p.mensalista && !p.frequenciaVisitas && <span className="text-gray-300 text-xs">—</span>}
+                        {!p.mensalista && !p.frequenciaVisitas && <span className="text-gray-400 text-xs">—</span>}
                       </div>
                     </td>
-                    {isAdmin && (
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                          {p.ativo ? 'Ativo' : 'Inativo'}
-                        </span>
-                      </td>
-                    )}
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {podeEditar && (
+                      <span className={`px-2 py-1 rounded-xl text-xs font-medium ${p.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {p.ativo ? 'Ativo' : 'Inativo'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-center gap-2">
+                        {podeEditar ? (
                           <button onClick={() => abrirEdicao(p)} title="Editar"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Pencil size={14} />
+                            className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors">
+                            <Pencil size={15} />
                           </button>
-                        )}
-                        {podeRemover && (
+                        ) : null}
+                        {podeRemover ? (
                           <button onClick={() => handleRemoverDaEmpresa(p)} title="Remover da empresa"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 size={14} />
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors">
+                            <Trash2 size={15} />
                           </button>
+                        ) : null}
+                        {!podeEditar && !podeRemover && (
+                          <span className="text-xs text-gray-400 italic">Somente leitura</span>
                         )}
                       </div>
                     </td>
@@ -783,8 +777,72 @@ export default function CadastroProprietario() {
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        )}
+      </div>
+
+      {/* ── Cards mobile ──────────────────────────────────────────────────────── */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="flex justify-center py-16"><Loader2 size={32} className="animate-spin text-emerald-500" /></div>
+        ) : proprietarios.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <Users size={40} className="mx-auto mb-3 opacity-30" />
+            <p className="text-sm">Nenhum proprietário encontrado.</p>
+          </div>
+        ) : proprietarios.map(p => (
+          <div key={p.id} className={`bg-white rounded-3xl border border-gray-200 p-4 ${!p.ativo ? 'opacity-50' : ''}`}>
+            <div className="flex justify-between items-start gap-2 mb-2">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-800 truncate">{p.fullName}</p>
+                <p className="text-xs text-gray-500 truncate">{p.email}</p>
+              </div>
+              <span className={`px-2 py-0.5 rounded-xl text-xs font-medium flex-shrink-0 ${p.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                {p.ativo ? 'Ativo' : 'Inativo'}
+              </span>
+            </div>
+
+            {p.phone && (
+              <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                <Phone size={12} /> {p.phone}
+              </div>
+            )}
+            {p.cidade && (
+              <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                <MapPin size={12} /> {p.cidade}{p.estado ? ` — ${p.estado}` : ''}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-1 mb-3">
+              {p.mensalista && (
+                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">Mensalista</span>
+              )}
+              {p.frequenciaVisitas && (
+                <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                  {p.frequenciaVisitas}x/sem
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+              <span className="text-xs text-gray-400">{labelDoc(p)}</span>
+              <div className="flex gap-2">
+                {podeEditar && (
+                  <button onClick={() => abrirEdicao(p)}
+                    className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
+                    Editar
+                  </button>
+                )}
+                {podeRemover && (
+                  <button onClick={() => handleRemoverDaEmpresa(p)}
+                    className="px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-xl hover:bg-red-50 transition-colors">
+                    Remover
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
 
       {showModal && (
         <ModalProprietario

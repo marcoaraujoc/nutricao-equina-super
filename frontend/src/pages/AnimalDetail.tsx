@@ -11,6 +11,7 @@ import {
   ArrowLeft, Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, Plus, X, Check, Trash2, Sparkles,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
+  Scan, Activity,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ interface AnimalData {
   solicitacoes?:     Solicitacao[];
 }
 
-type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
+type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'EXAME_LAB' | 'EXAME_IMG' | 'EXAME_BIO' | 'EXAME_COMPRA' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
 
 interface EventoHistorico {
   id:          string;
@@ -125,6 +126,10 @@ const BADGE_ORIGEM: Record<OrigemEvento, string> = {
   EVOLUCAO:       'bg-emerald-100 text-emerald-700',
   VACINA:         'bg-teal-100 text-teal-700',
   EXAME:          'bg-purple-100 text-purple-700',
+  EXAME_LAB:      'bg-blue-100 text-blue-700',
+  EXAME_IMG:      'bg-sky-100 text-sky-700',
+  EXAME_BIO:      'bg-violet-100 text-violet-700',
+  EXAME_COMPRA:   'bg-amber-100 text-amber-700',
   ENCAMINHAMENTO: 'bg-orange-100 text-orange-700',
   PRESCRICAO:     'bg-blue-100 text-blue-700',
 };
@@ -403,11 +408,15 @@ function DetalheModalPrescricao({ dados }: { dados: DetalhePrescricao }) {
 }
 
 const DETALHE_CONFIG: Record<OrigemEvento, { icon: React.ReactNode; title: string; accentCls: string }> = {
-  EVOLUCAO:       { icon: <FileText size={16} />,   title: 'Evolução Clínica',    accentCls: 'text-emerald-600' },
-  VACINA:         { icon: <Syringe size={16} />,    title: 'Vacina',              accentCls: 'text-teal-600'    },
-  EXAME:          { icon: <FlaskConical size={16} />,title: 'Exame Clínico',       accentCls: 'text-purple-600'  },
-  ENCAMINHAMENTO: { icon: <Send size={16} />,        title: 'Encaminhamento',      accentCls: 'text-orange-600'  },
-  PRESCRICAO:     { icon: <Pill size={16} />,        title: 'Prescrição',          accentCls: 'text-blue-600'    },
+  EVOLUCAO:       { icon: <FileText size={16} />,    title: 'Evolução Clínica',    accentCls: 'text-emerald-600' },
+  VACINA:         { icon: <Syringe size={16} />,     title: 'Vacina',              accentCls: 'text-teal-600'    },
+  EXAME:          { icon: <FlaskConical size={16} />, title: 'Exame Clínico',       accentCls: 'text-purple-600'  },
+  EXAME_LAB:      { icon: <FlaskConical size={16} />, title: 'Exame Laboratorial',  accentCls: 'text-blue-600'    },
+  EXAME_IMG:      { icon: <Scan size={16} />,         title: 'Exame de Imagem',     accentCls: 'text-sky-600'     },
+  EXAME_BIO:      { icon: <FlaskConical size={16} />, title: 'Exame Bioquímico',    accentCls: 'text-violet-600'  },
+  EXAME_COMPRA:   { icon: <Activity size={16} />,     title: 'Exame de Compra',     accentCls: 'text-amber-600'   },
+  ENCAMINHAMENTO: { icon: <Send size={16} />,         title: 'Encaminhamento',      accentCls: 'text-orange-600'  },
+  PRESCRICAO:     { icon: <Pill size={16} />,         title: 'Prescrição',          accentCls: 'text-blue-600'    },
 };
 
 function DetalheModal({
@@ -648,6 +657,10 @@ const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
   EVOLUCAO:       id => `/clinica/evolucoes/${id}`,
   VACINA:         id => `/clinica/vacinas/${id}`,
   EXAME:          id => `/clinica/exames/${id}`,
+  EXAME_LAB:      id => `/clinica/exames/${id}`,
+  EXAME_IMG:      id => `/clinica/exames/${id}`,
+  EXAME_BIO:      id => `/clinica/exames/${id}`,
+  EXAME_COMPRA:   id => `/clinica/exames/${id}`,
   ENCAMINHAMENTO: id => `/clinica/encaminhamentos/${id}`,
   PRESCRICAO:     id => `/clinica/prescricoes/grupos/${id}`,
 };
@@ -729,7 +742,8 @@ const AnimalDetail = () => {
       const res = await api.get(url);
       if (!res.data) { setDetalheLoading(false); return; }
       const dados = res.data.dados ?? res.data;
-      setDetalheRecord({ tipo: parsed.origem, dados } as DetalheRecord);
+      const tipoDetalhe = (parsed.origem.startsWith('EXAME') ? 'EXAME' : parsed.origem) as DetalheRecord['tipo'];
+      setDetalheRecord({ tipo: tipoDetalhe, dados } as DetalheRecord);
     } catch {
       toast.error('Não foi possível carregar os dados do registro.');
     } finally {

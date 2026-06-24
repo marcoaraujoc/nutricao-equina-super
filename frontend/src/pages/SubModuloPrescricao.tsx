@@ -638,7 +638,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
                     {/* MEDICAMENTO (span 3) */}
                     <div className="sm:col-span-3">
-                      <label className="block text-xs text-gray-500 mb-1">MEDICAMENTO *</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">MEDICAMENTO *</label>
                       <div className="relative">
                         <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                         <input
@@ -683,7 +683,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
                     {/* DOSAGEM (span 2) */}
                     <div className="sm:col-span-2">
-                      <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DOSAGEM *</label>
                       <div className="flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                         <input type="number" min="0" step="0.001" value={form.dosagem}
                           onChange={e => set('dosagem', e.target.value)}
@@ -703,7 +703,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
                     {/* VIA ADMINISTRAÇÃO (span 2) */}
                     <div className="sm:col-span-2">
-                      <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">VIA ADMINISTRAÇÃO *</label>
                       <select value={form.via} onChange={e => set('via', e.target.value)}
                         className={`w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
                         <option value="">— Selecionar —</option>
@@ -716,7 +716,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   <>
                   {/* Medicamento / Procedimento — campo único (modal ou procedimento) */}
                   <div>
-                  <label className="block text-xs text-gray-500 mb-1">
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                     {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
                   </label>
                   <div className="relative">
@@ -810,7 +810,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 {isMed && (
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">DOSAGEM *</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DOSAGEM *</label>
                       <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                         <input type="number" min="0" step="0.001" value={form.dosagem}
                           onChange={e => set('dosagem', e.target.value)}
@@ -830,7 +830,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">VIA ADMINISTRAÇÃO *</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">VIA ADMINISTRAÇÃO *</label>
                       <select value={form.via} onChange={e => set('via', e.target.value)}
                         className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
                         <option value="">— Selecionar —</option>
@@ -845,7 +845,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 {/* Frequência + Hora + Duração + Data Início */}
                 <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
                   <div className="col-span-2 sm:col-span-3">
-                    <label className="block text-xs text-gray-500 mb-1">FREQUÊNCIA *</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">FREQUÊNCIA *</label>
                     <select value={form.frequencia} onChange={e => set('frequencia', e.target.value)}
                       className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
                       <option value="">— Selecionar —</option>
@@ -853,12 +853,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     </select>
                   </div>
                   <div className="sm:col-span-1">
-                    <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
                     <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
                       className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="block text-xs text-gray-500 mb-1">DURAÇÃO (DIAS) *</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS) *</label>
                     <input type="number" min="1"
                       value={form.duracaoDias}
                       onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
@@ -866,7 +866,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                   </div>
                   <div className="col-span-2 sm:col-span-2">
-                    <label className="block text-xs text-gray-500 mb-1">DATA INÍCIO</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA INÍCIO</label>
                     <input
                       type="date"
                       value={form.dataInicio}
@@ -878,7 +878,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
                 {/* Observação */}
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">OBSERVAÇÃO</label>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">OBSERVAÇÃO</label>
                   <textarea value={form.observacao} onChange={e => set('observacao', e.target.value)}
                     rows={2} maxLength={500} placeholder="Instrução de uso, diluição, etc..."
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
@@ -1156,7 +1156,7 @@ function CancelarModal({
           </div>
         </div>
         <div className="mb-4">
-          <label className="block text-xs font-medium text-gray-700 mb-1">Motivo do cancelamento</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Motivo do cancelamento</label>
           <textarea
             value={motivo}
             onChange={e => setMotivo(e.target.value)}

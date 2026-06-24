@@ -159,6 +159,14 @@ const encaminhamentosRoutes    = require('./routes/encaminhamentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const examesClinicoRoutes      = require('./routes/clinica-exames');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const laboratorioExamesRoutes  = require('./routes/laboratorio-exames');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const imagemExamesRoutes       = require('./routes/imagem-exames');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const resenhaRoutes            = require('./routes/resenha');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const resenhaGraficaRoutes     = require('./routes/resenha-grafica');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const agendaRoutes             = require('./routes/agenda');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const vacinaAdminRoutes        = require('./routes/vacinaAdmin');
@@ -187,6 +195,10 @@ app.use('/api/clinica/faturas',       faturaRoutes);
 app.use('/api/clinica/prescricoes',   prescricoesRoutes);
 app.use('/api/clinica/encaminhamentos', encaminhamentosRoutes);
 app.use('/api/clinica/exames',         examesClinicoRoutes);
+app.use('/api/clinica/laboratorios',   laboratorioExamesRoutes);
+app.use('/api/clinica/imagem-exames',  imagemExamesRoutes);
+app.use('/api/resenha',               resenhaRoutes);
+app.use('/api/animais/:animalId/resenha', resenhaGraficaRoutes);
 app.use('/api/clinica',               agendaRoutes); // /historico e /agendamentos
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);

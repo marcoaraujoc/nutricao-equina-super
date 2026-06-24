@@ -88,7 +88,10 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
     if (!tipoServico?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório' });
-    if (!TIPOS_SERVICO_VALIDOS.includes(tipoServico))
+    const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
+    if (tiposEnviados.length === 0)
+      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório' });
+    if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
 
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
@@ -137,8 +140,11 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    if (tipoServico && !TIPOS_SERVICO_VALIDOS.includes(tipoServico))
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+    if (tipoServico) {
+      const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
+      if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
+        return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+    }
 
     try {
       const existe = await prisma.fornecedor.findUnique({ where: { id: Number(id) } });

@@ -347,8 +347,8 @@ const PERMISSOES_PADRAO = {
     'nutricao.relatorios.exportar': 'NENHUM',
   },
 
-  // Prestador de serviços — acesso restrito configurável pelo gestor
-  PRESTADOR: {
+  // Fornecedor de serviços — acesso restrito configurável pelo gestor
+  FORNECEDOR: {
     'cadastro.proprietario.ler':     'NENHUM',
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',

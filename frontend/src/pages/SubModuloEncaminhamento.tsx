@@ -246,7 +246,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
         <div className="space-y-3">
           {/* Seletor de especialidade — lista só aparece após selecionar */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Especialidade</label>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Especialidade</label>
             <select value={filtroServico}
               onChange={e => { setFiltroServico(e.target.value); setPrestadorSel(null); }}
               className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!filtroServico ? 'text-gray-400' : 'text-gray-900'}`}>
@@ -310,7 +310,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       ) : (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Especialidade *</label>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Especialidade *</label>
             {servicos.length > 0 ? (
               <select value={especialidade} onChange={e => setEspecialidade(e.target.value)}
                 className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!especialidade ? 'text-gray-400' : 'text-gray-900'}`}>
@@ -325,13 +325,13 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Profissional</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Profissional</label>
               <input type="text" value={vetDestino} onChange={e => setVetDestino(e.target.value)}
                 placeholder="Nome do profissional"
                 className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Clínica</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Clínica</label>
               <input type="text" value={clinicaDestino} onChange={e => setClinicaDestino(e.target.value)}
                 placeholder="Nome da clínica"
                 className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
@@ -341,7 +341,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       )}
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Motivo *</label>
+        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Motivo *</label>
         <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
           placeholder="Descreva o motivo do encaminhamento..."
           className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 resize-none" />
@@ -349,7 +349,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Urgência</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Urgência</label>
           <select value={urgencia} onChange={e => setUrgencia(e.target.value as Urgencia)}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600">
             <option value="NORMAL">Normal</option>
@@ -358,7 +358,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Observação</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Observação</label>
           <input type="text" value={observacao} onChange={e => setObservacao(e.target.value)}
             placeholder="Opcional"
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />

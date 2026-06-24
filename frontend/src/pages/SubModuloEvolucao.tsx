@@ -591,7 +591,7 @@ function NovaEvolucaoModal({
 
           {!editingId && agendamentos.length > 0 && (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Agendamento vinculado</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Agendamento vinculado</label>
               <select
                 value={agendamentoId ?? ''}
                 onChange={e => onAgendamentoChange(e.target.value ? Number(e.target.value) : null)}
@@ -610,7 +610,7 @@ function NovaEvolucaoModal({
 
           {editingId && (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Status</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</label>
               <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
                 {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -620,7 +620,7 @@ function NovaEvolucaoModal({
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-xs text-gray-500">Evolução clínica *</label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Evolução clínica *</label>
               <div className="flex items-center gap-2">
                 {form.texto && !gravacaoAtiva && !transcrevendo && (
                   <button onClick={() => onFormChange('texto', '')}
@@ -690,7 +690,7 @@ function NovaEvolucaoModal({
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-gray-500">Anexos</label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Anexos</label>
               <label className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors ${
                 desativado
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed'

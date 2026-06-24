@@ -4,6 +4,7 @@
 const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
+const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
 
 const prisma = require('../lib/prisma').default;
@@ -449,7 +450,7 @@ const EquipeController = {
     }
   },
 
-  // ── Fornecedores disponíveis para inclusão como PRESTADOR ──────────────────
+  // ── Fornecedores disponíveis para inclusão como FORNECEDOR ──────────────────
 
   getFornecedoresPorEquipe: async (req, res) => {
     try {
@@ -482,6 +483,123 @@ const EquipeController = {
       res.json({ sucesso: true, dados: fornecedores });
     } catch (err) {
       console.error('Erro ao listar fornecedores por equipe:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ─── Designações de Prestador ─────────────────────────────────────────────
+
+  getDesignacoesPrestador: async (req, res) => {
+    try {
+      const equipeIdN    = Number(req.params.equipeId);
+      const prestadorIdN = Number(req.params.userId);
+
+      // Valida acesso: ADMIN ou gestor/dono da empresa desta equipe
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+        const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+        if (!empresa || !equipe || equipe.empresaId !== empresa.id)
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+      }
+
+      const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+
+      const [designacoes, animaisDisponiveis] = await Promise.all([
+        prisma.designacaoPrestador.findMany({
+          where: { equipeId: equipeIdN, prestadorId: prestadorIdN },
+          include: {
+            animal: { select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } } },
+          },
+          orderBy: [{ ativo: 'desc' }, { animal: { nome: 'asc' } }],
+        }),
+        prisma.animal.findMany({
+          where: {
+            ativo: true,
+            OR: [
+              { equipeId: equipeIdN },
+              ...(equipe?.empresaId ? [{ empresaId: equipe.empresaId }] : []),
+            ],
+            NOT: {
+              designacoes: { some: { prestadorId: prestadorIdN, equipeId: equipeIdN, ativo: true } },
+            },
+          },
+          select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } },
+          orderBy: { nome: 'asc' },
+        }),
+      ]);
+
+      res.json({ sucesso: true, dados: { designacoes, animaisDisponiveis } });
+    } catch (err) {
+      console.error('Erro ao listar designações:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  addDesignacaoPrestador: async (req, res) => {
+    try {
+      const equipeIdN    = Number(req.params.equipeId);
+      const prestadorIdN = Number(req.params.userId);
+      const { animalId, motivo } = req.body;
+
+      if (!animalId) return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
+
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+        const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+        if (!empresa || !equipe || equipe.empresaId !== empresa.id)
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+      }
+
+      const designacao = await prisma.designacaoPrestador.upsert({
+        where: { animalId_prestadorId_equipeId: { animalId: Number(animalId), prestadorId: prestadorIdN, equipeId: equipeIdN } },
+        create: {
+          animalId:    Number(animalId),
+          prestadorId: prestadorIdN,
+          equipeId:    equipeIdN,
+          motivo:      motivo?.trim() || null,
+          criadoPorId: req.user.id,
+          ativo:       true,
+          dataInicio:  new Date(),
+        },
+        update: {
+          ativo:      true,
+          dataFim:    null,
+          motivo:     motivo?.trim() || null,
+          dataInicio: new Date(),
+        },
+        include: {
+          animal: { select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } } },
+        },
+      });
+
+      res.status(201).json({ sucesso: true, dados: designacao });
+    } catch (err) {
+      console.error('Erro ao adicionar designação:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  removeDesignacaoPrestador: async (req, res) => {
+    try {
+      const equipeIdN    = Number(req.params.equipeId);
+      const prestadorIdN = Number(req.params.userId);
+      const animalIdN    = Number(req.params.animalId);
+
+      if (req.user.role !== 'ADMIN') {
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+        const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+        if (!empresa || !equipe || equipe.empresaId !== empresa.id)
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+      }
+
+      await prisma.designacaoPrestador.updateMany({
+        where: { animalId: animalIdN, prestadorId: prestadorIdN, equipeId: equipeIdN },
+        data:  { ativo: false, dataFim: new Date() },
+      });
+
+      res.json({ sucesso: true });
+    } catch (err) {
+      console.error('Erro ao remover designação:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -816,10 +934,10 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
       }
 
-      // Cargo PRESTADOR: amarra a conta de login ao cadastro Fornecedor (tipoServico
+      // Cargo FORNECEDOR: amarra a conta de login ao cadastro Fornecedor (tipoServico
       // alimenta o seletor de encaminhamento). Existente → vincula; novo → cria CLIENTE.
       let fornecedorVinculo = null;
-      if (cargo === 'PRESTADOR') {
+      if (cargo === 'FORNECEDOR') {
         if (fornecedorId) {
           fornecedorVinculo = await prisma.fornecedor.findUnique({ where: { id: Number(fornecedorId) } });
           if (!fornecedorVinculo) {
@@ -859,7 +977,7 @@ const EquipeController = {
       const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
       const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', PRESTADOR: 'FORNECEDOR' };
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', FORNECEDOR: 'FORNECEDOR' };
       const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
 
       let usuarioCriado = false;
@@ -906,8 +1024,8 @@ const EquipeController = {
         data: { equipeId: equipe.id, userId: usuario.id, cargo },
       });
 
-      // Vincular/criar cadastro Fornecedor do prestador
-      if (cargo === 'PRESTADOR') {
+      // Vincular/criar cadastro Fornecedor
+      if (cargo === 'FORNECEDOR') {
         if (fornecedorVinculo) {
           await prisma.fornecedor.update({
             where: { id: fornecedorVinculo.id },
@@ -1178,7 +1296,7 @@ const EquipeController = {
 
       // Cria usuário se ainda não existir
       const SENHA_INICIAL     = 'Inicial_001';
-      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PRESTADOR: 'FORNECEDOR' };
+      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR' };
       const userTypeConvidado = cargoToUserType[cargo] ?? 'ESTAGIARIO';
       const usuarioExistente  = await prisma.user.findUnique({ where: { email } });
       let usuarioCriado      = false;
@@ -1550,6 +1668,10 @@ const EquipeController = {
         }
       }
 
+      // Garante que todos os perfis padrão existam (evita 400 por PerfilEquipe ausente
+      // quando o gestor usa Equipe.tsx antes de abrir ControleAcesso).
+      await PermissaoService.garantirPerfisPadrao(equipeId);
+
       // Valida que todos os cargos existem na equipe
       for (const cargo of cargos) {
         const perfilExiste = await prisma.perfilEquipe.findUnique({
@@ -1563,16 +1685,39 @@ const EquipeController = {
       // Cargo primário: GESTOR tem prioridade, senão o primeiro da lista
       const cargoPrimario = cargos.includes('GESTOR') ? 'GESTOR' : cargos[0];
 
-      // Carrega as matrizes de permissão de todos os cargos e faz a união (nivel máximo)
+      // Carrega as matrizes de permissão de todos os cargos e faz a união (nivel máximo).
+      // Fallback para PERMISSOES_PADRAO quando MatrizPerfil não está semeada para o cargo
+      // nesta equipe — evita que a segunda role contribua zero para a união.
+      // NEGADO em qualquer cargo vence (deny-wins) sobre qualquer nível positivo dos demais.
       const NIVEL_ORD = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
       const matrizes = await prisma.matrizPerfil.findMany({
         where: { equipeId, perfilSlug: { in: cargos } },
       });
-      const mapaUniao = {};
+
+      // Agrupa por cargo para detectar cargos sem entradas no banco
+      const slugsPorCargo = {};
       for (const m of matrizes) {
-        const atual = mapaUniao[m.moduloSlug];
-        if (atual === undefined || NIVEL_ORD[m.nivel] > NIVEL_ORD[atual]) {
-          mapaUniao[m.moduloSlug] = m.nivel;
+        if (!slugsPorCargo[m.perfilSlug]) slugsPorCargo[m.perfilSlug] = {};
+        slugsPorCargo[m.perfilSlug][m.moduloSlug] = m.nivel;
+      }
+
+      const mapaUniao = {};
+      for (const cargo of cargos) {
+        // MatrizPerfil da equipe tem prioridade; PERMISSOES_PADRAO como fallback
+        const matrizCargo  = slugsPorCargo[cargo] ?? {};
+        const defaultCargo = PERMISSOES_PADRAO[cargo] ?? {};
+        const efetivo      = { ...defaultCargo, ...matrizCargo };
+
+        for (const [slug, nivel] of Object.entries(efetivo)) {
+          if (nivel === 'NEGADO') {
+            mapaUniao[slug] = 'NEGADO'; // deny-wins: NEGADO de qualquer cargo bloqueia
+            continue;
+          }
+          const atual = mapaUniao[slug];
+          if (atual === 'NEGADO') continue; // já negado por outro cargo
+          if (atual === undefined || (NIVEL_ORD[nivel] ?? 0) > (NIVEL_ORD[atual] ?? 0)) {
+            mapaUniao[slug] = nivel;
+          }
         }
       }
 
@@ -1586,9 +1731,10 @@ const EquipeController = {
           await tx.permissaoMembro.createMany({
             data: Object.entries(mapaUniao).map(([slug, nivel]) => ({
               equipeId,
-              userId:     alvoUserId,
-              moduloSlug: slug,
+              userId:        alvoUserId,
+              moduloSlug:    slug,
               nivel,
+              atualizadoPor: req.user.id,
             })),
             skipDuplicates: true,
           });

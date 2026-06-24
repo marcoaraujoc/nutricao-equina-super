@@ -79,6 +79,8 @@ model User {
   designacoesCriadas       DesignacaoPrestador[]   @relation("DesignacaoCriadoPor")
   agendamentosComoVet      AgendamentoClinico[]    @relation("AgendamentoVeterinario")
   agendamentosCriados      AgendamentoClinico[]    @relation("AgendamentoCriadoPor")
+  resenhasCriadas          ResenhaEquino[]         @relation("ResenhasCriadas")
+  resenhasGraficasCriadas  ResenhaGrafica[]        @relation("ResenhaGraficaCriadaPor")
   @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
@@ -114,6 +116,10 @@ model Animal {
   bloqueado          Boolean   @default(false)
   bloqueioTipo       String?   @db.VarChar(30) @map("bloqueio_tipo")
   bloqueioExpira     DateTime? @map("bloqueio_expira")
+  pelagem            String?   @db.VarChar(100)
+  altura             String?   @db.VarChar(50)
+  registroPassaporte String?   @db.VarChar(100) @map("registro_passaporte")
+  finalidade         String?   @db.VarChar(100)
 
   especie         Especie              @relation(fields: [especieId],    references: [id])
   raca            Raca?                @relation(fields: [racaId],       references: [id])
@@ -139,6 +145,8 @@ model Animal {
   reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
   designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
   agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
+  resenha         ResenhaEquino?         @relation("AnimalResenha")
+  resenhasGraficas ResenhaGrafica[]      @relation("ResenhaGraficaAnimal")
 
   @@index([especieId])
   @@index([racaId])
@@ -341,12 +349,15 @@ model ExameClinico {
   dataResultado   DateTime?
   arquivoUrl      String?
   observacao      String?   @db.Text
+  qtdAmostra      Int?      @map("qtd_amostra")
+  numero          Int?
   ativo           Boolean   @default(true)
 
   animal      Animal           @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
   veterinario User?            @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
   evolucao    EvolucaoClinica? @relation("EvolucaoExames",          fields: [evolucaoId],    references: [id], onDelete: SetNull)
 
+  @@index([animalId])
   @@index([evolucaoId])
   @@map("tb_exames_clinicos")
   @@schema("schs2vet")
@@ -1330,5 +1341,202 @@ model LocalizacaoAnimal {
   @@index([tipoLocalizacao])
   @@index([ativo])
   @@map("tb_localizacoes_animal")
+  @@schema("schs2vet")
+}
+
+model Laboratorio {
+  id        Int      @id @default(autoincrement())
+  nome      String   @unique @db.VarChar(255)
+  contato   String?  @db.VarChar(100)
+  email     String?  @db.VarChar(255)
+  site      String?  @db.VarChar(255)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  grupos ExameGrupo[]
+
+  @@index([ativo])
+  @@map("tb_laboratorios")
+  @@schema("schs2vet")
+}
+
+model ExameGrupo {
+  id            Int     @id @default(autoincrement())
+  laboratorioId Int     @map("laboratorio_id")
+  nome          String  @db.VarChar(255)
+  ordem         Int     @default(0)
+  ativo         Boolean @default(true)
+
+  laboratorio Laboratorio @relation(fields: [laboratorioId], references: [id], onDelete: Cascade)
+  itens       ExameItem[]
+
+  @@unique([laboratorioId, nome])
+  @@index([laboratorioId])
+  @@map("tb_exame_grupos")
+  @@schema("schs2vet")
+}
+
+model ExameItem {
+  id           Int      @id @default(autoincrement())
+  grupoId      Int      @map("grupo_id")
+  nome         String   @db.VarChar(500)
+  sigla        String?  @db.VarChar(100)
+  tiposAmostra String[] @map("tipo_amostra") @default([])
+  ativo        Boolean  @default(true)
+
+  grupo ExameGrupo @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+
+  @@unique([grupoId, nome])
+  @@index([grupoId])
+  @@map("tb_exame_itens")
+  @@schema("schs2vet")
+}
+
+model ImagemExameGrupo {
+  id        Int      @id @default(autoincrement())
+  nome      String   @unique @db.VarChar(255)
+  categoria String   @default("Diagnóstico por Imagem") @db.VarChar(255)
+  ordem     Int      @default(0)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  itens ImagemExameItem[]
+
+  @@index([ativo])
+  @@map("tb_imagem_exame_grupos")
+  @@schema("schs2vet")
+}
+
+model ImagemExameItem {
+  id      Int     @id @default(autoincrement())
+  grupoId Int     @map("grupo_id")
+  codigo  String  @unique @db.VarChar(20)
+  nome    String  @db.VarChar(500)
+  sigla   String? @db.VarChar(100)
+  especie String  @default("Ambas") @db.VarChar(50)
+  ativo   Boolean @default(true)
+
+  grupo ImagemExameGrupo @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+
+  @@index([grupoId])
+  @@map("tb_imagem_exame_itens")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// RESENHA EQUINO
+// =============================================================================
+
+model ResenhaEquino {
+  id                 Int      @id @default(autoincrement())
+  animalId           Int?     @map("animal_id")
+  numeroCBH          String?  @db.VarChar(100) @map("numero_cbh")
+  paisNascimento     String?  @db.VarChar(100) @default("Brasil") @map("pais_nascimento")
+  registroGenealogia String?  @db.VarChar(100) @map("registro_genealogia")
+  pai                String?  @db.VarChar(255)
+  mae                String?  @db.VarChar(255)
+  paiDaMae           String?  @db.VarChar(255) @map("pai_da_mae")
+  sinaisCabeca       String?  @map("sinais_cabeca")
+  sinaisAE           String?  @map("sinais_ae")
+  sinaisAD           String?  @map("sinais_ad")
+  sinaisPE           String?  @map("sinais_pe")
+  sinaisPD           String?  @map("sinais_pd")
+  sinaisCorpo        String?  @map("sinais_corpo")
+  marcaFogo          String?  @db.VarChar(100) @map("marca_fogo")
+  outroId            String?  @db.VarChar(100) @map("outro_id")
+  graficaData        Json?    @map("grafica_data")
+  criadoPorId        Int?     @map("criado_por_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  animal    Animal? @relation("AnimalResenha", fields: [animalId], references: [id], onDelete: SetNull)
+  criadoPor User?   @relation("ResenhasCriadas", fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@unique([animalId])
+  @@map("tb_resenha_equino")
+  @@schema("schs2vet")
+}
+
+// =============================================================================
+// RESENHA GRÁFICA EQUINA
+// =============================================================================
+
+enum VistaResenha {
+  LATERAL
+  CABECA_FRONTAL
+  FOCINHO
+  PESCOCO_INFERIOR
+  MEMBROS_ANTERIORES
+  MEMBROS_POSTERIORES
+
+  @@schema("schs2vet")
+}
+
+enum TipoMarcacaoResenha {
+  PELO_BRANCO
+  CICATRIZ
+  MANCHA
+  REDEMOINHO
+
+  @@schema("schs2vet")
+}
+
+model RegiaoAnatomicaEquino {
+  id        Int          @id @default(autoincrement())
+  codigo    String       @unique @db.VarChar(60)
+  labelPt   String       @map("label_pt") @db.VarChar(120)
+  labelEn   String?      @map("label_en") @db.VarChar(120)
+  labelEs   String?      @map("label_es") @db.VarChar(120)
+  vista     VistaResenha
+  poligono  Json
+  ativo     Boolean      @default(true)
+  ordem     Int          @default(0)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  tracosRegiao ResenhaTracoRegiao[]
+
+  @@map("tb_regioes_anatomicas_equino")
+  @@schema("schs2vet")
+}
+
+model ResenhaGrafica {
+  id          Int          @id @default(autoincrement())
+  animalId    Int          @map("animal_id")
+  vista       VistaResenha
+  vetorTracos Json         @map("vetor_tracos")
+  snapshotPng String?      @map("snapshot_png") @db.Text
+  versao      Int          @default(1)
+  criadoPorId Int          @map("criado_por_id")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  animal       Animal               @relation("ResenhaGraficaAnimal", fields: [animalId], references: [id], onDelete: Cascade)
+  criadoPor    User                 @relation("ResenhaGraficaCriadaPor", fields: [criadoPorId], references: [id])
+  tracosRegiao ResenhaTracoRegiao[]
+
+  @@unique([animalId, vista])
+  @@index([animalId])
+  @@map("tb_resenha_grafica")
+  @@schema("schs2vet")
+}
+
+model ResenhaTracoRegiao {
+  id                Int                 @id @default(autoincrement())
+  resenhaGraficaId  Int                 @map("resenha_grafica_id")
+  tracoIndex        Int                 @map("traco_index")
+  regiaoId          Int                 @map("regiao_id")
+  tipoMarcacao      TipoMarcacaoResenha @map("tipo_marcacao")
+  percentualOverlap Decimal?            @map("percentual_overlap") @db.Decimal(5, 2)
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  resenhaGrafica ResenhaGrafica        @relation(fields: [resenhaGraficaId], references: [id], onDelete: Cascade)
+  regiao         RegiaoAnatomicaEquino @relation(fields: [regiaoId], references: [id])
+
+  @@index([resenhaGraficaId])
+  @@index([regiaoId])
+  @@map("tb_resenha_traco_regiao")
   @@schema("schs2vet")
 }

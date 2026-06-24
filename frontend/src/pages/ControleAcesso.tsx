@@ -30,6 +30,7 @@ import BotaoVoltar   from '../components/BotaoVoltar';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import FieldError, { inputErrCls } from '../components/FieldError';
+import ConfirmModal from '../components/ConfirmModal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ function mascaraCNPJ(v: string): string {
 const CARGO_INFO: Record<string, { label: string; desc: string; cor: string; tipo?: string }> = {
   GESTOR:        { label: 'Gestor',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple',  tipo: 'SISTEMA' },
   VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.',                 cor: 'emerald', tipo: 'SISTEMA' },
-  PRESTADOR:    { label: 'Prestador',    desc: 'Prestador de serviços. Acesso configurável pelo gestor da equipe.',                       cor: 'teal',    tipo: 'SISTEMA' },
+  FORNECEDOR:   { label: 'Fornecedor',   desc: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.',                      cor: 'teal',    tipo: 'SISTEMA' },
   ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.',      cor: 'blue',    tipo: 'SISTEMA' },
   PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.',                   cor: 'amber',   tipo: 'SISTEMA' },
   ADMIN:        { label: 'Administrador',desc: 'Gerência operacional e suporte técnico. Acesso amplo sem permissões financeiras.',        cor: 'red' },
@@ -231,7 +232,7 @@ const badgeCargo = (cargo: string) =>
   ({ VETERINARIO: 'bg-emerald-100 text-emerald-700', ESTAGIARIO: 'bg-blue-100 text-blue-700',
      ADMIN: 'bg-red-100 text-red-700', MEMBRO: 'bg-gray-100 text-gray-600',
      GESTOR: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
-     PRESTADOR: 'bg-teal-100 text-teal-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
+     FORNECEDOR: 'bg-teal-100 text-teal-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
 
 // ─── Utilitário ───────────────────────────────────────────────────────────────
 
@@ -404,6 +405,11 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
             for (const child of MODULO_CHILDREN[modulo] ?? []) {
               if (matriz[child]) Object.assign(allSubmodulos, matriz[child]);
             }
+            // Remove submódulos extraídos por módulos virtuais (já aparecem em suas entradas próprias)
+            const virtualClaimed = new Set(
+              VIRTUAL_MODULES.filter(vm => vm.fromModulo === modulo).flatMap(vm => vm.submoduloKeys)
+            );
+            for (const claimed of virtualClaimed) delete allSubmodulos[claimed];
           }
 
           const isCollapsed = collapsed[modulo] ?? true;
@@ -2243,6 +2249,357 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
 // ABA — Equipe (membros profissionais: Veterinário, Estagiário, Prestador)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── Modal: Gerenciar Acesso do Prestador (2 níveis) ──────────────────────────
+
+interface AnimalDesignado {
+  id:          number;
+  ativo:       boolean;
+  dataInicio:  string;
+  dataFim:     string | null;
+  motivo:      string | null;
+  animal: { id: number; nome: string; photoUrl: string | null; especie: { nome: string } | null };
+}
+
+interface AnimalDisponivel {
+  id:      number;
+  nome:    string;
+  photoUrl: string | null;
+  especie: { nome: string } | null;
+}
+
+interface AcaoMatrizItem {
+  slug:   string;
+  acao:   string;
+  label:  string;
+  nivel:  string;
+  locked?: boolean;
+}
+
+const NIVEL_CICLO = ['NENHUM', 'LEITURA', 'PROPRIO', 'EQUIPE', 'FULL'] as const;
+
+function GerenciarAcessoPrestadorModal({
+  equipeId, prestadorUserId, prestadorNome, onClose,
+}: {
+  equipeId:        number;
+  prestadorUserId: number;
+  prestadorNome:   string;
+  onClose:         () => void;
+}) {
+  const [abaModal, setAbaModal]       = useState<'animais' | 'permissoes'>('animais');
+  const [loading,  setLoading]        = useState(true);
+  const [salvando, setSalvando]       = useState(false);
+  const [salvandoPerms, setSalvandoPerms] = useState(false);
+  const [dirtyPerms,    setDirtyPerms]    = useState<Record<string, string>>({});
+
+  const [designacoes,        setDesignacoes]        = useState<AnimalDesignado[]>([]);
+  const [animaisDisponiveis, setAnimaisDisponiveis] = useState<AnimalDisponivel[]>([]);
+  const [animalSel,          setAnimalSel]          = useState('');
+  const [motivo,             setMotivo]             = useState('');
+
+  const [matriz,        setMatriz]        = useState<Record<string, Record<string, AcaoMatrizItem[]>>>({});
+  const [loadingMatriz, setLoadingMatriz] = useState(false);
+  const [confirmRemover, setConfirmRemover] = useState<{ animalId: number; nomeAnimal: string } | null>(null);
+
+  const NIVEL_LABEL: Record<string, string> = {
+    NEGADO:  'Negado',
+    NENHUM:  'Nenhum',
+    LEITURA: 'Leitura',
+    PROPRIO: 'Próprio',
+    EQUIPE:  'Equipe',
+    FULL:    'Full',
+  };
+  const NIVEL_COR: Record<string, string> = {
+    NEGADO:  'bg-red-100 text-red-700',
+    NENHUM:  'bg-gray-100 text-gray-500',
+    LEITURA: 'bg-blue-100 text-blue-700',
+    PROPRIO: 'bg-amber-100 text-amber-700',
+    EQUIPE:  'bg-purple-100 text-purple-700',
+    FULL:    'bg-emerald-100 text-emerald-700',
+  };
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`);
+      setDesignacoes(res.data?.dados?.designacoes ?? []);
+      setAnimaisDisponiveis(res.data?.dados?.animaisDisponiveis ?? []);
+    } catch { toast.error('Erro ao carregar designações'); }
+    finally  { setLoading(false); }
+  }, [equipeId, prestadorUserId]);
+
+  const carregarMatriz = useCallback(async () => {
+    setLoadingMatriz(true);
+    try {
+      const res = await api.get(`/equipes/${equipeId}/permissoes/${prestadorUserId}`);
+      setMatriz(res.data?.dados ?? {});
+      setDirtyPerms({});
+    } catch { /* silencioso */ }
+    finally  { setLoadingMatriz(false); }
+  }, [equipeId, prestadorUserId]);
+
+  const ciclarNivel = (slug: string, nivelAtual: string) => {
+    const idx     = NIVEL_CICLO.indexOf(nivelAtual as typeof NIVEL_CICLO[number]);
+    const proximo = NIVEL_CICLO[(idx + 1) % NIVEL_CICLO.length];
+    setDirtyPerms(prev => ({ ...prev, [slug]: proximo }));
+  };
+
+  const handleSalvarPermissoes = async () => {
+    if (Object.keys(dirtyPerms).length === 0) return;
+    setSalvandoPerms(true);
+    try {
+      await api.put(`/equipes/${equipeId}/permissoes/${prestadorUserId}`, { alteracoes: dirtyPerms });
+      toast.success('Permissões atualizadas com sucesso');
+      setDirtyPerms({});
+      carregarMatriz();
+    } catch {
+      toast.error('Erro ao salvar permissões');
+    } finally {
+      setSalvandoPerms(false);
+    }
+  };
+
+  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (abaModal === 'permissoes') carregarMatriz(); }, [abaModal, carregarMatriz]);
+
+  const handleAdicionarAnimal = async () => {
+    if (!animalSel) { toast.error('Selecione um animal'); return; }
+    setSalvando(true);
+    try {
+      await api.post(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`, {
+        animalId: Number(animalSel), motivo,
+      });
+      toast.success('Acesso ao animal concedido');
+      setAnimalSel(''); setMotivo('');
+      carregar();
+    } catch { toast.error('Erro ao conceder acesso'); }
+    finally  { setSalvando(false); }
+  };
+
+  const handleRemover = (animalId: number, nomeAnimal: string) => {
+    setConfirmRemover({ animalId, nomeAnimal });
+  };
+
+  const handleRemoverConfirmado = async () => {
+    if (!confirmRemover) return;
+    const { animalId } = confirmRemover;
+    setConfirmRemover(null);
+    try {
+      await api.delete(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes/${animalId}`);
+      toast.success('Acesso removido');
+      carregar();
+    } catch { toast.error('Erro ao remover acesso'); }
+  };
+
+  const ativas  = designacoes.filter(d => d.ativo);
+  const inativas = designacoes.filter(d => !d.ativo);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-teal-100 flex items-center justify-center">
+              <Wrench size={16} className="text-teal-700" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Gerenciar Acesso</h2>
+              <p className="text-xs text-gray-400">{prestadorNome}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Abas */}
+        <div className="flex gap-1 mx-6 mt-4 bg-gray-100 rounded-xl p-1 flex-shrink-0">
+          {([
+            { id: 'animais' as const,    label: 'Nível 1 — Animais com Acesso' },
+            { id: 'permissoes' as const, label: 'Nível 2 — Permissões do Perfil' },
+          ] as const).map(t => (
+            <button key={t.id} onClick={() => setAbaModal(t.id)}
+              className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all
+                ${abaModal === t.id ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Conteúdo */}
+        <div className="overflow-y-auto flex-1 px-6 py-4">
+
+          {abaModal === 'animais' && (
+            loading ? (
+              <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-teal-500" /></div>
+            ) : (
+              <div className="space-y-5">
+
+                {/* Conceder acesso */}
+                <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4">
+                  <p className="text-xs font-bold text-teal-700 uppercase tracking-widest mb-3">Conceder acesso a animal</p>
+                  <div className="space-y-2">
+                    <select value={animalSel} onChange={e => setAnimalSel(e.target.value)}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-teal-500">
+                      <option value="">Selecione um animal...</option>
+                      {animaisDisponiveis.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.nome}{a.especie ? ` — ${a.especie.nome}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <input value={motivo} onChange={e => setMotivo(e.target.value)}
+                      placeholder="Motivo (opcional)"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500" />
+                    <button onClick={handleAdicionarAnimal} disabled={salvando || !animalSel}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors">
+                      {salvando ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                      Conceder Acesso
+                    </button>
+                  </div>
+                </div>
+
+                {/* Animais com acesso ativo */}
+                <div>
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
+                    Com acesso ativo ({ativas.length})
+                  </p>
+                  {ativas.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">Nenhum animal designado.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {ativas.map(d => (
+                        <div key={d.id} className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl">
+                          <div className="w-9 h-9 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                            {d.animal.photoUrl
+                              ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
+                              : <div className="w-full h-full flex items-center justify-center text-lg">🐴</div>
+                            }
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{d.animal.nome}</p>
+                            <p className="text-xs text-gray-400">
+                              {d.animal.especie?.nome ?? '—'}
+                              {d.motivo && ` · ${d.motivo}`}
+                            </p>
+                          </div>
+                          <button onClick={() => handleRemover(d.animal.id, d.animal.nome)}
+                            className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Histórico inativo */}
+                {inativas.length > 0 && (
+                  <div>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
+                      Histórico — acessos removidos ({inativas.length})
+                    </p>
+                    <div className="space-y-1.5">
+                      {inativas.map(d => (
+                        <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl opacity-60">
+                          <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
+                            {d.animal.photoUrl
+                              ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
+                              : <div className="w-full h-full flex items-center justify-center text-base">🐴</div>
+                            }
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-gray-600 truncate">{d.animal.nome}</p>
+                            <p className="text-[10px] text-gray-400">
+                              Removido em {d.dataFim ? new Date(d.dataFim).toLocaleDateString('pt-BR') : '—'}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          )}
+
+          {abaModal === 'permissoes' && (
+            loadingMatriz ? (
+              <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-indigo-400" /></div>
+            ) : Object.keys(matriz).length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-10">Nenhuma permissão configurada.</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-700">
+                  Permissões individuais deste prestador. Clique em uma permissão para alterar o nível (NENHUM → LEITURA → PRÓPRIO → EQUIPE → FULL). As permissões padrão do perfil são definidas em <strong>Matriz de Perfis</strong>.
+                </div>
+                {Object.entries(matriz).map(([modulo, submodulos]) => (
+                  <div key={modulo} className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+                    <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{modulo}</p>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {Object.entries(submodulos).map(([sub, acoes]) => (
+                        <div key={sub} className="px-4 py-2.5">
+                          <p className="text-xs font-medium text-gray-600 mb-2">{sub}</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(acoes as AcaoMatrizItem[]).map(a => {
+                              const nivelAtual = dirtyPerms[a.slug] !== undefined ? dirtyPerms[a.slug] : a.nivel;
+                              const isDirty    = dirtyPerms[a.slug] !== undefined;
+                              return (
+                                <button key={a.slug}
+                                  onClick={() => ciclarNivel(a.slug, nivelAtual)}
+                                  title="Clique para alterar o nível"
+                                  className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full cursor-pointer hover:opacity-75 transition-opacity ${isDirty ? 'ring-2 ring-indigo-400 ring-offset-1' : ''} ${NIVEL_COR[nivelAtual] ?? 'bg-gray-100 text-gray-500'}`}>
+                                  {a.label}: {NIVEL_LABEL[nivelAtual] ?? nivelAtual}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0 flex gap-2">
+          {abaModal === 'permissoes' && Object.keys(dirtyPerms).length > 0 && (
+            <button onClick={handleSalvarPermissoes} disabled={salvandoPerms}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors">
+              {salvandoPerms ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
+              Salvar Permissões ({Object.keys(dirtyPerms).length})
+            </button>
+          )}
+          <button onClick={onClose}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Fechar
+          </button>
+        </div>
+      </div>
+
+      <ConfirmModal
+        open={confirmRemover != null}
+        titulo="Remover acesso ao animal"
+        mensagem={
+          confirmRemover
+            ? <>Tem certeza que deseja remover o acesso de <strong>{prestadorNome}</strong> ao animal <strong>"{confirmRemover.nomeAnimal}"</strong>?</>
+            : ''
+        }
+        variante="aviso"
+        labelConfirmar="Remover acesso"
+        onConfirmar={handleRemoverConfirmado}
+        onCancelar={() => setConfirmRemover(null)}
+      />
+    </div>
+  );
+}
+
 // Cadastro da tabela Fornecedor (tb_fornecedores) — disponível = sem login vinculado (userId null)
 interface Fornecedor {
   id:          number;
@@ -2266,17 +2623,20 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
 
+  // Modal de gerenciamento de acesso do prestador
+  const [modalAcesso, setModalAcesso] = useState<{ userId: number; nome: string } | null>(null);
+
   // Modal de inclusão
   const [showModal,      setShowModal]      = useState(false);
   const [passo,          setPasso]          = useState<1 | 2>(1); // 1=selecionar tipo, 2=preencher dados
-  const [tipoSel,        setTipoSel]        = useState<'VETERINARIO' | 'ESTAGIARIO' | 'PRESTADOR' | null>(null);
+  const [tipoSel,        setTipoSel]        = useState<'VETERINARIO' | 'ESTAGIARIO' | 'FORNECEDOR' | null>(null);
   const [conviteNome,    setConviteNome]    = useState('');
   const [conviteEmail,   setConviteEmail]   = useState('');
   const [conviteCargo,   setConviteCargo]   = useState('VETERINARIO');
   const [emailErro,      setEmailErro]      = useState('');
   const [enviando,       setEnviando]       = useState(false);
 
-  // Fornecedores (para tipo PRESTADOR) — cadastros da tabela Fornecedor disponíveis
+  // Fornecedores (para tipo FORNECEDOR) — cadastros da tabela Fornecedor disponíveis
   const [fornecedores,        setFornecedores]        = useState<Fornecedor[]>([]);
   const [loadingFornecedores, setLoadingFornecedores] = useState(false);
   const [buscaFornecedor,     setBuscaFornecedor]     = useState('');
@@ -2315,19 +2675,30 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
     setShowModal(true);
   };
 
-  const selecionarTipo = async (tipo: 'VETERINARIO' | 'ESTAGIARIO' | 'PRESTADOR') => {
+  // Tipos que são instituições (não podem ser membros individuais da equipe)
+  const TIPOS_EXCLUIDOS_MEMBRO = ['Laboratório', 'Farmácia'];
+
+  const selecionarTipo = async (tipo: 'VETERINARIO' | 'ESTAGIARIO' | 'FORNECEDOR') => {
     setTipoSel(tipo);
     setConviteCargo(tipo);
-    if (tipo === 'PRESTADOR') {
+    if (tipo === 'FORNECEDOR') {
       setLoadingFornecedores(true);
       try {
         const [resForn, resTipos] = await Promise.all([
-          api.get('/cadastro/fornecedores'),
+          api.get('/cadastro/fornecedores', { params: { ativo: 'true' } }),
           api.get('/cadastro/fornecedores/tipos'),
         ]);
         const lista = (resForn.data?.dados ?? []) as Fornecedor[];
-        setFornecedores(lista.filter(f => f.ativo && !f.userId)); // disponíveis = sem login vinculado
-        setTiposServico(resTipos.data?.dados ?? []);
+        setFornecedores(lista.filter(f => {
+          if (!f.ativo) return false;
+          // Exclui tipos institucionais (Laboratório, Farmácia)
+          const tipos = f.tipoServico.split(',').map(t => t.trim());
+          if (tipos.some(t => TIPOS_EXCLUIDOS_MEMBRO.includes(t))) return false;
+          // Exclui se o usuário vinculado já é membro desta equipe
+          if (f.userId && membros.some(m => m.user.id === f.userId)) return false;
+          return true;
+        }));
+        setTiposServico((resTipos.data?.dados ?? [] as string[]).filter(t => !TIPOS_EXCLUIDOS_MEMBRO.includes(t)));
       } catch { toast.error('Erro ao carregar fornecedores'); }
       finally { setLoadingFornecedores(false); }
     }
@@ -2353,8 +2724,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const handleEnviar = async () => {
     setEmailErro('');
 
-    // PRESTADOR: inclusão direta — cria/vincula o cadastro Fornecedor à conta de login
-    if (tipoSel === 'PRESTADOR') {
+    // FORNECEDOR: inclusão direta — cria/vincula o cadastro Fornecedor à conta de login
+    if (tipoSel === 'FORNECEDOR') {
       if (!fornecedorSel && !modoNovoForn) { setEmailErro('Selecione um fornecedor ou cadastre um novo'); return; }
       if (!conviteNome.trim())             { toast.error('Informe o nome');     return; }
       if (!conviteEmail.trim() || !isValidEmail(conviteEmail)) { setEmailErro('E-mail inválido'); return; }
@@ -2365,14 +2736,14 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       try {
         await api.post('/equipes/incluir-membro', {
           email:        conviteEmail.trim(),
-          cargo:        'PRESTADOR',
+          cargo:        'FORNECEDOR',
           fullName:     conviteNome.trim(),
           phone:        conviteTelefone.trim(),
           fornecedorId: fornecedorSel?.id ?? null,
           tipoServico:  modoNovoForn ? tipoServicoSel : null,
           equipeId,  // inclui na equipe exibida nesta aba (não na do contexto ativo)
         });
-        toast.success('Prestador incluído na equipe');
+        toast.success('Fornecedor incluído na equipe');
         setShowModal(false);
         carregar();
       } catch (err: unknown) {
@@ -2454,8 +2825,10 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const TIPOS_MEMBRO = [
     { id: 'VETERINARIO' as const, label: 'Veterinário',  icon: <Stethoscope size={20} className="text-emerald-600" />, cor: 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100' },
     { id: 'ESTAGIARIO'  as const, label: 'Estagiário',   icon: <Users size={20} className="text-blue-600" />,          cor: 'border-blue-200 bg-blue-50 hover:bg-blue-100' },
-    { id: 'PRESTADOR'   as const, label: 'Fornecedor / Prestador', icon: <Wrench size={20} className="text-teal-600" />, cor: 'border-teal-200 bg-teal-50 hover:bg-teal-100' },
+    { id: 'FORNECEDOR'   as const, label: 'Fornecedor',             icon: <Wrench size={20} className="text-teal-600" />, cor: 'border-teal-200 bg-teal-50 hover:bg-teal-100' },
   ];
+
+  const hasPrestador = membros.some(m => m.cargo === 'FORNECEDOR');
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -2471,6 +2844,17 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           </button>
         )}
       </div>
+
+      {/* Banner de orientação para acesso de prestador */}
+      {hasPrestador && isGestor && (
+        <div className="mx-5 mt-4 mb-1 flex items-start gap-3 bg-teal-50 border border-teal-200 rounded-xl px-4 py-3">
+          <Wrench size={15} className="text-teal-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-teal-700">
+            <span className="font-semibold">Fornecedores de serviço</span> só visualizam pacientes que você liberar.
+            Clique em <span className="font-semibold">"Gerenciar Acesso"</span> na linha do fornecedor para definir quais animais ele pode acessar.
+          </p>
+        </div>
+      )}
 
       <div className="px-5 py-3 border-b border-gray-50 flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
@@ -2501,6 +2885,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                   <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Profissional</th>
                   <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfil Ativo</th>
                   <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Status</th>
+                  {hasPrestador && <th className="px-5 py-3 text-left text-[11px] font-bold text-teal-500 uppercase tracking-wider">Acesso a Pacientes</th>}
                   <th className="px-5 py-3 text-right text-[11px] font-bold text-gray-400 uppercase tracking-wider">Ações</th>
                 </tr>
               </thead>
@@ -2551,13 +2936,28 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                         {m.user?.ativo !== false ? 'Ativo' : 'Desativado'}
                       </span>
                     </td>
+                    {hasPrestador && (
+                      <td className="px-5 py-3.5">
+                        {m.cargo === 'FORNECEDOR' && isGestor ? (
+                          <button
+                            onClick={() => setModalAcesso({ userId: m.user.id, nome: m.user.fullName })}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors">
+                            <Wrench size={13} /> Gerenciar Acesso
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-5 py-3.5 text-right">
-                      {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                        <button onClick={() => setConfirmDel(m)} title="Remover membro"
-                          className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 size={14} />
-                        </button>
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
+                          <button onClick={() => setConfirmDel(m)} title="Remover membro"
+                            className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -2577,15 +2977,35 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
                   {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
                 </span>
-                {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                  <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
-                    <Trash2 size={14} />
-                  </button>
-                )}
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {m.cargo === 'FORNECEDOR' && isGestor && (
+                    <button
+                      onClick={() => setModalAcesso({ userId: m.user.id, nome: m.user.fullName })}
+                      title="Gerenciar acesso ao paciente"
+                      className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 border border-teal-200 hover:bg-teal-100 rounded-lg">
+                      <Wrench size={11} /> Acesso
+                    </button>
+                  )}
+                  {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
+                    <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </>
+      )}
+
+      {/* Modal — Gerenciar Acesso Prestador */}
+      {modalAcesso && (
+        <GerenciarAcessoPrestadorModal
+          equipeId={equipeId}
+          prestadorUserId={modalAcesso.userId}
+          prestadorNome={modalAcesso.nome}
+          onClose={() => setModalAcesso(null)}
+        />
       )}
 
       {/* Modal — Incluir Membro */}
@@ -2599,13 +3019,13 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-gray-900">
-                    {passo === 1 ? 'Incluir Membro' : `Convidar ${tipoSel === 'PRESTADOR' ? 'Prestador' : tipoSel === 'ESTAGIARIO' ? 'Estagiário' : 'Veterinário'}`}
+                    {passo === 1 ? 'Incluir Membro' : `Convidar ${tipoSel === 'FORNECEDOR' ? 'Fornecedor' : tipoSel === 'ESTAGIARIO' ? 'Estagiário' : 'Veterinário'}`}
                   </h2>
                   <p className="text-xs text-gray-400">
                     {passo === 1
                       ? 'Selecione o tipo de membro'
-                      : tipoSel === 'PRESTADOR'
-                        ? 'O prestador será incluído imediatamente na equipe'
+                      : tipoSel === 'FORNECEDOR'
+                        ? 'O fornecedor será incluído imediatamente na equipe'
                         : 'Um e-mail de convite será enviado'}
                   </p>
                 </div>
@@ -2629,7 +3049,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                   </button>
                 ))}
               </div>
-            ) : tipoSel === 'PRESTADOR' ? (
+            ) : tipoSel === 'FORNECEDOR' ? (
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecionar fornecedor cadastrado</label>
@@ -2743,10 +3163,10 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                 {passo === 2 ? 'Voltar' : 'Cancelar'}
               </button>
               {passo === 2 && (
-                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'PRESTADOR' && !fornecedorSel && !modoNovoForn)}
+                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'FORNECEDOR' && !fornecedorSel && !modoNovoForn)}
                   className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
                   {enviando ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
-                  {tipoSel === 'PRESTADOR' ? 'Incluir Prestador' : 'Enviar Convite'}
+                  {tipoSel === 'FORNECEDOR' ? 'Incluir Fornecedor' : 'Enviar Convite'}
                 </button>
               )}
             </div>
@@ -2984,7 +3404,7 @@ interface EquipeOpcao {
 }
 
 type AbaAdmin = 'globais' | 'profissionais' | 'auditoria';
-type AbaGestor = 'matriz' | 'convites' | 'auditoria';
+type AbaGestor = 'matriz' | 'equipe' | 'convites' | 'auditoria';
 type Aba = AbaAdmin | AbaGestor;
 
 export default function ControleAcesso() {
@@ -3027,6 +3447,7 @@ export default function ControleAcesso() {
   // Matriz de Perfis só aparece no desktop (desktopOnly)
   const ABAS_GESTOR: Array<{ id: AbaGestor; label: string; icon: React.ReactNode; badge?: number; desktopOnly?: boolean }> = [
     { id: 'matriz',    label: 'Matriz de Perfis',  icon: <Shield    size={15} />, desktopOnly: true },
+    { id: 'equipe',    label: 'Profissionais',      icon: <Users2    size={15} /> },
     { id: 'convites',  label: 'Convites',           icon: <Mail      size={15} /> },
     { id: 'auditoria', label: 'Logs de Auditoria',  icon: <Activity  size={15} />, badge: auditTotal },
   ];
@@ -3119,6 +3540,7 @@ export default function ControleAcesso() {
 
       {isAdmin && aba === 'globais'       && <TabPermissoesGlobais />}
       {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isGestor={isGestor} isAdmin={isAdmin} />}
+      {!isAdmin && aba === 'equipe'       && equipeId && <TabEquipe equipeId={equipeId} isGestor={isGestor} />}
       {!isAdmin && aba === 'convites'     && equipeId && <TabConvites equipeId={equipeId} isGestor={isGestor} />}
       {aba === 'auditoria'                && equipeId && <TabAuditoria equipeId={equipeId} />}
       {!isAdmin && aba === 'matriz'          && equipeId && (

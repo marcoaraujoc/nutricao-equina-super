@@ -72,6 +72,9 @@ router.get('/empresa/:empresaId/especies', authenticate, EquipeController.getEsp
 
 router.get   ('/:equipeId/especies',                   authenticate, EquipeController.getEspeciesEquipe);
 router.get   ('/:equipeId/fornecedores',               authenticate, EquipeController.getFornecedoresPorEquipe);
+router.get   ('/:equipeId/prestadores/:userId/designacoes',           authenticate, EquipeController.getDesignacoesPrestador);
+router.post  ('/:equipeId/prestadores/:userId/designacoes',           authenticate, EquipeController.addDesignacaoPrestador);
+router.delete('/:equipeId/prestadores/:userId/designacoes/:animalId', authenticate, EquipeController.removeDesignacaoPrestador);
 router.patch ('/:equipeId/nome',                        authenticate, EquipeController.renomearEquipe);
 router.delete('/:equipeId/gestor/:userId',               authenticate, EquipeController.removerGestorAdmin);
 router.post  ('/:equipeId/convidar',                   authenticate, EquipeController.convidarParaEquipe);

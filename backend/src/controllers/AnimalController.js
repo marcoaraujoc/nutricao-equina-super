@@ -581,6 +581,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       proprietarioId, veterinarioUserId, local, baia, localizacaoId, tratadorId,
+      pelagem, altura, registroPassaporte, finalidade,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -826,6 +827,10 @@ class AnimalController {
           baia:           baia?.trim()  || null,
           localizacaoId:  localizacaoId ? Number(localizacaoId) : null,
           tratadorId:     tratadorId    ? Number(tratadorId)    : null,
+          pelagem:            pelagem?.trim()            || null,
+          altura:             altura?.trim()             || null,
+          registroPassaporte: registroPassaporte?.trim() || null,
+          finalidade:         finalidade?.trim()         || null,
           photoUrl,
           especieId:  Number(especieId),
           racaId:     Number(racaId),
@@ -975,6 +980,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
+      pelagem, altura, registroPassaporte, finalidade,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -1054,6 +1060,10 @@ class AnimalController {
           baia:           baia?.trim()  || null,
           localizacaoId:  localizacaoId !== undefined ? (localizacaoId ? Number(localizacaoId) : null) : undefined,
           tratadorId:     tratadorId    !== undefined ? (tratadorId    ? Number(tratadorId)    : null) : undefined,
+          pelagem:            pelagem?.trim()            ?? null,
+          altura:             altura?.trim()             ?? null,
+          registroPassaporte: registroPassaporte?.trim() ?? null,
+          finalidade:         finalidade?.trim()         ?? null,
           especieId: Number(especieId),
           racaId:    Number(racaId),
           ...(photoUrl && { photoUrl }),

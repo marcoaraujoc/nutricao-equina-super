@@ -6,10 +6,9 @@ import toast from 'react-hot-toast';
 import {
   Users2, Mail, Trash2, ToggleLeft, ToggleRight,
   Loader2, X, CheckCircle2,
-  ShieldCheck, Pencil, Check,
+  Pencil, Check,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
-import PermissoesModal from '../components/PermissoesModal';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
@@ -42,7 +41,7 @@ interface Membro {
 const CARGO_OPTIONS: { value: string; label: string }[] = [
   { value: 'VETERINARIO',  label: 'Veterinário'   },
   { value: 'ESTAGIARIO',   label: 'Estagiário'    },
-  { value: 'PRESTADOR',    label: 'Fornecedor'    },
+  { value: 'FORNECEDOR',    label: 'Fornecedor'    },
   { value: 'GESTOR',        label: 'Gestor'         },
 ];
 
@@ -52,7 +51,7 @@ const labelCargo = (cargo: string): string => ({
   GESTOR:        'Gestor',
   VETERINARIO:  'Veterinário',
   ESTAGIARIO:   'Estagiário',
-  PRESTADOR:    'Fornecedor',
+  FORNECEDOR:    'Fornecedor',
   ADMIN:        'Administrador',
   MEMBRO:       'Membro',
   PROPRIETARIO: 'Proprietário',
@@ -62,7 +61,7 @@ const badgeCargo = (cargo: string): string => ({
   GESTOR:        'bg-purple-100 text-purple-700',
   VETERINARIO:  'bg-emerald-100 text-emerald-700',
   ESTAGIARIO:   'bg-blue-100 text-blue-700',
-  PRESTADOR:    'bg-teal-100 text-teal-700',
+  FORNECEDOR:    'bg-teal-100 text-teal-700',
   ADMIN:        'bg-red-100 text-red-700',
   MEMBRO:       'bg-gray-100 text-gray-600',
   PROPRIETARIO: 'bg-purple-100 text-purple-700',
@@ -84,7 +83,6 @@ export default function Equipe() {
   const [editandoId,    setEditandoId]                    = useState<number | null>(null);
   const [editCargos,    setEditCargos]                    = useState<string[]>([]);
   const [salvandoCargo, setSalvandoCargo]                 = useState(false);
-  const [permissoesModal, setPermissoesModal]             = useState<Membro | null>(null);
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
   const [nomeEquipe,        setNomeEquipe]                  = useState('');
@@ -392,12 +390,6 @@ export default function Equipe() {
                     )}
                     {m.user.id !== user?.id && (
                       <>
-                        {isGestor && equipeId && m.cargo !== 'GESTOR' && (
-                          <button onClick={() => setPermissoesModal(m)}
-                            className="p-1.5 text-purple-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg" title="Controle de acesso">
-                            <ShieldCheck size={15} />
-                          </button>
-                        )}
                         <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
                           title={ativo ? 'Desativar' : 'Ativar'}
                           className={`p-1.5 rounded-lg transition-colors ${
@@ -424,16 +416,6 @@ export default function Equipe() {
             })}
           </div>
         </div>
-      )}
-
-      {/* Modal Permissões */}
-      {permissoesModal && equipeId && (
-        <PermissoesModal
-          equipeId={equipeId}
-          membroId={permissoesModal.user.id}
-          membroNome={permissoesModal.user.fullName}
-          onClose={() => setPermissoesModal(null)}
-        />
       )}
 
       {/* Modal Incluir Membro */}

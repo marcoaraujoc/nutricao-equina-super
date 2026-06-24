@@ -1,15 +1,15 @@
 // frontend/src/pages/CadastroLocalizacao.tsx
 
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Search, Loader2, X, MapPin,
   Phone, Building2, User, ToggleLeft, ToggleRight,
-  ChevronDown, Lock, Info, ArrowLeft,
+  ChevronDown, Lock, Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -117,7 +117,6 @@ function BadgeEntrada({ tipo }: { tipo: string }) {
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function CadastroLocalizacao() {
-  const navigate                            = useNavigate();
   const { user }                            = useAuth();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
 
@@ -287,26 +286,16 @@ export default function CadastroLocalizacao() {
   return (
     <PageContainer maxWidth="7xl">
       {/* ── Cabeçalho ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-4 mb-6 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)}
-            className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-2xl transition-colors flex-shrink-0"
-            title="Voltar">
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-              <MapPin size={24} className="text-emerald-600" /> Localizações de Animais
-            </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Cadastro global de haras, canis, fazendas e outros locais.
-            </p>
-          </div>
-        </div>
-
+      <BotaoVoltar />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-6 flex-wrap">
+        <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
+          <MapPin size={22} className="text-emerald-600" />
+          Localizações de Animais
+        </h1>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowInfo(v => !v)}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl">
+            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
+            title="Informações sobre este cadastro">
             <Info size={18} />
           </button>
           {(podeCriar || isAdmin) && (

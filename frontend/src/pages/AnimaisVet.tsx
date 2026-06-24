@@ -6,8 +6,9 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Unlink, Search, LayoutDashboard, ArrowLeft, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff } from 'lucide-react';
+import { Pencil, Unlink, Search, LayoutDashboard, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, ScrollText, Zap } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 
 interface Solicitacao {
@@ -41,6 +42,8 @@ interface Animal {
   tipoExercicio?:   string | null;
   baia?:            string | null;
   local?:           string | null;
+  localizacao?:     { nome: string } | null;
+  pelagem?:         string | null;
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
@@ -99,7 +102,13 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEd
           {animal.raca?.nome || animal.especie?.nome || '—'}
         </p>
         {animal.user?.fullName && (
-          <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+          <p className="text-xs text-gray-400 truncate">Prop.: {animal.user.fullName}</p>
+        )}
+        {(animal.localizacao?.nome || animal.local) && (
+          <p className="text-xs text-gray-500 truncate">
+            📍 {animal.localizacao?.nome || animal.local}
+            {animal.baia ? ` · Baia ${animal.baia}` : ''}
+          </p>
         )}
         <div className="flex items-center gap-2 mt-1 flex-wrap">
           <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
@@ -113,16 +122,6 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEd
           {animal.categoriaAnimal && (
             <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 truncate max-w-[120px]">
               {animal.categoriaAnimal}
-            </span>
-          )}
-          {animal.baia && (
-            <span className="text-xs bg-emerald-50 text-emerald-700 rounded-full px-2 py-0.5 font-medium">
-              Baia {animal.baia}
-            </span>
-          )}
-          {animal.local && (
-            <span className="text-xs bg-gray-50 text-gray-500 rounded-full px-2 py-0.5 truncate max-w-[120px]">
-              {animal.local}
             </span>
           )}
         </div>
@@ -456,25 +455,14 @@ const AnimaisVet = () => {
       <div className="space-y-5">
 
         {/* ── Header ────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/')}
-              className="flex items-center gap-1.5 text-sm text-emerald-700 hover:text-emerald-800 font-medium">
-              <ArrowLeft size={16} /> Voltar
-            </button>
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Meus Pacientes</h1>
-          </div>
+        <BotaoVoltar para="/" />
+        <div className="flex items-center justify-between gap-3 mt-2">
+          <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
+            <Zap size={22} className="text-emerald-600" />
+            Meus Pacientes
+          </h1>
           {podeCriarAnimal && (
             <div className="flex gap-2">
-              <button
-                onClick={() => setShowBuscarModal(true)}
-                className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
-                           px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
-              >
-                <UserPlus size={15} />
-                <span className="hidden sm:inline">Buscar Paciente</span>
-                <span className="sm:hidden">Buscar</span>
-              </button>
               <button
                 onClick={() => navigate('/animais')}
                 className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
@@ -482,6 +470,24 @@ const AnimaisVet = () => {
               >
                 <span className="hidden sm:inline">Novo Paciente</span>
                 <span className="sm:hidden">Novo</span>
+              </button>
+              <button
+                onClick={() => navigate('/exame-compra')}
+                className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
+                           px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+              >
+                <ClipboardList size={15} />
+                <span className="hidden sm:inline">Exame de Compra</span>
+                <span className="sm:hidden">Compra</span>
+              </button>
+              <button
+                onClick={() => navigate('/resenha')}
+                className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
+                           px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
+              >
+                <ScrollText size={15} />
+                <span className="hidden sm:inline">Resenha</span>
+                <span className="sm:hidden">Resenha</span>
               </button>
             </div>
           )}
@@ -587,79 +593,100 @@ const AnimaisVet = () => {
             </div>
 
             {/* DESKTOP — tabela */}
-            <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="grid grid-cols-[44px_1fr_150px_80px_120px_80px_70px_130px] items-center gap-4 px-5 py-3 border-b border-gray-100 bg-gray-50">
-                <span />
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Raça</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Baia</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Categoria NRC</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Idade</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Sexo</span>
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-right">Ações</span>
+            <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm">
+              <div className="overflow-x-auto rounded-2xl">
+                <table className="w-full min-w-[1020px]">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="w-14 pl-5 py-3" />
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Nome / Proprietário</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-36">Local</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-20">Baia</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-32">Raça</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-28">Pelagem</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-32">Categoria NRC</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-16">Idade</th>
+                      <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-14">Sexo</th>
+                      <th className="text-right pr-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-28">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {animaisFiltrados.map(animal => (
+                      <tr
+                        key={animal.id}
+                        onClick={() => irParaAnimal(animal)}
+                        className="hover:bg-gray-50 cursor-pointer transition-colors group"
+                      >
+                        <td className="pl-5 py-3.5">
+                          <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                            {animal.photoUrl
+                              ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
+                              : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
+                            }
+                          </div>
+                        </td>
+                        <td className="px-3 py-3.5 max-w-0">
+                          <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
+                            {animal.nome}
+                          </p>
+                          {animal.user?.fullName && (
+                            <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
+                          )}
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600 truncate">
+                            {animal.localizacao?.nome || animal.local || <span className="text-gray-300">—</span>}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          {animal.baia
+                            ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">{animal.baia}</span>
+                            : <span className="text-gray-300">—</span>
+                          }
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600 truncate">{animal.raca?.nome || animal.especie?.nome || '—'}</p>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600 truncate">{animal.pelagem || <span className="text-gray-300">—</span>}</p>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600 truncate">{animal.categoriaAnimal || '—'}</p>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600 whitespace-nowrap">{idadeDisplay(animal)}</p>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="text-sm text-gray-600">{animal.sexo || '—'}</p>
+                        </td>
+                        <td className="pr-5 py-3.5" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => irParaAnimal(animal)}
+                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                              title="Ver detalhes">
+                              <LayoutDashboard size={15} />
+                            </button>
+                            {podeEditarAnimal && (
+                              <button onClick={() => irParaEditar(animal)}
+                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="Editar">
+                                <Pencil size={15} />
+                              </button>
+                            )}
+                            {podeEditarAnimal && (
+                              <button onClick={() => setAnimalToUnlink(animal)}
+                                className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                                title="Desvincular">
+                                <Unlink size={15} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-
-              <div className="divide-y divide-gray-50">
-                {animaisFiltrados.map(animal => (
-                  <div
-                    key={animal.id}
-                    onClick={() => irParaAnimal(animal)}
-                    className="grid grid-cols-[44px_1fr_150px_80px_120px_80px_70px_130px] items-center gap-4
-                               px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
-                  >
-                    <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                      {animal.photoUrl
-                        ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                        : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
-                      }
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
-                        {animal.nome}
-                      </p>
-                      {animal.user?.fullName && (
-                        <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-600 truncate">
-                      {animal.raca?.nome || animal.especie?.nome || '—'}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      {animal.baia
-                        ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">{animal.baia}</span>
-                        : <span className="text-gray-300">—</span>
-                      }
-                    </p>
-                    <p className="text-sm text-gray-600 truncate">
-                      {animal.categoriaAnimal || '—'}
-                    </p>
-                    <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
-                    <p className="text-sm text-gray-600">{animal.sexo || '—'}</p>
-                    <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => irParaAnimal(animal)}
-                        className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                        title="Ver detalhes">
-                        <LayoutDashboard size={15} />
-                      </button>
-                      {podeEditarAnimal && (
-                        <button onClick={() => irParaEditar(animal)}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Editar">
-                          <Pencil size={15} />
-                        </button>
-                      )}
-                      {podeEditarAnimal && (
-                        <button onClick={() => setAnimalToUnlink(animal)}
-                          className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                          title="Desvincular">
-                          <Unlink size={15} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
               <div className="px-5 py-3 border-t border-gray-50 text-center">
                 <p className="text-xs text-gray-400">
                   {animaisFiltrados.length} paciente{animaisFiltrados.length !== 1 ? 's' : ''} encontrado{animaisFiltrados.length !== 1 ? 's' : ''}
