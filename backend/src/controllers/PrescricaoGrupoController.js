@@ -44,7 +44,44 @@ const DOSES_POR_DIA = {
   '1x21dias':     1/21, '1x30dias': 1/30, '1x90dias':    1/90,
 };
 
-// Quantidade total do curso — usada tanto para reserva quanto para baixa
+// ─── Conversão de unidades ────────────────────────────────────────────────────
+// Estratégia: converter TUDO para a unidade base (g para massa, mL para volume),
+// fazer a conta na base e converter de volta para a unidade do estoque.
+// Kg → g (×1000) | mg → g (×0.001) | L → mL (×1000)
+// Se as unidades são incompatíveis (ex: g vs mL) ou desconhecidas, usa o valor bruto.
+
+const FATOR_PARA_BASE = {
+  // Massa → gramas
+  'g': 1, 'mg': 0.001, 'kg': 1000, 'mcg': 0.000001, 'µg': 0.000001,
+  // Volume → mL
+  'ml': 1, 'l': 1000,
+};
+
+const GRUPO_UNIDADE = {
+  'g': 'm', 'mg': 'm', 'kg': 'm', 'mcg': 'm', 'µg': 'm',
+  'ml': 'v', 'l': 'v',
+};
+
+// qty (em `unidade`) → unidade base (g ou mL)
+function paraBase(qty, unidade) {
+  const f = FATOR_PARA_BASE[(unidade ?? '').trim().toLowerCase()];
+  return f != null ? qty * f : qty;
+}
+
+// qty (em unidade base) → unidade original
+function deBase(qtyBase, unidade) {
+  const f = FATOR_PARA_BASE[(unidade ?? '').trim().toLowerCase()];
+  return f != null ? qtyBase / f : qtyBase;
+}
+
+function mesmoGrupo(u1, u2) {
+  const g1 = GRUPO_UNIDADE[(u1 ?? '').trim().toLowerCase()];
+  const g2 = GRUPO_UNIDADE[(u2 ?? '').trim().toLowerCase()];
+  return g1 != null && g1 === g2;
+}
+
+// ─── Quantidade total do curso ────────────────────────────────────────────────
+
 function calcularQuantidadeTotal(item) {
   const qtdPorDose = parseFloat(item.dosagem) || 1;
   const dias       = Math.max(Number(item.duracaoDias) || 1, 1);
@@ -53,15 +90,39 @@ function calcularQuantidadeTotal(item) {
   return qtdPorDose * dosesPorDia * dias;
 }
 
-// Cria reservas de estoque (não altera qtdEstoque)
+// ─── Quantidade de 1 dia (sem multiplicar por duracaoDias) ───────────────────
+
+function calcularQuantidadeDiaria(item) {
+  const qtdPorDose = parseFloat(item.dosagem) || 1;
+  if (item.frequencia === 'agora') return qtdPorDose;
+  const dosesPorDia = DOSES_POR_DIA[item.frequencia] ?? 1;
+  return qtdPorDose * dosesPorDia;
+}
+
+function qtdDiariaEstoque(item, unidadeEstoque) {
+  const qtdBruta = calcularQuantidadeDiaria(item);
+  if (!mesmoGrupo(item.unidade, unidadeEstoque)) return qtdBruta;
+  return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
+}
+
+// Converte a quantidade prescrita (item.unidade) para a unidade do estoque via base.
+// Ex: 500g → kg: paraBase(500,'g')=500g → deBase(500,'kg')=0.5 kg
+function qtdNaUnidadeEstoque(item, unidadeEstoque) {
+  const qtdBruta = calcularQuantidadeTotal(item);
+  if (!mesmoGrupo(item.unidade, unidadeEstoque)) return qtdBruta; // incompatível, retorna bruto
+  return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
+}
+
+// Cria reservas de estoque em unidade do estoque (não altera qtdEstoque)
 async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     const estoque = await tx.estoqueClinica.findFirst({
-      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: { medicamento: { select: { unidade: true } } },
     });
     if (!estoque) continue;
-    const quantidade = calcularQuantidadeTotal(item);
+    const quantidade = qtdNaUnidadeEstoque(item, estoque.medicamento?.unidade);
     await tx.reservaEstoque.upsert({
       where:  { prescricaoGrupoId_estoqueId: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } },
       update: { quantidade },
@@ -71,31 +132,56 @@ async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
 }
 
 // Consome reservas e dá baixa no estoque (ao executar).
-// Retorna Map<medicamentoCatId, precoPorUnidade> onde precoPorUnidade = valor_embalagem / qtdEstoque.
-// Exemplo: embalagem 500ml a R$50 → 0.10 R$/ml. Fatura: 0.10 × 100ml = R$10 (proporcional).
+// Estratégia: converte tudo para a menor unidade (g ou mL), subtrai, converte de volta.
+// Retorna { precos: Map<catId, R$/unidadeEstoque>, unidades: Map<catId, unidadeEstoque> }
 async function consumirReservas(tx, grupoId, itens, empresaId) {
-  const precos = new Map(); // medicamentoCatId → preço por unidade de medida (R$/ml, R$/mg, etc.)
+  const precos   = new Map();
+  const unidades = new Map();
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     const estoque = await tx.estoqueClinica.findFirst({
-      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: { medicamento: { select: { unidade: true } } },
     });
     if (!estoque) continue;
-    const deduzir = calcularQuantidadeTotal(item);
-    const nova    = Math.max(estoque.qtdEstoque - deduzir, 0);
-    const desc    = item.dosagem
+    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
+    const qtdTotal       = calcularQuantidadeTotal(item);
+
+    let novaQtd;
+    if (mesmoGrupo(item.unidade, unidadeEstoque)) {
+      // Converte TUDO para a menor unidade base (g ou mL), faz a conta, volta para unidade do estoque
+      const estoqueBase  = paraBase(estoque.qtdEstoque, unidadeEstoque);
+      const prescritaBase = paraBase(qtdTotal, item.unidade);
+      novaQtd = deBase(Math.max(estoqueBase - prescritaBase, 0), unidadeEstoque);
+    } else {
+      // Unidades incompatíveis — subtrai diretamente
+      novaQtd = Math.max(estoque.qtdEstoque - qtdTotal, 0);
+    }
+
+    const deduzido = estoque.qtdEstoque - novaQtd;
+    const desc     = item.dosagem
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} × ${item.duracaoDias}d`
       : item.frequencia;
-    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: nova } });
+    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: novaQtd } });
     await tx.movimentoEstoque.create({
-      data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: Math.ceil(deduzir), motivo: `Prescrição executada: ${desc}` },
+      data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: deduzido, motivo: `Prescrição executada: ${desc}` },
     });
     await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } });
-    // Preço proporcional: divide o valor da embalagem pela quantidade disponível antes da baixa
-    const precoPorUnidade = estoque.qtdEstoque > 0 ? (estoque.valor ?? 0) / estoque.qtdEstoque : 0;
+    // Preço proporcional ao cliente por unidade base (R$/g ou R$/mL).
+    // Usa precoUnitarioBase (campo fixo gravado na entrada do estoque) quando disponível;
+    // cai no cálculo dinâmico apenas para itens legados sem o campo.
+    const precoVenda = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+    let precoPorUnidade;
+    if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
+      precoPorUnidade = estoque.precoUnitarioBase; // R$/g ou R$/mL
+    } else {
+      const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
+      precoPorUnidade = qtdEstoqueBase > 0 ? precoVenda / qtdEstoqueBase : 0;
+    }
     precos.set(item.medicamentoCatId, precoPorUnidade);
+    unidades.set(item.medicamentoCatId, unidadeEstoque);
   }
-  return precos;
+  return { precos, unidades };
 }
 
 // Libera reservas sem dar baixa (ao cancelar)
@@ -103,33 +189,118 @@ async function liberarReservas(tx, grupoId) {
   await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId } });
 }
 
-// Verifica estoque real antes de executar — retorna lista de alertas
-// Checa qtdEstoque atual (sem descontar reservas de outros grupos) vs. quantidade necessária
-async function verificarEstoqueParaExecucao(itens, empresaId) {
+// Debita 1 dia de tratamento do estoque e cria MovimentoEstoque.
+// Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura).
+async function debitarEstoqueDia(tx, itens, empresaId) {
+  const precos   = new Map();
+  const unidades = new Map();
+  for (const item of itens) {
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    const estoque = await tx.estoqueClinica.findFirst({
+      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: { medicamento: { select: { unidade: true } } },
+    });
+    if (!estoque) continue;
+    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
+    const qtdDia         = calcularQuantidadeDiaria(item);
+
+    let novaQtd;
+    if (mesmoGrupo(item.unidade, unidadeEstoque)) {
+      const estoqueBase   = paraBase(estoque.qtdEstoque, unidadeEstoque);
+      const prescritaBase = paraBase(qtdDia, item.unidade);
+      novaQtd = deBase(Math.max(estoqueBase - prescritaBase, 0), unidadeEstoque);
+    } else {
+      novaQtd = Math.max(estoque.qtdEstoque - qtdDia, 0);
+    }
+
+    const deduzido = estoque.qtdEstoque - novaQtd;
+    const desc = item.dosagem
+      ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dia)`
+      : `${item.frequencia} (1 dia)`;
+    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: novaQtd } });
+    await tx.movimentoEstoque.create({
+      data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: deduzido, motivo: `Prescrição executada: ${desc}` },
+    });
+    // Valor da dose = qtdDebitBase × precoUnitarioBase (R$/g ou R$/mL).
+    // precoUnitarioBase é gravado na entrada do estoque e permanece fixo;
+    // itens legados (sem o campo) caem no cálculo dinâmico, que tem o bug
+    // de aumentar o preço conforme o estoque diminui.
+    const precoVenda   = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+    const qtdDebitBase = paraBase(deduzido, unidadeEstoque);
+    let valorDaDose;
+    if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
+      valorDaDose = qtdDebitBase * estoque.precoUnitarioBase;
+    } else {
+      const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
+      valorDaDose = qtdEstoqueBase > 0 ? (qtdDebitBase * precoVenda) / qtdEstoqueBase : 0;
+    }
+    precos.set(item.medicamentoCatId, valorDaDose);
+    unidades.set(item.medicamentoCatId, unidadeEstoque);
+  }
+  return { precos, unidades };
+}
+
+// Verifica estoque para 1 dia de tratamento — retorna lista de alertas.
+async function verificarEstoqueParaDia(itens, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     const estoque = await prisma.estoqueClinica.findFirst({
-      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
       include: { medicamento: { select: { nome: true, unidade: true } } },
     });
-    const necessario = calcularQuantidadeTotal(item);
-    if (!estoque || estoque.qtdEstoque < necessario) {
+    if (!estoque) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
+    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
+    const disponBase     = paraBase(estoque.qtdEstoque ?? 0, unidadeEstoque);
+    const necessarioBase = paraBase(calcularQuantidadeDiaria(item), item.unidade);
+    const comparavel     = mesmoGrupo(item.unidade, unidadeEstoque);
+    const insuficiente   = comparavel ? disponBase < necessarioBase : estoque.qtdEstoque < calcularQuantidadeDiaria(item);
+    if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
-        unidade:       estoque?.medicamento?.unidade ?? '',
-        qtdNecessaria: necessario,
-        qtdDisponivel: estoque?.qtdEstoque ?? 0,
+        unidade:       unidadeEstoque,
+        qtdNecessaria: qtdDiariaEstoque(item, unidadeEstoque),
+        qtdDisponivel: estoque.qtdEstoque ?? 0,
       });
     }
   }
   return alertas;
 }
 
-// Verifica disponibilidade antes de reservar — retorna lista de alertas
-// tipo 'INSUFICIENTE': disponível < necessário (não há estoque livre suficiente)
-// tipo 'ZERADO':       disponível >= necessário mas o estoque livre ficará zerado após a reserva
+// Verifica estoque real antes de executar — retorna lista de alertas.
+// Compara em unidade base para evitar mismatch kg vs g.
+async function verificarEstoqueParaExecucao(itens, empresaId) {
+  const alertas = [];
+  for (const item of itens) {
+    if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    const estoque = await prisma.estoqueClinica.findFirst({
+      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+      include: { medicamento: { select: { nome: true, unidade: true } } },
+    });
+    if (!estoque) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
+    const unidadeEstoque  = estoque.medicamento?.unidade ?? item.unidade;
+    const disponBase      = paraBase(estoque.qtdEstoque ?? 0, unidadeEstoque);
+    const necessarioBase  = paraBase(calcularQuantidadeTotal(item), item.unidade);
+    const comparavel      = mesmoGrupo(item.unidade, unidadeEstoque);
+    const insuficiente    = comparavel ? disponBase < necessarioBase : estoque.qtdEstoque < calcularQuantidadeTotal(item);
+    if (insuficiente) {
+      alertas.push({
+        tipo:          'INSUFICIENTE',
+        medicamento:   item.medicamento,
+        unidade:       unidadeEstoque,
+        qtdNecessaria: qtdNaUnidadeEstoque(item, unidadeEstoque),
+        qtdDisponivel: estoque.qtdEstoque ?? 0,
+      });
+    }
+  }
+  return alertas;
+}
+
+// Verifica disponibilidade antes de reservar — retorna lista de alertas.
+// Compara em unidade base (g/mL) para suportar kg vs g, L vs mL, etc.
+// tipo 'INSUFICIENTE': disponível < necessário
+// tipo 'ZERADO':       ficará zerado após esta reserva
 async function verificarDisponibilidade(itens, grupoId, empresaId) {
   const alertas = [];
   for (const item of itens) {
@@ -145,32 +316,41 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
       },
     });
     if (!estoque) continue;
-    const qtdReservada = estoque.reservas.reduce((s, r) => s + r.quantidade, 0);
-    const disponivel   = estoque.qtdEstoque - qtdReservada;
-    const necessario   = calcularQuantidadeTotal(item);
+    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
+    const qtdReservada   = estoque.reservas.reduce((s, r) => s + r.quantidade, 0); // em unidadeEstoque
+    const disponivel     = estoque.qtdEstoque - qtdReservada;                      // em unidadeEstoque
+
+    // Compara em unidade base
+    const dispBase  = paraBase(disponivel, unidadeEstoque);
+    const necBase   = paraBase(calcularQuantidadeTotal(item), item.unidade);
+    const comparavel = mesmoGrupo(item.unidade, unidadeEstoque);
+    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // em unidadeEstoque para exibição
+
     const reservasInfo = estoque.reservas.map(r => ({
       animalNome:       r.animal.nome,
       prescricaoNumero: String(r.prescricaoGrupo.numero).padStart(3, '0'),
       quantidade:       r.quantidade,
     }));
 
-    if (disponivel < necessario) {
+    const dispInsuf  = comparavel ? dispBase < necBase        : disponivel < calcularQuantidadeTotal(item);
+    const dispZerado = comparavel ? Math.abs(dispBase - necBase) < 0.001 : Math.abs(disponivel - calcularQuantidadeTotal(item)) < 0.001;
+
+    if (dispInsuf) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
-        unidade:       estoque.medicamento.unidade ?? '',
+        unidade:       unidadeEstoque,
         qtdNecessaria: necessario,
         qtdDisponivel: Math.max(disponivel, 0),
         qtdEstoque:    estoque.qtdEstoque,
         qtdReservada,
         reservas:      reservasInfo,
       });
-    } else if (necessario > 0 && disponivel - necessario < 0.01) {
-      // Estoque livre ficará zerado (ou com menos de 0.01 unidade) após esta reserva
+    } else if (necessario > 0 && dispZerado) {
       alertas.push({
         tipo:          'ZERADO',
         medicamento:   item.medicamento,
-        unidade:       estoque.medicamento.unidade ?? '',
+        unidade:       unidadeEstoque,
         qtdNecessaria: necessario,
         qtdDisponivel: disponivel,
         qtdEstoque:    estoque.qtdEstoque,
@@ -418,48 +598,43 @@ const removerItem = async (req, res) => {
 };
 
 // ─── Finalizar grupo ──────────────────────────────────────────────────────────
-// SALVO → FINALIZADO. Cria reservas de estoque. Baixa só ao executar.
+// SALVO → FINALIZADO.
 
 const finalizar = async (req, res) => {
   try {
-    const grupoId         = Number(req.params.id);
-    const veterinarioId   = req.user.id;
-    const forcarFinalizacao = req.body?.forcarFinalizacao === true;
-
-    // Apenas gestores podem finalizar
-    const membroGestor = await prisma.membroEquipe.findFirst({ where: { userId: veterinarioId, cargo: 'GESTOR' } });
-    if (!membroGestor) return res.status(403).json({ error: 'Apenas gestores podem finalizar prescrições.' });
+    const grupoId       = Number(req.params.id);
+    const veterinarioId = req.user.id;
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
-      include: { itens: { where: { ativo: true }, include: { medicamentoCat: true } } },
+      include: { itens: { where: { ativo: true } } },
     });
 
     if (!grupo)                   return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível finalizar prescrições com status SALVO.' });
+
+    if (req.user.userType === 'FORNECEDOR' && grupo.veterinarioId !== veterinarioId) {
+      return res.status(403).json({ error: 'Você só pode finalizar prescrições criadas por você.' });
+    }
     if (grupo.itens.length === 0) return res.status(400).json({ error: 'A prescrição não possui itens ativos.' });
 
-    // empresaId efetivo: prefere o do grupo (persistido), cai no do usuário autenticado
-    const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
-
-    // Verifica disponibilidade de estoque (considera reservas existentes)
-    if (!forcarFinalizacao) {
-      const alertas = await verificarDisponibilidade(grupo.itens, grupoId, empresaIdEfetivo);
-      if (alertas.length > 0) {
-        return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas });
-      }
-    }
+    const agora = new Date();
 
     await prisma.$transaction(async (tx) => {
       await tx.prescricao.updateMany({
         where: { grupoId, ativo: true },
         data:  { status: 'ATIVA', veterinarioId },
       });
+
       await tx.prescricaoGrupo.update({
         where: { id: grupoId },
-        data:  { status: 'FINALIZADO', veterinarioId },
+        data:  {
+          status:          'FINALIZADO',
+          veterinarioId,
+          finalizadoPorId: veterinarioId,
+          finalizadoEm:    agora,
+        },
       });
-      await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -479,15 +654,16 @@ const cancelar = async (req, res) => {
     const userId  = req.user.id;
     const motivo  = req.body?.motivo?.trim() ?? null;
 
-    // Apenas gestores podem cancelar
-    const membroGestor = await prisma.membroEquipe.findFirst({ where: { userId, cargo: 'GESTOR' } });
-    if (!membroGestor) return res.status(403).json({ error: 'Apenas gestores podem cancelar prescrições.' });
-
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
       include: { itens: { where: { ativo: true } } },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+
+    // Regra: FORNECEDOR só pode cancelar prescrição que ele próprio criou
+    if (req.user.userType === 'FORNECEDOR' && grupo.veterinarioId !== userId) {
+      return res.status(403).json({ error: 'Você só pode cancelar prescrições criadas por você.' });
+    }
 
     if (grupo.status === 'EXECUTADO') {
       return res.status(400).json({ error: 'Prescrição executada integralmente não pode ser cancelada.', code: 'EXECUTADO' });
@@ -513,24 +689,31 @@ const cancelar = async (req, res) => {
   }
 };
 
-// ─── Executar grupo ───────────────────────────────────────────────────────────
-// FINALIZADO → EXECUTADO. Consome reservas, dá baixa no estoque e lança na fatura.
+// ─── Executar grupo (por dia) ─────────────────────────────────────────────────
+// Debita a dose do dia do estoque e lança na fatura.
+// Se isUltimoDia = true → transita para EXECUTADO; senão mantém FINALIZADO.
 
 const executar = async (req, res) => {
   try {
     const grupoId       = Number(req.params.id);
     const veterinarioId = req.user.id;
+    // isUltimoDia: enviado pelo frontend; default true para compatibilidade retroativa
+    const isUltimoDia   = req.body?.isUltimoDia !== false;
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
-      include: { itens: { where: { ativo: true }, include: { medicamentoCat: true } } },
+      include: {
+        itens:   { where: { ativo: true }, include: { medicamentoCat: true } },
+        evolucao: { select: { id: true, numero: true, tipoAtendimento: true } },
+      },
     });
     if (!grupo)                        return res.status(404).json({ error: 'Prescrição não encontrada.' });
-    if (grupo.status !== 'FINALIZADO') return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser marcadas como executadas.' });
+    if (grupo.status !== 'FINALIZADO') return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
-    const alertasEstoque = await verificarEstoqueParaExecucao(grupo.itens, empresaIdEfetivo);
+    // Verifica estoque para a dose do dia (não para o tratamento completo)
+    const alertasEstoque = await verificarEstoqueParaDia(grupo.itens, empresaIdEfetivo);
     if (alertasEstoque.length > 0) {
       return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
     }
@@ -538,26 +721,26 @@ const executar = async (req, res) => {
     const animal = await prisma.animal.findUnique({ where: { id: grupo.animalId }, select: { userId: true } });
     const proprietarioId = animal?.userId ?? null;
 
-    // Prefixo do atendimento para as descrições na fatura
     const atendNum = grupo.evolucao
       ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
       : null;
+    const agora = new Date();
 
     await prisma.$transaction(async (tx) => {
-      await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'EXECUTADO' } });
+      // Debita dose do dia e retorna preços/unidades por medicamento
+      const { precos, unidades } = await debitarEstoqueDia(tx, grupo.itens, empresaIdEfetivo);
 
-      // Consome reservas e dá baixa no estoque; retorna preços por medicamento
-      const precos = await consumirReservas(tx, grupoId, grupo.itens, empresaIdEfetivo);
-
-      // Lança na fatura ABERTA do proprietário usando utilitário compartilhado
+      // Lança na fatura ABERTA do proprietário (quantidade do dia)
       const fatura = await getOrCreateFatura(tx, proprietarioId);
 
       for (const item of grupo.itens) {
-        const qtd            = calcularQuantidadeTotal(item);
-        const qtdArredondada = Math.ceil(qtd);
-        const valorUnitario  = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
+        // MEDICAMENTO sem estoque debitado: não lança na fatura
+        if (item.tipo === 'MEDICAMENTO' && item.medicamentoCatId && !precos.has(item.medicamentoCatId)) continue;
+
+        // precos já contém o valor proporcional da dose (regra de 3)
+        const valorDaDose = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
         const dose = item.dosagem
-          ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia} × ${item.duracaoDias}d`
+          ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
           : item.frequencia;
         const descBase = item.tipo === 'MEDICAMENTO'
           ? `${item.medicamento} — ${dose}`
@@ -569,9 +752,21 @@ const executar = async (req, res) => {
           animalId:     grupo.animalId,
           tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
           descricao,
-          valor:        valorUnitario,
-          quantidade:   qtdArredondada,
+          valor:        valorDaDose,  // valor total da dose (regra de 3)
+          quantidade:   1,
           veterinarioId,
+        });
+      }
+
+      // Só transita para EXECUTADO no último dia do tratamento
+      if (isUltimoDia) {
+        await tx.prescricaoGrupo.update({
+          where: { id: grupoId },
+          data:  {
+            status:         'EXECUTADO',
+            executadoPorId: veterinarioId,
+            executadoEm:    agora,
+          },
         });
       }
     });

@@ -1,6 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-06-09
+# Atualizado em: 2026-06-24 (RBAC enforcement + regra de finalização por autoria)
 
 ---
 
@@ -180,6 +180,34 @@ Refresh: via /api/users/me
 - Vinculação animal-vet requer aprovação do proprietário via email + `approvalToken`
 - `mustChangePassword` bloqueia acesso até troca de senha
 
+### Regras de autoria em registros clínicos (evolução, prescrição, vacina, exame, encaminhamento)
+
+**Regra 1 — Edição (editar/salvar):** ✅ Implementado em 2026-06-24
+```
+GESTOR     → pode editar qualquer registro da equipe (bypass total via req.membroCargo === 'GESTOR')
+Todos os demais (VET, ESTAGIARIO, FORNECEDOR, etc.)
+           → só podem editar registros que eles próprios criaram (veterinarioId === req.user.id)
+```
+**Implementação:** `req.membroCargo` setado como `'GESTOR'` pelo `checkPermission` em todos os
+bypass paths (dono de empresa, membro com cargo GESTOR). Controllers verificam:
+`if (req.membroCargo !== 'GESTOR' && item.veterinarioId !== req.user.id) → 403`
+Aplicado em: `EvolucaoController.atualizar`, `PrescricaoController.atualizar`,
+`ExameClinicoController.atualizar`, `EncaminhamentoController.atualizar`.
+VacinaClinica: pendente de migration para campo `status` antes de implementar.
+
+**Regra 2 — Finalização (finalizar):** ✅ Implementado em 2026-06-24
+```
+GESTOR     → pode finalizar qualquer registro da equipe (bypass total via checkPermission)
+FORNECEDOR → pode finalizar apenas registros que ele próprio criou (veterinarioId check no controller)
+VET / ESTAGIARIO / outros → BLOQUEADOS (nível NENHUM no seed → 403 em checkPermission)
+```
+
+**Relação entre as duas regras:**
+- Regra 1 (editar) é mais ampla: VET também é bloqueado de editar registros de outros (exceto GESTOR).
+- Regra 2 (finalizar) tem restrição adicional sobre quem pode executar a ação: VET não pode finalizar nada,
+  só GESTOR e FORNECEDOR (o próprio). A Regra 1 não exclui VET de finalizar — ela não se aplica a finalizar.
+- As duas regras se combinam: um FORNECEDOR pode editar e finalizar itens que criou; não pode tocar em itens de outros.
+
 ### Fluxo de VÍNCULO vet-animal (VINCULO)
 ```
 Proprietário associa vet → cria VetAnimalSolicitacao {tipo:'VINCULO', status:'PENDENTE'}
@@ -351,6 +379,10 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 | atendimento | exames | `atendimento.exames.editar` | alterar | PROPRIO | NENHUM |
 | atendimento | exames | `atendimento.exames.deletar` | excluir | PROPRIO | NENHUM |
 | atendimento | exames | `atendimento.exames.imprimir` | imprimir | EQUIPE | NENHUM |
+| atendimento | agendamentos | `atendimento.agendamentos.ler` | ver | EQUIPE | EQUIPE |
+| atendimento | agendamentos | `atendimento.agendamentos.criar` | criar | PROPRIO | EQUIPE |
+| atendimento | agendamentos | `atendimento.agendamentos.editar` | alterar | PROPRIO | PROPRIO |
+| atendimento | agendamentos | `atendimento.agendamentos.deletar` | excluir | PROPRIO | NENHUM |
 | enfermagem | prescricao | `enfermagem.prescricao.ler` | ver | EQUIPE | EQUIPE |
 | enfermagem | prescricao | `enfermagem.prescricao.executar` | executar | PROPRIO | EQUIPE |
 | enfermagem | prescricao | `enfermagem.prescricao.imprimir` | imprimir | EQUIPE | EQUIPE |
@@ -383,6 +415,11 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 | financeiro | faturas | `financeiro.faturas.lancar` | lançar cobrança | PROPRIO | NENHUM |
 | equipe | membros | `equipe.membros.ler` | ver | LEITURA | LEITURA |
 | equipe | membros | `equipe.membros.editar` | alterar | NENHUM | NENHUM |
+| vacina | estoque | `vacina.estoque.ler` | ver | EQUIPE | EQUIPE |
+| vacina | estoque | `vacina.estoque.criar` | criar | PROPRIO | NENHUM |
+| vacina | estoque | `vacina.estoque.editar` | alterar | PROPRIO | NENHUM |
+| vacina | estoque | `vacina.estoque.deletar` | excluir | PROPRIO | NENHUM |
+| vacina | estoque | `vacina.estoque.imprimir` | imprimir | EQUIPE | NENHUM |
 | farmacia | estoque | `farmacia.estoque.ler` | ver | EQUIPE | EQUIPE |
 | farmacia | estoque | `farmacia.estoque.criar` | criar | PROPRIO | NENHUM |
 | farmacia | estoque | `farmacia.estoque.editar` | alterar | PROPRIO | NENHUM |
@@ -409,7 +446,11 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 - `farmacia.movimentacoes` não tem `editar`/`deletar` — movimentos são imutáveis por auditoria
 - `medicamentos` e `procedimentos`: criar/editar/excluir reservados para ADMIN (catálogo global)
 - `enfermagem.prescricao.executar`: estagiários têm EQUIPE por padrão (técnicos executam prescrições)
+- `atendimento.agendamentos` não tem `finalizar`/`imprimir` — agendamentos são gerenciados por status (AGENDADO/CONCLUIDO/CANCELADO)
+- `vacina.estoque` não tem `finalizar` — estoque de vacinas segue o mesmo padrão de farmácia
+- Sidebar usa `podeExecutar('vacina.estoque.ler')` para exibir o módulo Vacina; agenda ainda usa role check (`isVetOuSuperior`) — ver TODO em seção 12
 - ControleAcesso.tsx ACAO_COLS: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. Ações extras (executar, ativar, exportar, compartilhar, whatsapp, fechar, lancar, desvincular) existem no DB mas não aparecem como colunas na UI — pendente implementação de colunas dinâmicas por módulo
+- ControleAcesso exibe `agenda` como módulo virtual (extrai `agendamentos` de `atendimento`) — slugs são os mesmos; alterar em um lugar altera nos dois
 - Sidebar: Alimentos, Nutrientes e Composição Alimentar ficam no accordion **Nutricional** (apenas ADMIN)
 - Sidebar: Cadastro Pessoal, Pacientes/Animais, Proprietários e Tratadores ficam no sub-accordion **Cadastro** dentro de **Geral**
 - Para re-sincronizar módulos no banco após alterações no seed: `node backend/seed.js`
@@ -871,8 +912,32 @@ New-Item -ItemType Junction `
       `AgendamentoClinico` (migration `20260611190000`), `HistoricoController` (agregação de 5 origens),
       `AgendamentoController` (CRUD com acesso via verificarAcessoAnimal), rotas em `routes/agenda.js`
       montadas em `/api/clinica`. Botões de acesso rápido aos módulos removidos da tela
-- [ ] Permissões granulares para agendamentos (slug atendimento.agendamentos.* no seed) — hoje o
-      gate é por userType (ADMIN/VET/EST gerenciam; PROPRIETARIO/FORNECEDOR visualizam)
+- [x] **RBAC enforcement completo — auditoria 2026-06-24:**
+  - Bug crítico corrigido em `medicamentos.js` e `procedimentos.js`: `requireAdmin` checava `req.user?.role`
+    (sempre `undefined`) ao invés de `req.user?.userType` → nenhum usuário (nem ADMIN) conseguia
+    criar/editar/excluir medicamentos ou procedimentos. Corrigido para `req.user?.userType`.
+  - `checkPermission` adicionado a 6 route files que tinham slugs no seed mas nenhum enforcement:
+    `farmacia.js` (farmacia.estoque.*/movimentacoes.ler), `estoqueVacina.js` (vacina.estoque.*),
+    `proprietarios.js` (cadastro.proprietario.*), `tratadores.js` (cadastro.tratador.*),
+    `fornecedores.js` (cadastro.fornecedor.*), `localizacoes.js` (cadastro.localizacao.* + soAdmin inline para PUT/PATCH)
+  - Catálogos ADMIN-only protegidos com `soAdmin` inline: `alimentos.js`, `nutrientes.js`,
+    `composicaoAlimentar.js` (POST/PUT/DELETE + analisar-llm + importar-completo). GETs livres (usados em dropdowns).
+  - `resenha-grafica.js` PUT protegido: apenas ADMIN e VETERINARIO podem salvar resenha gráfica.
+  - `ExameClinicoController.js` — método `atualizar` adicionado; `clinica-exames.js` — `PUT /:id`
+    com `checkPermission('atendimento.exames.editar', 'PROPRIO')` (slug existia no seed sem rota).
+  - `Exames.tsx` — slug mismatch corrigido: `exames.laboratorial.*` → `atendimento.exames.*`
+    (frontend estava usando slug diferente do backend, desconectando o controle de acesso).
+  - `CriaExameNutricional.tsx` — adicionados `usePermissoes`, page guard e handler guards para
+    `atendimento.exames.criar` (página não tinha nenhuma verificação de permissão).
+- [x] **Regra de finalização por autoria** — `atendimento.{evolucoes|prescricoes|vacinas|encaminhamentos|exames}.finalizar`:
+  - GESTOR: bypass total (checkPermission). FORNECEDOR: finaliza apenas itens com `veterinarioId === req.user.id`. VET/ESTAGIARIO/outros: NENHUM no seed → bloqueados em checkPermission.
+  - Seed: VET finalizar PROPRIO → NENHUM; FORNECEDOR recebeu PROPRIO em todos os módulos; novos slugs `atendimento.encaminhamentos.finalizar` e `atendimento.exames.finalizar` adicionados ao ModuloSistema + todos os perfis.
+  - Rotas: `PATCH aprovar` (evolucoes) usa `finalizar PROPRIO`; prescricoes `/grupos/:id/finalizar|cancelar` e legados usam `finalizar PROPRIO`. Novos: `PATCH /:id/finalizar` em `clinica-exames.js` (→ status CONCLUIDO) e `encaminhamentos.js` (→ CONCLUIDO + inativa designação).
+  - Controllers: `PrescricaoGrupoController` — removido check hardcoded `membroEquipe.cargo=GESTOR`; adicionado FORNECEDOR ownership check. `PrescricaoController.finalizarTodas` — FORNECEDOR filtra por `veterinarioId`. `ExameClinicoController.criar` — `veterinarioId` sempre `req.user.id` (antes: null para não-VET). `EvolucaoController.aprovar` e `EncaminhamentoController` — FORNECEDOR ownership check.
+  - VacinaClinica: sem finalizar (modelo sem status/draft). TODO: migration futura para campo `status`.
+- [x] **Regra de autoria em editar** — `EvolucaoController.atualizar`, `PrescricaoController.atualizar`, `ExameClinicoController.atualizar`, `EncaminhamentoController.atualizar`: GESTOR edita qualquer item (via `req.membroCargo === 'GESTOR'`); demais só editam itens que criaram (`veterinarioId === req.user.id` → 403 caso contrário). VacinaClinica.atualizar: pendente de migration para campo `status`.
+- [ ] Slugs orphans `exames.laboratorial.*` e `exames.imagem.*` — existem no seed e aparecem no ControleAcesso mas não protegem nenhum endpoint real (backends usam `atendimento.exames.*`). Gestores que configurarem esses slugs não controlam nada efetivamente. Decisão pendente: remover do seed ou implementar granularidade real por tipo de exame.
+- [x] Sidebar/páginas de agenda: migrar gate de role check (`isVetOuSuperior`) para `podeExecutar('atendimento.agendamentos.ler')` — Agenda usa permissão real; Minha Agenda mantém `isVetOuSuperior && podeVerAgendamentos` (sub-view específica de vet). Dashboard oculto para VET (non-Gestor) e ESTAGIÁRIO no Sidebar — eles têm "Pacientes" como home; GESTOR (bypass) continua vendo.
 - [ ] UI de gestão de designações no ControleAcesso (aba Equipe → membro PRESTADOR → animais designados)
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
@@ -1017,6 +1082,16 @@ POST   /                                → criar prescrição (status RASCUNHO,
 PUT    /:id                             → atualizar
 DELETE /:id                             → soft delete
 
+# clinica/exames — prefixo /api/clinica/exames (ExameClinicoController)
+# Tipos: Laboratorial | Bioquímico | Imagem | Compra
+# (ExameNutricional usa /api/exames — modelo e controller distintos)
+GET    /animal/:animalId                → listarPorAnimal (page/limit) — atendimento.exames.ler LEITURA
+GET    /:id                             → obterPorId — atendimento.exames.ler LEITURA
+POST   /                                → criar (body: animalId, tipo, descricao, evolucaoId?) — atendimento.exames.criar PROPRIO
+PUT    /:id                             → atualizar — atendimento.exames.editar PROPRIO
+PATCH  /:id/finalizar                   → status→CONCLUIDO, regra de autoria — atendimento.exames.finalizar PROPRIO
+DELETE /:id                             → soft delete — atendimento.exames.deletar PROPRIO
+
 # Cadastro — Proprietários e Tratadores
 GET/POST    /api/cadastro/proprietarios     → ProprietarioController (CRUD userType=PROPRIETARIO)
 GET/PUT     /api/cadastro/proprietarios/:id
@@ -1038,7 +1113,8 @@ GET    /prestadores/:animalId           → prestadores (cargo PRESTADOR) das eq
                                           com tipoServico (via Fornecedor.userId) + flag jaDesignado
 GET    /animal/:animalId                → lista encaminhamentos (?status=)
 POST   /                                → criar (prestadorId presente → upsert DesignacaoPrestador na transação)
-PATCH  /:id/status                      → PENDENTE|CONCLUIDO|CANCELADO (encerra/reativa designação)
+PATCH  /:id/finalizar                   → CONCLUIDO com regra de autoria (atendimento.encaminhamentos.finalizar PROPRIO)
+PATCH  /:id/status                      → PENDENTE|CONCLUIDO|CANCELADO sem regra de autoria (atendimento.encaminhamentos.editar PROPRIO)
 PUT    /:id                             → editar campos textuais (só PENDENTE)
 DELETE /:id                             → soft delete + inativa designação vinculada
 
@@ -1093,7 +1169,8 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 | `Dieta.tsx` | `/dieta` — visualização da dieta do animal selecionado. Controle de acesso completo: guard de página (`nutricao.dietas.ler`), gating de useEffects em `loadingPerms`, guards nos 6 handlers de escrita, UI condicional por `podeCriar`/`podeEditar`. Loaders verificam `if (!res.data) return` (GET 403 → null). |
 | `CriaDieta.tsx` | `/cria-dieta` — formulário de criação/edição de dieta |
 | `RelatorioNutricional.tsx` | `/relatorio` — relatório nutricional do animal selecionado |
-| `Exames.tsx` | `/exames` — exames do animal selecionado |
+| `Exames.tsx` | `/exames`, `/exames/:animalId` — **Exames Nutricionais** (modelo `ExameNutricional`, backend `/api/exames`). Guard de página e botões usam `atendimento.exames.*` (corrigido — era `exames.laboratorial.*`, mismatch com o backend). |
+| `CriaExameNutricional.tsx` | `/exames/:animalId/novo` — criação de exame nutricional via upload de laudo (LLM) ou manual. Guard de página + handlers protegidos com `atendimento.exames.criar`. |
 | `Atendimento.tsx` | `/atendimento` — shell clínico com abas: evolucao, prescricao, vacina, exames, encaminhamento. Delega a SubModulo* |
 | `SubModuloEvolucao.tsx` | Prontuário clínico — speech recognition (Web Speech API) + Whisper offline, anexo de mídias, impressão via `EvolucaoPrint` |
 | `SubModuloPrescricao.tsx` | Prescrições — speech recognition + Whisper offline, fluxo RASCUNHO→ATIVA via `finalizarTodas` |
@@ -1294,6 +1371,48 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     PROPRIETARIO, que mantém union+deny-wins). Bypass de dono de empresa vale APENAS para a
     empresa ativa. PermissaoController: todas as rotas /:equipeId exigem ADMIN, GESTOR da equipe
     ou dono da empresa dela (autorizarGestorDaEquipe) — antes só exigiam authenticate (gap).
+
+26. medicamentos.js e procedimentos.js — requireAdmin histórico usava `req.user?.role` (campo
+    inexistente no JWT do S2Vet — o campo correto é `userType`). Resultado: `undefined !== 'ADMIN'`
+    era sempre true, gerando 403 para todos. Corrigido para `req.user?.userType !== 'ADMIN'`.
+    Se criar novos guards inline de "admin only" em qualquer route file, SEMPRE usar `req.user?.userType`.
+
+27. Dois sistemas de exame COMPLETAMENTE distintos — não confundir:
+    Sistema A — ExameNutricional: rota /api/exames, controller ExameController, páginas Exames.tsx +
+      CriaExameNutricional.tsx. Backend usa slugs atendimento.exames.*. Frontend (após fix 2026-06-24)
+      usa os mesmos slugs. Exame nutricional de nutrientes (hemograma, minerais, etc.)
+    Sistema B — ExameClinico: rota /api/clinica/exames, controller ExameClinicoController, página
+      SubModuloExames.tsx (dentro de Atendimento). Slugs: atendimento.exames.*. Tipos: Laboratorial,
+      Bioquímico, Imagem, Compra. Exames pedidos no atendimento clínico.
+    Slugs orphans: exames.laboratorial.* e exames.imagem.* existem no seed e aparecem no ControleAcesso
+    mas NENHUM backend route os usa. Gestor que configurar esses slugs não controla nada efetivamente.
+    Farmácia, vacina.estoque e todos os módulos de cadastro agora têm checkPermission — os slugs do seed
+    estão alinhados com os routes a partir de 2026-06-24.
+
+28. Regra de finalização — GESTOR vs FORNECEDOR vs outros:
+    checkPermission('*.finalizar', 'PROPRIO') no route determina quem chega ao controller:
+    - GESTOR (userType=VETERINARIO com cargo GESTOR) → bypass total em checkPermission → chega sempre
+    - FORNECEDOR → MatrizPerfil PROPRIO ≥ PROPRIO → chega; controller verifica veterinarioId === req.user.id
+    - VET não-GESTOR → MatrizPerfil NENHUM → 403 no checkPermission → nunca chega ao controller
+    - Identificação de autoria: todos os create agora setam veterinarioId = req.user.id (inclusive FORNECEDOR)
+      ExameClinico.criar antes setava null para não-VET — bug corrigido em 2026-06-24.
+    - VacinaClinica não tem route de finalizar (sem status field no schema). Adicionar migration + route
+      futuramente quando workflow draft→aplicada for necessário.
+    - EncaminhamentoController.finalizar (novo) é distinto de atualizarStatus: aplica a regra de autoria
+      e sempre transita para CONCLUIDO. atualizarStatus continua existindo para mudanças de status gerais
+      (usadas por gestores diretamente, que têm bypass em checkPermission).
+
+29. Regra de autoria em editar — GESTOR pode editar qualquer item; demais só editam o que criaram:
+    Para `editar`, a barreira do `checkPermission` passa VET/FORNECEDOR (nível PROPRIO), mas o
+    controller verifica autoria via `req.membroCargo`. Diferença entre as duas regras:
+    - Finalizar (implementado):  GESTOR=qualquer, FORNECEDOR=próprio, VET=bloqueado no checkPermission
+    - Editar (implementado):     GESTOR=qualquer, TODOS OS DEMAIS=apenas próprio (VET também limitado)
+    Identificação de GESTOR sem query extra: `req.membroCargo` já é setado como `'GESTOR'` pelo
+    `checkPermission` em todos os bypass paths (cargo GESTOR, dono de empresa sem MembroEquipe,
+    dono da empresa da equipe). No controller: `if (req.membroCargo !== 'GESTOR' && item.veterinarioId !== req.user.id) → 403`.
+    O padrão de FORNECEDOR ownership NÃO é suficiente para essa regra — um VET não-GESTOR também
+    é barrado de editar itens de outros. Aplicado em: EvolucaoController, PrescricaoController,
+    ExameClinicoController, EncaminhamentoController. VacinaClinica pendente de migration `status`.
 ```
 
 ---

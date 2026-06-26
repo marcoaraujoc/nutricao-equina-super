@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Pencil, Trash2, CheckCircle2, X, Loader2,
-  ChevronLeft, ChevronRight, Pill, Activity,
+  ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
   Clock, Calendar, Search, FileText, Eye, Printer,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -32,19 +32,10 @@ type StatusGrupo = 'SALVO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELA
 interface MedicamentoCat {
   id: number; nome: string; formaFarmaceutica: string;
   unidade: string; vias: { via: string }[];
+  emEstoque:  boolean;
+  qtdEstoque: number | null;
 }
 
-interface EstoqueItem {
-  medicamentoId: number;
-  qtdEstoque: number;
-  medicamento: {
-    id: number;
-    nome: string;
-    formaFarmaceutica: string;
-    unidade: string;
-    vias: { via: string }[];
-  };
-}
 
 interface ItemGrupo {
   id: number;
@@ -125,6 +116,16 @@ const POSOLOGIAS = [
 const VIAS     = ['Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica', 'Retal', 'Nasal', 'Oftálmica'];
 const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
 
+// Unidades do catálogo que têm subunidade preferencial para prescrição
+// lookup case-insensitive; opcoes usa o valor original do banco para a unidade maior
+const getConversaoUnidade = (u: string | null): { subunidade: string; opcoes: string[] } | null => {
+  if (!u) return null;
+  const lower = u.toLowerCase();
+  if (lower === 'l')  return { subunidade: 'mL', opcoes: ['mL', u] };
+  if (lower === 'kg') return { subunidade: 'g',  opcoes: ['g',  u] };
+  return null;
+};
+
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   SALVO:                { label: 'Salvo',               cls: 'bg-amber-100 text-amber-700'    },
   FINALIZADO:           { label: 'Finalizado',          cls: 'bg-emerald-100 text-emerald-700' },
@@ -190,7 +191,7 @@ function AlertaEstoqueModal({
   const titulo    = temInsuficiente ? 'Estoque Insuficiente' : 'Estoque Ficará Zerado';
   const subtitulo = temInsuficiente
     ? 'Não existe estoque disponível suficiente para esta prescrição'
-    : 'Ao executar esta prescrição, o estoque disponível ficará zerado';
+    : 'Ao finalizar esta prescrição, o estoque disponível ficará zerado';
   const headerCls = temInsuficiente
     ? 'border-orange-100 bg-orange-50 rounded-t-2xl'
     : 'border-amber-100 bg-amber-50 rounded-t-2xl';
@@ -282,7 +283,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
   const [medicamentos,     setMedicamentos]     = useState<MedicamentoCat[]>([]);
-  const [estoqueMap,       setEstoqueMap]       = useState<Map<number, number>>(new Map());
+  const [allMeds,          setAllMeds]          = useState<MedicamentoCat[]>([]);
   const [saving,           setSaving]           = useState(false);
   const [finalizing,       setFinalizing]       = useState(false);
   const [alertaEstoque,    setAlertaEstoque]    = useState<AlertaEstoque[] | null>(null);
@@ -290,10 +291,17 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
   const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string }[]>([]);
   const [showProcDropdown, setShowProcDropdown] = useState(false);
+  const [loadingMeds,      setLoadingMeds]      = useState(false);
+  const [medBusca,         setMedBusca]         = useState('');
+  const medComboboxRef = useRef<HTMLDivElement>(null);
   const [draggedIdx,       setDraggedIdx]       = useState<number | null>(null);
   const [dragOverIdx,      setDragOverIdx]      = useState<number | null>(null);
   // Rascunhos independentes: preserva os valores de cada aba ao trocar de tipo
-  const formBackupsRef = useRef<Partial<Record<TipoItem, FormItem>>>({});
+  const formBackupsRef    = useRef<Partial<Record<TipoItem, FormItem>>>({});
+  const medDebounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchAbortRef    = useRef<AbortController | null>(null);
+  const [allMedsLoaded,       setAllMedsLoaded]       = useState(false);
+  const [backgroundSearching, setBackgroundSearching] = useState(false);
 
   const set = <K extends keyof FormItem>(k: K, v: FormItem[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
@@ -331,32 +339,76 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     setDragOverIdx(null);
   };
 
-  // Load catalogs on mount
-  useEffect(() => {
-    api.get('/farmacia/estoque?ativo=true').then(r => {
-      const itens: EstoqueItem[] = r.data.dados ?? [];
-      const medMap = new Map<number, MedicamentoCat>();
-      const stockMap = new Map<number, number>();
-      itens.forEach(e => {
-        stockMap.set(e.medicamentoId, (stockMap.get(e.medicamentoId) ?? 0) + e.qtdEstoque);
-        if (!medMap.has(e.medicamentoId) && e.medicamento) {
-          medMap.set(e.medicamentoId, {
-            id: e.medicamento.id,
-            nome: e.medicamento.nome,
-            formaFarmaceutica: e.medicamento.formaFarmaceutica,
-            unidade: e.medicamento.unidade,
-            vias: e.medicamento.vias,
-          });
-        }
+  // Carrega todos os medicamentos em background (silencioso — não bloqueia o dropdown).
+  // Quando chega, sinaliza allMedsLoaded para que o filtro passe a ser client-side.
+  const carregarMedicamentos = useCallback(async () => {
+    setLoadingMeds(true);
+    try {
+      const r = await api.get('/medicamentos/para-atendimento', {
+        params: { animalId, tipo: 'medicamento' },
       });
-      setMedicamentos([...medMap.values()].sort((a, b) => a.nome.localeCompare(b.nome)));
-      setEstoqueMap(stockMap);
-    }).catch(() => {});
+      const lista: MedicamentoCat[] = r.data?.dados ?? [];
+      setAllMeds(lista);
+      setAllMedsLoaded(true);
+    } catch {}
+    finally { setLoadingMeds(false); }
+  }, [animalId]);
+
+  // Carrega o catálogo completo no mount
+  useEffect(() => {
+    carregarMedicamentos();
     api.get('/procedimentos?limit=500&ativo=true').then(r => {
       const lista: { id: number; nome: string }[] = r.data.dados ?? [];
       setProcedimentos(lista.map(p => ({ id: p.id, nome: p.nome })));
     }).catch(() => {});
-  }, []);
+  }, [carregarMedicamentos]);
+
+  // Cancela busca paralela ao desmontar
+  useEffect(() => () => { searchAbortRef.current?.abort(); }, []);
+
+  // Filtro híbrido:
+  //   - Lista completa carregada → filtra client-side (rápido, sem request)
+  //   - Lista ainda carregando + usuário digitou → dispara request paralelo ao backend
+  //     com AbortController (cancela o anterior a cada tecla)
+  //   - Quando a lista completa chega, qualquer nova digitação volta ao client-side
+  useEffect(() => {
+    if (medDebounceRef.current) clearTimeout(medDebounceRef.current);
+    medDebounceRef.current = setTimeout(async () => {
+      const q = medBusca.trim().toLowerCase();
+      if (allMedsLoaded) {
+        setMedicamentos(q
+          ? allMeds.filter(m => m.nome.toLowerCase().includes(q) || m.formaFarmaceutica?.toLowerCase().includes(q))
+          : allMeds
+        );
+      } else if (q) {
+        searchAbortRef.current?.abort();
+        searchAbortRef.current = new AbortController();
+        setBackgroundSearching(true);
+        try {
+          const r = await api.get('/medicamentos/para-atendimento', {
+            params: { animalId, tipo: 'medicamento', busca: q },
+            signal: searchAbortRef.current.signal,
+          });
+          setMedicamentos(r.data?.dados ?? []);
+        } catch { /* abortado ou erro de rede — silencioso */ }
+        finally { setBackgroundSearching(false); }
+      }
+    }, 200);
+    return () => { if (medDebounceRef.current) clearTimeout(medDebounceRef.current); };
+  }, [medBusca, allMeds, allMedsLoaded, animalId]);
+
+  // Fecha o dropdown ao clicar fora
+  useEffect(() => {
+    if (!showMedDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (!medComboboxRef.current?.contains(e.target as Node)) {
+        setShowMedDropdown(false);
+        setMedBusca('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showMedDropdown]);
 
   const validarForm = () => {
     const isMed = form.tipo === 'MEDICAMENTO';
@@ -515,7 +567,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       }
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
       setAlertaEstoque(null);
-      toast.success('Prescrição finalizada');
+      toast.success('Prescrição finalizada com sucesso');
       onSaved(); onClose();
     } catch (err: unknown) {
       const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
@@ -549,12 +601,52 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     );
   }
 
+  // Conteúdo reutilizável do dropdown de medicamentos (usado em 2 layouts distintos)
+  const renderMedList = () => {
+    if (loadingMeds && !backgroundSearching && medicamentos.length === 0)
+      return <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin text-emerald-500" /></div>;
+    if (medicamentos.length === 0 && !backgroundSearching)
+      return <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>;
+    const onSelect = (m: MedicamentoCat) => {
+      const conv = getConversaoUnidade(m.unidade);
+      setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: conv ? conv.subunidade : m.unidade, via: m.vias[0]?.via ?? prev.via }));
+      setShowMedDropdown(false);
+      setMedBusca('');
+    };
+    return (
+      <>
+        {backgroundSearching && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-gray-100">
+            <Loader2 size={10} className="animate-spin text-emerald-400" />
+            <span className="text-[10px] text-gray-400">Buscando...</span>
+          </div>
+        )}
+        {medicamentos.map(m => (
+          <button key={m.id} type="button" onMouseDown={() => onSelect(m)}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors border-b border-gray-50 last:border-0">
+            <span className="font-medium">{m.nome}</span>
+            {m.formaFarmaceutica && <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>}
+            {m.emEstoque && (m.qtdEstoque ?? 0) > 0
+              ? <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Em estoque: {m.qtdEstoque}</span>
+              : m.emEstoque
+                ? <span className="ml-2 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Estoque zerado</span>
+                : <span className="ml-2 text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">Sem estoque</span>
+            }
+          </button>
+        ))}
+      </>
+    );
+  };
+
   const isMed           = form.tipo === 'MEDICAMENTO';
   const medCatalogo     = form.medicamentoCatId
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
   const viasDisponiveis = medCatalogo?.vias.map(v => v.via) ?? VIAS;
-  const unidadeCatalogo = medCatalogo?.unidade ?? null;
+  const catalogoUnidade  = medCatalogo?.unidade ?? null;
+  const conversaoUnidade = getConversaoUnidade(catalogoUnidade);
+  // trava o campo apenas quando NÃO há subunidade (ex: mg, mL, UI)
+  const unidadeCatalogo  = conversaoUnidade ? null : catalogoUnidade;
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
   // Em modo edição: formulário aparece ao editar item existente ou ao clicar "Inserir item"
@@ -639,43 +731,35 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     {/* MEDICAMENTO (span 3) */}
                     <div className="sm:col-span-3">
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">MEDICAMENTO *</label>
-                      <div className="relative">
-                        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                        <input
-                          type="text"
-                          value={form.medicamento}
-                          onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowMedDropdown(true); }}
-                          onFocus={() => setShowMedDropdown(true)}
-                          onBlur={() => setTimeout(() => setShowMedDropdown(false), 150)}
-                          placeholder="Buscar medicamento..."
-                          className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                        />
-                        {showMedDropdown && (
-                          <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                            {medicamentos
-                              .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                              .slice(0, 40)
-                              .map(m => {
-                                const qtd = estoqueMap.get(m.id) ?? 0;
-                                return (
-                                  <button key={m.id} type="button"
-                                    onMouseDown={() => {
-                                      setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: m.unidade, via: m.vias[0]?.via ?? prev.via }));
-                                      setShowMedDropdown(false);
-                                    }}
-                                    className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                                    <span className="font-medium">{m.nome}</span>
-                                    {m.formaFarmaceutica && <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>}
-                                    {qtd > 0
-                                      ? <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Estoque: {qtd}</span>
-                                      : <span className="ml-2 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Sem estoque</span>
-                                    }
-                                  </button>
-                                );
-                              })}
-                            {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                              <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
+                      <div ref={medComboboxRef} className="relative">
+                        {!showMedDropdown ? (
+                          /* Botão — aparece quando NÃO está buscando */
+                          <button type="button"
+                            onClick={() => { setShowMedDropdown(true); setMedBusca(''); }}
+                            className="w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white">
+                            <span className={form.medicamento ? 'text-gray-900 truncate' : 'text-gray-400'}>
+                              {form.medicamento || 'Selecionar medicamento...'}
+                            </span>
+                            {form.medicamento ? (
+                              <X size={13} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
+                                onClick={e => { e.stopPropagation(); set('medicamento', ''); set('medicamentoCatId', null); }} />
+                            ) : (
+                              <ChevronDown size={13} className="text-gray-400 flex-shrink-0 ml-2" />
                             )}
+                          </button>
+                        ) : (
+                          /* Campo de busca — substitui o botão (nunca os dois juntos) */
+                          <div className="relative">
+                            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                            <input autoFocus type="text" placeholder="Buscar medicamento..."
+                              value={medBusca} onChange={e => setMedBusca(e.target.value)}
+                              onBlur={() => setTimeout(() => { setShowMedDropdown(false); setMedBusca(''); }, 150)}
+                              className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                            <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                              <div className="max-h-40 overflow-y-auto">
+                                {renderMedList()}
+                              </div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -694,8 +778,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         ) : (
                           <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
                             className="w-20 flex-shrink-0 px-1 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                            <option value="">—</option>
-                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
+                            {conversaoUnidade
+                              ? conversaoUnidade.opcoes.map(u => <option key={u}>{u}</option>)
+                              : <><option value="">—</option>{UNIDADES.map(u => <option key={u}>{u}</option>)}</>
+                            }
                           </select>
                         )}
                       </div>
@@ -714,96 +800,75 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                 ) : (
                   <>
-                  {/* Medicamento / Procedimento — campo único (modal ou procedimento) */}
+                  {/* Medicamento / Procedimento */}
                   <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                     {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
                   </label>
-                  <div className="relative">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={form.medicamento}
-                      onChange={e => {
-                        set('medicamento', e.target.value);
-                        set('medicamentoCatId', null);
-                        if (isMed) setShowMedDropdown(true);
-                        else       setShowProcDropdown(true);
-                      }}
-                      onFocus={() => {
-                        if (isMed) setShowMedDropdown(true);
-                        else       setShowProcDropdown(true);
-                      }}
-                      onBlur={() => setTimeout(() => {
-                        setShowMedDropdown(false);
-                        setShowProcDropdown(false);
-                      }, 150)}
-                      placeholder={isMed ? 'Buscar medicamento...' : 'Buscar procedimento...'}
-                      className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-                    />
-                    {/* Dropdown medicamentos */}
-                    {isMed && showMedDropdown && (
-                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                        {medicamentos
-                          .filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                          .slice(0, 40)
-                          .map(m => {
-                            const qtd = estoqueMap.get(m.id) ?? 0;
-                            return (
-                              <button
-                                key={m.id}
-                                type="button"
-                                onMouseDown={() => {
-                                  setForm(prev => ({
-                                    ...prev,
-                                    medicamento:      m.nome,
-                                    medicamentoCatId: m.id,
-                                    unidade:          m.unidade,
-                                    via:              m.vias[0]?.via ?? prev.via,
-                                  }));
-                                  setShowMedDropdown(false);
-                                }}
+                  {isMed ? (
+                    <div ref={medComboboxRef} className="relative">
+                      {!showMedDropdown ? (
+                        /* Botão — aparece quando NÃO está buscando */
+                        <button type="button"
+                          onClick={() => { setShowMedDropdown(true); setMedBusca(''); }}
+                          className="w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white">
+                          <span className={form.medicamento ? 'text-gray-900 truncate' : 'text-gray-400'}>
+                            {form.medicamento || 'Selecionar medicamento...'}
+                          </span>
+                          {form.medicamento ? (
+                            <X size={13} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
+                              onClick={e => { e.stopPropagation(); set('medicamento', ''); set('medicamentoCatId', null); }} />
+                          ) : (
+                            <ChevronDown size={13} className="text-gray-400 flex-shrink-0 ml-2" />
+                          )}
+                        </button>
+                      ) : (
+                        /* Campo de busca — substitui o botão (nunca os dois juntos) */
+                        <div className="relative">
+                          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                          <input autoFocus type="text" placeholder="Buscar medicamento..."
+                            value={medBusca} onChange={e => setMedBusca(e.target.value)}
+                            onBlur={() => setTimeout(() => { setShowMedDropdown(false); setMedBusca(''); }, 150)}
+                            className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                          <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                            <div className="max-h-40 overflow-y-auto">
+                              {renderMedList()}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={form.medicamento}
+                        onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowProcDropdown(true); }}
+                        onFocus={() => setShowProcDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowProcDropdown(false), 150)}
+                        placeholder="Buscar procedimento..."
+                        className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                      />
+                      {showProcDropdown && (
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
+                          {procedimentos
+                            .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
+                            .slice(0, 40)
+                            .map(p => (
+                              <button key={p.id} type="button"
+                                onMouseDown={() => { set('medicamento', p.nome); setShowProcDropdown(false); }}
                                 className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                                <span className="font-medium">{m.nome}</span>
-                                {m.formaFarmaceutica && (
-                                  <span className="ml-2 text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
-                                )}
-                                {qtd > 0
-                                  ? <span className="ml-2 text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Estoque: {qtd}</span>
-                                  : <span className="ml-2 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Sem estoque</span>
-                                }
+                                <span className="font-medium">{p.nome}</span>
                               </button>
-                            );
-                          })}
-                        {medicamentos.filter(m => m.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                          <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>
-                        )}
-                      </div>
-                    )}
-                    {/* Dropdown procedimentos */}
-                    {!isMed && showProcDropdown && (
-                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                        {procedimentos
-                          .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
-                          .slice(0, 40)
-                          .map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onMouseDown={() => {
-                                set('medicamento', p.nome);
-                                setShowProcDropdown(false);
-                              }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
-                              <span className="font-medium">{p.nome}</span>
-                            </button>
-                          ))}
-                        {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
-                          <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                            ))}
+                          {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                            <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Dosagem + Via */}
@@ -823,8 +888,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         ) : (
                           <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
                             className="px-2 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                            <option value="">—</option>
-                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
+                            {conversaoUnidade
+                              ? conversaoUnidade.opcoes.map(u => <option key={u}>{u}</option>)
+                              : <><option value="">—</option>{UNIDADES.map(u => <option key={u}>{u}</option>)}</>
+                            }
                           </select>
                         )}
                       </div>
@@ -979,8 +1046,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         {/* Footer */}
         <div className={`flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-wrap ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
           <div className="flex items-center gap-2 ml-auto">
-            {/* Imprimir — só FINALIZADO */}
-            {grupo?.status === 'FINALIZADO' && podeImprimir && (
+            {/* Imprimir — FINALIZADO ou EXECUTADO */}
+            {(grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir && (
               <button onClick={() => imprimirPrescricao(grupo!, animal)}
                 className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm transition-colors">
                 <Printer size={14} /> Imprimir
@@ -1191,6 +1258,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const canEdit = podeCriar;
   const canFinalizarCancelar = podeFinalizar;
+  // FORNECEDOR só edita/finaliza/cancela itens que ele próprio criou (mesmo que a MatrizPerfil conceda EQUIPE/FULL)
+  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -1238,7 +1307,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
     try {
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`);
-      toast.success('Prescrição finalizada');
+      toast.success('Prescrição finalizada com sucesso');
       carregar();
       onFaturaAtualizada();
       onSalvo?.();
@@ -1258,7 +1327,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     try {
       await api.post(`/clinica/prescricoes/grupos/${alertaDireto.grupoId}/finalizar`, { forcarFinalizacao: true });
       setAlertaDireto(null);
-      toast.success('Prescrição finalizada');
+      toast.success('Prescrição finalizada com sucesso');
       carregar();
       onFaturaAtualizada();
       onSalvo?.();
@@ -1366,8 +1435,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
               const isViewOnly = g.status !== 'SALVO';
-              const editavel   = g.status === 'SALVO' && canEdit;
-              const cancelavel = ['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar;
+              const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
+              const editavel   = g.status === 'SALVO' && canEdit && (!isFornecedor || eProprioAutor);
+              const cancelavel = ['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
@@ -1406,7 +1476,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                           <CheckCircle2 size={13} />
                         </button>
                       )}
-                      {g.status === 'FINALIZADO' && podeImprimir && (
+                      {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                         <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
                           className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
                           <Printer size={13} />
@@ -1429,7 +1499,10 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
       {/* Mobile cards */}
       <div className="md:hidden divide-y divide-gray-50">
-        {grupos.map(g => (
+        {grupos.map(g => {
+          const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
+          const editavelMobile = g.status === 'SALVO' && (!isFornecedor || eProprioAutorMobile);
+          return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <button onClick={() => abrirEdicao(g)}
@@ -1445,15 +1518,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             <div className="flex gap-2 mt-2">
               <button onClick={() => abrirEdicao(g)}
                 className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                {g.status === 'SALVO' ? <><Pencil size={11} /> Editar</> : <><Eye size={11} /> Ver</>}
+                {editavelMobile ? <><Pencil size={11} /> Editar</> : <><Eye size={11} /> Ver</>}
               </button>
-              {g.status === 'FINALIZADO' && podeImprimir && (
+              {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                 <button onClick={() => imprimirPrescricao(g, animal)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                   <Printer size={11} /> Imprimir
                 </button>
               )}
-              {['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (
+              {['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutorMobile) && (
                 <button onClick={() => setDeletingId(g.id)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                   <Trash2 size={11} /> Cancelar
@@ -1461,7 +1534,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Paginação */}

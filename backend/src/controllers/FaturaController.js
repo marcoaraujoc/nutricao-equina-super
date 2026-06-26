@@ -14,7 +14,7 @@ const FATURA_INCLUDE = {
     include: ITEM_INCLUDE,
     orderBy: [{ animalId: 'asc' }, { criadoEm: 'asc' }],
   },
-  proprietario: { select: { id: true, fullName: true, email: true, phone: true } },
+  proprietario: { select: { id: true, fullName: true, email: true, phone: true, valorAssistencia: true, mensalista: true } },
 };
 
 async function recalcularTotal(faturaId) {
@@ -26,6 +26,41 @@ async function recalcularTotal(faturaId) {
 
 function mesReferenciaAtual() {
   return new Date().toISOString().slice(0, 7); // "2026-06"
+}
+
+// Retorna o mês seguinte no formato "YYYY-MM"
+function proximoMesRef(mesRef) {
+  if (!mesRef) {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 1);
+    return d.toISOString().slice(0, 7);
+  }
+  const [ano, mes] = mesRef.split('-').map(Number);
+  // mes é 1-based; new Date(ano, mes, 1) avança um mês (junho=6 → Date(2026,6,1) = julho)
+  const d = new Date(ano, mes, 1);
+  return d.toISOString().slice(0, 7);
+}
+
+// Adiciona item de assistência veterinária mensal se o proprietário for mensalista
+// e ainda não existir o item nesta fatura (idempotente)
+async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null) {
+  if (!proprietario?.mensalista || !proprietario?.valorAssistencia || proprietario.valorAssistencia <= 0) return false;
+  const existeAssistencia = await prisma.faturaItem.findFirst({
+    where: { faturaId, tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária Mensal' },
+  });
+  if (existeAssistencia) return false;
+  await prisma.faturaItem.create({
+    data: {
+      faturaId,
+      tipo:         'ASSISTENCIA',
+      descricao:    'Assistência Veterinária Mensal',
+      valor:        proprietario.valorAssistencia,
+      quantidade:   1,
+      veterinarioId: veterinarioId ?? null,
+    },
+  });
+  await recalcularTotal(faturaId);
+  return true;
 }
 
 const FaturaController = {
@@ -56,17 +91,18 @@ const FaturaController = {
             id: true, fullName: true, email: true, phone: true,
             animais: { where: { ativo: true }, select: ANIMAL_SELECT },
             faturas: {
-              where:   { status: { in: ['ABERTA', 'PAGA'] } },
+              where:   { status: { in: ['ABERTA', 'FECHADA', 'PAGA'] } },
               orderBy: { criadoEm: 'desc' },
-              take:    5,
+              take:    6,
               select:  { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
             },
           },
         });
         if (!prop) return res.json({ dados: [] });
-        const faturaAberta = prop.faturas.find(f => f.status === 'ABERTA') ?? null;
-        const faturaPaga   = prop.faturas.find(f => f.status === 'PAGA')   ?? null;
-        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? faturaPaga ?? null, faturaPaga, faturas: undefined }];
+        const faturaAberta  = prop.faturas.find(f => f.status === 'ABERTA')  ?? null;
+        const faturaFechada = prop.faturas.find(f => f.status === 'FECHADA') ?? null;
+        const faturaPaga    = prop.faturas.find(f => f.status === 'PAGA')    ?? null;
+        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaFechada, faturaPaga, faturas: undefined }];
         return res.json({ dados });
       }
 
@@ -107,6 +143,7 @@ const FaturaController = {
         where: { id: { in: proprietarioIds } },
         select: {
           id: true, fullName: true, email: true, phone: true,
+          valorAssistencia: true, mensalista: true,
           animais: {
             where: { ativo: true },
             select: {
@@ -117,16 +154,16 @@ const FaturaController = {
             },
           },
           faturas: {
-            where: { status: 'ABERTA' },
+            where: { status: { in: ['ABERTA', 'FECHADA'] } },
             orderBy: { criadoEm: 'desc' },
-            take: 1,
+            take: 2,
             select: { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
           },
         },
         orderBy: { fullName: 'asc' },
       });
 
-      // Busca a fatura PAGA mais recente para TODOS os proprietários (independente de ter ABERTA)
+      // Busca a fatura PAGA mais recente por proprietário
       const faturasPagas = proprietarioIds.length > 0
         ? await prisma.fatura.findMany({
             where: { proprietarioId: { in: proprietarioIds }, status: 'PAGA' },
@@ -142,8 +179,9 @@ const FaturaController = {
 
       const dados = proprietarios.map(p => ({
         ...p,
-        faturaAtiva: p.faturas[0] ?? faturaPagaPorProp[p.id] ?? null,
-        faturaPaga:  faturaPagaPorProp[p.id] ?? null,
+        faturaAtiva:   p.faturas.find(f => f.status === 'ABERTA')   ?? null,
+        faturaFechada: p.faturas.find(f => f.status === 'FECHADA')  ?? null,
+        faturaPaga:    faturaPagaPorProp[p.id] ?? null,
         faturas: undefined,
       }));
 
@@ -183,6 +221,12 @@ const FaturaController = {
           data:    { proprietarioId: Number(proprietarioId), mesReferencia: mesRef, total: 0, status: 'ABERTA' },
           include: FATURA_INCLUDE,
         });
+      }
+
+      // Adiciona assistência mensal automaticamente ao abrir (idempotente — não duplica)
+      const adicionou = await adicionarAssistenciaMensal(fatura.id, fatura.proprietario);
+      if (adicionou) {
+        fatura = await prisma.fatura.findUnique({ where: { id: fatura.id }, include: FATURA_INCLUDE });
       }
 
       res.json({ dados: fatura });
@@ -293,6 +337,38 @@ const FaturaController = {
     }
   },
 
+  // PATCH /:faturaId/fechar
+  // Fecha a fatura: adiciona assistência veterinária mensal (se aplicável) e muda status para FECHADA.
+  // Idempotente: não duplica o item de assistência se já existir.
+  fecharFatura: async (req, res) => {
+    const { faturaId } = req.params;
+
+    try {
+      const fatura = await prisma.fatura.findUnique({
+        where:   { id: Number(faturaId) },
+        include: { proprietario: { select: { id: true, valorAssistencia: true, mensalista: true } } },
+      });
+
+      if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
+      if (fatura.status !== 'ABERTA') {
+        return res.status(400).json({ error: 'Apenas faturas com status ABERTA podem ser fechadas' });
+      }
+
+      await adicionarAssistenciaMensal(Number(faturaId), fatura.proprietario, req.user.id);
+
+      const faturaFechada = await prisma.fatura.update({
+        where:   { id: Number(faturaId) },
+        data:    { status: 'FECHADA' },
+        include: FATURA_INCLUDE,
+      });
+
+      res.json({ dados: faturaFechada });
+    } catch (err) {
+      console.error('Erro ao fechar fatura:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
   // Legado — mantido para compatibilidade
   obterFaturaAberta: async (req, res) => {
     const { animalId } = req.params;
@@ -316,3 +392,5 @@ const FaturaController = {
 };
 
 module.exports = FaturaController;
+module.exports.adicionarAssistenciaMensal = adicionarAssistenciaMensal;
+module.exports.recalcularTotal            = recalcularTotal;

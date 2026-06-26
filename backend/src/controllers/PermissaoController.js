@@ -8,7 +8,7 @@ const prisma = require('../lib/prisma').default;
 // Perfis/permissões são POR EQUIPE — um gestor de outra equipe/empresa não pode
 // ler nem alterar a matriz desta. Retorna null se autorizado, ou { status, mensagem }.
 async function autorizarGestorDaEquipe(req, equipeId) {
-  if (req.user.role === 'ADMIN') return null;
+  if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') return null;
 
   const equipe = await prisma.equipe.findUnique({
     where:  { id: equipeId },

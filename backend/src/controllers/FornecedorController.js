@@ -10,6 +10,7 @@ const TIPOS_SERVICO_VALIDOS = [
   'Ferrador',
   'Fisioterapeuta',
   'Laboratório',
+  'Loja',
   'Quiroprata',
   'Radiologista',
 ];

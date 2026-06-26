@@ -3,6 +3,21 @@
 
 const prisma = require('../lib/prisma').default;
 
+// Calcula preço por unidade base (R$/g ou R$/mL) a partir do preço total e
+// da quantidade em sua unidade de medida. Retorna null quando não é possível
+// calcular (unidade desconhecida ou quantidade zero).
+const FATOR_BASE_ESTOQUE = {
+  'g': 1, 'mg': 0.001, 'kg': 1000, 'mcg': 0.000001,
+  'ml': 1, 'l': 1000,
+};
+function calcPrecoUnitarioBase(valorRepassado, qtd, unidade) {
+  if (!qtd || qtd <= 0 || !valorRepassado || valorRepassado <= 0) return null;
+  const fator = FATOR_BASE_ESTOQUE[(unidade ?? '').trim().toLowerCase()];
+  if (fator == null) return null; // unidade incompatível (ex: 'un', 'balde') — não calcula
+  const qtdBase = qtd * fator;
+  return qtdBase > 0 ? valorRepassado / qtdBase : null;
+}
+
 const INCLUDE = {
   medicamento: {
     include: { vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } } },
@@ -28,7 +43,7 @@ function pertenceAEmpresa(item, req) {
 
 const listar = async (req, res) => {
   try {
-    const { busca, ativo } = req.query;
+    const { busca, ativo, limit } = req.query;
     const empresaId = getEmpresaScope(req);
 
     // Não-ADMIN sem empresa ativa não vê nada
@@ -54,6 +69,7 @@ const listar = async (req, res) => {
       where,
       include: INCLUDE,
       orderBy: { medicamento: { nome: 'asc' } },
+      ...(limit ? { take: parseInt(limit, 10) } : {}),
     });
 
     const [total, totalControlados] = await Promise.all([
@@ -119,12 +135,15 @@ const criar = async (req, res) => {
     if (!med) return res.status(404).json({ error: 'Medicamento não encontrado no catálogo.' });
 
     const item = await prisma.$transaction(async (tx) => {
+      const precoUnitarioBase = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), med.unidade);
+
       const entry = await tx.estoqueClinica.create({
         data: {
           medicamentoId:    Number(medicamentoId),
           empresaId:        empresaId ? Number(empresaId) : (req.empresaId ?? null),
           valor:            Number(valor),
           valorRepassado:   Number(valorRepassado),
+          precoUnitarioBase,
           lote:             lote?.trim() ?? null,
           validade:         validade ? new Date(validade) : null,
           qtdEstoque:       Number(qtdEstoque),
@@ -176,6 +195,13 @@ const atualizar = async (req, res) => {
     if (ativo            !== undefined) data.ativo            = Boolean(ativo);
     if (fornecedorId     !== undefined) data.fornecedorId     = fornecedorId ? Number(fornecedorId) : null;
     if (notaFiscal       !== undefined) data.notaFiscal       = notaFiscal?.trim() ?? null;
+
+    // Recalcula precoUnitarioBase sempre que o valorRepassado for alterado manualmente
+    if (valorRepassado !== undefined) {
+      const med = await prisma.medicamento.findUnique({ where: { id: existe.medicamentoId }, select: { unidade: true } });
+      const novoPreco = calcPrecoUnitarioBase(Number(valorRepassado), existe.qtdEstoque, med?.unidade);
+      if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
+    }
 
     const item = await prisma.estoqueClinica.update({ where: { id }, data, include: INCLUDE });
     return res.json({ dados: item });

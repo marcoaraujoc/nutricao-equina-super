@@ -35,33 +35,14 @@ function mascaraTelefone(v: string): string {
   return n.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
 }
 
-// ─── Mapeamento estático tipo → espécies ─────────────────────────────────────
-
-const TIPO_ESPECIES: Record<string, string[] | null> = {
-  HARAS:              ['Equino'],
-  CANIL:              ['Canino'],
-  GATIL:              ['Felino'],
-  FAZENDA:            null,
-  CLINICA:            null,
-  HOSPITAL:           null,
-  CENTRO_REPRODUCAO:  ['Equino', 'Canino', 'Felino', 'Bovino'],
-  CENTRO_TREINAMENTO: ['Equino', 'Canino', 'Felino', 'Bovino'],
-  PETSHOP:            ['Canino', 'Felino', 'Réptil'],
-  HOTEL_ANIMAL:       ['Canino', 'Felino', 'Réptil'],
-  ONG:                null,
-  CRIADOR:            null,
-  PROPRIETARIO:       null,
-  OUTRO:              null,
-};
+const TIPOS_LOCALIZACAO = [
+  'CANIL', 'CENTRO_REPRODUCAO', 'CENTRO_TREINAMENTO', 'CLINICA',
+  'CLUBE', 'CLUBE_HIPICO', 'CRIADOR', 'FAZENDA', 'GATIL', 'HARAS',
+  'HOSPITAL', 'HOTEL_ANIMAL', 'ONG', 'OUTRO', 'PETSHOP', 'PROPRIETARIO',
+];
 
 const formatarTipo = (tipo: string) =>
   tipo.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-
-const TIPOS_LOCALIZACAO = Object.keys(TIPO_ESPECIES).map(k => ({
-  value:   k,
-  label:   formatarTipo(k),
-  especies: TIPO_ESPECIES[k] ?? ['TODOS'],
-}));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -136,26 +117,6 @@ export default function CadastroLocalizacao() {
 
   const [buscandoCEP,    setBuscandoCEP]    = useState(false);
   const [showInfo,       setShowInfo]       = useState(false);
-
-  // Espécies que a equipe do usuário atende — usadas para filtrar o dropdown de tipos
-  const [minhasEspecies, setMinhasEspecies] = useState<string[] | null>(null);
-
-  useEffect(() => {
-    api.get('/equipes/minhas-especies')
-      .then(res => { if (res.data) setMinhasEspecies(res.data.dados ?? []); })
-      .catch(() => setMinhasEspecies([]));
-  }, []);
-
-  // Tipos de localização filtrados pelas espécies da equipe.
-  // Tipos com espécies = null (TODOS) sempre aparecem.
-  // Tipos específicos (HARAS, CANIL…) só aparecem se a equipe atende aquela espécie.
-  // Se minhasEspecies === null (ainda carregando) ou vazio → mostra todos.
-  const tiposDisponiveis = TIPOS_LOCALIZACAO.filter(t => {
-    if (!minhasEspecies || minhasEspecies.length === 0) return true;
-    const especies = TIPO_ESPECIES[t.value];
-    if (especies === null) return true;
-    return especies.some(e => minhasEspecies.includes(e));
-  });
 
   // ── Carregar lista ──────────────────────────────────────────────────────────
   const carregar = useCallback(async () => {
@@ -278,11 +239,6 @@ export default function CadastroLocalizacao() {
     );
   }
 
-  // ── Espécies do tipo selecionado ─────────────────────────────────────────────
-  const especiesDoTipo = form.tipoLocalizacao
-    ? (TIPO_ESPECIES[form.tipoLocalizacao] ?? null)
-    : null;
-
   return (
     <PageContainer maxWidth="7xl">
       {/* ── Cabeçalho ─────────────────────────────────────────────────────── */}
@@ -365,7 +321,6 @@ export default function CadastroLocalizacao() {
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Tipo</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Espécies</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Responsável</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Contato</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Entrada</th>
@@ -374,9 +329,7 @@ export default function CadastroLocalizacao() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {lista.map(loc => {
-                  const especies = TIPO_ESPECIES[loc.tipoLocalizacao];
-                  return (
+                {lista.map(loc => (
                     <tr key={loc.id} className={`hover:bg-gray-50 transition-colors ${!loc.ativo ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-800">{loc.nome}</p>
@@ -386,9 +339,6 @@ export default function CadastroLocalizacao() {
                         <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-medium">
                           {formatarTipo(loc.tipoLocalizacao)}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">
-                        {especies ? especies.join(', ') : 'TODOS'}
                       </td>
                       <td className="px-4 py-3 text-gray-700">{loc.pessoaResponsavel ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{loc.telefone ?? '—'}</td>
@@ -420,8 +370,7 @@ export default function CadastroLocalizacao() {
                         </div>
                       </td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
@@ -437,9 +386,7 @@ export default function CadastroLocalizacao() {
             <MapPin size={40} className="mx-auto mb-3 opacity-30" />
             <p className="text-sm">Nenhuma localização encontrada.</p>
           </div>
-        ) : lista.map(loc => {
-          const especies = TIPO_ESPECIES[loc.tipoLocalizacao];
-          return (
+        ) : lista.map(loc => (
             <div key={loc.id} className={`bg-white rounded-3xl border border-gray-200 p-4 ${!loc.ativo ? 'opacity-50' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
                 <div>
@@ -465,10 +412,6 @@ export default function CadastroLocalizacao() {
                 </div>
               )}
 
-              <div className="text-xs text-gray-400 mb-3">
-                Espécies: {especies ? especies.join(', ') : 'TODOS'}
-              </div>
-
               <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                 <span className={`px-2 py-1 rounded-xl text-xs font-medium ${loc.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                   {loc.ativo ? 'Ativo' : 'Inativo'}
@@ -487,8 +430,7 @@ export default function CadastroLocalizacao() {
                 )}
               </div>
             </div>
-          );
-        })}
+        ))}
       </div>
 
       {/* ── Modal de criação / edição ──────────────────────────────────────────── */}
@@ -541,20 +483,12 @@ export default function CadastroLocalizacao() {
                     className="w-full px-3 py-2.5 border border-gray-200 rounded-2xl text-sm appearance-none bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400 pr-8"
                   >
                     <option value="">Selecione…</option>
-                    {tiposDisponiveis.map(t => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
+                    {TIPOS_LOCALIZACAO.map(t => (
+                      <option key={t} value={t}>{formatarTipo(t)}</option>
                     ))}
                   </select>
                   <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
-                {especiesDoTipo && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Espécies atendidas: {especiesDoTipo.join(', ')}
-                  </p>
-                )}
-                {form.tipoLocalizacao && !especiesDoTipo && (
-                  <p className="text-xs text-gray-400 mt-1">Espécies atendidas: TODOS</p>
-                )}
               </div>
 
               {/* CNPJ */}

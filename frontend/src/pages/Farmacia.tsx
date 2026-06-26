@@ -10,7 +10,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import {
   AlertTriangle, Lock, Plus, Pencil, Trash2,
   Search, RefreshCw, X, BarChart2, Package, Calendar,
-  ChevronDown,
+  ChevronDown, Sliders,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
 
@@ -54,6 +54,10 @@ interface Meta { total: number; totalControlados: number; totalAbaixoMinimo: num
 interface MovimentoEstoque { id: number; tipo: string; quantidade: number; motivo: string | null; createdAt: string }
 
 type FiltroTab = 'todos' | 'critico' | 'alarmante' | 'controlados' | 'inativos';
+
+
+// Tipos de fornecedor relevantes para farmácia (excluem prestadores de serviço clínico)
+const TIPOS_FORNECEDOR_FARMACIA = new Set(['Farmácia', 'Laboratório', 'Loja']);
 
 const FORM_VAZIO = {
   medicamentoId: 0,
@@ -145,14 +149,22 @@ export default function Farmacia() {
   const [modalHistorico, setModalHistorico] = useState<EstoqueItem | null>(null);
   const [movimentos,     setMovimentos]     = useState<MovimentoEstoque[]>([]);
   const [loadingMov,     setLoadingMov]     = useState(false);
+
+  const [modalAjuste,    setModalAjuste]    = useState<EstoqueItem | null>(null);
+  const [ajusteFrascos,  setAjusteFrascos]  = useState<number | ''>('');
+  const [ajustePeso,     setAjustePeso]     = useState<number | ''>('');
+  const [ajusteMotivo,   setAjusteMotivo]   = useState('');
+  const [salvandoAjuste, setSalvandoAjuste] = useState(false);
   const [confirmExcluir, setConfirmExcluir] = useState<EstoqueItem | null>(null);
   const [valorStr,             setValorStr]             = useState('');
   const [valorRepassadoStr,    setValorRepassadoStr]    = useState('');
   const [repassadoEditado,     setRepassadoEditado]     = useState(false);
   const [frascos,        setFrascos]        = useState<number | ''>('');
+  const [pesoPorEmbalagem, setPesoPorEmbalagem] = useState<number | ''>('');
   const [buscaMed,       setBuscaMed]       = useState('');
   const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
   const comboboxRef = useRef<HTMLDivElement>(null);
+
 
   // ── Busca medicamento selecionado ─────────────────────────────────────────
 
@@ -161,8 +173,6 @@ export default function Farmacia() {
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
 
-  const volDetectado  = medSelecionado ? extrairVolume(medSelecionado) : null;
-  const tipoEmbalagem = medSelecionado?.apresentacao?.match(/^([A-Za-zÀ-ÿ]+)/i)?.[1]?.toLowerCase() ?? 'unidade';
   const hoje = (() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -216,19 +226,26 @@ export default function Farmacia() {
       setItens(estoqueRes.data.dados ?? []);
       setMeta(estoqueRes.data.meta ?? { total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
       setMedicamentos(medRes.data.dados ?? []);
-      setFornecedores(fornRes.data?.dados ?? []);
+      setFornecedores(
+        (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => TIPOS_FORNECEDOR_FARMACIA.has(f.tipoServico))
+      );
     } catch { toast.error('Erro ao carregar estoque.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
-  useEffect(() => { setFrascos(''); }, [form.medicamentoId]);
+  useEffect(() => {
+    setFrascos('');
+    const med = medicamentos.find(m => m.id === form.medicamentoId) ?? null;
+    setPesoPorEmbalagem(med ? (extrairVolume(med) ?? '') : '');
+  }, [form.medicamentoId, medicamentos]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
         setDropdownMedAberto(false);
+        setBuscaMed('');
       }
     };
     document.addEventListener('mousedown', handler);
@@ -269,6 +286,10 @@ export default function Farmacia() {
     const ref = Math.max(i.estoqueAlarmante, i.estoqueMinimo) * 2 || 10;
     return `${Math.min((i.qtdEstoque / ref) * 100, 100)}%`;
   };
+
+  // Remove zeros à direita de floats: 3.60 → 3.6, 3.00 → 3, 0.50 → 0.5
+  const fmtQtd = (n: number) =>
+    parseFloat(n.toFixed(3)).toString().replace('.', ',');
 
   const formatValidade = (v: string | null) => {
     if (!v) return '—';
@@ -313,6 +334,7 @@ export default function Farmacia() {
     setEditandoId(null);
     setModalFormAberto(false);
     setFrascos('');
+    setPesoPorEmbalagem('');
     setBuscaMed('');
     setDropdownMedAberto(false);
   };
@@ -349,12 +371,16 @@ export default function Farmacia() {
     if (!editandoId && form.qtdEstoque < 0) return toast.error('Estoque não pode ser negativo.');
     if (!form.valor || form.valor <= 0) return toast.error('Valor é obrigatório.');
 
+    // Na criação, valor e valorRepassado são por embalagem — multiplicar pelo nº de embalagens
+    // para que o banco armazene o valor TOTAL da entrada (base do cálculo de custo por unidade).
+    const nPacotes = !editandoId && frascos !== '' && Number(frascos) > 0 ? Number(frascos) : 1;
+
     setSalvando(true);
     try {
       const payload = {
         medicamentoId:    form.medicamentoId,
-        valor:            form.valor,
-        valorRepassado:   form.valorRepassado,
+        valor:            form.valor * nPacotes,
+        valorRepassado:   form.valorRepassado * nPacotes,
         lote:             form.lote || null,
         validade:         form.validade || null,
         estoqueMinimo:    form.estoqueMinimo,
@@ -389,6 +415,41 @@ export default function Farmacia() {
       setConfirmExcluir(null);
       carregarEstoque();
     } catch { toast.error('Erro ao inativar.'); }
+  };
+
+  const abrirAjuste = (item: EstoqueItem) => {
+    if (!podeEditar) { semPermissao('ajustar estoque'); return; }
+    const vol = extrairVolume(item.medicamento);
+    setAjusteFrascos('');
+    setAjustePeso(vol ?? '');
+    setAjusteMotivo('');
+    setModalAjuste(item);
+  };
+
+  const salvarAjuste = async () => {
+    if (!modalAjuste) return;
+    const n = Number(ajusteFrascos);
+    const p = Number(ajustePeso);
+    const alvo = n > 0 && p > 0 ? n * p : n > 0 ? n : 0;
+    if (alvo <= 0) return toast.error('Informe uma quantidade válida maior que zero.');
+    const diff = alvo - modalAjuste.qtdEstoque;
+    if (Math.abs(diff) < 0.0001) { setModalAjuste(null); return; }
+    const tipo = diff > 0 ? 'ENTRADA' : 'SAIDA';
+    const qty  = Math.abs(diff);
+    setSalvandoAjuste(true);
+    try {
+      await api.patch(`/farmacia/estoque/${modalAjuste.id}/ajuste`, {
+        tipo,
+        quantidade: qty,
+        motivo: ajusteMotivo.trim() || 'Correção de estoque',
+      });
+      toast.success(`Estoque corrigido para ${fmtQtd(alvo)} ${modalAjuste.medicamento.unidade}`);
+      setModalAjuste(null);
+      carregarEstoque();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao ajustar estoque.');
+    } finally { setSalvandoAjuste(false); }
   };
 
   const abrirHistorico = async (item: EstoqueItem) => {
@@ -521,6 +582,14 @@ export default function Farmacia() {
                         {item.medicamento.nome}
                       </span>
                       {item.medicamento.controlado && <Lock size={10} className="text-purple-600 flex-shrink-0" />}
+                      {/* Quantidade atual com unidade */}
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
+                        nivelEstoque(item) === 'critico'   ? 'bg-red-100 text-red-700' :
+                        nivelEstoque(item) === 'alarmante' ? 'bg-amber-100 text-amber-700' :
+                                                              'bg-emerald-50 text-emerald-700'
+                      }`}>
+                        {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
+                      </span>
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${item.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                         {item.ativo ? 'ATIVO' : 'INATIVO'}
                       </span>
@@ -541,7 +610,7 @@ export default function Farmacia() {
                     <div className={`flex flex-col justify-center gap-0.5 bg-white px-6 py-2.5 border-y ${borderCls.replace('border-l-[4px] border-l-red-500 ','').replace('border-l-[4px] border-l-amber-400 ','')}`}>
                       <div className="flex items-center justify-center gap-1">
                         <span className={`text-[10px] font-bold ${nivel==='critico' ? 'text-red-600' : nivel==='alarmante' ? 'text-amber-600' : 'text-gray-500'}`}>
-                          {item.qtdEstoque}/{item.estoqueMinimo}
+                          {fmtQtd(item.qtdEstoque)} / mín {fmtQtd(item.estoqueMinimo)} {item.medicamento.unidade}
                         </span>
                         {nivel !== 'ok' && <AlertTriangle size={10} className={nivel==='critico' ? 'text-red-500' : 'text-amber-500'} />}
                       </div>
@@ -555,6 +624,10 @@ export default function Farmacia() {
                       <button onClick={() => preencherEdicao(item)} title="Editar"
                         className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
                         <Pencil size={13} />
+                      </button>
+                      <button onClick={() => abrirAjuste(item)} title="Corrigir Estoque"
+                        className="p-1.5 rounded-lg border border-blue-200 text-blue-500 hover:bg-blue-50">
+                        <Sliders size={13} />
                       </button>
                       <button onClick={() => setConfirmExcluir(item)} title="Inativar"
                         className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
@@ -587,62 +660,63 @@ export default function Farmacia() {
                   Medicamento <span className="text-red-500">*</span>
                 </label>
                 <div className="relative" ref={comboboxRef}>
-                  <button
-                    type="button"
-                    disabled={!!editandoId}
-                    onClick={() => {
-                      if (!editandoId) {
-                        setDropdownMedAberto((v) => !v);
-                        setBuscaMed('');
-                      }
-                    }}
-                    className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-white">
-                    <span className={medSelecionado ? 'text-gray-900' : 'text-gray-400'}>
-                      {medSelecionado ? medSelecionado.nome : 'Selecione o medicamento...'}
-                    </span>
-                    <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
-                  </button>
-
-                  {dropdownMedAberto && (
-                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
-                      <div className="p-2 border-b border-gray-100">
-                        <div className="relative">
-                          <Search size={13} className="absolute left-2.5 top-2 text-gray-400" />
-                          <input
-                            autoFocus
-                            type="text"
-                            placeholder="Buscar medicamento..."
-                            value={buscaMed}
-                            onChange={(e) => setBuscaMed(e.target.value)}
-                            className="w-full pl-7 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                          />
-                        </div>
+                  {!dropdownMedAberto ? (
+                    /* Botão — aparece quando NÃO está buscando */
+                    <button
+                      type="button"
+                      disabled={!!editandoId}
+                      onClick={() => { if (!editandoId) { setDropdownMedAberto(true); setBuscaMed(''); } }}
+                      className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-white">
+                      <span className={medSelecionado ? 'text-gray-900 truncate' : 'text-gray-400'}>
+                        {medSelecionado ? medSelecionado.nome : 'Selecione o medicamento...'}
+                      </span>
+                      {medSelecionado && !editandoId ? (
+                        <X size={14} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
+                          onClick={e => { e.stopPropagation(); setForm(f => ({ ...f, medicamentoId: 0 })); }} />
+                      ) : (
+                        <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ) : (
+                    /* Campo de busca — substitui o botão ao clicar (nunca os dois juntos) */
+                    <div className="relative">
+                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Buscar medicamento..."
+                        value={buscaMed}
+                        onChange={(e) => setBuscaMed(e.target.value)}
+                        onBlur={() => setTimeout(() => { setDropdownMedAberto(false); setBuscaMed(''); }, 150)}
+                        className="w-full pl-8 pr-3 border border-gray-300 rounded-xl py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                        <ul className="max-h-44 overflow-y-auto">
+                          {medsFiltrados.length === 0 ? (
+                            <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum medicamento encontrado.</li>
+                          ) : (
+                            medsFiltrados.map((m) => (
+                              <li key={m.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={() => {
+                                    setForm((f) => ({ ...f, medicamentoId: m.id }));
+                                    setDropdownMedAberto(false);
+                                    setBuscaMed('');
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 transition-colors ${
+                                    form.medicamentoId === m.id ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-800'
+                                  }`}>
+                                  <span className="block truncate">{m.nome}</span>
+                                  {m.formaFarmaceutica && (
+                                    <span className="text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
+                                  )}
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
                       </div>
-                      <ul className="max-h-44 overflow-y-auto">
-                        {medsFiltrados.length === 0 ? (
-                          <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum medicamento encontrado.</li>
-                        ) : (
-                          medsFiltrados.map((m) => (
-                            <li key={m.id}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setForm((f) => ({ ...f, medicamentoId: m.id }));
-                                  setDropdownMedAberto(false);
-                                  setBuscaMed('');
-                                }}
-                                className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 transition-colors ${
-                                  form.medicamentoId === m.id ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-800'
-                                }`}>
-                                <span className="block truncate">{m.nome}</span>
-                                {m.formaFarmaceutica && (
-                                  <span className="text-[11px] text-gray-400">{m.formaFarmaceutica}</span>
-                                )}
-                              </button>
-                            </li>
-                          ))
-                        )}
-                      </ul>
                     </div>
                   )}
                 </div>
@@ -702,18 +776,32 @@ export default function Farmacia() {
               {!estoqueExistente && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor Comprado (R$) <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      {editandoId ? 'Valor Total Comprado (R$)' : 'Valor por Embalagem (R$)'} <span className="text-red-500">*</span>
+                    </label>
                     <input type="text" inputMode="decimal" value={valorStr}
                       onChange={(e) => handleValorChange(e.target.value)}
                       placeholder="0,00"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    {!editandoId && frascos !== '' && Number(frascos) > 1 && form.valor > 0 && (
+                      <p className="text-[10px] text-emerald-700 mt-0.5 font-semibold">
+                        Total: R$ {formatarValor(form.valor * Number(frascos))}
+                      </p>
+                    )}
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Valor Repassado (R$)</label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      {editandoId ? 'Valor Total Repassado (R$)' : 'Valor Repassado por Embalagem (R$)'}
+                    </label>
                     <input type="text" inputMode="decimal" value={valorRepassadoStr}
                       onChange={(e) => handleValorRepassadoChange(e.target.value)}
                       placeholder="0,00"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    {!editandoId && frascos !== '' && Number(frascos) > 1 && form.valorRepassado > 0 && (
+                      <p className="text-[10px] text-emerald-700 mt-0.5 font-semibold">
+                        Total: R$ {formatarValor(form.valorRepassado * Number(frascos))}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
@@ -756,69 +844,92 @@ export default function Farmacia() {
                 </div>
               )}
 
-              {/* Quantidade + Mínimo + Alarmante */}
-              <div className={`grid gap-3 ${estoqueExistente ? 'grid-cols-1' : 'grid-cols-3'}`}>
+              {/* Calculadora de Embalagens */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {volDetectado
-                      ? <>Qtd <span className="text-gray-400 font-normal capitalize">({tipoEmbalagem}s)</span></>
-                      : <>Qtd {medSelecionado && <span className="text-gray-400 font-normal">({medSelecionado.unidade})</span>}</>
-                    }
-                    {' '}<span className="text-red-500">*</span>
+                    Nº de Embalagens <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="number" min={0}
                     disabled={!!editandoId}
-                    value={volDetectado ? (frascos === '' ? '' : frascos) : (form.qtdEstoque === 0 ? '' : form.qtdEstoque)}
+                    value={frascos === '' ? '' : frascos}
                     onChange={e => {
                       const n = e.target.value === '' ? '' : Number(e.target.value);
-                      if (volDetectado) {
-                        setFrascos(n);
-                        setForm(f => ({ ...f, qtdEstoque: n !== '' && Number(n) > 0 ? Number(n) * volDetectado : 0 }));
-                      } else {
-                        setFrascos('');
-                        setForm(f => ({ ...f, qtdEstoque: n === '' ? 0 : Number(n) }));
-                      }
+                      setFrascos(n);
+                      const p = pesoPorEmbalagem !== '' ? Number(pesoPorEmbalagem) : 0;
+                      const total = n !== '' && Number(n) > 0
+                        ? (p > 0 ? Number(n) * p : Number(n))
+                        : 0;
+                      setForm(f => ({ ...f, qtdEstoque: total }));
                     }}
-                    placeholder={volDetectado ? `Nº de ${tipoEmbalagem}s` : '0'}
+                    placeholder="Qtd de embalagens"
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
                   />
-                  {volDetectado && (
-                    <p className="text-[11px] text-gray-400 mt-1 leading-tight">
-                      1 {tipoEmbalagem} = {volDetectado.toLocaleString('pt-BR')} {medSelecionado!.unidade}
-                      {frascos !== '' && Number(frascos) > 0 && (
-                        <><br /><b className="text-emerald-700">
-                          = {(Number(frascos) * volDetectado).toLocaleString('pt-BR')} {medSelecionado!.unidade}
-                        </b></>
-                      )}
-                    </p>
-                  )}
                   {editandoId && <p className="text-[10px] text-gray-400 mt-1">Use "Ajuste de Estoque" para alterar.</p>}
                 </div>
-
-                {!estoqueExistente && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-                        Mínimo <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
-                      </label>
-                      <input type="number" min={0} value={form.estoqueMinimo}
-                        onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: Number(e.target.value) }))}
-                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                        Alarmante <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
-                      </label>
-                      <input type="number" min={0} value={form.estoqueAlarmante}
-                        onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: Number(e.target.value) }))}
-                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    </div>
-                  </>
-                )}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Peso/Vol por Embalagem{medSelecionado && <span className="text-gray-400 font-normal ml-1">({medSelecionado.unidade})</span>}
+                  </label>
+                  <input
+                    type="number" min={0}
+                    disabled={!!editandoId}
+                    value={pesoPorEmbalagem === '' ? '' : pesoPorEmbalagem}
+                    onChange={e => {
+                      const p = e.target.value === '' ? '' : Number(e.target.value);
+                      setPesoPorEmbalagem(p);
+                      const n = frascos !== '' ? Number(frascos) : 0;
+                      const total = n > 0 && p !== '' && Number(p) > 0
+                        ? n * Number(p)
+                        : n;
+                      setForm(f => ({ ...f, qtdEstoque: total }));
+                    }}
+                    placeholder="Ex: 3,6"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                </div>
               </div>
+
+              {/* Total computado */}
+              {Number(frascos) > 0 && (
+                <p className="text-xs text-gray-500 -mt-1">
+                  Total em estoque:{' '}
+                  <b className="text-emerald-700">
+                    {fmtQtd(
+                      pesoPorEmbalagem !== '' && Number(pesoPorEmbalagem) > 0
+                        ? Number(frascos) * Number(pesoPorEmbalagem)
+                        : Number(frascos)
+                    )} {medSelecionado?.unidade ?? ''}
+                  </b>
+                </p>
+              )}
+
+              {/* Mínimo + Alarmante */}
+              {!estoqueExistente && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                      Mínimo <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
+                    </label>
+                    <input type="number" min={0} value={form.estoqueMinimo === 0 ? '' : form.estoqueMinimo}
+                      onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: e.target.value === '' ? 0 : Number(e.target.value) }))}
+                      placeholder="0"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                      Alarmante <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
+                    </label>
+                    <input type="number" min={0} value={form.estoqueAlarmante === 0 ? '' : form.estoqueAlarmante}
+                      onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: e.target.value === '' ? 0 : Number(e.target.value) }))}
+                      placeholder="0"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                </div>
+              )}
 
               {/* Status */}
               <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
@@ -849,6 +960,120 @@ export default function Farmacia() {
           </div>
         </>
       )}
+
+      {/* ── Modal: Corrigir Estoque ──────────────────────────────────────── */}
+      {modalAjuste && (() => {
+        const n     = Number(ajusteFrascos);
+        const p     = Number(ajustePeso);
+        const alvo  = n > 0 && p > 0 ? n * p : n > 0 ? n : 0;
+        const diff  = alvo - modalAjuste.qtdEstoque;
+        const nivel = nivelEstoque(modalAjuste);
+        return (
+          <>
+            <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setModalAjuste(null)} />
+            <div className="fixed inset-x-4 top-[8vh] z-50 bg-white rounded-2xl shadow-2xl max-w-md mx-auto flex flex-col max-h-[84vh] overflow-hidden">
+              <div className="bg-blue-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <Sliders size={15} className="text-white/80" />
+                  <p className="font-bold text-sm text-white">Corrigir Estoque</p>
+                </div>
+                <button onClick={() => setModalAjuste(null)} className="text-white/60 hover:text-white"><X size={18} /></button>
+              </div>
+
+              <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+                {/* Info do produto */}
+                <div className="bg-gray-50 rounded-xl p-3">
+                  <p className="text-sm font-semibold text-gray-800">{modalAjuste.medicamento.nome}</p>
+                  {modalAjuste.medicamento.apresentacao && (
+                    <p className="text-xs text-gray-500 mt-0.5">{modalAjuste.medicamento.apresentacao}</p>
+                  )}
+                  <p className="text-sm font-bold mt-1.5">
+                    Estoque atual:{' '}
+                    <span className={nivel === 'critico' ? 'text-red-600' : nivel === 'alarmante' ? 'text-amber-600' : 'text-emerald-700'}>
+                      {fmtQtd(modalAjuste.qtdEstoque)} {modalAjuste.medicamento.unidade}
+                    </span>
+                  </p>
+                </div>
+
+                {/* Calculadora */}
+                <div>
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Quantidade real em estoque agora</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Nº de Embalagens</label>
+                      <input
+                        type="number" min={0} autoFocus
+                        value={ajusteFrascos === '' ? '' : ajusteFrascos}
+                        onChange={e => setAjusteFrascos(e.target.value === '' ? '' : Number(e.target.value))}
+                        placeholder="Ex: 10"
+                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Peso/Vol por Embalagem ({modalAjuste.medicamento.unidade})
+                      </label>
+                      <input
+                        type="number" min={0}
+                        value={ajustePeso === '' ? '' : ajustePeso}
+                        onChange={e => setAjustePeso(e.target.value === '' ? '' : Number(e.target.value))}
+                        placeholder="Ex: 3,6"
+                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                  {n > 0 && (
+                    <p className="text-xs text-gray-500 mt-1.5">
+                      Total:{' '}
+                      <b className="text-blue-700">
+                        {fmtQtd(alvo)} {modalAjuste.medicamento.unidade}
+                      </b>
+                    </p>
+                  )}
+                </div>
+
+                {/* Preview da movimentação */}
+                {alvo > 0 && Math.abs(diff) >= 0.001 && (
+                  <div className={`rounded-xl p-3 text-xs font-semibold ${diff > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-orange-50 text-orange-700 border border-orange-200'}`}>
+                    {diff > 0
+                      ? `Será registrada entrada de ${fmtQtd(diff)} ${modalAjuste.medicamento.unidade}`
+                      : `Será registrada saída de ${fmtQtd(-diff)} ${modalAjuste.medicamento.unidade}`
+                    }
+                  </div>
+                )}
+
+                {/* Motivo */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Motivo (opcional)</label>
+                  <input
+                    type="text"
+                    value={ajusteMotivo}
+                    onChange={e => setAjusteMotivo(e.target.value)}
+                    placeholder="Ex: Correção de inventário"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={salvarAjuste}
+                    disabled={salvandoAjuste || alvo <= 0}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60"
+                  >
+                    {salvandoAjuste ? 'Salvando...' : 'Corrigir Estoque'}
+                  </button>
+                  <button
+                    onClick={() => setModalAjuste(null)}
+                    className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* ── FAB mobile ────────────────────────────────────────────────────── */}
       {!modalFormAberto && (

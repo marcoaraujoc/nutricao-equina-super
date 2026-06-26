@@ -299,10 +299,15 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
+      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
+      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
+      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestor && Number(existente.veterinarioId) !== Number(userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode editar evoluções criadas por você.' });
+      }
+
       if (existente.status === 'FINALIZADA') {
-        // Gestores podem editar evoluções finalizadas
-        const membro = await prisma.membroEquipe.findFirst({ where: { userId } });
-        if (!membro || membro.cargo !== 'GESTOR') {
+        if (!bypassGestor) {
           return res.status(403).json({
             sucesso:  false,
             mensagem: 'Evoluções finalizadas só podem ser editadas por gestores',
@@ -377,7 +382,13 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      if (existente.status === 'FINALIZADA' && req.user.role !== 'ADMIN') {
+      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
+      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestorDel && Number(existente.veterinarioId) !== Number(userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode excluir evoluções criadas por você.' });
+      }
+
+      if (existente.status === 'FINALIZADA' && req.user.userType !== 'ADMIN') {
         return res.status(403).json({
           sucesso:  false,
           mensagem: 'Apenas administradores podem excluir evoluções finalizadas',
@@ -483,6 +494,11 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Regra: FORNECEDOR só pode finalizar evolução que ele próprio criou
+      if (req.user.userType === 'FORNECEDOR' && existente.veterinarioId !== userId) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode finalizar evoluções criadas por você.' });
+      }
 
       if (existente.aprovado) {
         return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está aprovada' });

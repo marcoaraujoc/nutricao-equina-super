@@ -54,7 +54,7 @@ interface ResumoHistoricoItem {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = [
-  { key: 'agenda',         label: 'Minha Agenda',   icon: <CalendarDays size={15} /> },
+  { key: 'agenda',         label: 'Agenda',          icon: <CalendarDays size={15} /> },
   { key: 'evolucao',       label: 'Evolução',       icon: <FileText     size={15} /> },
   { key: 'prescricao',     label: 'Prescrição',     icon: <Pill         size={15} /> },
   { key: 'vacina',         label: 'Vacina',         icon: <Syringe      size={15} /> },

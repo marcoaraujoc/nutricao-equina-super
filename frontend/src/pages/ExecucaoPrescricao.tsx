@@ -226,13 +226,14 @@ function ModalExecucao({
       saveExecMap(grupo.id, m);
       setExecMap(m);
 
-      if (isUltimoDia) {
-        // Último dia: transita grupo para EXECUTADO e sai da fila
-        await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`);
-        toast.success('Tratamento concluído — prescrição finalizada');
-      } else {
-        toast.success(`Dia ${diaAtualLabel} executado com sucesso`);
-      }
+      // Sempre chama o backend: debita estoque do dia + lança na fatura.
+      // isUltimoDia = true → grupo transita para EXECUTADO e sai da fila.
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { isUltimoDia });
+      toast.success(
+        isUltimoDia
+          ? 'Tratamento concluído — prescrição finalizada'
+          : `Dia ${diaAtualLabel} executado — estoque debitado e fatura lançada`,
+      );
       markDoneToday(grupo.id);
       onClose();
     } catch (err: unknown) {

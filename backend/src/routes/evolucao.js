@@ -81,7 +81,7 @@ router.delete('/:id',   authenticate, checkPermission('atendimento.evolucoes.del
 
 // Ações de patch
 router.patch('/:id/cancelar', authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.cancelar);
-router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evolucoes.editar',  'EQUIPE'),  evolucaoIdParam, validate, EvolucaoController.aprovar);
+router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evolucoes.finalizar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.aprovar);
 router.patch('/:id/titulo',   authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
 
 // Mídias

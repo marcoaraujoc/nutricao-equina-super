@@ -149,13 +149,20 @@ const PrescricaoController = {
 
       const prescricaoParaCheck = await prisma.prescricao.findFirst({
         where:  { id: Number(id), ativo: true },
-        select: { animalId: true },
+        select: { animalId: true, veterinarioId: true },
       });
       if (!prescricaoParaCheck) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
       const acessoUpd = await verificarAcessoAnimal({ animalId: prescricaoParaCheck.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoUpd === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoUpd)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
+      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
+      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestor && Number(prescricaoParaCheck.veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Você só pode editar prescrições criadas por você.' });
+      }
 
       const inicio   = dataInicio ? new Date(dataInicio) : undefined;
       const fim      = inicio && duracaoDias
@@ -198,13 +205,19 @@ const PrescricaoController = {
     try {
       const prescricaoParaDel = await prisma.prescricao.findFirst({
         where:  { id: Number(req.params.id), ativo: true },
-        select: { animalId: true },
+        select: { animalId: true, veterinarioId: true },
       });
       if (!prescricaoParaDel) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
       const acessoDel = await verificarAcessoAnimal({ animalId: prescricaoParaDel.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoDel === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoDel)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
+      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestorDel && Number(prescricaoParaDel.veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Você só pode excluir prescrições criadas por você.' });
+      }
 
       await prisma.prescricao.update({
         where: { id: Number(req.params.id) },
@@ -232,6 +245,11 @@ const PrescricaoController = {
       const acessoFin1 = await verificarAcessoAnimal({ animalId: prescricao.animalId, userId: vet.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acessoFin1 === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin1)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Regra: FORNECEDOR só pode finalizar prescrição que ele próprio criou
+      if (vet.userType === 'FORNECEDOR' && prescricao.veterinarioId !== vet.id) {
+        return res.status(403).json({ error: 'Você só pode finalizar prescrições criadas por você.' });
+      }
 
       if (prescricao.status !== 'RASCUNHO') {
         return res.status(400).json({ error: 'Apenas rascunhos podem ser finalizados' });
@@ -289,8 +307,12 @@ const PrescricaoController = {
       if (acessoFin === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
+      // FORNECEDOR só finaliza rascunhos que ele próprio criou
+      const whereRascunho = { animalId: Number(animalId), ativo: true, status: 'RASCUNHO' };
+      if (vet.userType === 'FORNECEDOR') whereRascunho.veterinarioId = vet.id;
+
       const rascunhos = await prisma.prescricao.findMany({
-        where: { animalId: Number(animalId), ativo: true, status: 'RASCUNHO' },
+        where: whereRascunho,
       });
 
       if (rascunhos.length === 0) {

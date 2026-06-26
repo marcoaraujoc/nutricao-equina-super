@@ -8,7 +8,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import {
-  DollarSign, Search, ChevronRight, Loader2, Trash2,
+  DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, AlertCircle, Ban, Share2, Download, Printer, ChevronDown,
 } from 'lucide-react';
@@ -36,7 +36,7 @@ interface Fatura {
   id: number; proprietarioId: number; mesReferencia?: string;
   total: number; status: FaturaStatus; criadoEm: string;
   itens: FaturaItem[];
-  proprietario?: { id: number; fullName: string; email: string; phone?: string };
+  proprietario?: { id: number; fullName: string; email: string; phone?: string; valorAssistencia?: number; mensalista?: boolean };
 }
 
 interface FaturaResumo {
@@ -45,9 +45,11 @@ interface FaturaResumo {
 
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
+  valorAssistencia?: number; mensalista?: boolean;
   animais: AnimalResumo[];
-  faturaAtiva?: FaturaResumo | null;
-  faturaPaga?:  FaturaResumo | null;
+  faturaAtiva?:   FaturaResumo | null;
+  faturaFechada?: FaturaResumo | null;
+  faturaPaga?:    FaturaResumo | null;
 }
 
 // ─── Catálogo de itens comuns ─────────────────────────────────────────────────
@@ -241,11 +243,11 @@ function ItemRow({
 // ─── Painel direito — detalhe da fatura ──────────────────────────────────────
 
 function PainelFatura({
-  prop, onStatusChange, faturaIdPaga,
+  prop, onStatusChange, faturaId,
 }: {
   prop: ProprietarioItem;
   onStatusChange: () => void;
-  faturaIdPaga?: number;
+  faturaId?: number;
 }) {
   const { podeExecutar, isGestor } = usePermissoes();
   const podeEditar  = isGestor || podeExecutar('financeiro.faturas.editar');
@@ -298,7 +300,6 @@ function PainelFatura({
   };
 
   // Formulário de novo item
-  const [novoAnimalId,      setNovoAnimalId]      = useState<string>(prop.animais[0]?.id?.toString() ?? '');
   const [novoCatIdx,        setNovoCatIdx]        = useState<string>('');
   const [novoNome,          setNovoNome]          = useState('');
   const [novoTipo,          setNovoTipo]          = useState<ItemTipo>('ASSISTENCIA');
@@ -310,8 +311,8 @@ function PainelFatura({
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const url = faturaIdPaga
-        ? `/clinica/faturas/proprietario/${prop.id}?faturaId=${faturaIdPaga}`
+      const url = faturaId
+        ? `/clinica/faturas/proprietario/${prop.id}?faturaId=${faturaId}`
         : `/clinica/faturas/proprietario/${prop.id}`;
       const r = await api.get(url);
       setFatura(r.data.dados);
@@ -320,7 +321,7 @@ function PainelFatura({
     } finally {
       setLoading(false);
     }
-  }, [prop.id, faturaIdPaga]);
+  }, [prop.id, faturaId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -376,7 +377,6 @@ function PainelFatura({
     setLancando(true);
     try {
       const r = await api.post(`/clinica/faturas/${fatura.id}/itens`, {
-        animalId:   novoAnimalId ? Number(novoAnimalId) : undefined,
         tipo:       novoTipo,
         descricao:  novoNome.trim(),
         valor:      Number(novoValor),
@@ -394,7 +394,6 @@ function PainelFatura({
   };
 
   const handleStatus = async (status: FaturaStatus) => {
-    if (status === 'FECHADA' && !podeFechar) { semPermissao('fechar fatura'); return; }
     if (status !== 'FECHADA' && !podeEditar) { semPermissao('alterar status da fatura'); return; }
     if (!fatura) return;
     setSalvando(true);
@@ -402,13 +401,25 @@ function PainelFatura({
       const r = await api.patch(`/clinica/faturas/${fatura.id}/status`, { status });
       setFatura(r.data.dados);
       const MSG: Partial<Record<FaturaStatus, string>> = {
-        PAGA:    'Fatura marcada como paga',
-        FECHADA: 'Fatura fechada — itens bloqueados para edição',
-        ABERTA:  'Fatura reaberta',
+        PAGA:   'Fatura marcada como paga',
+        ABERTA: 'Fatura reaberta',
       };
       toast.success(MSG[status] ?? 'Status atualizado');
       onStatusChange();
     } catch { toast.error('Erro ao atualizar status'); }
+    finally { setSalvando(false); }
+  };
+
+  const handleFechar = async () => {
+    if (!podeFechar) { semPermissao('fechar fatura'); return; }
+    if (!fatura) return;
+    setSalvando(true);
+    try {
+      const r = await api.patch(`/clinica/faturas/${fatura.id}/fechar`);
+      setFatura(r.data.dados);
+      toast.success('Fatura fechada — itens bloqueados para edição');
+      onStatusChange();
+    } catch { toast.error('Erro ao fechar fatura'); }
     finally { setSalvando(false); }
   };
 
@@ -449,7 +460,7 @@ function PainelFatura({
             {canEdit && (
               <>
                 <button
-                  onClick={() => handleStatus('FECHADA')}
+                  onClick={handleFechar}
                   disabled={salvando}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/20">
                   {salvando ? <Loader2 size={11} className="animate-spin"/> : <X size={11}/>}
@@ -560,6 +571,21 @@ function PainelFatura({
       {/* Corpo da fatura */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4 pr-1 pb-4">
 
+        {/* Assistência e serviços gerais (sem animal) — sempre primeiro */}
+        {(itensPorAnimal['sem'] ?? []).length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-50">
+              <p className="text-sm font-bold text-gray-700">Assistência &amp; Serviços Gerais</p>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {(itensPorAnimal['sem'] ?? []).map((item: FaturaItem) => (
+                <ItemRow key={item.id} item={item} canEdit={canEdit}
+                  onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Seções por animal */}
         {prop.animais.map(animal => {
           const itens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
@@ -605,21 +631,6 @@ function PainelFatura({
           );
         })}
 
-        {/* Itens sem animal associado */}
-        {(itensPorAnimal['sem'] ?? []).length > 0 && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-50">
-              <p className="text-sm font-bold text-gray-700">Outros lançamentos</p>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {(itensPorAnimal['sem'] ?? []).map((item: FaturaItem) => (
-                <ItemRow key={item.id} item={item} canEdit={canEdit}
-                  onDelete={handleDeleteItem} onSave={handleSaveItem}/>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Resumo */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
           <div className="flex items-center justify-between">
@@ -637,33 +648,15 @@ function PainelFatura({
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
               Lançar Novo Item / Cobrança na Fatura
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-              {/* Pet */}
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                  Selecionar Pet <span className="text-red-400">*</span>
-                </label>
-                <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                  {prop.animais.map(a => (
-                    <option key={a.id} value={a.id}>
-                      {a.nome} ({a.especie?.nome ?? '—'})
-                    </option>
-                  ))}
-                  <option value="">Sem animal específico</option>
-                </select>
-              </div>
-              {/* Outros Itens */}
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Outros Itens</label>
-                <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                  <option value="">— Selecione um item —</option>
-                  {CATALOGO.map((c, i) => (
-                    <option key={i} value={i}>{c.label}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="mb-3">
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Itens Frequentes</label>
+              <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
+                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
+                <option value="">— Selecione um item —</option>
+                {CATALOGO.map((c, i) => (
+                  <option key={i} value={i}>{c.label}</option>
+                ))}
+              </select>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
               {/* Quantidade */}
@@ -714,50 +707,35 @@ function PainelFatura({
 // ─── Painel esquerdo — lista de proprietários ─────────────────────────────────
 
 function CardProprietario({
-  prop, selecionado, onClick, faturaExibir,
+  prop, selecionado, onClick,
 }: {
   prop: ProprietarioItem; selecionado: boolean; onClick: () => void;
-  faturaExibir?: FaturaResumo | null;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left p-3.5 rounded-2xl border transition-all ${
+      className={`w-full text-left p-3 rounded-xl border transition-all ${
         selecionado
-          ? 'bg-indigo-50 border-indigo-200 shadow-sm'
+          ? 'bg-indigo-50 border-indigo-300 shadow-sm'
           : 'bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50'
       }`}>
-      <div className="flex items-start justify-between gap-2 mb-1.5">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
-            {prop.fullName[0]?.toUpperCase()}
-          </div>
-          <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
+      <div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+          {prop.fullName[0]?.toUpperCase()}
         </div>
-        {faturaExibir && <StatusBadge status={faturaExibir.status}/>}
-      </div>
-      <div className="flex flex-wrap gap-1 mb-2 pl-9">
-        {prop.animais.slice(0, 3).map(a => (
-          <span key={a.id}
-            className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full font-medium">
-            {a.nome} ({a.especie?.nome ?? '—'})
-          </span>
-        ))}
-        {prop.animais.length > 3 && (
-          <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">
-            +{prop.animais.length - 3}
-          </span>
-        )}
-      </div>
-      <div className="flex items-center justify-between pl-9">
-        <p className="text-[10px] text-gray-400 truncate">{prop.email}</p>
-        {faturaExibir && (
-          <p className="text-xs font-bold text-gray-700 flex-shrink-0">
-            {formatBRL(faturaExibir.total)}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
+          <p className="text-[10px] text-gray-400 truncate">
+            {prop.animais.map(a => a.nome).join(', ') || 'Sem animais'}
           </p>
-        )}
+        </div>
+        {/* Bolinhas indicadoras de faturas existentes */}
+        <div className="flex gap-1 flex-shrink-0">
+          {prop.faturaAtiva   && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
+          {prop.faturaFechada && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
+          {prop.faturaPaga    && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
+        </div>
       </div>
-      {selecionado && <ChevronRight size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-400"/>}
     </button>
   );
 }
@@ -767,12 +745,14 @@ function CardProprietario({
 export default function Faturamento() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
 
+  type FiltroTipo = 'ABERTA' | 'FECHADA' | 'PAGA';
+
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [busca,         setBusca]         = useState('');
   const [selecionado,   setSelecionado]   = useState<ProprietarioItem | null>(null);
-  const [totalAbertas,  setTotalAbertas]  = useState(0);
-  const [filtroStatus, setFiltroStatus] = useState<'ABERTA' | 'PAGA'>('ABERTA');
+  const [contadores,    setContadores]    = useState({ abertas: 0, fechadas: 0, pagas: 0 });
+  const [filtroStatus,  setFiltroStatus]  = useState<FiltroTipo>('ABERTA');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -780,7 +760,11 @@ export default function Faturamento() {
       const r = await api.get('/clinica/faturas/proprietarios');
       const lista: ProprietarioItem[] = r.data.dados ?? [];
       setProprietarios(lista);
-      setTotalAbertas(lista.filter(p => p.faturaAtiva?.status === 'ABERTA').length);
+      setContadores({
+        abertas:  lista.filter(p => !!p.faturaAtiva).length,
+        fechadas: lista.filter(p => !!p.faturaFechada).length,
+        pagas:    lista.filter(p => !!p.faturaPaga).length,
+      });
     } catch {
       toast.error('Erro ao carregar proprietários');
     } finally {
@@ -791,15 +775,12 @@ export default function Faturamento() {
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
   const filtrados = proprietarios.filter(p => {
-    const temAberta = p.faturaAtiva?.status === 'ABERTA';
-    const temPaga   = !!p.faturaPaga;
-    if (filtroStatus === 'ABERTA' && !temAberta) return false;
-    if (filtroStatus === 'PAGA'   && !temPaga)   return false;
     if (!busca) return true;
+    const q = busca.toLowerCase();
     return (
-      p.fullName.toLowerCase().includes(busca.toLowerCase()) ||
-      p.email.toLowerCase().includes(busca.toLowerCase()) ||
-      p.animais.some(a => a.nome.toLowerCase().includes(busca.toLowerCase()))
+      p.fullName.toLowerCase().includes(q) ||
+      p.email.toLowerCase().includes(q) ||
+      p.animais.some(a => a.nome.toLowerCase().includes(q))
     );
   });
 
@@ -827,57 +808,31 @@ export default function Faturamento() {
               <p className="text-sm text-gray-500">Faturas e contas conveniadas por proprietário</p>
             </div>
           </div>
-          {totalAbertas > 0 && (
+          {contadores.abertas > 0 && (
             <span className="text-xs font-bold bg-amber-500 text-white px-2.5 py-0.5 rounded-full flex-shrink-0">
-              {totalAbertas} {totalAbertas === 1 ? 'fatura aberta' : 'faturas abertas'}
+              {contadores.abertas} {contadores.abertas === 1 ? 'fatura aberta' : 'faturas abertas'}
             </span>
           )}
         </div>
 
         {/* Layout split */}
         <div className="flex gap-5 min-h-[520px] overflow-hidden">
-          {/* Painel esquerdo */}
-          <div className="w-72 flex-shrink-0 flex flex-col min-h-0">
-            {/* Tab — dentro do painel esquerdo para alinhar com o topo do painel direito */}
-            <div className="flex gap-1 flex-shrink-0 mb-3">
-              <button className="flex items-center gap-2 px-4 py-2 bg-white border-b-2 border-indigo-600 text-indigo-700 text-sm font-semibold rounded-t-xl shadow-sm">
-                <Receipt size={14}/> Faturamento & Contas Conveniadas
-              </button>
-            </div>
-            {/* Filtro */}
-            <div className="mb-3 flex-shrink-0">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Filtrar Proprietários</p>
-              <div className="relative mb-2">
-                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-                <input value={busca} onChange={e => setBusca(e.target.value)}
-                  placeholder="Pesquisar por proprietário, CPF ou pet..."
-                  className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"/>
-              </div>
-              {/* Toggle abertas / pagas */}
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setFiltroStatus('ABERTA')}
-                  className={`flex-1 py-1.5 text-[11px] font-semibold rounded-lg transition-colors ${
-                    filtroStatus === 'ABERTA'
-                      ? 'bg-amber-500 text-white'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                  }`}>
-                  Abertas
-                </button>
-                <button
-                  onClick={() => setFiltroStatus('PAGA')}
-                  className={`flex-1 py-1.5 text-[11px] font-semibold rounded-lg transition-colors ${
-                    filtroStatus === 'PAGA'
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                  }`}>
-                  Pagas
-                </button>
-              </div>
+
+          {/* ── Painel esquerdo — lista de proprietários ── */}
+          <div className="w-60 flex-shrink-0 flex flex-col min-h-0">
+            {/* Busca */}
+            <div className="relative mb-3 flex-shrink-0">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+              <input
+                value={busca}
+                onChange={e => setBusca(e.target.value)}
+                placeholder="Buscar proprietário..."
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"
+              />
             </div>
 
             {/* Lista */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
               {loading ? (
                 <div className="flex justify-center py-8">
                   <Loader2 size={18} className="animate-spin text-indigo-400"/>
@@ -886,7 +841,7 @@ export default function Faturamento() {
                 <div className="text-center py-8">
                   <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
                   <p className="text-xs text-gray-400">
-                    {busca ? 'Nenhum resultado encontrado.' : 'Nenhum proprietário com animais vinculados.'}
+                    {busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}
                   </p>
                 </div>
               ) : (
@@ -895,30 +850,55 @@ export default function Faturamento() {
                     key={p.id} prop={p}
                     selecionado={selecionado?.id === p.id}
                     onClick={() => setSelecionado(p)}
-                    faturaExibir={filtroStatus === 'PAGA' ? p.faturaPaga : p.faturaAtiva}
                   />
                 ))
               )}
             </div>
 
-            {/* Footer lista */}
+            {/* Atualizar */}
             <div className="flex-shrink-0 mt-3">
               <button
                 onClick={carregar}
                 className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-gray-300 rounded-xl text-xs text-gray-500 hover:bg-gray-50 hover:border-gray-400 transition-colors">
-                <RefreshCw size={11}/> Atualizar Lista
+                <RefreshCw size={11}/> Atualizar
               </button>
             </div>
           </div>
 
-          {/* Painel direito */}
+          {/* ── Painel direito ── */}
           {selecionado ? (
-            <PainelFatura
-              key={`${selecionado.id}-${filtroStatus}`}
-              prop={selecionado}
-              onStatusChange={carregar}
-              faturaIdPaga={filtroStatus === 'PAGA' ? selecionado.faturaPaga?.id : undefined}
-            />
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
+              {/* Filtros de tipo de fatura no topo */}
+              <div className="flex gap-2 mb-3 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
+                {[
+                  { key: 'ABERTA'  as FiltroTipo, label: 'Aberta',         cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva   },
+                  { key: 'FECHADA' as FiltroTipo, label: 'Fechada',        cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada },
+                  { key: 'PAGA'    as FiltroTipo, label: 'Paga',           cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga    },
+                ].map(({ key, label, cor, existe }) => (
+                  <button
+                    key={key}
+                    onClick={() => setFiltroStatus(key)}
+                    disabled={!existe}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                      filtroStatus === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <PainelFatura
+                key={`${selecionado.id}-${filtroStatus}`}
+                prop={selecionado}
+                onStatusChange={carregar}
+                faturaId={
+                  filtroStatus === 'PAGA'    ? selecionado.faturaPaga?.id    :
+                  filtroStatus === 'FECHADA' ? selecionado.faturaFechada?.id :
+                  undefined
+                }
+              />
+            </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
               <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center mb-4">

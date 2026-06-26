@@ -480,6 +480,14 @@ class AnimalController {
       // Somente usuários sem userType proprietário e com role ADMIN têm acesso global.
       const isAdmin = role === 'ADMIN' && userType !== 'PROPRIETARIO';
 
+      // Multicargo: PROPRIETARIO com cargo VETERINARIO/ESTAGIARIO/GESTOR numa equipe
+      // deve ver também os animais da equipe além dos próprios.
+      // req.membroCargo é setado pelo checkPermission com o cargo real da equipe.
+      const CARGOS_EQUIPE = ['VETERINARIO', 'ESTAGIARIO', 'GESTOR'];
+      const isProprietarioMulticargo = userType === 'PROPRIETARIO'
+        && req.membroCargo
+        && CARGOS_EQUIPE.includes(req.membroCargo);
+
       const isMembroEquipe = !!req.empresaId && !isAdmin;
 
       const vetSolicitacoesWhere = { solicitacoes: { some: { vetUserId: Number(userId), OR: [
@@ -512,9 +520,12 @@ class AnimalController {
 
       const where = isAdmin
         ? {}
-        // PROPRIETARIO: sempre isolado pelo próprio userId — nunca vaza para outros donos
+        // PROPRIETARIO: sempre inclui seus próprios animais.
+        // Multicargo (também é VET/ESTAGIARIO/GESTOR numa equipe): adiciona escopo da equipe.
         : userType === 'PROPRIETARIO'
-          ? { userId: Number(userId) }
+          ? isProprietarioMulticargo
+            ? { OR: [{ userId: Number(userId) }, ...scopeOR] }
+            : { userId: Number(userId) }
           // FORNECEDOR (prestador): NUNCA herda escopo de equipe — só animais com
           // designação ativa (DesignacaoPrestador) e dentro da validade
           : userType === 'FORNECEDOR'

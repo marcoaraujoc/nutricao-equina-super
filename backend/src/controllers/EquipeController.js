@@ -239,7 +239,7 @@ const EquipeController = {
       const selectBase = { id: true, email: true, cargo: true, status: true, createdAt: true, expiresAt: true };
 
       // ADMIN: todos os convites de todas as equipes
-      if (req.user.role === 'ADMIN') {
+      if ((req.user.role === 'ADMIN' || req.user.userType === 'ADMIN')) {
         const convites = await prisma.conviteEquipe.findMany({
           orderBy: { createdAt: 'desc' },
           select:  { ...selectBase, equipe: { select: { nome: true, empresa: { select: { nome: true } } } } },
@@ -278,7 +278,7 @@ const EquipeController = {
       }
 
       // Verifica que o usuário é gestor da equipe (ADMIN tem acesso irrestrito)
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const membro = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
         });
@@ -304,7 +304,7 @@ const EquipeController = {
 
   listarTodasEmpresasAdmin: async (req, res) => {
     try {
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Acesso restrito a administradores.' });
       }
 
@@ -357,7 +357,7 @@ const EquipeController = {
       const equipeIdParam = req.query.equipeId ? Number(req.query.equipeId) : null;
 
       // ADMIN: acesso irrestrito a qualquer equipe
-      if (req.user.role === 'ADMIN') {
+      if ((req.user.role === 'ADMIN' || req.user.userType === 'ADMIN')) {
         const todasEquipes = await prisma.equipe.findMany({
           include: { empresa: { select: { nome: true } } },
           orderBy: { createdAt: 'asc' },
@@ -428,7 +428,7 @@ const EquipeController = {
       const equipeIdN = Number(equipeId);
 
       // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (empresa) {
           const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
@@ -457,7 +457,7 @@ const EquipeController = {
       const equipeIdN = Number(req.params.equipeId);
 
       // Isolamento: verifica que o solicitante pertence à empresa desta equipe
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (empresa) {
           const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
@@ -495,7 +495,7 @@ const EquipeController = {
       const prestadorIdN = Number(req.params.userId);
 
       // Valida acesso: ADMIN ou gestor/dono da empresa desta equipe
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
         if (!empresa || !equipe || equipe.empresaId !== empresa.id)
@@ -543,7 +543,7 @@ const EquipeController = {
 
       if (!animalId) return res.status(400).json({ sucesso: false, mensagem: 'animalId é obrigatório' });
 
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
         if (!empresa || !equipe || equipe.empresaId !== empresa.id)
@@ -585,7 +585,7 @@ const EquipeController = {
       const prestadorIdN = Number(req.params.userId);
       const animalIdN    = Number(req.params.animalId);
 
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
         if (!empresa || !equipe || equipe.empresaId !== empresa.id)
@@ -613,7 +613,7 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'fullName, email e cargo são obrigatórios' });
       }
 
-      if (cargo === 'GESTOR' && req.user.role !== 'ADMIN') {
+      if (cargo === 'GESTOR' && (req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
@@ -662,7 +662,7 @@ const EquipeController = {
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
 
       // Autorização: ADMIN, ou gestor da empresa da equipe do membro
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (!empresa || membro.equipe?.empresaId !== empresa.id) {
           return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores da equipe podem editar membros.' });
@@ -673,7 +673,7 @@ const EquipeController = {
         }
       }
 
-      if (cargo === 'GESTOR' && req.user.role !== 'ADMIN') {
+      if (cargo === 'GESTOR' && (req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
@@ -727,7 +727,7 @@ const EquipeController = {
       const { membroId } = req.params;
 
       // Gestores não podem excluir outros gestores — apenas desativar
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const alvo = await prisma.membroEquipe.findUnique({
           where:  { id: Number(membroId) },
           select: { cargo: true },
@@ -752,7 +752,7 @@ const EquipeController = {
   // ADMIN: remove o gestor da equipe e desativa a conta
   removerGestorAdmin: async (req, res) => {
     try {
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem usar esta ação.' });
       }
 
@@ -840,7 +840,7 @@ const EquipeController = {
 
       // Criar usuário convidado se ainda não existir
       const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO' };
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeConvidado = cargoToUserType[cargo] || 'ESTAGIARIO';
       let usuarioCriado = false;
       let usuarioConvidadoId = null;
@@ -977,7 +977,7 @@ const EquipeController = {
       const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
       const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', FORNECEDOR: 'FORNECEDOR' };
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', FORNECEDOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
 
       let usuarioCriado = false;
@@ -1099,7 +1099,7 @@ const EquipeController = {
 
   convidarGestorAdmin: async (req, res) => {
     try {
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem usar esta rota.' });
       }
 
@@ -1253,7 +1253,7 @@ const EquipeController = {
       }
 
       // Apenas ADMIN (role sistêmica) ou GESTOR da equipe podem usar esta rota
-      const isAdmin = req.user.role === 'ADMIN';
+      const isAdmin = (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN');
       if (!isAdmin) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
@@ -1296,7 +1296,7 @@ const EquipeController = {
 
       // Cria usuário se ainda não existir
       const SENHA_INICIAL     = 'Inicial_001';
-      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR' };
+      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeConvidado = cargoToUserType[cargo] ?? 'ESTAGIARIO';
       const usuarioExistente  = await prisma.user.findUnique({ where: { email } });
       let usuarioCriado      = false;
@@ -1423,7 +1423,7 @@ const EquipeController = {
     try {
       const userId = Number(req.user.id);
 
-      if (req.user.role === 'ADMIN') {
+      if ((req.user.role === 'ADMIN' || req.user.userType === 'ADMIN')) {
         const todas = await prisma.especie.findMany({ select: { nome: true } });
         return res.json({ sucesso: true, dados: todas.map(e => e.nome) });
       }
@@ -1655,7 +1655,7 @@ const EquipeController = {
       }
 
       // ADMIN bypass; Gestor pode alterar mas não pode promover a GESTOR
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
           select: { cargo: true },
@@ -1770,7 +1770,7 @@ const EquipeController = {
       }
 
       // ADMIN tem bypass total; GESTOR pode alterar cargos mas não pode promover a GESTOR
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
           select: { cargo: true },
@@ -1844,59 +1844,130 @@ const EquipeController = {
       const userId = req.user.id;
 
       // ── ADMIN: acesso irrestrito — retorna FULL em todos os módulos ───────────
-      if (req.user.role === 'ADMIN') {
+      if ((req.user.role === 'ADMIN' || req.user.userType === 'ADMIN')) {
         const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
         const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
         return res.json({ sucesso: true, dados: { permissoes, isGestor: true, isAdmin: true, temEquipe: true } });
       }
 
       // ── PROPRIETARIO: lê MatrizPerfil das equipes vinculadas aos seus animais ──
-      // Segregação por equipe: usa Animal.equipeId (equipe responsável); animais
-      // legados sem equipeId caem no escopo de todas as equipes da empresa.
+      // Multicargo: se também tiver cargo VETERINARIO/ESTAGIARIO/GESTOR numa equipe,
+      // faz merge das permissões (MAX entre cargo de equipe e PROPRIETARIO).
+      // NEGADO do cargo de equipe bloqueia; NEGADO de PROPRIETARIO não bloqueia cargo de equipe.
       if (req.user.userType === 'PROPRIETARIO') {
-        const equipeIds = await getEquipeIdsDoProprietario(Number(userId));
+        // Verifica se também tem cargo de equipe (VETERINARIO/ESTAGIARIO/GESTOR)
+        let membroEquipe = null;
+        if (req.equipeId) {
+          membroEquipe = await prisma.membroEquipe.findUnique({
+            where:  { equipeId_userId: { equipeId: req.equipeId, userId } },
+            select: { equipeId: true, cargo: true, cargos: true },
+          });
+        }
+        if (!membroEquipe && req.empresaId) {
+          membroEquipe = await prisma.membroEquipe.findFirst({
+            where:   { userId, equipe: { empresaId: req.empresaId } },
+            select:  { equipeId: true, cargo: true, cargos: true },
+            orderBy: { createdAt: 'desc' },
+          });
+        }
 
-        if (equipeIds.length === 0) {
+        // GESTOR bypass — mesmo sendo PROPRIETARIO, tem acesso total
+        if (membroEquipe?.cargo === 'GESTOR') {
+          const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
+          const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
+          return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
+        }
+
+        const equipeIds = await getEquipeIdsDoProprietario(Number(userId));
+        const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+
+        // Permissões de PROPRIETARIO (das equipes vinculadas via animais)
+        const mapaMaximoProp = {};
+        if (equipeIds.length > 0) {
+          const matrizesProp = await prisma.matrizPerfil.findMany({
+            where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
+          });
+          const negadosProp = new Set();
+          for (const m of matrizesProp) {
+            if (m.nivel === 'NEGADO') { negadosProp.add(m.moduloSlug); mapaMaximoProp[m.moduloSlug] = 'NEGADO'; continue; }
+            if (negadosProp.has(m.moduloSlug)) continue;
+            const atual = mapaMaximoProp[m.moduloSlug];
+            if (atual === undefined || NIVEL_POSITIVO[m.nivel] > NIVEL_POSITIVO[atual]) {
+              mapaMaximoProp[m.moduloSlug] = m.nivel;
+            }
+          }
+        }
+        mapaMaximoProp['dashboard.geral.ler'] = mapaMaximoProp['dashboard.geral.ler'] ?? 'LEITURA';
+
+        // Sem cargo de equipe: retorna apenas permissões de PROPRIETARIO (comportamento original)
+        if (!membroEquipe || !['VETERINARIO', 'ESTAGIARIO'].includes(membroEquipe.cargo)) {
+          if (equipeIds.length === 0) {
+            return res.json({ sucesso: true, dados: {
+              permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
+              isGestor:       false,
+              temEquipe:     false,
+              isProprietario: true,
+            }});
+          }
+
+          const permissoes = Object.fromEntries(
+            Object.entries(mapaMaximoProp).filter(([, v]) => v !== 'NENHUM')
+          );
           return res.json({ sucesso: true, dados: {
-            permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
+            permissoes,
             isGestor:       false,
-            temEquipe:     false,
+            temEquipe:      equipeIds.length > 0,
             isProprietario: true,
           }});
         }
 
-        const matrizes = await prisma.matrizPerfil.findMany({
-          where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
+        // COM cargo de equipe VET/ESTAGIARIO: merge de permissões
+        // Lê MatrizPerfil do cargo da equipe (pode ter cargos múltiplos via campo cargos)
+        const todosCargos = (membroEquipe.cargos && membroEquipe.cargos.length > 0)
+          ? membroEquipe.cargos
+          : [membroEquipe.cargo];
+
+        const matrizesCargo = await prisma.matrizPerfil.findMany({
+          where:  { equipeId: membroEquipe.equipeId, perfilSlug: { in: todosCargos } },
+          select: { moduloSlug: true, nivel: true },
         });
 
-        // União das permissões — NEGADO vence sobre qualquer nível positivo (deny-wins).
-        // Entre valores positivos, toma o máximo entre as equipes.
-        const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
-        const negados  = new Set(); // slugs com NEGADO em ao menos uma equipe
-        const mapaMaximo = {};
-        for (const m of matrizes) {
-          if (m.nivel === 'NEGADO') {
-            negados.add(m.moduloSlug);
-            mapaMaximo[m.moduloSlug] = 'NEGADO';
-            continue;
-          }
-          if (negados.has(m.moduloSlug)) continue; // NEGADO já ganhou para este slug
-          const atual = mapaMaximo[m.moduloSlug];
-          if (atual === undefined || NIVEL_POSITIVO[m.nivel] > NIVEL_POSITIVO[atual]) {
-            mapaMaximo[m.moduloSlug] = m.nivel;
+        const mapaCargo = {};
+        const negadosCargo = new Set();
+        for (const m of matrizesCargo) {
+          if (m.nivel === 'NEGADO') { negadosCargo.add(m.moduloSlug); mapaCargo[m.moduloSlug] = 'NEGADO'; continue; }
+          if (negadosCargo.has(m.moduloSlug)) continue;
+          const atual = mapaCargo[m.moduloSlug];
+          if (!atual || (NIVEL_POSITIVO[m.nivel] ?? 0) > (NIVEL_POSITIVO[atual] ?? 0)) {
+            mapaCargo[m.moduloSlug] = m.nivel;
           }
         }
-        mapaMaximo['dashboard.geral.ler'] = mapaMaximo['dashboard.geral.ler'] ?? 'LEITURA';
 
-        const permissoes = Object.fromEntries(
-          Object.entries(mapaMaximo).filter(([, v]) => v !== 'NENHUM')
-        );
+        // Merge final: MAX entre cargo de equipe e PROPRIETARIO por módulo.
+        // NEGADO do cargo bloqueia; NEGADO de PROPRIETARIO não bloqueia quem tem cargo de equipe.
+        const todasSlugs = new Set([...Object.keys(mapaMaximoProp), ...Object.keys(mapaCargo)]);
+        const permissoesMerge = {};
+        for (const slug of todasSlugs) {
+          const nivelCargo = mapaCargo[slug] ?? PERMISSOES_PADRAO[membroEquipe.cargo]?.[slug] ?? 'NENHUM';
+          if (nivelCargo === 'NEGADO') continue;
+
+          const nivelPropBruto = mapaMaximoProp[slug] ?? 'NENHUM';
+          const nivelProp      = nivelPropBruto === 'NEGADO' ? 'NENHUM' : nivelPropBruto;
+
+          const ordCargo = NIVEL_POSITIVO[nivelCargo] ?? 0;
+          const ordProp  = NIVEL_POSITIVO[nivelProp]  ?? 0;
+          const nivelMax = ordCargo >= ordProp ? nivelCargo : nivelProp;
+
+          if (nivelMax !== 'NENHUM') permissoesMerge[slug] = nivelMax;
+        }
+        permissoesMerge['dashboard.geral.ler'] = permissoesMerge['dashboard.geral.ler'] ?? 'LEITURA';
 
         return res.json({ sucesso: true, dados: {
-          permissoes,
+          permissoes:     permissoesMerge,
           isGestor:       false,
-          temEquipe:     equipeIds.length > 0,
+          temEquipe:      true,
           isProprietario: true,
+          isMulticargo:   true,
         }});
       }
 
@@ -1907,13 +1978,13 @@ const EquipeController = {
       if (req.equipeId) {
         membro = await prisma.membroEquipe.findUnique({
           where:  { equipeId_userId: { equipeId: req.equipeId, userId } },
-          select: { equipeId: true, cargo: true },
+          select: { equipeId: true, cargo: true, cargos: true },
         });
       }
       if (!membro && req.empresaId) {
         membro = await prisma.membroEquipe.findFirst({
           where:   { userId, equipe: { empresaId: req.empresaId } },
-          select:  { equipeId: true, cargo: true },
+          select:  { equipeId: true, cargo: true, cargos: true },
           orderBy: { createdAt: 'desc' },
         });
       }
@@ -1924,7 +1995,7 @@ const EquipeController = {
           where:  { id: req.empresaId, ownerId: userId },
           select: { id: true },
         });
-        if (dono) {
+        if (dono && req.user.userType !== 'FORNECEDOR') {
           const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
           const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
           return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
@@ -1934,7 +2005,7 @@ const EquipeController = {
       if (!membro) {
         membro = await prisma.membroEquipe.findFirst({
           where:   { userId },
-          select:  { equipeId: true, cargo: true },
+          select:  { equipeId: true, cargo: true, cargos: true },
           orderBy: { createdAt: 'desc' },
         });
       }
@@ -1950,12 +2021,52 @@ const EquipeController = {
         return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
       }
 
-      const registros = await prisma.permissaoMembro.findMany({
-        where:  { equipeId: membro.equipeId, userId },
-        select: { moduloSlug: true, nivel: true },
-      });
+      // FORNECEDOR: permissões individuais por membro (PermissaoMembro),
+      // pois o gestor configura acesso granular por animal via ControleAcesso → Fornecedor.
+      // Todos os demais cargos: MatrizPerfil é a fonte canônica — reflete exatamente o que
+      // o gestor configurou na aba "Matriz de Perfis" do ControleAcesso, sem depender de
+      // propagação para PermissaoMembro (que pode estar desatualizada).
+      let permissoesMap = {};
 
-      const permissoes = Object.fromEntries(registros.map(r => [r.moduloSlug, r.nivel]));
+      if (membro.cargo === 'FORNECEDOR') {
+        const membroRegistros = await prisma.permissaoMembro.findMany({
+          where:  { equipeId: membro.equipeId, userId },
+          select: { moduloSlug: true, nivel: true },
+        });
+        for (const m of membroRegistros) permissoesMap[m.moduloSlug] = m.nivel;
+      } else {
+        // Para VET, ESTAGIARIO, SECRETARIA, FINANCEIRO, ENFERMEIRO etc.:
+        // lê MatrizPerfil diretamente — é o que o gestor edita e a única fonte de verdade.
+        // Multi-cargo: faz a união dos níveis (NEGADO vence; entre positivos, toma o máximo).
+        const todosCargos = (membro.cargos && membro.cargos.length > 0)
+          ? membro.cargos
+          : [membro.cargo];
+
+        const matrizRegistros = await prisma.matrizPerfil.findMany({
+          where:  { equipeId: membro.equipeId, perfilSlug: { in: todosCargos } },
+          select: { moduloSlug: true, nivel: true },
+        });
+
+        const NIVEL_ORD_LOCAL = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
+        const negados = new Set();
+        for (const m of matrizRegistros) {
+          if (m.nivel === 'NEGADO') {
+            negados.add(m.moduloSlug);
+            permissoesMap[m.moduloSlug] = 'NEGADO';
+            continue;
+          }
+          if (negados.has(m.moduloSlug)) continue;
+          const atual = permissoesMap[m.moduloSlug];
+          if (!atual || (NIVEL_ORD_LOCAL[m.nivel] ?? 0) > (NIVEL_ORD_LOCAL[atual] ?? 0)) {
+            permissoesMap[m.moduloSlug] = m.nivel;
+          }
+        }
+      }
+
+      // Remove NENHUM do mapa para que podeExecutar retorne false para slugs ausentes
+      const permissoes = Object.fromEntries(
+        Object.entries(permissoesMap).filter(([, v]) => v !== 'NENHUM'),
+      );
       return res.json({ sucesso: true, dados: { permissoes, isGestor: false, temEquipe: true } });
     } catch (err) {
       console.error('Erro ao buscar permissões:', err);
@@ -1967,7 +2078,7 @@ const EquipeController = {
 
   getMatrizGlobalUserType: async (req, res) => {
     try {
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Acesso restrito a administradores.' });
       }
       const { userType } = req.params;
@@ -1984,7 +2095,7 @@ const EquipeController = {
 
   salvarMatrizGlobalUserType: async (req, res) => {
     try {
-      if (req.user.role !== 'ADMIN') {
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         return res.status(403).json({ sucesso: false, mensagem: 'Acesso restrito a administradores.' });
       }
       const { userType } = req.params;

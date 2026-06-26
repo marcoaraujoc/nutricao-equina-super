@@ -160,9 +160,10 @@ async function registrar(req, res) {
         }
       }
       loteNumFinal = loteData.lote;
-      const valorBrutoExplicito = loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0;
-      const qtdLoteExplicito    = Number(loteData.qtdTotal) || Number(loteData.qtdDisponivel) || 1;
-      loteValor = Number(valorBrutoExplicito) / qtdLoteExplicito;
+      // Valor por frasco ÷ doses por frasco = valor proporcional por dose
+      const valorFrascoExplicito = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
+      const dosesFrascoExplicito = Number(loteData.dosesPorFrasco) || 1;
+      loteValor = valorFrascoExplicito / dosesFrascoExplicito;
       if (!isCliente) {
         await prisma.loteVacina.update({
           where: { id: loteIdFinal },
@@ -183,6 +184,7 @@ async function registrar(req, res) {
 
       const loteRows = await prisma.$queryRawUnsafe(
         `SELECT id, lote, qtd_disponivel AS "qtdDisponivel", qtd_total AS "qtdTotal",
+                doses_por_frasco AS "dosesPorFrasco",
                 COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
          FROM schs2vet.tb_lotes_vacina
          WHERE medicamento_cat_id = $1
@@ -196,11 +198,11 @@ async function registrar(req, res) {
       );
 
       if (loteRows.length > 0) {
-        const loteAuto  = loteRows[0];
-        loteIdFinal     = Number(loteAuto.id);
-        loteNumFinal    = loteAuto.lote ?? loteNumFinal;
-        const qtdLote   = Number(loteAuto.qtdTotal) || Number(loteAuto.qtdDisponivel) || 1;
-        loteValor       = Number(loteAuto.valorBruto) / qtdLote;
+        const loteAuto     = loteRows[0];
+        loteIdFinal        = Number(loteAuto.id);
+        loteNumFinal       = loteAuto.lote ?? loteNumFinal;
+        const dosesFrasco  = Number(loteAuto.dosesPorFrasco) || 1;
+        loteValor          = Number(loteAuto.valorBruto) / dosesFrasco;
         await prisma.loteVacina.update({
           where: { id: loteIdFinal },
           data:  { qtdDisponivel: { decrement: qtdFinal } },
@@ -245,8 +247,8 @@ async function registrar(req, res) {
       criada.id
     );
 
-    // Lança na fatura apenas quando não for vacina do cliente
-    if (!isCliente) setImmediate(async () => {
+    // Lança na fatura apenas quando não for vacina do cliente E houver lote debitado
+    if (!isCliente && loteIdFinal) setImmediate(async () => {
       try {
         const animal = await prisma.animal.findUnique({
           where:  { id: Number(animalId) },

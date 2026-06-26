@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../contexts/AuthContext';
 import {
   Share2, Loader2, Check, Ban,
   UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText,
@@ -386,10 +387,13 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
 export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendimentoNumero, onSalvo }: Props) {
+  const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
   const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
+  // FORNECEDOR só cancela/edita encaminhamentos que ele próprio criou
+  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
   const [loading,          setLoading]         = useState(true);
@@ -497,14 +501,17 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
         </div>
       ) : (
         <div className="space-y-2">
-          {encaminhamentos.map(enc => (
-            <EncaminhamentoItem
-              key={enc.id}
-              enc={enc}
-              podeEditar={podeEditar}
-              onStatus={handleStatus}
-            />
-          ))}
+          {encaminhamentos.map(enc => {
+            const eAutor = enc.veterinario?.id === (user?.id ?? 0);
+            return (
+              <EncaminhamentoItem
+                key={enc.id}
+                enc={enc}
+                podeEditar={podeEditar && (!isFornecedor || eAutor)}
+                onStatus={handleStatus}
+              />
+            );
+          })}
         </div>
       )}
 

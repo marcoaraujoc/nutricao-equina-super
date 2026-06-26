@@ -6,7 +6,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Unlink, Search, LayoutDashboard, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, ScrollText, Zap } from 'lucide-react';
+import { Pencil, Unlink, Search, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, ScrollText, Zap } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
@@ -128,11 +128,6 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEd
       </div>
 
       <div className="flex flex-col gap-1 flex-shrink-0">
-        <button onClick={onDashboard}
-          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-          title="Ver detalhes">
-          <LayoutDashboard size={15} />
-        </button>
         {podeEditar && (
           <button onClick={onEditar}
             className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
@@ -661,11 +656,6 @@ const AnimaisVet = () => {
                         </td>
                         <td className="pr-5 py-3.5" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => irParaAnimal(animal)}
-                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                              title="Ver detalhes">
-                              <LayoutDashboard size={15} />
-                            </button>
                             {podeEditarAnimal && (
                               <button onClick={() => irParaEditar(animal)}
                                 className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"

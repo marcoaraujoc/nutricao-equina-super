@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X } from 'lucide-react';
+import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -163,6 +163,31 @@ const initRadio = (): Record<string,number|null> =>
 
 const hoje = () => new Date().toISOString().slice(0, 10);
 
+// ─── Types (histórico) ────────────────────────────────────────────────────────
+
+interface ExameCompraItem {
+  id:              number;
+  numero:          number | null;
+  tipo:            string;
+  dataSolicitacao: string;
+  status:          string;
+  observacao:      string | null;
+  veterinario:     { id: number; fullName: string } | null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseLaudo(obs: string | null): any {
+  if (!obs) return null;
+  try { return JSON.parse(obs); }
+  catch { return null; }
+}
+
+const fmtData = (iso: string) =>
+  new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+
+const fmtNumero = (n: number | null | undefined) =>
+  n != null ? `#${String(n).padStart(3, '0')}` : '—';
+
 // ─── BinaryField ──────────────────────────────────────────────────────────────
 
 function BinaryField({ label, opt1, opt2, value, obs, onChange, onObsChange }: {
@@ -174,7 +199,7 @@ function BinaryField({ label, opt1, opt2, value, obs, onChange, onObsChange }: {
   return (
     <div className="py-1 space-y-1">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-gray-800 font-medium flex-1 leading-snug">{label}</span>
+        <span className="text-sm text-gray-700 flex-1 leading-snug">{label}</span>
         <div className="flex gap-1 shrink-0">
           {([opt1, opt2] as string[]).map((opt, i) => (
             <button key={opt} type="button" onClick={() => onChange(opt)}
@@ -207,7 +232,7 @@ function BinarySection({ titulo, fields, values, obs, onChange, onObsChange }: {
 }) {
   return (
     <div className="space-y-1">
-      {titulo && <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1">{titulo}</p>}
+      {titulo && <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1 text-center">{titulo}</p>}
       <div>
         {fields.map(([k, label, o1, o2]) => (
           <BinaryField key={k} label={label} opt1={o1} opt2={o2}
@@ -310,9 +335,29 @@ export default function ExameCompra() {
   const [comportSuspeito, setComportSuspeito] = useState<boolean|null>(null);
   const [antiDopping,     setAntiDopping]     = useState<boolean|null>(null);
   const [antiDoppResult,  setAntiDoppResult]  = useState('');
-  const [conclusao, setConclusao] = useState('');
+  const [conclusao,      setConclusao]      = useState('');
+  const [justificativa,  setJustificativa]  = useState('');
 
   const podeCriar = isGestor || podeExecutar('atendimento.exames.criar');
+
+  // ── Estado do histórico ───────────────────────────────────────────────────
+  const [historicoCompra,   setHistoricoCompra]   = useState<ExameCompraItem[]>([]);
+  const [loadingHistorico,  setLoadingHistorico]  = useState(false);
+  const [editingId,         setEditingId]         = useState<number | null>(null);
+  const [editingNumero,     setEditingNumero]      = useState<number | null>(null);
+
+  const carregarHistoricoCompra = useCallback(async (animalIdParam: number): Promise<ExameCompraItem[]> => {
+    setLoadingHistorico(true);
+    try {
+      const res = await api.get(`/clinica/exames/animal/${animalIdParam}?limit=50`);
+      if (!res.data) return [];
+      const todos: ExameCompraItem[] = res.data?.dados ?? res.data ?? [];
+      const compras = todos.filter(e => e.tipo === 'Compra');
+      setHistoricoCompra(compras);
+      return compras;
+    } catch { return []; }
+    finally { setLoadingHistorico(false); }
+  }, []);
 
   const carregarAnimais = useCallback(async () => {
     setLoadingAnimais(true);
@@ -337,6 +382,201 @@ export default function ExameCompra() {
 
   useEffect(() => { if (!loadingPerms) carregarAnimais(); }, [loadingPerms]);
   useEffect(() => { if (animalId) carregarAnimalPorId(animalId); }, [animalId]);
+  useEffect(() => {
+    if (!selectedAnimal?.id) return;
+    resetForm();
+    carregarHistoricoCompra(selectedAnimal.id).then(compras => {
+      if (compras.length > 0) handleEditar(compras[0], true);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAnimal?.id]);
+
+  // ── Editar ────────────────────────────────────────────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleEditar = (ex: ExameCompraItem, silent = false) => {
+    let laudo = parseLaudo(ex.observacao);
+    if (!laudo) { toast.error('Não foi possível carregar os dados do exame.'); return; }
+
+    // Fallback para exames salvos no formato antigo (antes da correção do controller):
+    // - formato create: laudo estava em grupos[0].laudoCompra
+    // - formato update: laudo estava em laudo.obs (como JSON string aninhado)
+    if (!laudo.clinicoGeral) {
+      if (laudo.grupos?.[0]?.laudoCompra) {
+        laudo = laudo.grupos[0].laudoCompra;
+      } else if (typeof laudo.obs === 'string') {
+        try { laudo = JSON.parse(laudo.obs); } catch { /* mantém laudo atual */ }
+      }
+    }
+
+    const me = laudo.musculoEsqueletico ?? {};
+    const img = laudo.imagem ?? {};
+    setClinicoGeral(laudo.clinicoGeral?.valores ?? initB(F_CLINICO));
+    setClinicoGeralObs(laudo.clinicoGeral?.obs ?? {});
+    setCardio(laudo.cardiovascular?.valores ?? initB(F_CARDIO));
+    setCardioObs(laudo.cardiovascular?.obs ?? {});
+    setResp(laudo.respiratorio?.valores ?? initB(F_RESP));
+    setRespObs(laudo.respiratorio?.obs ?? {});
+    setDigest(laudo.digestivo?.valores ?? initB(F_DIGEST));
+    setDigestObs(laudo.digestivo?.obs ?? {});
+    setUrogen(laudo.urogenital?.valores ?? initB(F_UROGEN));
+    setUrogenObs(laudo.urogenital?.obs ?? {});
+    setNervoso(laudo.nervoso?.valores ?? initB(F_NERVOSO));
+    setNervosoObs(laudo.nervoso?.obs ?? {});
+    setInspecao(me.inspecao?.valores ?? initB(F_INSPECAO));
+    setInspecaoObs(me.inspecao?.obs ?? {});
+    setCascos(me.cascos?.valores ?? initB(F_CASCOS));
+    setCascosObs(me.cascos?.obs ?? {});
+    setPincamento(me.cascos?.pincamento ?? initPatas('Normal'));
+    setPincamentoObs(me.cascos?.pincamentoObs ?? initPatas(''));
+    setFerrageamento(me.ferrageamento?.tipo ?? 'Normal');
+    setFerrPatas(me.ferrageamento?.patas ?? initPatas(''));
+    setLocomocao(me.locomocao?.valores ?? Object.fromEntries(
+      LOCOMOCAO_GROUPS.flatMap(g => g.items.map(([k]) => [k, 'Normal']))
+    ));
+    setLocomocaoObs(me.locomocao?.obs ?? {});
+    setFlexao(me.flexao ?? initFlexao());
+    setRaioX(img.raioX ?? 'LAUDO EM ANEXO');
+    setRadioAval(img.radioAval ?? initRadio());
+    setRaioXLaudo(img.raioXLaudo ?? '');
+    setUltrassom(img.ultrassom ?? 'IMAGENS MAD E MAE – LAUDO EM ANEXO');
+    setUltrassomLaudo(img.ultrassomLaudo ?? '');
+    setEndoscopia(img.endoscopia ?? '');
+    setImgOutros(img.outros ?? '');
+    setComportSuspeito(img.comportamentoSuspeito ?? null);
+    setAntiDopping(img.antiDopping ?? null);
+    setAntiDoppResult(img.antiDoppingResultado ?? '');
+    setConclusao(laudo.conclusao ?? '');
+    setJustificativa('');
+    setDataSolicitacao(ex.dataSolicitacao.slice(0, 10));
+    setEditingId(ex.id);
+    setEditingNumero(ex.numero);
+    setAbaAtiva('clinico-geral');
+    if (!silent) window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const resetForm = () => {
+    setClinicoGeral(initB(F_CLINICO));
+    setClinicoGeralObs({});
+    setCardio(initB(F_CARDIO));
+    setCardioObs({});
+    setResp(initB(F_RESP));
+    setRespObs({});
+    setDigest(initB(F_DIGEST));
+    setDigestObs({});
+    setUrogen(initB(F_UROGEN));
+    setUrogenObs({});
+    setNervoso(initB(F_NERVOSO));
+    setNervosoObs({});
+    setInspecao(initB(F_INSPECAO));
+    setInspecaoObs({});
+    setCascos(initB(F_CASCOS));
+    setCascosObs({});
+    setPincamento(initPatas('Normal'));
+    setPincamentoObs(initPatas(''));
+    setFerrageamento('Normal');
+    setFerrPatas(initPatas(''));
+    setLocomocao(Object.fromEntries(LOCOMOCAO_GROUPS.flatMap(g => g.items.map(([k]) => [k, 'Normal']))));
+    setLocomocaoObs({});
+    setFlexao(initFlexao());
+    setRaioX('LAUDO EM ANEXO');
+    setRadioAval(initRadio());
+    setRaioXArquivos([]);
+    setRaioXLaudo('');
+    setUltrassom('IMAGENS MAD E MAE – LAUDO EM ANEXO');
+    setUltrassomArquivos([]);
+    setUltrassomLaudo('');
+    setEndoscopia('');
+    setImgOutros('');
+    setComportSuspeito(null);
+    setAntiDopping(null);
+    setAntiDoppResult('');
+    setConclusao('');
+    setJustificativa('');
+    setDataSolicitacao(hoje());
+    setAbaAtiva('clinico-geral');
+    setEditingId(null);
+    setEditingNumero(null);
+  };
+
+  // ── Imprimir ──────────────────────────────────────────────────────────────
+  const imprimirLaudo = (ex: ExameCompraItem) => {
+    const laudo = parseLaudo(ex.observacao);
+    const dataFormatada = fmtData(ex.dataSolicitacao);
+    const animalNome = selectedAnimal?.nome ?? '—';
+
+    const linhas: string[] = [];
+    const add = (txt: string) => linhas.push(txt);
+
+    const secBin = (titulo: string, campos: FieldDef[], valores: Record<string,string>, obs: Record<string,string>) => {
+      add(`<h3>${titulo}</h3><table style="width:100%;border-collapse:collapse;">`);
+      campos.forEach(([k, label, o1]) => {
+        const v = valores?.[k] ?? o1;
+        const o = obs?.[k] ?? '';
+        const cor = v === o1 ? '#166534' : '#92400e';
+        add(`<tr><td style="padding:3px 6px;border:1px solid #e5e7eb;font-size:12px;">${label}</td>
+             <td style="padding:3px 6px;border:1px solid #e5e7eb;color:${cor};font-weight:600;font-size:12px;">${v}</td>
+             ${o ? `<td style="padding:3px 6px;border:1px solid #e5e7eb;font-size:11px;color:#6b7280;">${o}</td>` : '<td style="border:1px solid #e5e7eb;"></td>'}
+             </tr>`);
+      });
+      add('</table>');
+    };
+
+    if (laudo) {
+      const me = laudo.musculoEsqueletico ?? {};
+      secBin('Exame Clínico Geral', F_CLINICO, laudo.clinicoGeral?.valores, laudo.clinicoGeral?.obs);
+      secBin('Cardiovascular', F_CARDIO, laudo.cardiovascular?.valores, laudo.cardiovascular?.obs);
+      secBin('Respiratório', F_RESP, laudo.respiratorio?.valores, laudo.respiratorio?.obs);
+      secBin('Digestório', F_DIGEST, laudo.digestivo?.valores, laudo.digestivo?.obs);
+      secBin('Urogenital', F_UROGEN, laudo.urogenital?.valores, laudo.urogenital?.obs);
+      secBin('Sistema Nervoso', F_NERVOSO, laudo.nervoso?.valores, laudo.nervoso?.obs);
+      secBin('Inspeção / Palpação', F_INSPECAO, me.inspecao?.valores, me.inspecao?.obs);
+      secBin('Cascos', F_CASCOS, me.cascos?.valores, me.cascos?.obs);
+      if (laudo.imagem?.raioXLaudo) add(`<h3>Raio-X</h3><p style="font-size:12px;">${laudo.imagem.raioXLaudo}</p>`);
+      if (laudo.imagem?.ultrassomLaudo) add(`<h3>Ultrassonografia</h3><p style="font-size:12px;">${laudo.imagem.ultrassomLaudo}</p>`);
+      if (laudo.conclusao) add(`<h3>Conclusão / Parecer Final</h3><p style="font-size:13px;font-style:italic;">${laudo.conclusao}</p>`);
+    }
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Exame de Compra ${fmtNumero(ex.numero)} — ${animalNome}</title>
+      <style>body{font-family:sans-serif;padding:24px;color:#111;}h2{margin:0 0 4px;}h3{margin:16px 0 6px;font-size:13px;text-transform:uppercase;color:#6b7280;letter-spacing:.05em;}table{margin-bottom:8px;}@media print{h3{page-break-after:avoid;}}</style>
+      </head><body>
+      <h2>Exame de Compra ${fmtNumero(ex.numero)}</h2>
+      <p style="color:#6b7280;font-size:13px;margin:0 0 16px;">Paciente: <strong>${animalNome}</strong> &nbsp;|&nbsp; Data: ${dataFormatada}${ex.veterinario ? ` &nbsp;|&nbsp; Médico: ${ex.veterinario.fullName}` : ''}</p>
+      ${linhas.join('')}
+      </body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(html);
+    w.document.close();
+    w.onload = () => w.print();
+  };
+
+  // ── Compartilhar ──────────────────────────────────────────────────────────
+  const compartilharWhatsApp = (ex: ExameCompraItem) => {
+    const laudo = parseLaudo(ex.observacao);
+    const linhas = [
+      `*Exame de Compra ${fmtNumero(ex.numero)}*`,
+      `Paciente: ${selectedAnimal?.nome ?? '—'}`,
+      `Data: ${fmtData(ex.dataSolicitacao)}`,
+      ex.veterinario ? `Médico: ${ex.veterinario.fullName}` : '',
+      laudo?.conclusao ? `\n*Conclusão:*\n${laudo.conclusao}` : '',
+    ].filter(Boolean).join('\n');
+    window.open(`https://wa.me/?text=${encodeURIComponent(linhas)}`, '_blank');
+  };
+
+  const compartilharEmail = (ex: ExameCompraItem) => {
+    const laudo = parseLaudo(ex.observacao);
+    const assunto = `Exame de Compra ${fmtNumero(ex.numero)} — ${selectedAnimal?.nome ?? '—'} — ${fmtData(ex.dataSolicitacao)}`;
+    const corpo = [
+      `Exame de Compra ${fmtNumero(ex.numero)}`,
+      `Paciente: ${selectedAnimal?.nome ?? '—'}`,
+      `Data: ${fmtData(ex.dataSolicitacao)}`,
+      ex.veterinario ? `Médico Responsável: ${ex.veterinario.fullName}` : '',
+      laudo?.conclusao ? `\nConclusão / Parecer Final:\n${laudo.conclusao}` : '',
+    ].filter(Boolean).join('\n');
+    window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo)}`;
+  };
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) {
     return (
@@ -353,6 +593,11 @@ export default function ExameCompra() {
     if (!podeCriar) { toast.error('Sem permissão para registrar exames.'); return; }
     if (!selectedAnimal) { toast.error('Selecione um paciente.'); return; }
     if (!dataSolicitacao) { toast.error('Informe a data do exame.'); return; }
+    const isEditing = editingId !== null;
+    if (isEditing && !justificativa.trim()) {
+      toast.error('Preencha a justificativa da alteração antes de salvar.');
+      return;
+    }
     setSaving(true);
     try {
       const laudo = {
@@ -375,14 +620,31 @@ export default function ExameCompra() {
           antiDopping, antiDoppingResultado: antiDoppResult,
         },
         conclusao,
+        ...(isEditing && justificativa.trim() && { justificativa: justificativa.trim() }),
       };
-      await api.post('/clinica/exames', {
+      const payload = {
         animalId: selectedAnimal.id, tipo: 'Compra',
         descricao: 'Laudo de Exame de Compra', dataSolicitacao,
         tipoAmostra: 'Exame Físico', observacao: JSON.stringify(laudo),
         grupos: [{ tipo: 'Compra', exames: ['Laudo de Compra Equino'], tipoAmostra: 'Exame Físico', laudoCompra: laudo }],
-      });
-      toast.success('Exame de Compra registrado com sucesso');
+      };
+      if (isEditing) {
+        await api.put(`/clinica/exames/${editingId}`, payload);
+      } else {
+        await api.post('/clinica/exames', payload);
+      }
+      toast.success(isEditing ? 'Exame de Compra atualizado com sucesso' : 'Exame de Compra registrado com sucesso');
+      if (isEditing) {
+        setJustificativa('');
+        if (selectedAnimal?.id) carregarHistoricoCompra(selectedAnimal.id);
+      } else {
+        resetForm();
+        if (selectedAnimal?.id) {
+          carregarHistoricoCompra(selectedAnimal.id).then(compras => {
+            if (compras.length > 0) handleEditar(compras[0], true);
+          });
+        }
+      }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao registrar exame');
@@ -400,7 +662,7 @@ export default function ExameCompra() {
       />
 
       <div className="space-y-2">
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pt-1">Cascos</p>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pt-1 text-center">Cascos</p>
         <BinarySection fields={F_CASCOS} values={cascos} obs={cascosObs}
           onChange={(k,v) => setCascos(p => ({ ...p, [k]: v }))}
           onObsChange={(k,v) => setCascosObs(p => ({ ...p, [k]: v }))}
@@ -472,11 +734,11 @@ export default function ExameCompra() {
 
       {/* Locomoção */}
       <div className="space-y-1">
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1">Locomoção</p>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1 text-center">Locomoção</p>
         <div className="">
           {LOCOMOCAO_GROUPS.map(group => (
             <div key={group.titulo}>
-              <p className="text-xs font-semibold text-gray-500 italic pt-2 pb-0.5">{group.titulo}</p>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest pt-2 pb-0.5 text-center">{group.titulo}</p>
               <div className="">
                 {group.items.map(([k, label]) => (
                   <div key={k} className="py-1 space-y-1">
@@ -513,14 +775,14 @@ export default function ExameCompra() {
 
       {/* Testes de Flexão */}
       <div className="space-y-1">
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1">Testes de Flexão</p>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1 text-center">Testes de Flexão</p>
         <div className="">
           {FLEXAO_JOINTS.map(([k, label]) => {
             const item = flexao[k];
             return (
               <div key={k} className="py-1 space-y-1">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <span className="text-sm text-gray-800 font-medium flex-1">{label}</span>
+                  <span className="text-sm text-gray-700 flex-1">{label}</span>
                   <div className="flex gap-1 shrink-0">
                     {(['Não sensível','Sensível'] as const).map((opt, i) => {
                       const active = i === 1 ? item.sensivel : !item.sensivel;
@@ -814,16 +1076,79 @@ export default function ExameCompra() {
               />
             </div>
 
+            {/* Justificativa de alteração — obrigatória ao editar exame existente */}
+            {editingId !== null && (
+              <div>
+                <label className="block text-xs font-bold text-amber-600 uppercase tracking-widest mb-1.5">
+                  Justificativa da Alteração *
+                </label>
+                <textarea rows={2} value={justificativa} onChange={e => setJustificativa(e.target.value)}
+                  placeholder="Informe o motivo da alteração neste exame de compra..."
+                  className={`w-full border rounded-2xl px-4 py-3 text-sm text-gray-900 focus:outline-none resize-none shadow-sm ${
+                    justificativa.trim() ? 'border-gray-200 focus:border-amber-500' : 'border-amber-300 bg-amber-50/40 focus:border-amber-500'
+                  }`}
+                />
+              </div>
+            )}
+
             {/* Salvar */}
             <div className="flex justify-end pb-6">
               <button onClick={handleSalvar} disabled={saving || !dataSolicitacao}
                 className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                {saving ? 'Salvando…' : 'Salvar Exame de Compra'}
+                {saving ? 'Salvando…' : editingId !== null ? 'Atualizar Exame de Compra' : 'Salvar Exame de Compra'}
               </button>
             </div>
           </>
         )}
+
+        {/* ── Registro atual — ações de impressão/compartilhamento ─────── */}
+        {selectedAnimal && historicoCompra.length > 0 && !loadingHistorico && (() => {
+          const ex = historicoCompra[0];
+          const laudo = parseLaudo(ex.observacao);
+          return (
+            <div className="pb-8">
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Activity size={15} className="text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                    <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-lg border border-gray-200">
+                      {fmtNumero(ex.numero)}
+                    </span>
+                    <span className="text-xs text-gray-500">{fmtData(ex.dataSolicitacao)}</span>
+                    {ex.veterinario && (
+                      <span className="text-xs text-gray-400">· {ex.veterinario.fullName}</span>
+                    )}
+                    {laudo?.justificativa && (
+                      <span className="text-xs text-amber-600 italic">· Alt: {laudo.justificativa}</span>
+                    )}
+                  </div>
+                  {laudo?.conclusao ? (
+                    <p className="text-xs text-gray-600 line-clamp-2 mt-1 italic">{laudo.conclusao}</p>
+                  ) : (
+                    <p className="text-xs text-gray-300 italic mt-1">Sem conclusão registrada</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button onClick={() => imprimirLaudo(ex)} title="Imprimir"
+                    className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                    <Printer size={14} />
+                  </button>
+                  <button onClick={() => compartilharWhatsApp(ex)} title="WhatsApp"
+                    className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                    <MessageCircle size={14} />
+                  </button>
+                  <button onClick={() => compartilharEmail(ex)} title="E-mail"
+                    className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                    <Mail size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       </div>
     </PageContainer>

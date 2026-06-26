@@ -24,6 +24,7 @@ const TIPOS_SERVICO = [
   'Ferrador',
   'Fisioterapeuta',
   'Laboratório',
+  'Loja',
   'Quiroprata',
   'Radiologista',
 ] as const;

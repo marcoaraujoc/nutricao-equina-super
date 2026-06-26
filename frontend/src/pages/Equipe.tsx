@@ -4,8 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Users2, Mail, Trash2, ToggleLeft, ToggleRight,
-  Loader2, X, CheckCircle2,
+  Users2, Mail, ToggleLeft, ToggleRight,
+  Loader2, X,
   Pencil, Check,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
@@ -39,29 +39,38 @@ interface Membro {
 
 // Perfis de acesso atribuíveis a membros da equipe
 const CARGO_OPTIONS: { value: string; label: string }[] = [
-  { value: 'VETERINARIO',  label: 'Veterinário'   },
-  { value: 'ESTAGIARIO',   label: 'Estagiário'    },
-  { value: 'FORNECEDOR',    label: 'Fornecedor'    },
-  { value: 'GESTOR',        label: 'Gestor'         },
+  { value: 'VETERINARIO', label: 'Veterinário' },
+  { value: 'ESTAGIARIO',  label: 'Estagiário'  },
+  { value: 'ENFERMEIRO',  label: 'Enfermeiro'  },
+  { value: 'SECRETARIA',  label: 'Secretaria'  },
+  { value: 'FINANCEIRO',  label: 'Financeiro'  },
+  { value: 'FORNECEDOR',  label: 'Fornecedor'  },
+  { value: 'GESTOR',      label: 'Gestor'      },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const labelCargo = (cargo: string): string => ({
-  GESTOR:        'Gestor',
+  GESTOR:       'Gestor',
   VETERINARIO:  'Veterinário',
   ESTAGIARIO:   'Estagiário',
-  FORNECEDOR:    'Fornecedor',
+  ENFERMEIRO:   'Enfermeiro',
+  SECRETARIA:   'Secretaria',
+  FINANCEIRO:   'Financeiro',
+  FORNECEDOR:   'Fornecedor',
   ADMIN:        'Administrador',
   MEMBRO:       'Membro',
   PROPRIETARIO: 'Proprietário',
 } as Record<string,string>)[cargo] ?? cargo;
 
 const badgeCargo = (cargo: string): string => ({
-  GESTOR:        'bg-purple-100 text-purple-700',
+  GESTOR:       'bg-purple-100 text-purple-700',
   VETERINARIO:  'bg-emerald-100 text-emerald-700',
   ESTAGIARIO:   'bg-blue-100 text-blue-700',
-  FORNECEDOR:    'bg-teal-100 text-teal-700',
+  ENFERMEIRO:   'bg-cyan-100 text-cyan-700',
+  SECRETARIA:   'bg-amber-100 text-amber-700',
+  FINANCEIRO:   'bg-orange-100 text-orange-700',
+  FORNECEDOR:   'bg-teal-100 text-teal-700',
   ADMIN:        'bg-red-100 text-red-700',
   MEMBRO:       'bg-gray-100 text-gray-600',
   PROPRIETARIO: 'bg-purple-100 text-purple-700',
@@ -78,11 +87,6 @@ export default function Equipe() {
   const [showConvite,   setShowConvite]                   = useState(false);
   const [enviando,      setEnviando]                      = useState(false);
   const [togglingId,    setTogglingId]                    = useState<number | null>(null);
-  const [removendoId,   setRemovendoId]                   = useState<number | null>(null);
-  const [confirmRemover,setConfirmRemover]                = useState<Membro | null>(null);
-  const [editandoId,    setEditandoId]                    = useState<number | null>(null);
-  const [editCargos,    setEditCargos]                    = useState<string[]>([]);
-  const [salvandoCargo, setSalvandoCargo]                 = useState(false);
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
   const [nomeEquipe,        setNomeEquipe]                  = useState('');
@@ -158,29 +162,7 @@ export default function Equipe() {
     finally { setTogglingId(null); }
   };
 
-  const handleRemover = async () => {
-    if (!confirmRemover) return;
-    setRemovendoId(confirmRemover.id);
-    try {
-      await api.delete(`/equipes/membros/${confirmRemover.id}`);
-      toast.success(`${confirmRemover.user.fullName} removido da equipe`);
-      setConfirmRemover(null); carregarMembros();
-    } catch { toast.error('Erro ao remover membro'); }
-    finally { setRemovendoId(null); }
-  };
-
-  const handleSalvarCargos = async (membro: Membro) => {
-    if (!equipeId || editCargos.length === 0) return;
-    setSalvandoCargo(true);
-    try {
-      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargos`, { cargos: editCargos });
-      toast.success('Cargo(s) atualizado(s)');
-      setEditandoId(null); carregarMembros();
-    } catch { toast.error('Erro ao atualizar cargo'); }
-    finally { setSalvandoCargo(false); }
-  };
-
-  const handleSalvarEdicao = async (values: UsuarioFormValues) => {
+const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     if (!membroEditando) return;
     setSalvandoEdicao(true);
     try {
@@ -321,61 +303,15 @@ export default function Equipe() {
                     <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                   </div>
 
-                  {/* Cargo(s) editável para Gestor (apenas membros não-gestor) */}
-                  {isGestor && editandoId === m.id ? (
-                    <div className="flex items-start gap-1.5 flex-shrink-0">
-                      <div className="bg-white border border-gray-200 rounded-xl p-2 shadow-sm">
-                        {CARGO_OPTIONS.map(c => {
-                          const sel = editCargos.includes(c.value);
-                          return (
-                            <label key={c.value} className="flex items-center gap-1.5 py-0.5 cursor-pointer select-none">
-                              <input
-                                type="checkbox" checked={sel}
-                                onChange={e => {
-                                  const next = e.target.checked
-                                    ? [...editCargos, c.value]
-                                    : editCargos.filter(x => x !== c.value);
-                                  if (next.length > 0) setEditCargos(next);
-                                }}
-                                className="w-3 h-3 accent-emerald-600"
-                              />
-                              <span className="text-xs text-gray-700">{c.label}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <button onClick={() => handleSalvarCargos(m)} disabled={salvandoCargo}
-                          className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
-                          {salvandoCargo ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                        </button>
-                        <button onClick={() => setEditandoId(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
-                          <X size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className={`hidden sm:flex flex-wrap items-center gap-1 ${
-                        isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'cursor-pointer' : ''
-                      }`}
-                      onClick={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR'
-                        ? () => { setEditandoId(m.id); setEditCargos(m.cargos?.length ? m.cargos : [m.cargo]); }
-                        : undefined}
-                      title={isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? 'Clique para editar cargos' : undefined}
-                    >
-                      {(m.cargos?.length ? m.cargos : [m.cargo]).map(c => (
-                        <span key={c} className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                          ativo ? badgeCargo(c) : 'bg-gray-100 text-gray-400'
-                        }`}>
-                          {labelCargo(c)}
-                        </span>
-                      ))}
-                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
-                        <Pencil size={9} className="text-gray-400 opacity-50" />
-                      )}
-                    </div>
-                  )}
+                  <div className="hidden sm:flex flex-wrap items-center gap-1">
+                    {(m.cargos?.length ? m.cargos : [m.cargo]).map(c => (
+                      <span key={c} className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        ativo ? badgeCargo(c) : 'bg-gray-100 text-gray-400'
+                      }`}>
+                        {labelCargo(c)}
+                      </span>
+                    ))}
+                  </div>
 
                   <p className="hidden md:block text-xs text-gray-400 flex-shrink-0">Desde {formatDate(m.createdAt)}</p>
 
@@ -402,12 +338,6 @@ export default function Equipe() {
                             : ativo ? <ToggleRight size={18} /> : <ToggleLeft size={18} />
                           }
                         </button>
-                        {m.cargo !== 'GESTOR' && (
-                          <button onClick={() => setConfirmRemover(m)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Remover">
-                            <Trash2 size={15} />
-                          </button>
-                        )}
                       </>
                     )}
                   </div>
@@ -437,7 +367,7 @@ export default function Equipe() {
           titulo="Editar Membro"
           modoEdicao
           permitirSenha={isGestor}
-          permitirMultiCargos
+          ocultarPerfil
           emailBloqueado
           textoBotao="Salvar"
           salvando={salvandoEdicao}
@@ -459,29 +389,6 @@ export default function Equipe() {
           }}
         />
       )}
-      {/* Modal Confirmar remoção */}
-      {confirmRemover && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
-            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Trash2 size={22} className="text-red-500" />
-            </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Remover membro?</h2>
-            <p className="text-gray-500 text-sm mb-6">
-              <strong className="text-gray-700">{confirmRemover.user.fullName}</strong> perderá acesso à plataforma.
-            </p>
-            <div className="flex gap-3">
-              <button onClick={() => setConfirmRemover(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">Cancelar</button>
-              <button onClick={handleRemover} disabled={removendoId !== null}
-                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 text-white rounded-2xl text-sm font-semibold">
-                {removendoId !== null ? 'Removendo...' : 'Remover'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </PageContainer>
   );
 }

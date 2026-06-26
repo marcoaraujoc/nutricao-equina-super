@@ -76,15 +76,24 @@ const ExameClinicoController = {
 
       // Campos extras armazenados em observacao como JSON
       const { dataHoraColeta, dataSolicitacao } = req.body;
-      const extra = {
-        laboratorio:      laboratorio?.trim()      || null,
-        dataHoraColeta:   dataHoraColeta           || null,
-        tipoAmostra:      tipoAmostra?.trim()      || null,
-        indicacaoClinica: indicacaoClinica?.trim() || null,
-        obs:              observacao?.trim()        || null,
-        grupoNome:        grupoNome?.trim()         || null,
-        grupos:           Array.isArray(grupos) && grupos.length >= 1 ? grupos : null,
-      };
+
+      // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
+      // Preserva direto, sem encapsular na estrutura extra (que quebraria a leitura em handleEditar).
+      let observacaoFinal;
+      if (tipo === 'Compra') {
+        observacaoFinal = observacao ?? null;
+      } else {
+        const extra = {
+          laboratorio:      laboratorio?.trim()      || null,
+          dataHoraColeta:   dataHoraColeta           || null,
+          tipoAmostra:      tipoAmostra?.trim()      || null,
+          indicacaoClinica: indicacaoClinica?.trim() || null,
+          obs:              observacao?.trim()        || null,
+          grupoNome:        grupoNome?.trim()         || null,
+          grupos:           Array.isArray(grupos) && grupos.length >= 1 ? grupos : null,
+        };
+        observacaoFinal = JSON.stringify(extra);
+      }
 
       const item = await prisma.$transaction(async (tx) => {
         const maxResult = await tx.exameClinico.aggregate({
@@ -96,12 +105,12 @@ const ExameClinicoController = {
         return tx.exameClinico.create({
           data: {
             animalId:        Number(animalId),
-            veterinarioId:   req.user.userType === 'VETERINARIO' ? req.user.id : null,
+            veterinarioId:   req.user.id,
             evolucaoId:      evolucaoId ? Number(evolucaoId) : null,
             tipo,
             descricao:       descricao.trim(),
             status:          'SOLICITADO',
-            observacao:      JSON.stringify(extra),
+            observacao:      observacaoFinal,
             qtdAmostra:      qtdAmostra != null ? Number(qtdAmostra) : null,
             numero:          proximoNumero,
             dataSolicitacao: dataSolicitacao ? new Date(dataSolicitacao) : new Date(),
@@ -132,6 +141,95 @@ const ExameClinicoController = {
     }
   },
 
+  // PUT /clinica/exames/:id
+  atualizar: async (req, res) => {
+    try {
+      const item = await prisma.exameClinico.findUnique({ where: { id: Number(req.params.id) } });
+      if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+      });
+      if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
+      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
+      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestor && Number(item.veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Você só pode editar exames criados por você.' });
+      }
+
+      const { descricao, observacao, status, laboratorio, tipoAmostra, indicacaoClinica, dataSolicitacao, qtdAmostra } = req.body;
+
+      // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
+      // Preserva direto; para outros tipos, encapsula na estrutura extra padrão.
+      let observacaoAtualizada;
+      if (item.tipo === 'Compra') {
+        observacaoAtualizada = observacao ?? item.observacao;
+      } else {
+        const extra = {
+          laboratorio:      laboratorio?.trim()      || null,
+          tipoAmostra:      tipoAmostra?.trim()      || null,
+          indicacaoClinica: indicacaoClinica?.trim() || null,
+          obs:              observacao?.trim()        || null,
+        };
+        observacaoAtualizada = JSON.stringify(extra);
+      }
+
+      const atualizado = await prisma.exameClinico.update({
+        where: { id: item.id },
+        data: {
+          ...(descricao       && { descricao: descricao.trim() }),
+          ...(status          && { status }),
+          ...(dataSolicitacao && { dataSolicitacao: new Date(dataSolicitacao) }),
+          ...(qtdAmostra != null && { qtdAmostra: Number(qtdAmostra) }),
+          observacao: observacaoAtualizada,
+        },
+        include: INCLUDE,
+      });
+
+      res.json({ dados: atualizado });
+    } catch (err) {
+      console.error('Erro ao atualizar exame clínico:', err);
+      res.status(500).json({ error: 'Erro ao atualizar exame' });
+    }
+  },
+
+  // PATCH /clinica/exames/:id/finalizar — transita status para CONCLUIDO
+  // GESTOR: qualquer exame (bypass via checkPermission)
+  // FORNECEDOR: apenas exames que ele próprio criou (veterinarioId check)
+  finalizar: async (req, res) => {
+    try {
+      const item = await prisma.exameClinico.findUnique({ where: { id: Number(req.params.id) } });
+      if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+      });
+      if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      // Regra: FORNECEDOR só pode finalizar exame que ele próprio criou
+      if (req.user.userType === 'FORNECEDOR' && item.veterinarioId !== req.user.id) {
+        return res.status(403).json({ error: 'Você só pode finalizar exames criados por você.' });
+      }
+
+      if (item.status === 'CONCLUIDO') {
+        return res.status(400).json({ error: 'Exame já está concluído.' });
+      }
+
+      const atualizado = await prisma.exameClinico.update({
+        where: { id: item.id },
+        data:  { status: 'CONCLUIDO' },
+        include: INCLUDE,
+      });
+
+      res.json({ dados: atualizado });
+    } catch (err) {
+      console.error('Erro ao finalizar exame clínico:', err);
+      res.status(500).json({ error: 'Erro ao finalizar exame' });
+    }
+  },
+
   // DELETE /clinica/exames/:id  (soft delete)
   excluir: async (req, res) => {
     try {
@@ -142,6 +240,12 @@ const ExameClinicoController = {
         animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
+      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestorDel && Number(item.veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Você só pode excluir exames criados por você.' });
+      }
 
       await prisma.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
       res.json({ dados: { id: item.id, excluido: true } });

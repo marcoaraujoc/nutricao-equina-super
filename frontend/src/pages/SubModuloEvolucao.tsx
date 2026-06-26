@@ -209,8 +209,8 @@ function ViewEvolucaoModal({ ev, animal, isGestor, onClose, onEditar, onImprimir
   onEditar?:  () => void;
   onImprimir: () => void;
 }) {
-  const editavel  = ev.status === 'EM_ANDAMENTO' || (ev.status === 'FINALIZADA' && isGestor);
-  const bloqueado = (ev.status === 'FINALIZADA' && !isGestor) || ev.status === 'CANCELADA';
+  const editavel  = ev.status === 'EM_ANDAMENTO';
+  const bloqueado = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
   const midias    = ev.midias ?? [];
 
   return (
@@ -792,6 +792,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const podeFinalizar = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
   const podeImprimir  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
 
+  // FORNECEDOR nunca tem bypass de autoria: só edita/finaliza o que criou,
+  // mesmo que o GESTOR tenha configurado nível EQUIPE/FULL explicitamente.
+  const isFornecedor = user?.userType === 'FORNECEDOR';
+
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -930,6 +934,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     if (editingEv ? !podeEditar : !podeCriar) {
       semPermissao(editingEv ? 'editar evolução' : 'criar evolução'); return;
     }
+    // FORNECEDOR: regra de autoria no frontend — bloqueia antes de chamar a API
+    if (editingEv && isFornecedor && editingEv.veterinarioId !== (user?.id ?? 0)) {
+      semPermissao('editar evolução de outro profissional'); return;
+    }
     if (!form.texto.trim()) {
       toast.error('O texto da evolução é obrigatório');
       return;
@@ -975,6 +983,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleFinalizar = async () => {
     if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
+    // FORNECEDOR: regra de autoria — só finaliza o que criou
+    if (editingEv && isFornecedor && editingEv.veterinarioId !== (user?.id ?? 0)) {
+      semPermissao('finalizar evolução de outro profissional'); return;
+    }
     if (!form.texto.trim()) {
       toast.error('O texto da evolução é obrigatório');
       return;
@@ -1039,6 +1051,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleExcluir = async (justificativa: string) => {
     if (!deletingEv) return;
+    // FORNECEDOR: regra de autoria — só exclui o que criou
+    if (isFornecedor && deletingEv.veterinarioId !== (user?.id ?? 0)) {
+      semPermissao('excluir evolução de outro profissional'); return;
+    }
     setSavingExclusao(true);
     try {
       await api.delete(`/clinica/evolucoes/${deletingEv.id}`, { data: { justificativa } });
@@ -1302,12 +1318,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
                 const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
 
-                const podeEditarEsta  = nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' ||
-                  (nivelEditar  === 'PROPRIO' && eProprioAutor);
-                const podeExcluir    = emAndamento && (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' ||
-                  (nivelDeletar === 'PROPRIO' && eProprioAutor));
-                const podeFinalizarEsta = emAndamento && (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' ||
-                  (nivelFinalizar === 'PROPRIO' && eProprioAutor));
+                // FORNECEDOR: autoria obrigatória independente do nível configurado
+                const podeEditarEsta  = isFornecedor
+                  ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
+                  : (nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' || (nivelEditar  === 'PROPRIO' && eProprioAutor));
+                // FORNECEDOR: autoria obrigatória independente do nível configurado
+                const podeExcluir    = emAndamento && (isFornecedor
+                  ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
+                  : (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' || (nivelDeletar === 'PROPRIO' && eProprioAutor)));
+                const podeFinalizarEsta = emAndamento && (isFornecedor
+                  ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
+                  : (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' || (nivelFinalizar === 'PROPRIO' && eProprioAutor)));
                 const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
@@ -1447,9 +1468,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           onClose={() => setViewingEv(null)}
           onEditar={(() => {
             const nivelEd = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
-            const podeEd  = nivelEd === 'FULL' || nivelEd === 'EQUIPE' ||
-              (nivelEd === 'PROPRIO' && viewingEv.veterinarioId === userId);
-            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (viewingEv.status === 'FINALIZADA' && isGestor));
+            const eAutorViewing = viewingEv.veterinarioId === userId;
+            // FORNECEDOR: autoria obrigatória independente do nível
+            const podeEd = isFornecedor
+              ? (nivelEd !== 'NENHUM' && eAutorViewing)
+              : (nivelEd === 'FULL' || nivelEd === 'EQUIPE' || (nivelEd === 'PROPRIO' && eAutorViewing));
+            const podeEditar = podeEd && viewingEv.status === 'EM_ANDAMENTO';
             return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
           })()}
           onImprimir={() => handleImprimir(viewingEv)}

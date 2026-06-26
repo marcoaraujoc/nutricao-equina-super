@@ -250,8 +250,8 @@ const listarCatalogoComEstoque = async (req, res) => {
               m.id, m.nome, m.fabricante,
               m."formaFarmaceutica",
               m.apresentacao, m.unidade,
-              CASE WHEN COALESCE(lv.qtd_total, 0) > 0
-                   THEN COALESCE(lv.valor_unitario_repassado, lv.valor_unitario, 0) / lv.qtd_total
+              CASE WHEN COALESCE(lv.doses_por_frasco, 1) > 0
+                   THEN COALESCE(lv.valor_unitario_repassado, lv.valor_unitario, 0) / NULLIF(lv.doses_por_frasco, 0)
                    ELSE 0
               END::float AS "valorUnitario"
        FROM schs2vet.tb_medicamentos m
@@ -464,19 +464,20 @@ const listarLotesDisponiveisPorMed = async (req, res) => {
       select: {
         id: true, lote: true, validade: true,
         qtdDisponivel: true, qtdTotal: true,
+        dosesPorFrasco: true,
         valorUnitario: true, valorUnitarioRepassado: true,
       },
     });
 
     const dados = lotes.map(l => {
-      const valorBruto = Number(l.valorUnitarioRepassado ?? l.valorUnitario ?? 0);
-      const qtdTotal   = Number(l.qtdTotal) || Number(l.qtdDisponivel) || 1;
+      const valorBruto    = Number(l.valorUnitarioRepassado ?? l.valorUnitario ?? 0);
+      const dosesPorFrasco = Number(l.dosesPorFrasco) || 1;
       return {
         id:            l.id,
         lote:          l.lote,
         validade:      l.validade,
         qtdDisponivel: l.qtdDisponivel,
-        valorPorDose:  qtdTotal > 0 ? valorBruto / qtdTotal : 0,
+        valorPorDose:  valorBruto / dosesPorFrasco,
       };
     });
 

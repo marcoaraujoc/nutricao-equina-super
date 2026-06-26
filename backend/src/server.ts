@@ -510,4 +510,53 @@ cron.schedule('0 8 * * *', () => {
 
 logger.info('[Lembrete-Cron] Agendado: diariamente às 08:00 (Brasília)');
 
+// ===================== CRON — FECHAMENTO MENSAL AUTOMÁTICO DE FATURAS =====================
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { adicionarAssistenciaMensal, recalcularTotal } = require('./controllers/FaturaController');
+
+async function fecharFaturasDoMes() {
+  try {
+    const faturas = await prisma.fatura.findMany({
+      where:   { status: 'ABERTA' },
+      include: { proprietario: { select: { id: true, valorAssistencia: true, mensalista: true } } },
+    });
+
+    logger.info(`[FaturaFechamento-Cron] ${faturas.length} fatura(s) ABERTA(s) a fechar`);
+
+    let fechadas = 0;
+    for (const fatura of faturas) {
+      try {
+        await adicionarAssistenciaMensal(fatura.id, fatura.proprietario, null);
+
+        const total = await recalcularTotal(fatura.id);
+
+        await prisma.fatura.update({
+          where: { id: fatura.id },
+          data:  { status: 'FECHADA', total },
+        });
+
+        fechadas++;
+        logger.info(`[FaturaFechamento-Cron] Fatura id=${fatura.id} fechada (total=${total})`);
+      } catch (err: unknown) {
+        logger.error(`[FaturaFechamento-Cron] Erro na fatura id=${fatura.id}: ${(err as Error).message}`);
+      }
+    }
+
+    logger.info(`[FaturaFechamento-Cron] Concluído — ${fechadas}/${faturas.length} fatura(s) fechada(s)`);
+  } catch (err: unknown) {
+    logger.error(`[FaturaFechamento-Cron] Erro geral: ${(err as Error).message}`);
+  }
+}
+
+// Executa nos dias 28–31 às 23:45 (Brasília) e verifica se é o último dia do mês
+cron.schedule('45 23 28-31 * *', () => {
+  const amanha = new Date();
+  amanha.setDate(amanha.getDate() + 1);
+  if (amanha.getDate() !== 1) return; // só executa no último dia do mês
+  logger.info('[FaturaFechamento-Cron] Iniciando fechamento mensal automático...');
+  fecharFaturasDoMes();
+}, { timezone: 'America/Sao_Paulo' });
+
+logger.info('[FaturaFechamento-Cron] Agendado: último dia do mês às 23:45 (Brasília)');
+
 export default app;

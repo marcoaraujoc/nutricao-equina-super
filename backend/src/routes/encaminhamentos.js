@@ -12,7 +12,8 @@ router.get('/prestadores/:animalId', authenticate, checkPermission('atendimento.
 router.get('/animal/:animalId',      authenticate, checkPermission('atendimento.encaminhamentos.ler',     'LEITURA'), EncaminhamentoController.listarPorAnimal);
 router.get('/:id',                   authenticate, checkPermission('atendimento.encaminhamentos.ler',     'LEITURA'), EncaminhamentoController.obterPorId);
 router.post('/',                     authenticate, checkPermission('atendimento.encaminhamentos.criar',   'PROPRIO'), EncaminhamentoController.criar);
-router.patch('/:id/status',          authenticate, checkPermission('atendimento.encaminhamentos.editar',  'PROPRIO'), EncaminhamentoController.atualizarStatus);
+router.patch('/:id/finalizar',        authenticate, checkPermission('atendimento.encaminhamentos.finalizar', 'PROPRIO'), EncaminhamentoController.finalizar);
+router.patch('/:id/status',          authenticate, checkPermission('atendimento.encaminhamentos.editar',    'PROPRIO'), EncaminhamentoController.atualizarStatus);
 router.put('/:id',                   authenticate, checkPermission('atendimento.encaminhamentos.editar',  'PROPRIO'), EncaminhamentoController.atualizar);
 router.delete('/:id',                authenticate, checkPermission('atendimento.encaminhamentos.deletar', 'PROPRIO'), EncaminhamentoController.excluir);
 

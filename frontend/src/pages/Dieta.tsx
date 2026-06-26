@@ -897,14 +897,14 @@ const Dieta = () => {
 
         <BotaoVoltar className="mb-4" />
 
-        {animal && <AnimalCard animal={animal} />}
-
         <SeletorAnimal
           animais={animaisDoProprietario}
           animalIdAtual={effectiveAnimalId}
           rotaBase="/dieta"
           className="mb-4"
         />
+
+        {animal && <AnimalCard animal={animal} />}
 
         {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
         <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>

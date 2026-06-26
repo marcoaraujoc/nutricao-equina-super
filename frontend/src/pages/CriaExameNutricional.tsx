@@ -2,6 +2,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import { Upload, Edit, Trash2, AlertCircle, X, FileText } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -11,6 +12,7 @@ const CriaExameNutricional = () => {
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const [resultadoIA, setResultadoIA] = useState<any>(null);
   const [fileName, setFileName] = useState('');
@@ -139,6 +141,10 @@ const CriaExameNutricional = () => {
   };
 
   const saveManual = async () => {
+    if (!isGestor && !podeExecutar('atendimento.exames.criar')) {
+      alert('Sem permissão para criar exames. Verifique com o responsável da equipe.');
+      return;
+    }
     const validos = manualExames.filter(e => e.nutrienteId && e.valorEncontrado);
     if (validos.length === 0) return alert('Preencha Nutriente e Valor.');
 
@@ -166,6 +172,10 @@ const CriaExameNutricional = () => {
   };
 
   const salvarTodos = async () => {
+    if (!isGestor && !podeExecutar('atendimento.exames.criar')) {
+      alert('Sem permissão para criar exames. Verifique com o responsável da equipe.');
+      return;
+    }
     if (!resultadoIA || submitting) return;
     const validos = resultadoIA.exames.filter((e: any) => e.encontrado);
     if (validos.length === 0) { alert('Nenhum exame válido.'); return; }
@@ -200,6 +210,17 @@ const CriaExameNutricional = () => {
     alert(`Adicionando ${faltantes.length} nutrientes ao catálogo:\n\n` + faltantes.map((e: any) => `- ${e.nomeOficial}`).join('\n'));
     setShowModal(false);
   };
+
+  if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.criar')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center py-16">
+          <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
+          <p className="text-sm text-gray-500">Você não tem permissão para criar exames nutricionais.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 pb-10">

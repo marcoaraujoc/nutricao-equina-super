@@ -33,7 +33,7 @@ const authenticate = async (req, res, next) => {
       const headerEquipeId = Number(req.headers['x-equipe-id']);
       if (Number.isInteger(headerEquipeId) && headerEquipeId > 0) {
         const equipe = await prisma.equipe.findFirst({
-          where: decoded.role === 'ADMIN'
+          where: (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN')
             ? { id: headerEquipeId }
             : {
                 id: headerEquipeId,
@@ -52,7 +52,7 @@ const authenticate = async (req, res, next) => {
 
       const headerEmpresaId = Number(req.headers['x-empresa-id']);
       if (!req.empresaId && Number.isInteger(headerEmpresaId) && headerEmpresaId > 0) {
-        if (decoded.role === 'ADMIN') {
+        if (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN') {
           req.empresaId = headerEmpresaId;
         } else {
           const vinculo = await prisma.empresa.findFirst({

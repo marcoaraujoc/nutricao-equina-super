@@ -739,7 +739,7 @@ model FaturaItem {
   tipo          String   @db.VarChar(50)   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
   descricao     String
   valor         Float    @default(0)
-  quantidade    Int      @default(1)
+  quantidade    Float    @default(1)
   veterinarioId Int?
   criadoEm      DateTime @default(now())
 
@@ -1195,13 +1195,14 @@ model EstoqueClinica {
   id               Int       @id @default(autoincrement())
   medicamentoId    Int
   empresaId        Int?
-  valor            Float     @default(0)        // preço de compra
-  valorRepassado   Float     @default(0)        @map("valor_repassado")
-  lote             String?   @db.VarChar(100)
-  validade         DateTime?
-  qtdEstoque       Int       @default(0)
-  estoqueMinimo    Int       @default(0)        // alerta vermelho
-  estoqueAlarmante Int       @default(0)        // alerta amarelo
+  valor              Float     @default(0)        // preço de compra
+  valorRepassado     Float     @default(0)        @map("valor_repassado")
+  precoUnitarioBase  Float?                       @map("preco_unitario_base") // R$/g ou R$/mL — fixo na entrada
+  lote               String?   @db.VarChar(100)
+  validade           DateTime?
+  qtdEstoque         Float     @default(0)
+  estoqueMinimo    Float     @default(0)        // alerta vermelho
+  estoqueAlarmante Float     @default(0)        // alerta amarelo
   ativo            Boolean   @default(true)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -1228,7 +1229,7 @@ model MovimentoEstoque {
   id         Int            @id @default(autoincrement())
   estoqueId  Int
   tipo       String         @db.VarChar(20)  // ENTRADA | SAIDA | AJUSTE
-  quantidade Int
+  quantidade Float
   motivo     String?        @db.Text
   createdAt  DateTime       @default(now())
 

@@ -133,18 +133,25 @@ async function getNivelPermissaoProprietario(userId, moduloSlug) {
 
 /**
  * Busca o nível de permissão de um usuário para um módulo específico.
- * Prioridade: PermissaoMembro (override individual) → MatrizPerfil (template do cargo) → 'NENHUM'.
- * Isso garante que o que o gestor configura em ControleAcesso (MatrizPerfil) seja respeitado
- * mesmo quando o membro entrou na equipe antes do slug existir.
+ *
+ * FORNECEDOR: usa PermissaoMembro (permissões individuais configuradas por animal/membro).
+ * Todos os demais cargos: usa MatrizPerfil como fonte canônica — é o que o gestor
+ * edita no ControleAcesso → "Matriz de Perfis". Ignorar PermissaoMembro evita que
+ * registros desatualizados (ex.: do seed ou de propagação anterior) concedam acesso
+ * indevido após o gestor restringir o perfil.
  */
 async function getNivelPermissao(userId, equipeId, moduloSlug, cargo = null) {
-  const permissao = await prisma.permissaoMembro.findUnique({
-    where: { equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug } },
-    select: { nivel: true },
-  });
-  if (permissao) return permissao.nivel;
+  if (cargo === 'FORNECEDOR') {
+    // FORNECEDOR: permissões individuais por membro (via ControleAcesso → aba Fornecedor)
+    const permissao = await prisma.permissaoMembro.findUnique({
+      where: { equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug } },
+      select: { nivel: true },
+    });
+    if (permissao) return permissao.nivel;
+  }
 
   if (cargo) {
+    // Para todos os demais cargos: MatrizPerfil é a fonte de verdade
     const matriz = await prisma.matrizPerfil.findUnique({
       where: { equipeId_perfilSlug_moduloSlug: { equipeId, perfilSlug: cargo, moduloSlug } },
       select: { nivel: true },
@@ -166,6 +173,11 @@ async function getNivelPermissao(userId, equipeId, moduloSlug, cargo = null) {
  *
  * @param {string} moduloSlug - slug do módulo (ex: 'atendimento.evolucoes.criar')
  * @param {string} nivelMinimo - nível mínimo exigido (LEITURA|PROPRIO|EQUIPE|FULL)
+ *
+ * Multicargo: um usuário com userType=PROPRIETARIO que também é MembroEquipe como
+ * VETERINARIO ou ESTAGIARIO recebe o MAX entre o nível do cargo de equipe e o nível
+ * de PROPRIETARIO. NEGADO do cargo de equipe bloqueia; NEGADO de PROPRIETARIO não
+ * bloqueia quando o usuário tem cargo de equipe ativo.
  */
 function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
   return async (req, res, next) => {
@@ -174,12 +186,109 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return res.status(401).json({ error: 'Não autenticado.' });
       }
 
-      // ADMIN (role sistêmica): bypass total
-      if (req.user.role === 'ADMIN') {
+      // ADMIN: bypass total — checa role (campo legado) OU userType (campo canônico)
+      if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') {
         return next();
       }
 
-      // PROPRIETARIO: verifica MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas
+      // Resolve equipe do contexto ativo ANTES do check de userType, para suportar
+      // multicargo (ex: userType=PROPRIETARIO com cargo VETERINARIO numa equipe).
+      const equipeId = await resolveEquipeId(req);
+
+      // ── CAMINHO DE MEMBRO DE EQUIPE ────────────────────────────────────────────
+      if (equipeId) {
+        const membro = await prisma.membroEquipe.findUnique({
+          where:  { equipeId_userId: { equipeId, userId: req.user.id } },
+          select: { cargo: true },
+        });
+
+        if (membro) {
+          // BYPASS para gestores — têm acesso total dentro da equipe
+          if (membro.cargo === 'GESTOR') {
+            req.permissaoNivel = 'FULL';
+            req.equipeId       = equipeId;
+            req.membroCargo    = 'GESTOR';
+            return next();
+          }
+
+          const nivelEquipe = await getNivelPermissao(req.user.id, equipeId, moduloSlug, membro.cargo);
+
+          // Multicargo: PROPRIETARIO com cargo de equipe recebe o máximo entre os dois níveis.
+          // NEGADO de PROPRIETARIO não bloqueia quem tem cargo de equipe ativo.
+          let nivelAtual = nivelEquipe;
+          if (req.user.userType === 'PROPRIETARIO') {
+            const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+            if (nivelProp !== 'NEGADO') {
+              const ordProp   = NIVEL_ORDINAL[nivelProp]   ?? 0;
+              const ordEquipe = NIVEL_ORDINAL[nivelEquipe] ?? 0;
+              if (ordProp > ordEquipe) nivelAtual = nivelProp;
+            }
+          }
+
+          if (nivelAtual === 'NEGADO') {
+            return res.status(403).json({
+              error:  'Acesso negado pelo administrador da equipe.',
+              modulo: moduloSlug,
+            });
+          }
+
+          const ordinalAtual  = NIVEL_ORDINAL[nivelAtual]  ?? 0;
+          const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
+
+          if (ordinalAtual < ordinalMinimo) {
+            return res.status(403).json({
+              error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
+              modulo: moduloSlug,
+            });
+          }
+
+          req.permissaoNivel = nivelAtual;
+          req.equipeId       = equipeId;
+          req.membroCargo    = membro.cargo;
+          return next();
+        }
+
+        // equipeId resolvido mas usuário não é membro → verifica dono da empresa da equipe
+        const equipe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { empresaId: true } });
+        const dono = equipe
+          ? await prisma.empresa.findFirst({ where: { id: equipe.empresaId, ownerId: req.user.id }, select: { id: true } })
+          : null;
+        if (dono && req.user.userType !== 'FORNECEDOR') {
+          req.permissaoNivel = 'FULL';
+          req.equipeId       = equipeId;
+          req.membroCargo    = 'GESTOR';
+          return next();
+        }
+        // Não é membro nem dono: cai no caminho sem equipe abaixo
+      }
+
+      // ── SEM EQUIPE ATIVA ───────────────────────────────────────────────────────
+      if (!equipeId) {
+        // Dono de empresa sem MembroEquipe: tem bypass total (igual a GESTOR).
+        // Com contexto ativo (req.empresaId), o bypass vale APENAS se ele for dono
+        // DAQUELA empresa — ser dono de outra empresa não concede nada aqui.
+        const empresaOwned = await prisma.empresa.findFirst({
+          where: { ownerId: req.user.id, ...(req.empresaId ? { id: req.empresaId } : {}) },
+        });
+        if (empresaOwned && req.user.userType !== 'FORNECEDOR') {
+          req.permissaoNivel = 'FULL';
+          req.equipeId       = null;
+          req.membroCargo    = 'GESTOR';
+          return next();
+        }
+
+        // Veterinário autônomo (sem equipe e sem empresa): acesso filtrado por VetAnimalSolicitacao no controller
+        if (req.user.userType === 'VETERINARIO') {
+          req.permissaoNivel = 'PROPRIO';
+          req.equipeId       = null;
+          req.membroCargo    = null;
+          return next();
+        }
+      }
+
+      // ── PROPRIETARIO sem cargo de equipe ativo ─────────────────────────────────
+      // Chegou aqui: sem MembroEquipe válido (ou não era membro de nenhuma equipe).
+      // Verifica MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas via animais.
       if (req.user.userType === 'PROPRIETARIO') {
         const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
 
@@ -206,84 +315,9 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return next();
       }
 
-      const equipeId = await resolveEquipeId(req);
-
-      if (!equipeId) {
-        // Dono de empresa sem MembroEquipe: tem bypass total (igual a GESTOR).
-        // Com contexto ativo (req.empresaId), o bypass vale APENAS se ele for dono
-        // DAQUELA empresa — ser dono de outra empresa não concede nada aqui.
-        const empresaOwned = await prisma.empresa.findFirst({
-          where: { ownerId: req.user.id, ...(req.empresaId ? { id: req.empresaId } : {}) },
-        });
-        if (empresaOwned) {
-          req.permissaoNivel = 'FULL';
-          req.equipeId       = null;
-          req.membroCargo    = 'GESTOR';
-          return next();
-        }
-
-        // Veterinário autônomo (sem equipe e sem empresa): acesso filtrado por VetAnimalSolicitacao no controller
-        if (req.user.userType === 'VETERINARIO') {
-          req.permissaoNivel = 'PROPRIO';
-          req.equipeId       = null;
-          req.membroCargo    = null;
-          return next();
-        }
-
-        return res.status(403).json({
-          error: 'Nenhuma equipe ativa encontrada. Associe-se a uma equipe.',
-        });
-      }
-
-      // Garante que o usuário é membro da equipe resolvida
-      const membro = await prisma.membroEquipe.findUnique({
-        where: { equipeId_userId: { equipeId, userId: req.user.id } },
-        select: { cargo: true },
+      return res.status(403).json({
+        error: 'Nenhuma equipe ativa encontrada. Associe-se a uma equipe.',
       });
-
-      if (!membro) {
-        // Dono da empresa da equipe sem registro de MembroEquipe → bypass de gestor
-        const equipe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { empresaId: true } });
-        const dono = equipe
-          ? await prisma.empresa.findFirst({ where: { id: equipe.empresaId, ownerId: req.user.id }, select: { id: true } })
-          : null;
-        if (dono) {
-          req.permissaoNivel = 'FULL';
-          req.equipeId       = equipeId;
-          req.membroCargo    = 'GESTOR';
-          return next();
-        }
-
-        return res.status(403).json({
-          error: 'Você não pertence a esta equipe.',
-        });
-      }
-
-      // BYPASS para gestores — têm acesso total dentro da equipe
-      if (membro.cargo === 'GESTOR') {
-        req.permissaoNivel  = 'FULL';
-        req.equipeId        = equipeId;
-        req.membroCargo     = 'GESTOR';
-        return next();
-      }
-
-      const nivelAtual = await getNivelPermissao(req.user.id, equipeId, moduloSlug, membro.cargo);
-      const ordinalAtual   = NIVEL_ORDINAL[nivelAtual]   ?? 0;
-      const ordinalMinimo  = NIVEL_ORDINAL[nivelMinimo]  ?? 0;
-
-      if (ordinalAtual < ordinalMinimo) {
-        return res.status(403).json({
-          error: `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
-          modulo: moduloSlug,
-        });
-      }
-
-      // Injeta na request para uso nos services
-      req.permissaoNivel = nivelAtual;
-      req.equipeId       = equipeId;
-      req.membroCargo    = membro.cargo;
-
-      next();
     } catch (err) {
       console.error('[checkPermission] Erro:', err);
       res.status(500).json({ error: 'Erro ao verificar permissão.' });

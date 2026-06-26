@@ -10,7 +10,7 @@ const ctrl     = require('../controllers/ProcedimentoController');
 const { authenticate } = require('../middlewares/auth');
 
 const requireAdmin = (req, res, next) => {
-  if (req.user?.role !== 'ADMIN') {
+  if (req.user?.userType !== 'ADMIN') {
     return res.status(403).json({ error: 'Acesso restrito a administradores do sistema.' });
   }
   next();

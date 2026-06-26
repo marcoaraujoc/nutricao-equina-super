@@ -86,9 +86,20 @@ interface DetalheVacina {
   loteVacina: { lote: string; validade: string } | null;
 }
 
+interface GrupoExameDetalhe {
+  tipo:             string;
+  laboratorio:      string | null;
+  nome:             string | null;
+  exames:           string[] | null;
+  tipoAmostra:      string | null;
+  indicacaoClinica: string | null;
+  obs:              string | null;
+}
+
 interface DetalheExame {
   id: number; tipo: string; descricao: string | null;
   resultado: string | null; status: string; dataSolicitacao: string;
+  observacao: string | null;
   veterinario: { fullName: string } | null;
 }
 
@@ -167,6 +178,12 @@ const formatDate = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
 
 const labelFreq = (v: string) => POSOLOGIAS[v] ?? v;
 
+function parseExtraExame(obs: string | null): { grupos?: GrupoExameDetalhe[] | null; laboratorio?: string | null; [k: string]: unknown } | null {
+  if (!obs) return null;
+  try { return JSON.parse(obs) as { grupos?: GrupoExameDetalhe[] | null }; }
+  catch { return null; }
+}
+
 const calcularIdade = (dataNascimento?: string | null, idadeAnos?: number | null): string => {
   if (dataNascimento) {
     const nasc = new Date(dataNascimento);
@@ -194,8 +211,8 @@ function parseEventoId(ev: EventoHistorico): { origem: OrigemEvento; numId: numb
 function CampoHeader({ label, valor }: { label: string; valor: string }) {
   return (
     <div className="min-w-0">
-      <span className="block text-[10px] uppercase text-gray-400 tracking-widest font-semibold">{label}</span>
-      <span className="block text-sm font-bold text-gray-900 truncate mt-0.5" title={valor}>{valor}</span>
+      <span className="block text-[10px] uppercase text-gray-400 tracking-widest">{label}</span>
+      <span className="block text-sm text-gray-900 truncate mt-0.5" title={valor}>{valor}</span>
     </div>
   );
 }
@@ -304,20 +321,81 @@ function DetalheModalVacina({ dados }: { dados: DetalheVacina }) {
 }
 
 function DetalheModalExame({ dados }: { dados: DetalheExame }) {
+  const extra  = parseExtraExame(dados.observacao);
+  const grupos = extra?.grupos?.filter(g => g.exames && g.exames.length > 0) ?? [];
+
+  // Agrupa por laboratório preservando a ordem de aparição
+  const labOrder: string[]                       = [];
+  const labMap: Map<string, GrupoExameDetalhe[]> = new Map();
+  for (const g of grupos) {
+    const key = g.laboratorio?.trim() || 'Sem laboratório';
+    if (!labMap.has(key)) { labMap.set(key, []); labOrder.push(key); }
+    labMap.get(key)!.push(g);
+  }
+
+  const temBlocos = labOrder.length > 0;
+
   return (
     <div className="space-y-0">
-      <RowDetalhe label="Tipo"          value={dados.tipo} />
-      <RowDetalhe label="Status"        value={dados.status} />
-      <RowDetalhe label="Data"          value={formatDate(dados.dataSolicitacao)} />
-      <RowDetalhe label="Responsável"   value={dados.veterinario?.fullName} />
-      {dados.descricao && (
+      <RowDetalhe label="Status"      value={dados.status} />
+      <RowDetalhe label="Data"        value={formatDate(dados.dataSolicitacao)} />
+      <RowDetalhe label="Responsável" value={dados.veterinario?.fullName} />
+
+      {/* Blocos por laboratório */}
+      {temBlocos && (
+        <div className="pt-3 space-y-3">
+          {labOrder.map(lab => {
+            const gs = labMap.get(lab)!;
+            return (
+              <div key={lab} className="border border-blue-100 rounded-xl overflow-hidden">
+                {/* Cabeçalho — nome do laboratório */}
+                <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 border-b border-blue-100">
+                  <FlaskConical size={13} className="text-blue-500 flex-shrink-0" />
+                  <span className="text-xs font-bold text-blue-800 uppercase tracking-wide">{lab}</span>
+                </div>
+
+                {/* Grupos deste laboratório */}
+                <div className="divide-y divide-gray-50">
+                  {gs.map((g, gi) => (
+                    <div key={gi} className="px-3 py-2.5">
+                      {g.nome && (
+                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                          {g.nome}
+                        </p>
+                      )}
+                      <ul className="space-y-0.5">
+                        {g.exames!.map((ex, ei) => (
+                          <li key={ei} className="flex items-start gap-1.5 text-sm text-gray-800">
+                            <span className="text-blue-400 mt-0.5 flex-shrink-0">•</span>
+                            {ex}
+                          </li>
+                        ))}
+                      </ul>
+                      {g.tipoAmostra && (
+                        <p className="text-[11px] text-gray-400 mt-1.5">Amostra: {g.tipoAmostra}</p>
+                      )}
+                      {g.obs && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">Obs: {g.obs}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Fallback: sem grupos estruturados */}
+      {!temBlocos && dados.descricao && (
         <div className="py-2.5 border-b border-gray-50">
-          <span className="text-xs text-gray-400 font-medium block mb-1.5">Descrição</span>
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Exames</span>
           <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.descricao}</p>
         </div>
       )}
+
       {dados.resultado && (
-        <div className="py-2.5">
+        <div className="py-2.5 pt-3">
           <span className="text-xs text-gray-400 font-medium block mb-1.5">Resultado</span>
           <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.resultado}</p>
         </div>

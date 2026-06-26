@@ -15,7 +15,10 @@ router.post('/:faturaId/itens',  authenticate, checkPermission('financeiro.fatur
 router.put('/itens/:itemId',     authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.atualizarItem);
 router.delete('/itens/:itemId',  authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'),  Ctrl.removerItem);
 
-// Status da fatura
+// Fechamento de fatura (adiciona assistência mensal + status FECHADA)
+router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharFatura);
+
+// Status da fatura (uso geral: PAGA, ABERTA, CANCELADA)
 router.patch('/:faturaId/status', authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'), Ctrl.atualizarStatus);
 
 // Legado

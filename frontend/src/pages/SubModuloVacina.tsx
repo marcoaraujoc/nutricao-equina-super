@@ -16,6 +16,7 @@ interface MedicamentoCatalogo {
   formaFarmaceutica: string;
   valorUnitario:     number | null;
   vias:              { id: number; via: string }[];
+  emEstoque:         boolean;
 }
 
 interface LoteDisponivel {
@@ -238,6 +239,75 @@ function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) 
   );
 }
 
+// ─── DuplicataWarningModal ────────────────────────────────────────────────────
+
+function DuplicataWarningModal({
+  nomeVacina,
+  data,
+  onConfirmar,
+  onCancelar,
+}: {
+  nomeVacina: string;
+  data:       string;
+  onConfirmar: () => void;
+  onCancelar:  () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancelar();
+      if (e.key === 'Enter')  onConfirmar();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onConfirmar, onCancelar]);
+
+  const dataFormatada = (() => {
+    const [y, m, d] = data.split('-');
+    return `${d}/${m}/${y}`;
+  })();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancelar} />
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-sm border border-gray-100 overflow-hidden">
+        <button
+          onClick={onCancelar}
+          className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+          <X size={16} />
+        </button>
+        <div className="p-6">
+          <div className="flex items-start gap-4 mb-4">
+            <div className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-amber-100">
+              <AlertCircle size={20} className="text-amber-600" />
+            </div>
+            <div className="pt-1.5">
+              <h3 className="text-base font-bold text-gray-900 leading-snug">Vacina já aplicada hoje</h3>
+            </div>
+          </div>
+          <div className="ml-14 space-y-2">
+            <p className="text-sm text-gray-600">
+              A vacina <span className="font-semibold text-gray-800">{nomeVacina}</span> já possui um registro ativo para este animal na data <span className="font-semibold text-gray-800">{dataFormatada}</span>.
+            </p>
+            <p className="text-sm text-gray-500">Deseja registrar mesmo assim?</p>
+          </div>
+        </div>
+        <div className="flex flex-col-reverse sm:flex-row gap-2 px-6 pb-6 pt-0">
+          <button
+            onClick={onCancelar}
+            className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirmar}
+            className="flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold text-white transition-colors bg-amber-500 hover:bg-amber-600">
+            Registrar mesmo assim
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ExcluirModal ─────────────────────────────────────────────────────────────
 
 function ExcluirModal({
@@ -375,6 +445,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
 
   const [page, setPage] = useState(1);
   const limit = 8;
+  const [confirmandoDuplicata, setConfirmandoDuplicata] = useState(false);
 
   const historicoFiltrado = historico.filter(v => {
     if (filtroStatus === 'todos') return true;
@@ -408,12 +479,14 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
   const carregarCatalogo = useCallback(async () => {
     setLoadingCat(true);
     try {
-      const res = await api.get('/vacinas/estoque/catalogo');
+      const res = await api.get('/medicamentos/para-atendimento', {
+        params: { animalId, tipo: 'vacina' },
+      });
       if (!res.data) return;
       setCatalogo(res.data?.dados ?? []);
     } catch { /* silencioso */ }
     finally { setLoadingCat(false); }
-  }, []);
+  }, [animalId]);
 
   const carregarHistorico = useCallback(async () => {
     setLoadingHist(true);
@@ -472,8 +545,14 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
       setLotesDisponiveis([]);
       return;
     }
+    const med = catalogo.find(m => m.id === medicamentoId);
+    if (!med?.emEstoque) {
+      setLoteId('');
+      setLotesDisponiveis([]);
+      return;
+    }
     fetchLotes(medicamentoId);
-  }, [medicamentoId, fetchLotes]);
+  }, [medicamentoId, fetchLotes, catalogo]);
 
   // Reset page when filter changes
   useEffect(() => { setPage(1); }, [filtroStatus]);
@@ -494,10 +573,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
     setDropdownMedAberto(false);
   };
 
-  const handleSalvar = async () => {
-    if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
-    if (!medicamentoId) { toast.error('Selecione a vacina'); return; }
-
+  const executarSalvar = async () => {
     setSaving(true);
     try {
       await api.post('/clinica/vacinas', {
@@ -521,6 +597,26 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao registrar vacina');
     } finally { setSaving(false); }
+  };
+
+  const handleSalvar = () => {
+    if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
+    if (!medicamentoId) { toast.error('Selecione a vacina'); return; }
+
+    if (medSelecionado) {
+      const nomeBusca = medSelecionado.nome.toLowerCase().trim();
+      const duplicata = historico.find(v => {
+        if (!v.ativo) return false;
+        return v.nome.toLowerCase().trim() === nomeBusca &&
+               v.dataAplicacao.slice(0, 10) === dataAplicacao;
+      });
+      if (duplicata) {
+        setConfirmandoDuplicata(true);
+        return;
+      }
+    }
+
+    executarSalvar();
   };
 
   const handleExcluirSolicitado = (id: number) => {
@@ -582,7 +678,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                 </div>
               ) : catalogo.length === 0 ? (
                 <div className="px-3 py-2.5 border border-amber-200 rounded-xl text-sm text-amber-600 bg-amber-50 text-xs">
-                  Nenhuma vacina disponível no estoque
+                  Nenhuma vacina cadastrada para esta espécie
                 </div>
               ) : (
                 <div className="relative">
@@ -626,7 +722,13 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                               className={`w-full text-left px-3 py-2 hover:bg-teal-50 transition-colors ${m.id === medicamentoId ? 'bg-teal-50 text-teal-700' : 'text-gray-900'}`}
                             >
                               <p className="text-sm font-medium">{m.nome}</p>
-                              <p className="text-xs text-gray-400">{m.formaFarmaceutica}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {m.formaFarmaceutica && <p className="text-xs text-gray-400">{m.formaFarmaceutica}</p>}
+                                {m.emEstoque
+                                  ? <span className="text-[10px] font-semibold text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded-full">No estoque</span>
+                                  : <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">Sem estoque</span>
+                                }
+                              </div>
                             </button>
                           </li>
                         ))}
@@ -642,6 +744,10 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
               {!medicamentoId ? (
                 <div className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-300 bg-gray-50">
                   Selecione a vacina primeiro
+                </div>
+              ) : !medSelecionado?.emEstoque ? (
+                <div className="px-3 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-xs text-gray-500">
+                  Sem estoque cadastrado — registro sem débito de estoque
                 </div>
               ) : loadingLotes ? (
                 <div className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-400">
@@ -981,6 +1087,15 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
       )}
 
       {viewingV && <ViewModal v={viewingV} onFechar={() => setViewingV(null)} />}
+
+      {confirmandoDuplicata && medSelecionado && (
+        <DuplicataWarningModal
+          nomeVacina={medSelecionado.nome}
+          data={dataAplicacao}
+          onConfirmar={() => { setConfirmandoDuplicata(false); executarSalvar(); }}
+          onCancelar={() => setConfirmandoDuplicata(false)}
+        />
+      )}
 
       <ExcluirModal
         open={excluindoId != null}

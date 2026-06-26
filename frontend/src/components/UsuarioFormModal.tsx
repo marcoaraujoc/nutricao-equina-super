@@ -52,7 +52,10 @@ export const SENHA_PADRAO_INICIAL = 'Inicial_001';
 export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
   { value: 'ESTAGIARIO',  label: 'Estagiário'  },
-  { value: 'FORNECEDOR',   label: 'Fornecedor'  },
+  { value: 'ENFERMEIRO',  label: 'Enfermeiro'  },
+  { value: 'SECRETARIA',  label: 'Secretaria'  },
+  { value: 'FINANCEIRO',  label: 'Financeiro'  },
+  { value: 'FORNECEDOR',  label: 'Fornecedor'  },
 ];
 
 // Perfis que não podem ser escolhidos, mas podem existir em usuários antigos (edição)
@@ -104,6 +107,8 @@ interface UsuarioFormModalProps {
   comFornecedor?: boolean;
   /** Exibe checkboxes multi-seleção de cargo em vez do select único */
   permitirMultiCargos?: boolean;
+  /** Oculta o campo "Perfil de acesso" (usado em telas de cadastro simples) */
+  ocultarPerfil?: boolean;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -115,7 +120,8 @@ interface UsuarioFormModalProps {
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
-  comFornecedor = false, permitirMultiCargos = false, initial, salvando, textoBotao, onClose, onSubmit,
+  comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false,
+  initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
   const [form, setForm] = useState<UsuarioFormValues>({
@@ -259,7 +265,7 @@ export default function UsuarioFormModal({
               <UserIcon size={12} /> Dados Pessoais
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="sm:col-span-2">
+              {!ocultarPerfil && <div className="sm:col-span-2">
                 <label className={labelCls}>Perfil de acesso *</label>
                 {permitirMultiCargos ? (
                   <div className="flex flex-wrap gap-2 mt-0.5">
@@ -284,7 +290,7 @@ export default function UsuarioFormModal({
                     {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 )}
-              </div>
+              </div>}
 
               {fornecedorAtivo && (
                 <div className="sm:col-span-2 bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 space-y-3">

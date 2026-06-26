@@ -13,9 +13,18 @@ const { authenticate } = require('../middlewares/auth');
 
 const ResenhaGraficaController = require('../controllers/ResenhaGraficaController');
 
+// VETERINARIO/GESTOR podem salvar resenha; PROPRIETARIO e ESTAGIARIO só lêem
+const podeEscrever = (req, res, next) => {
+  const tipo = req.user?.userType;
+  if (tipo !== 'ADMIN' && tipo !== 'VETERINARIO') {
+    return res.status(403).json({ error: 'Somente veterinários podem salvar a resenha gráfica.' });
+  }
+  next();
+};
+
 // IMPORTANTE: /marcacoes deve vir ANTES de /:vista para não ser capturado como parâmetro
 router.get('/marcacoes', authenticate, ResenhaGraficaController.listarMarcacoes);
 router.get('/:vista',    authenticate, ResenhaGraficaController.buscarPorVista);
-router.put('/:vista',    authenticate, ResenhaGraficaController.salvarPorVista);
+router.put('/:vista',    authenticate, podeEscrever, ResenhaGraficaController.salvarPorVista);
 
 module.exports = router;

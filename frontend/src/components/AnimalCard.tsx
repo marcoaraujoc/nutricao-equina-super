@@ -107,7 +107,7 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-2">
           <div>
             <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
-            <span className="text-sm font-semibold text-gray-900 truncate block">{animal.nome}</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.nome}</span>
           </div>
           <div>
             <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Espécie</span>

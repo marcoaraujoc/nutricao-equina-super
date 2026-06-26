@@ -329,4 +329,87 @@ const excluir = async (req, res) => {
   }
 };
 
-module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir };
+// ─── Para Atendimento ─────────────────────────────────────────────────────────
+// Retorna todos os medicamentos do catálogo para a espécie do animal,
+// com flag emEstoque indicando se há entrada no estoque da empresa.
+// tipo=medicamento: exclui vacinas (classificacao contém 'vacin')
+// tipo=vacina:      filtra apenas vacinas
+// O backend de prescrição e vacina já ignora silenciosamente itens sem entrada
+// de estoque (criarReservas / consumirReservas / verificarEstoqueParaDia fazem
+// continue quando !estoque), portanto nenhuma mudança de fluxo é necessária.
+
+const paraAtendimento = async (req, res) => {
+  try {
+    const { animalId, tipo = 'medicamento', busca } = req.query;
+    const empresaId = req.empresaId ?? null;
+
+    if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
+
+    const animal = await prisma.animal.findUnique({
+      where:  { id: Number(animalId) },
+      select: { especieId: true },
+    });
+    if (!animal) return res.status(404).json({ error: 'Animal não encontrado.' });
+
+    const where = { ativo: true };
+
+    if (animal.especieId) {
+      where.especies = { some: { especieId: animal.especieId } };
+    }
+
+    const isVacina = tipo === 'vacina';
+
+    if (isVacina) {
+      where.classificacao = { contains: 'vacin', mode: 'insensitive' };
+    } else {
+      where.NOT = { classificacao: { contains: 'vacin', mode: 'insensitive' } };
+    }
+
+    if (busca?.trim()) {
+      where.OR = [
+        { nome:              { contains: busca.trim(), mode: 'insensitive' } },
+        { formaFarmaceutica: { contains: busca.trim(), mode: 'insensitive' } },
+      ];
+    }
+
+    const estoqueWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
+    const loteWhere    = { ativo: true, qtdDisponivel: { gt: 0 }, ...(empresaId ? { empresaId } : {}) };
+
+    const medicamentos = await prisma.medicamento.findMany({
+      where,
+      include: {
+        vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
+        ...(isVacina
+          ? { lotes: { where: loteWhere, select: { id: true }, take: 1 } }
+          : { estoques: { where: estoqueWhere, select: { id: true, qtdEstoque: true } } }
+        ),
+      },
+      orderBy: { nome: 'asc' },
+    });
+
+    const dados = medicamentos.map(m => {
+      if (isVacina) {
+        return {
+          id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
+          unidade: m.unidade, vias: m.vias,
+          emEstoque: (m.lotes ?? []).length > 0,
+        };
+      }
+      const estoques = m.estoques ?? [];
+      const qtdTotal = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
+      return {
+        id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
+        unidade: m.unidade, vias: m.vias,
+        emEstoque:   estoques.length > 0,
+        qtdEstoque:  estoques.length > 0 ? qtdTotal : null,
+      };
+    });
+
+    return res.json({ dados });
+  } catch (err) {
+    console.error('MedicamentoController.paraAtendimento:', err);
+    return res.status(500).json({ error: 'Erro ao buscar medicamentos para atendimento.' });
+  }
+};
+
+module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento };

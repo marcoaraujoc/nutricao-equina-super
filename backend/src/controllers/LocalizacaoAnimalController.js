@@ -5,20 +5,22 @@ const prisma = require('../lib/prisma').default;
 
 // Mapeamento estático: tipoLocalizacao → espécies atendidas (null = TODOS)
 const TIPO_ESPECIES = {
-  HARAS:               ['Equino'],
   CANIL:               ['Canino'],
-  GATIL:               ['Felino'],
-  FAZENDA:             null,
-  CLINICA:             null,
-  HOSPITAL:            null,
   CENTRO_REPRODUCAO:   ['Equino', 'Canino', 'Felino', 'Bovino'],
   CENTRO_TREINAMENTO:  ['Equino', 'Canino', 'Felino', 'Bovino'],
-  PETSHOP:             ['Canino', 'Felino', 'Réptil'],
+  CLINICA:             null,
+  CLUBE:               null,
+  CLUBE_HIPICO:        ['Equino'],
+  CRIADOR:             null,
+  FAZENDA:             null,
+  GATIL:               ['Felino'],
+  HARAS:               ['Equino'],
+  HOSPITAL:            null,
   HOTEL_ANIMAL:        ['Canino', 'Felino', 'Réptil'],
   ONG:                 null,
-  CRIADOR:             null,
-  PROPRIETARIO:        null,
   OUTRO:               null,
+  PETSHOP:             ['Canino', 'Felino', 'Réptil'],
+  PROPRIETARIO:        null,
 };
 
 const TIPOS_VALIDOS = Object.keys(TIPO_ESPECIES);

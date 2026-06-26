@@ -23,7 +23,8 @@ import {
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, Syringe,
+  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, CalendarClock, Syringe,
+  ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
@@ -148,13 +149,16 @@ function mascaraCNPJ(v: string): string {
 // ─── Constantes estáticas ─────────────────────────────────────────────────────
 
 const CARGO_INFO: Record<string, { label: string; desc: string; cor: string; tipo?: string }> = {
-  GESTOR:        { label: 'Gestor',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                    cor: 'purple',  tipo: 'SISTEMA' },
-  VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.',                 cor: 'emerald', tipo: 'SISTEMA' },
-  FORNECEDOR:   { label: 'Fornecedor',   desc: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.',                      cor: 'teal',    tipo: 'SISTEMA' },
-  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.',      cor: 'blue',    tipo: 'SISTEMA' },
-  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.',                   cor: 'amber',   tipo: 'SISTEMA' },
-  ADMIN:        { label: 'Administrador',desc: 'Gerência operacional e suporte técnico. Acesso amplo sem permissões financeiras.',        cor: 'red' },
-  MEMBRO:       { label: 'Membro',       desc: 'Membro da equipe com acesso básico configurável.',                                       cor: 'gray' },
+  GESTOR:        { label: 'Gestor',        desc: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.',                       cor: 'purple',  tipo: 'SISTEMA' },
+  VETERINARIO:  { label: 'Veterinário',  desc: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.',                    cor: 'emerald', tipo: 'SISTEMA' },
+  FORNECEDOR:   { label: 'Fornecedor',   desc: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.',                         cor: 'teal',    tipo: 'SISTEMA' },
+  ESTAGIARIO:   { label: 'Estagiário',   desc: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.',         cor: 'blue',    tipo: 'SISTEMA' },
+  PROPRIETARIO: { label: 'Proprietário', desc: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.',                      cor: 'amber',   tipo: 'SISTEMA' },
+  SECRETARIA:   { label: 'Secretaria',   desc: 'Recepção e administrativo: agendamentos, cadastros e financeiro básico.',                    cor: 'amber' },
+  FINANCEIRO:   { label: 'Financeiro',   desc: 'Setor financeiro: acesso completo ao módulo de faturas e cobrança.',                        cor: 'orange' },
+  ENFERMEIRO:   { label: 'Enfermeiro',   desc: 'Técnico de enfermagem: execução de prescrições, vacinas e evoluções.',                      cor: 'cyan' },
+  ADMIN:        { label: 'Administrador',desc: 'Gerência operacional e suporte técnico. Acesso amplo sem permissões financeiras.',           cor: 'red' },
+  MEMBRO:       { label: 'Membro',       desc: 'Membro da equipe com acesso básico configurável.',                                          cor: 'gray' },
 };
 
 const USER_TYPES_GERENCIADOS = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIETARIO'] as const;
@@ -171,6 +175,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   dashboard:      { label: 'Dashboard',           icon: <LayoutDashboard size={14} /> },
   cadastro:       { label: 'Cadastro',            icon: <Users2          size={14} /> },
   animais:        { label: 'Animais & Pacientes', icon: <PawPrint        size={14} /> },
+  agendamento:    { label: 'Agendamento',          icon: <CalendarClock   size={14} /> },
   agenda:         { label: 'Agenda',              icon: <CalendarDays    size={14} /> },
   atendimento:    { label: 'Atendimento',         icon: <Stethoscope     size={14} /> },
   enfermagem:     { label: 'Enfermagem',          icon: <Activity        size={14} /> },
@@ -187,7 +192,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
 // Ordem dos módulos espelhando o Sidebar
 // 'animais' e 'equipe' são filhos de 'cadastro' — ver MODULO_CHILDREN
 const MODULO_ORDER = [
-  'dashboard', 'cadastro', 'agenda', 'atendimento',
+  'dashboard', 'cadastro', 'agendamento', 'agenda', 'atendimento',
   'enfermagem', 'farmacia', 'vacina', 'nutricao', 'exames', 'financeiro',
   'medicamentos', 'procedimentos',
 ];
@@ -201,7 +206,8 @@ const SUBMODULO_LABEL: Record<string, string> = {
   evolucoes:          'Evolução Clínica',
   prescricoes:        'Prescrições',
   vacinas:            'Vacinas',
-  agendamentos:       'Agendamentos',
+  agendamento:        'Agendamentos',
+  agendamentos:       'Agenda',
   encaminhamentos:    'Encaminhamentos',
   exames:             'Exames & Laudos',
   prescricao:         'Execução de Prescrição',
@@ -226,13 +232,32 @@ const ACAO_COLS: Array<{ acao: string; label: string; icon?: React.ReactNode }> 
   { acao: 'imprimir',  label: 'IMPRIMIR', icon: <Printer size={9} /> },
 ];
 
+const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: string }>> = {
+  agendamento: [
+    { acao: 'ler',                label: 'VER'            },
+    { acao: 'confirmar',          label: 'CONFIRMAR'      },
+    { acao: 'reagendar',          label: 'REAGENDAR'      },
+    { acao: 'trocar_profissional', label: 'TROCAR PROF.'  },
+    { acao: 'cancelar',           label: 'CANCELAR'       },
+  ],
+  agenda: [
+    { acao: 'ler',                label: 'VER'            },
+    { acao: 'editar',             label: 'EDITAR'         },
+    { acao: 'concluir',           label: 'CONCLUIR'       },
+    { acao: 'trocar_profissional', label: 'TROCAR PROF.'  },
+    { acao: 'deletar',            label: 'CANCELAR'       },
+  ],
+};
+
 const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';
 
 const badgeCargo = (cargo: string) =>
   ({ VETERINARIO: 'bg-emerald-100 text-emerald-700', ESTAGIARIO: 'bg-blue-100 text-blue-700',
      ADMIN: 'bg-red-100 text-red-700', MEMBRO: 'bg-gray-100 text-gray-600',
      GESTOR: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
-     FORNECEDOR: 'bg-teal-100 text-teal-700' } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
+     FORNECEDOR: 'bg-teal-100 text-teal-700', SECRETARIA: 'bg-amber-100 text-amber-700',
+     FINANCEIRO: 'bg-orange-100 text-orange-700', ENFERMEIRO: 'bg-cyan-100 text-cyan-700',
+  } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
 
 // ─── Utilitário ───────────────────────────────────────────────────────────────
 
@@ -319,7 +344,7 @@ const VIRTUAL_MODULES: Array<{ key: string; fromModulo: string; submoduloKeys: s
 
 // Submódulos que recebem label diferente quando exibidos dentro de certo módulo pai
 const SUBMODULO_LABEL_OVERRIDE: Record<string, Record<string, string>> = {
-  atendimento: { agendamentos: 'Minha Agenda' },
+  agenda:      { agendamentos: 'Agenda' },
   vacina:      { estoque: 'Estoque de Vacinas' },
 };
 
@@ -327,7 +352,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const toggleModulo = (mod: string) =>
-    setCollapsed(prev => ({ ...prev, [mod]: !prev[mod] }));
+    setCollapsed(prev => ({ ...prev, [mod]: !(prev[mod] ?? true) }));
 
   // Entradas reais (excluindo filhos absorvidos)
   const realEntries = Object.entries(matriz)
@@ -350,8 +375,9 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
   const entries = [...realEntries, ...virtualEntries]
     .sort((a, b) => (MODULO_ORDER.indexOf(a.key) + 1 || 999) - (MODULO_ORDER.indexOf(b.key) + 1 || 999));
 
-  const renderSubmodulos = (submodulos: MatrizAgrupada[string], moduloKey: string) =>
-    Object.entries(submodulos)
+  const renderSubmodulos = (submodulos: MatrizAgrupada[string], moduloKey: string) => {
+    const cols = MODULO_ACAO_COLS_OVERRIDE[moduloKey] ?? ACAO_COLS;
+    return Object.entries(submodulos)
       .sort(([a], [b]) => (SUBMODULO_LABEL[a] ?? a).localeCompare(SUBMODULO_LABEL[b] ?? b, 'pt-BR'))
       .map(([sub, acoes], si) => {
         const mapaAcoes = Object.fromEntries(acoes.map(a => [a.acao, a]));
@@ -363,7 +389,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
                 <p className="text-sm font-medium text-gray-700">{label}</p>
                 <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>
               </div>
-              {ACAO_COLS.map(c => {
+              {cols.map(c => {
                 const item = mapaAcoes[c.acao];
                 if (!item) return (
                   <div key={c.acao} className="w-16 flex justify-center">
@@ -380,6 +406,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
           </div>
         );
       });
+  };
 
   return (
     <>
@@ -436,7 +463,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
                 <div className="border-t border-gray-100">
                   <div className="flex items-center px-4 py-2 border-b border-gray-100 bg-gray-100/60">
                     <div className="flex-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Funcionalidade</div>
-                    {ACAO_COLS.map(c => (
+                    {(MODULO_ACAO_COLS_OVERRIDE[modulo] ?? ACAO_COLS).map(c => (
                       <div key={c.acao} className="w-16 text-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">{c.label}</div>
                     ))}
                   </div>
@@ -479,17 +506,6 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
   const [confirmExcluir, setConfirmExcluir] = useState<string | null>(null);
   const [excluindo,   setExcluindo]   = useState(false);
 
-  const carregarPerfis = useCallback(async () => {
-    setLoadPerfis(true);
-    try {
-      const res = await api.get(`/equipes/${equipeId}/perfis`);
-      setPerfis(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar perfis'); }
-    finally  { setLoadPerfis(false); }
-  }, [equipeId]);
-
-  useEffect(() => { carregarPerfis(); }, [carregarPerfis]);
-
   const carregarMatriz = useCallback(async (cargo: string) => {
     setLoadMatriz(true);
     setDirty({});
@@ -499,6 +515,22 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
     } catch { toast.error('Erro ao carregar matriz'); }
     finally  { setLoadMatriz(false); }
   }, [equipeId]);
+
+  const carregarPerfis = useCallback(async () => {
+    setLoadPerfis(true);
+    try {
+      const res = await api.get(`/equipes/${equipeId}/perfis`);
+      const lista: PerfilResumo[] = res.data.dados ?? [];
+      setPerfis(lista);
+      if (lista.length > 0 && !cargoSel) {
+        setCargoSel(lista[0].cargo);
+        carregarMatriz(lista[0].cargo);
+      }
+    } catch { toast.error('Erro ao carregar perfis'); }
+    finally  { setLoadPerfis(false); }
+  }, [equipeId, carregarMatriz]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { carregarPerfis(); }, [carregarPerfis]);
 
   const handleSelCargo = (cargo: string) => {
     setCargoSel(cargo);
@@ -956,6 +988,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
   const [removendo,  setRemovendo]    = useState<number | null>(null);
   const [alterandoCargo, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
+  const [togglingId,     setTogglingId]     = useState<number | null>(null);
   const [proprietarios,  setProprietarios]  = useState<ProprietarioEquipe[]>([]);
 
   interface ConviteEnviado {
@@ -1169,6 +1202,10 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
         if (nums.length !== 11 || !validarCPF(conviteDoc)) { setConviteDocErro('CPF inválido'); hasError = true; }
         if (!conviteNome.trim()) { setConviteNomeErro('Nome é obrigatório'); hasError = true; }
       }
+      if (!selecionadoId && conviteEspecies.length === 0) {
+        toast.error('Selecione ao menos uma espécie atendida');
+        hasError = true;
+      }
     }
 
     if (hasError) return;
@@ -1276,6 +1313,19 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover gestor';
       toast.error(msg);
     } finally { setRemovendo(null); }
+  };
+
+  const handleToggle = async (m: Membro) => {
+    setTogglingId(m.id);
+    try {
+      await api.patch(`/equipes/membros/${m.id}/toggle`);
+      const novoAtivo = m.user.ativo === false;
+      setMembros(prev => prev.map(mb => mb.id === m.id
+        ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
+        : mb));
+      toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
+    } catch { toast.error('Erro ao alterar status'); }
+    finally  { setTogglingId(null); }
   };
 
   const filtrados = membros.filter(m => {
@@ -1462,31 +1512,13 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           </div>
                         </td>
                         <td className="px-5 py-3.5">
-                          {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? (
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
-                                <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
-                                  {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
-                                </span>
-                              ))}
-                              {alterandoCargo === m.id
-                                ? <Loader2 size={12} className="animate-spin text-indigo-400" />
-                                : (
-                                  <button
-                                    onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                                    className="p-0.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded transition-colors"
-                                    title="Editar perfis"
-                                  >
-                                    <Pencil size={11} />
-                                  </button>
-                                )
-                              }
-                            </div>
-                          ) : (
-                            <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-bold ${badgeCargo(m.cargo)}`}>
-                              {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
+                              <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
+                                {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
+                              </span>
+                            ))}
+                          </div>
                         </td>
                         <td className="px-5 py-3.5">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
@@ -1497,12 +1529,31 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                            <button onClick={() => setConfirmDel(m)} title="Remover membro"
-                              className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                              <Trash2 size={14} />
-                            </button>
-                          )}
+                          <div className="flex items-center justify-end gap-1">
+                            {m.user.id !== user?.id && (
+                              <button
+                                onClick={() => handleToggle(m)}
+                                disabled={togglingId === m.id}
+                                title={m.user?.ativo !== false ? 'Desativar' : 'Ativar'}
+                                className={`p-1.5 rounded-lg transition-colors ${
+                                  m.user?.ativo !== false
+                                    ? 'text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50'
+                                    : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                }`}>
+                                {togglingId === m.id
+                                  ? <Loader2 size={16} className="animate-spin" />
+                                  : m.user?.ativo !== false ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                              </button>
+                            )}
+                            {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
+                              <button
+                                onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
+                                className="p-1.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors"
+                                title="Editar perfis">
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1511,25 +1562,50 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
               </div>
 
               <div className="md:hidden divide-y divide-gray-50">
-                {filtrados.map(m => (
-                  <div key={m.id} className="px-4 py-3.5 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
-                      {m.user.fullName?.[0]?.toUpperCase()}
+                {filtrados.map(m => {
+                  const ativo = m.user?.ativo !== false;
+                  return (
+                    <div key={m.id} className="px-4 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          {m.user.fullName?.[0]?.toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
+                          <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
+                          {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
+                        </span>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0 ${ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                          {ativo ? 'Ativo' : 'Desativado'}
+                        </span>
+                      </div>
+                      {m.user.id !== user?.id && (
+                        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-gray-100">
+                          {isGestor && m.cargo !== 'GESTOR' && (
+                            <button
+                              onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
+                              className="px-3 py-1.5 text-xs text-indigo-600 border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-colors">
+                              Editar
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleToggle(m)}
+                            disabled={togglingId === m.id}
+                            className={`px-3 py-1.5 text-xs rounded-xl border transition-colors ${
+                              ativo
+                                ? 'text-amber-600 border-amber-200 hover:bg-amber-50'
+                                : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50'
+                            }`}>
+                            {togglingId === m.id ? 'Aguarde...' : ativo ? 'Desativar' : 'Ativar'}
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
-                      <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
-                    </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
-                      {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                    </span>
-                    {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                      <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -1809,11 +1885,9 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
               {isAdmin && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Espécies atendidas
-                    {selecionadoId ? (
+                    Espécies atendidas <span className="text-red-500">*</span>
+                    {selecionadoId && (
                       <span className="ml-1.5 text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">da equipe</span>
-                    ) : (
-                      <span className="text-gray-400 font-normal ml-1">(opcional)</span>
                     )}
                   </label>
                   {selecionadoId ? (
@@ -1845,7 +1919,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                     <p className="text-xs text-gray-400">Nenhuma espécie cadastrada.</p>
                   ) : (
                     <div className="grid grid-cols-2 gap-2">
-                      {especies.map(esp => {
+                      {especies.filter(esp => esp.nome !== 'NA ÁGUA DE BEBIDA').map(esp => {
                         const selecionada = conviteEspecies.includes(esp.id);
                         return (
                           <button
@@ -2621,6 +2695,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [removendo,    setRemovendo]    = useState<number | null>(null);
   const [alterandoCargo, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
+  const [togglingId,     setTogglingId]     = useState<number | null>(null);
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
 
   // Modal de gerenciamento de acesso do prestador
@@ -2809,6 +2884,19 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
     } finally { setRemovendo(null); }
   };
 
+  const handleToggle = async (m: Membro) => {
+    setTogglingId(m.id);
+    try {
+      await api.patch(`/equipes/membros/${m.id}/toggle`);
+      const novoAtivo = m.user.ativo === false;
+      setMembros(prev => prev.map(mb => mb.id === m.id
+        ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
+        : mb));
+      toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
+    } catch { toast.error('Erro ao alterar status'); }
+    finally  { setTogglingId(null); }
+  };
+
   const filtrados = membros.filter(m => {
     const buscaOk = !busca || m.user.fullName.toLowerCase().includes(busca.toLowerCase()) || m.user.email.toLowerCase().includes(busca.toLowerCase());
     const cargoOk = !filtroCargo || m.cargo === filtroCargo;
@@ -2907,28 +2995,13 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' ? (
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
-                            <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
-                              {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
-                            </span>
-                          ))}
-                          {alterandoCargo === m.id
-                            ? <Loader2 size={12} className="animate-spin text-indigo-400" />
-                            : (
-                              <button onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                                className="p-0.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded transition-colors" title="Editar perfis">
-                                <Pencil size={11} />
-                              </button>
-                            )
-                          }
-                        </div>
-                      ) : (
-                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-bold ${badgeCargo(m.cargo)}`}>
-                          {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
+                          <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
+                            {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
+                          </span>
+                        ))}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${m.user?.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
@@ -2951,10 +3024,27 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                     )}
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                          <button onClick={() => setConfirmDel(m)} title="Remover membro"
-                            className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 size={14} />
+                        {m.user.id !== user?.id && (
+                          <button
+                            onClick={() => handleToggle(m)}
+                            disabled={togglingId === m.id}
+                            title={m.user?.ativo !== false ? 'Desativar' : 'Ativar'}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              m.user?.ativo !== false
+                                ? 'text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50'
+                                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                            }`}>
+                            {togglingId === m.id
+                              ? <Loader2 size={16} className="animate-spin" />
+                              : m.user?.ativo !== false ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                          </button>
+                        )}
+                        {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
+                          <button
+                            onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
+                            className="p-1.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors"
+                            title="Editar perfis">
+                            <Pencil size={14} />
                           </button>
                         )}
                       </div>
@@ -2965,35 +3055,57 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
             </table>
           </div>
           <div className="md:hidden divide-y divide-gray-50">
-            {filtrados.map(m => (
-              <div key={m.id} className="px-4 py-3.5 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
-                  {m.user.fullName?.[0]?.toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
-                  <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
-                  {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                </span>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {m.cargo === 'FORNECEDOR' && isGestor && (
-                    <button
-                      onClick={() => setModalAcesso({ userId: m.user.id, nome: m.user.fullName })}
-                      title="Gerenciar acesso ao paciente"
-                      className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 border border-teal-200 hover:bg-teal-100 rounded-lg">
-                      <Wrench size={11} /> Acesso
-                    </button>
+            {filtrados.map(m => {
+              const ativo = m.user?.ativo !== false;
+              return (
+                <div key={m.id} className="px-4 py-3.5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                      {m.user.fullName?.[0]?.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
+                      <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
+                      {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
+                    </span>
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0 ${ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                      {ativo ? 'Ativo' : 'Desativado'}
+                    </span>
+                  </div>
+                  {m.user.id !== user?.id && (
+                    <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-gray-100">
+                      {m.cargo === 'FORNECEDOR' && isGestor && (
+                        <button
+                          onClick={() => setModalAcesso({ userId: m.user.id, nome: m.user.fullName })}
+                          className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-teal-700 border border-teal-200 hover:bg-teal-50 rounded-xl transition-colors">
+                          <Wrench size={11} /> Acesso
+                        </button>
+                      )}
+                      {isGestor && m.cargo !== 'GESTOR' && (
+                        <button
+                          onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
+                          className="px-3 py-1.5 text-xs text-indigo-600 border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-colors">
+                          Editar
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleToggle(m)}
+                        disabled={togglingId === m.id}
+                        className={`px-3 py-1.5 text-xs rounded-xl border transition-colors ${
+                          ativo
+                            ? 'text-amber-600 border-amber-200 hover:bg-amber-50'
+                            : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50'
+                        }`}>
+                        {togglingId === m.id ? 'Aguarde...' : ativo ? 'Desativar' : 'Ativar'}
+                      </button>
+                    </div>
                   )}
-                  {m.user.id !== user?.id && isGestor && m.cargo !== 'GESTOR' && (
-                    <button onClick={() => setConfirmDel(m)} className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

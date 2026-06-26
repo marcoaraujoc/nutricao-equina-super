@@ -48,6 +48,9 @@ async function main() {
     { slug: 'FORNECEDOR',   label: 'Fornecedor',    descricao: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.' },
     { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.' },
     { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.' },
+    { slug: 'SECRETARIA',   label: 'Secretaria',    descricao: 'Recepção e administrativo: agendamentos, cadastros e financeiro básico.' },
+    { slug: 'FINANCEIRO',   label: 'Financeiro',    descricao: 'Setor financeiro: acesso completo ao módulo de faturas e cobrança.' },
+    { slug: 'ENFERMEIRO',   label: 'Enfermeiro',    descricao: 'Técnico de enfermagem: execução de prescrições, vacinas e evoluções.' },
   ];
 
   const equipes = await prisma.equipe.findMany({ select: { id: true } });

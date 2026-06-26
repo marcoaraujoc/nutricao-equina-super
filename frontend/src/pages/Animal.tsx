@@ -43,7 +43,7 @@ interface FormData {
   pelagem:            string;
   altura:             string;
   registroPassaporte: string;
-  finalidade:         string;
+  finalidades:        string[];
 }
 
 interface Tratador {
@@ -192,6 +192,19 @@ function mascaraTelefone(v: string): string {
   return n.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
 }
 
+function mascaraAltura(v: string): string {
+  const n = v.replace(/\D/g, '').slice(0, 3);
+  if (n.length === 0) return '';
+  if (n.length === 1) return n;
+  if (n.length === 2) return `${n[0]}.${n[1]}`;
+  return `${n[0]}.${n.slice(1)} m`;
+}
+
+const FINALIDADES = [
+  'Adestramento', 'Barril', 'CCE', 'Enduro', 'Laço',
+  'Manga Larga', 'Polo', 'Salto', 'Vaquejada', 'Reprodução', 'Trabalho/Tração', 'Outro',
+];
+
 const Animal = () => {
   const { refreshSelectedAnimal } = useSelectedAnimal();
   const { user }                  = useAuth();
@@ -267,7 +280,7 @@ const Animal = () => {
     categoriaAnimal: '', tipoExercicio: '',
     veterinarioUserId: null,
     localizacaoId: null, tratadorId: null, baia: '',
-    pelagem: '', altura: '', registroPassaporte: '', finalidade: '',
+    pelagem: '', altura: '', registroPassaporte: '', finalidades: [],
   });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
@@ -464,7 +477,7 @@ const Animal = () => {
             pelagem:           a.pelagem            ?? '',
             altura:            a.altura             ?? '',
             registroPassaporte: a.registroPassaporte ?? '',
-            finalidade:        a.finalidade          ?? '',
+            finalidades:       a.finalidade ? a.finalidade.split('|') : [],
           });
           // Pré-preenche o texto da busca de localização
           if (a.localizacao?.nome) {
@@ -751,7 +764,7 @@ const Animal = () => {
         pelagem:            formData.pelagem.trim()            || null,
         altura:             formData.altura.trim()             || null,
         registroPassaporte: formData.registroPassaporte.trim() || null,
-        finalidade:         formData.finalidade.trim()         || null,
+        finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         // Vet vinculando animal existente sem vet
         ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
           animalExistenteId: animalEncontrado.id,
@@ -918,7 +931,7 @@ const Animal = () => {
             <div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Nome do animal <span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
@@ -946,7 +959,7 @@ const Animal = () => {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
                   <select
                     value={formData.sexo}
                     onChange={e => setFormData({ ...formData, sexo: e.target.value })}
@@ -1006,7 +1019,7 @@ const Animal = () => {
             {/* ── 2. Local do Animal + Baia ────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div className="relative">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
                   <span className="flex items-center gap-1">
                     <MapPin size={14} className="text-emerald-600" />
                     Local do Animal <span className="text-red-500">*</span>
@@ -1071,7 +1084,7 @@ const Animal = () => {
               </div>
               {labelBaia && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
                     {labelBaia}
                   </label>
                   <input
@@ -1088,7 +1101,7 @@ const Animal = () => {
             {/* ── 3. Espécie + Raça ─────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
                 <select
                   value={formData.especieId}
                   onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
@@ -1099,7 +1112,7 @@ const Animal = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Raça <span className="text-red-500">*</span>
                 </label>
                 <select
@@ -1117,7 +1130,7 @@ const Animal = () => {
             {/* ── 4. Peso + Idade + Data de nascimento ─────────────────────── */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Peso (kg) <span className="text-red-500">*</span>
                 </label>
                 <input
@@ -1128,7 +1141,7 @@ const Animal = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 <input
@@ -1141,7 +1154,7 @@ const Animal = () => {
                 {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 <div className="relative">
@@ -1179,11 +1192,11 @@ const Animal = () => {
             {/* ── 5. Identificação / Resenha ───────────────────────────────── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Pelagem</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Pelagem</label>
                 <select
                   value={formData.pelagem}
                   onChange={e => setFormData(p => ({ ...p, pelagem: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputClass}
                 >
                   <option value="">— selecione —</option>
                   <option>Alazão</option>
@@ -1204,59 +1217,72 @@ const Animal = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Altura (cernelha)</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Altura (cernelha)</label>
                 <input
                   type="text"
-                  placeholder="Ex.: 1,65 m / 16,1 h"
+                  placeholder="Ex.: 1.70 m"
                   value={formData.altura}
-                  onChange={e => setFormData(p => ({ ...p, altura: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={e => setFormData(p => ({ ...p, altura: mascaraAltura(e.target.value) }))}
+                  className={inputClass}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Registro / Passaporte N°</label>
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Registro / Passaporte N°</label>
                 <input
                   type="text"
                   placeholder="Número do registro ou passaporte"
                   value={formData.registroPassaporte}
                   onChange={e => setFormData(p => ({ ...p, registroPassaporte: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputClass}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Finalidade</label>
-                <select
-                  value={formData.finalidade}
-                  onChange={e => setFormData(p => ({ ...p, finalidade: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">— selecione —</option>
-                  <option>Adestramento</option>
-                  <option>Barril</option>
-                  <option>CCE (Concurso Completo de Equitação)</option>
-                  <option>Enduro</option>
-                  <option>Laço</option>
-                  <option>Manga Larga</option>
-                  <option>Polo</option>
-                  <option>Salto</option>
-                  <option>Vaquejada</option>
-                  <option>Reprodução</option>
-                  <option>Trabalho/Tração</option>
-                  <option>Outro</option>
-                </select>
-              </div>
+            </div>
+
+            {/* ── Finalidade (multi-seleção: select + pills removíveis) ────── */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">Finalidade</label>
+              <select
+                value=""
+                onChange={e => {
+                  const val = e.target.value;
+                  if (val && !formData.finalidades.includes(val))
+                    setFormData(p => ({ ...p, finalidades: [...p.finalidades, val] }));
+                }}
+                className={inputClass}
+              >
+                <option value="">Adicionar finalidade...</option>
+                {FINALIDADES.filter(f => !formData.finalidades.includes(f)).map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+              {formData.finalidades.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {formData.finalidades.map(f => (
+                    <span key={f} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                      {f}
+                      <button
+                        type="button"
+                        onClick={() => setFormData(p => ({ ...p, finalidades: p.finalidades.filter(x => x !== f) }))}
+                        className="ml-0.5 hover:text-emerald-900 transition-colors"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* ── 6. Perfil NRC — equinos ───────────────────────────────────── */}
             {isEquino && (
               <>
                 <div className="pt-2 border-t border-gray-100">
-                  <p className="text-sm font-semibold text-gray-600 mb-1">Perfil NRC</p>
+                  <p className="text-sm font-semibold text-gray-700 mb-1">Perfil NRC</p>
                   {!temIdadeOuData && <p className="text-xs text-amber-600">Informe a idade ou data para ver as categorias.</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Categoria <span className="text-red-500">*</span>
                     </label>
                     <select
@@ -1271,7 +1297,7 @@ const Animal = () => {
                   </div>
                   {formData.categoriaAnimal && tiposDisponiveis.length > 0 && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
                         Tipo / Estágio <span className="text-red-500">*</span>
                       </label>
                       <select
@@ -1291,7 +1317,7 @@ const Animal = () => {
 
             {/* ── 7. Tratador ───────────────────────────────────────────────── */}
             <div className="relative">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
                 <span className="flex items-center gap-1">
                   <User2 size={14} className="text-emerald-600" />
                   Tratador Responsável
@@ -1364,7 +1390,7 @@ const Animal = () => {
                 <div className="space-y-3">
                   {/* E-mail primeiro — lookup automático ao sair do campo */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
                       E-mail {!isEditMode && <span className="text-red-500">*</span>}
                     </label>
                     <div className="relative">
@@ -1399,7 +1425,7 @@ const Animal = () => {
                   {/* Nome e telefone — preenchidos automaticamente se usuário existir */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
                         Nome Completo {!isEditMode && <span className="text-red-500">*</span>}
                       </label>
                       <input
@@ -1412,7 +1438,7 @@ const Animal = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">Telefone</label>
                       <input
                         type="tel"
                         value={formProp.telefone}
@@ -1434,7 +1460,7 @@ const Animal = () => {
                           className="w-4 h-4 rounded border-gray-300 accent-blue-600 mt-0.5 flex-shrink-0"
                         />
                         <div>
-                          <span className="text-sm font-medium text-gray-700">Solicitar autorização ao proprietário</span>
+                          <span className="text-sm font-semibold text-gray-700">Solicitar autorização ao proprietário</span>
                           <p className="text-xs text-gray-500 mt-0.5">
                             {pedirAutorizacao
                               ? 'O proprietário receberá um e-mail com os dados de acesso (se conta nova) e um link para autorizar o vínculo.'
@@ -1476,9 +1502,9 @@ const Animal = () => {
             {/* ── 9. Veterinário (apenas proprietários) ────────────────────── */}
             {!isVet && (
               <div className="pt-2 border-t border-gray-100">
-                <p className="text-sm font-semibold text-gray-600 mb-3">Veterinário Responsável</p>
+                <p className="text-sm font-semibold text-gray-700 mb-3">Veterinário Responsável</p>
                 <div className="mb-3">
-                  <label className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <label className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-1">
                     <UserCheck size={14} className="text-emerald-600" />
                     Veterinário cadastrado no S2Vet
                   </label>
@@ -1570,7 +1596,7 @@ const Animal = () => {
           </h3>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
               Nome <span className="text-red-500">*</span>
             </label>
             <input
@@ -1583,7 +1609,7 @@ const Animal = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
               Tipo <span className="text-red-500">*</span>
             </label>
             <select
@@ -1629,7 +1655,7 @@ const Animal = () => {
           </h3>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
               Nome <span className="text-red-500">*</span>
             </label>
             <input
@@ -1642,7 +1668,7 @@ const Animal = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Telefone</label>
             <input
               value={novoTratTelefone}
               onChange={e => setNovoTratTelefone(mascaraTelefone(e.target.value))}
@@ -1652,7 +1678,7 @@ const Animal = () => {
           </div>
 
           <div className="relative">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
               Local de Trabalho <span className="text-red-500">*</span>
             </label>
             <div className="relative">

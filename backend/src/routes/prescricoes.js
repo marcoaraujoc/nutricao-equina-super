@@ -17,13 +17,13 @@ router.post('/grupos',                    authenticate, checkPermission('atendim
 router.post('/grupos/:id/itens',          authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.adicionarItem);
 router.put('/grupos/:id/itens/:itemId',   authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.atualizarItem);
 router.delete('/grupos/:id/itens/:itemId', authenticate, checkPermission('atendimento.prescricoes.deletar', 'PROPRIO'), PrescricaoGrupoController.removerItem);
-router.post('/grupos/:id/finalizar',      authenticate, checkPermission('atendimento.prescricoes.editar',  'EQUIPE'),  PrescricaoGrupoController.finalizar);
-router.post('/grupos/:id/cancelar',       authenticate, checkPermission('atendimento.prescricoes.editar',  'EQUIPE'),  PrescricaoGrupoController.cancelar);
+router.post('/grupos/:id/finalizar',      authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.finalizar);
+router.post('/grupos/:id/cancelar',       authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
 router.post('/grupos/:id/executar',       authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.executar);
 
 // ── Legacy (individual items — backward compat) ───────────────────────────────
-router.post('/finalizar/:animalId', authenticate, checkPermission('atendimento.prescricoes.editar',  'EQUIPE'),  PrescricaoController.finalizarTodas);
-router.post('/finalizar-uma/:id',   authenticate, checkPermission('atendimento.prescricoes.editar',  'EQUIPE'),  PrescricaoController.finalizarUma);
+router.post('/finalizar/:animalId', authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoController.finalizarTodas);
+router.post('/finalizar-uma/:id',   authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoController.finalizarUma);
 router.get('/animal/:animalId',     authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoController.listarPorAnimal);
 router.post('/',                    authenticate, checkPermission('atendimento.prescricoes.criar',   'PROPRIO'), PrescricaoController.criar);
 router.put('/:id',                  authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoController.atualizar);

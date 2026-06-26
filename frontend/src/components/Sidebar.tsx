@@ -80,7 +80,9 @@ export default function Sidebar() {
   const isVetOuSuperior        = isVet || isAdmin || isGestor;
 
   const podeVerAdministracao   = isAdmin || isGestor;
-  const podeVerDashboard       = podeExecutar('dashboard.geral.ler');
+  // Dashboard: oculto para VET (non-Gestor) e ESTAGIÁRIO — eles têm "Pacientes" como home.
+  // GESTOR (userType=VETERINARIO com cargo GESTOR) continua vendo Dashboard via isGestor.
+  const podeVerDashboard       = (isGestor || (!isVet && !isEstagiario)) && podeExecutar('dashboard.geral.ler');
   const podeVerAnimais         = podeExecutar('animais.ler');
   const podeVerExames          = podeExecutar('atendimento.exames.ler');
   const podeVerEvolucoes       = podeExecutar('atendimento.evolucoes.ler');
@@ -107,18 +109,24 @@ export default function Sidebar() {
 
   const temAcessoAtendimento = podeVerEvolucoes || podeVerPrescricoes || podeVerExames || podeVerVacinas || podeVerEncaminhamentos;
   const temAcessoNutricional  = podeVerDieta || podeVerRelatorio || isAdmin;
+  const podeVerAgendamentos    = podeExecutar('atendimento.agendamentos.ler');
   const temAlgumModulo        =
+    podeVerAgendamentos                        ||
     (temAcessoClinico && temAcessoAtendimento) ||
     (temAcessoClinico && podeVerPrescricoes)   ||
     podeVerFarmacia                            ||
     temAcessoNutricional                       ||
     podeVerFaturas;
 
+  // "Cadastro Pessoal" sempre disponível para profissionais (não-estagiário, não-proprietário).
+  // Permite que VETs sem nenhuma outra permissão ainda acessem seu próprio perfil.
+  const podVerCadastroPessoal = !isEstagiario && !isProprietario;
+
   // Itens visíveis no accordion Cadastro e na seção Geral
   const temAlgumCadastroItem =
     (temAcessoClinico && podeVerAnimais) ||
     !temAcessoClinico ||           // proprietários: sempre mostra meus-animais
-    !isEstagiario ||               // não-estagiários: sempre mostra Cadastro Pessoal
+    podVerCadastroPessoal ||       // profissionais com ao menos 1 permissão ativa
     podeVerEquipe ||
     podeVerFornecedores ||
     podeVerLocalizacoes ||
@@ -317,7 +325,7 @@ export default function Sidebar() {
                             : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
                           }
 
-                          {!isEstagiario && subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
+                          {podVerCadastroPessoal && subLink('/cadastro-pessoal', <User size={14} />, 'Cadastro Pessoal', p.startsWith('/cadastro-pessoal'))}
                           {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                           {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
                           {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
@@ -350,8 +358,8 @@ export default function Sidebar() {
               {openModulos && (
                 <div className="mt-1 pl-4 space-y-0.5">
 
-                  {/* ── Agenda ───────────────────────────────────────── */}
-                  {temAcessoClinico && isVetOuSuperior && (
+                  {/* ── Agendamento ──────────────────────────────────── */}
+                  {podeVerAgendamentos && (
                     <button
                       onClick={() => { closeMobile(); navigate('/agendamentos'); }}
                       className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
@@ -359,7 +367,7 @@ export default function Sidebar() {
                       }`}
                     >
                       <CalendarClock size={20} />
-                      Agenda
+                      Agendamento
                     </button>
                   )}
 
@@ -369,7 +377,7 @@ export default function Sidebar() {
                       {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
                       {openClinica && (
                         <div className="mt-1 pl-6 space-y-0.5">
-                          {isVetOuSuperior && subLink('/clinica/agenda', <CalendarDays size={14} />, 'Minha Agenda', p.startsWith('/clinica/agenda'))}
+                          {isVetOuSuperior && podeVerAgendamentos && subLink('/clinica/agenda', <CalendarDays size={14} />, 'Agenda', p.startsWith('/clinica/agenda'))}
                           {podeVerEvolucoes  && subLink(
                             animalId ? `/clinica/evolucao/${animalId}` : '/clinica/evolucao',
                             <FileText    size={14} />, 'Evolução',
