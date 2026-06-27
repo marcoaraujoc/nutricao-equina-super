@@ -143,11 +143,12 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   onCriado:    () => void;
   onFechar:    () => void;
 }) {
-  const [prestadores,    setPrestadores]    = useState<Prestador[]>([]);
-  const [loadingPrest,   setLoadingPrest]   = useState(true);
-  const [destinoTipo,    setDestinoTipo]    = useState<DestinoTipo>('EQUIPE');
-  const [filtroServico,  setFiltroServico]  = useState('');
-  const [prestadorSel,   setPrestadorSel]   = useState<Prestador | null>(null);
+  const [prestadores,         setPrestadores]         = useState<Prestador[]>([]);
+  const [servicosDisponiveis, setServicosDisponiveis] = useState<string[]>([]);
+  const [loadingPrest,        setLoadingPrest]        = useState(true);
+  const [destinoTipo,         setDestinoTipo]         = useState<DestinoTipo>('EQUIPE');
+  const [filtroServico,       setFiltroServico]       = useState('');
+  const [prestadorSel,        setPrestadorSel]        = useState<Prestador | null>(null);
   const [especialidade,  setEspecialidade]  = useState('');
   const [motivo,         setMotivo]         = useState('');
   const [urgencia,       setUrgencia]       = useState<Urgencia>('NORMAL');
@@ -163,15 +164,16 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       try {
         const res = await api.get(`/clinica/encaminhamentos/prestadores/${animalId}`);
         if (cancelado) return;
-        if (!res.data) { setPrestadores([]); return; } // GET 403 → null
+        if (!res.data) { setPrestadores([]); setServicosDisponiveis([]); return; } // GET 403 → null
         setPrestadores(res.data.dados ?? []);
-      } catch { if (!cancelado) setPrestadores([]); }
+        setServicosDisponiveis(res.data.servicosDisponiveis ?? []);
+      } catch { if (!cancelado) { setPrestadores([]); setServicosDisponiveis([]); } }
       finally { if (!cancelado) setLoadingPrest(false); }
     })();
     return () => { cancelado = true; };
   }, [animalId]);
 
-  const servicos = [...new Set(prestadores.map(p => p.tipoServico).filter((s): s is string => !!s))].sort();
+  const servicos = servicosDisponiveis; // vem do backend, já sem 'clínico'
 
   const prestadoresFiltrados = filtroServico
     ? prestadores.filter(p => p.tipoServico === filtroServico)

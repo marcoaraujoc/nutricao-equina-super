@@ -277,8 +277,39 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // Abre diretamente na "segunda tela" (form visível) quando editando uma prescrição SALVA
   const openWithForm = !isCreate && !isReadOnly && canEdit;
 
-  const [form,             setForm]             = useState<FormItem>(FORM_VAZIO());
-  const [localItens,       setLocalItens]       = useState<FormItem[]>([]);
+  // ── Draft persistence (inline create mode only) ──────────────────────────
+  const draftKey = isCreate && isInline
+    ? `s2vet_prescricao_draft_${animalId}_${evolucaoId ?? 'sem'}`
+    : null;
+
+  const clearDraft = () => {
+    if (!draftKey) return;
+    try { localStorage.removeItem(draftKey); } catch {}
+  };
+
+  const [form, setForm] = useState<FormItem>(() => {
+    if (!draftKey) return FORM_VAZIO();
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d?.form && typeof d.form === 'object') return { ...FORM_VAZIO(), ...d.form } as FormItem;
+      }
+    } catch {}
+    return FORM_VAZIO();
+  });
+
+  const [localItens, setLocalItens] = useState<FormItem[]>(() => {
+    if (!draftKey) return [];
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (Array.isArray(d?.localItens)) return d.localItens as FormItem[];
+      }
+    } catch {}
+    return [];
+  });
   const [editingLocalIdx,  setEditingLocalIdx]  = useState<number | null>(null);
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
@@ -409,6 +440,33 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showMedDropdown]);
+
+  // Restaura formBackupsRef do draft no mount (form/localItens já restaurados via lazy useState)
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d?.formBackups && typeof d.formBackups === 'object') {
+        formBackupsRef.current = d.formBackups;
+      }
+    } catch {}
+  // draftKey é estável durante o ciclo de vida do componente
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persiste o rascunho a cada mudança de form ou localItens
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({
+        localItens,
+        form,
+        formBackups: formBackupsRef.current,
+      }));
+    } catch {}
+  }, [localItens, form, draftKey]);
 
   const validarForm = () => {
     const isMed = form.tipo === 'MEDICAMENTO';
@@ -545,6 +603,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     try {
       await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
       toast.success('Prescrição salva');
+      clearDraft();
       onSaved(); onClose();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -568,6 +627,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
       setAlertaEstoque(null);
       toast.success('Prescrição finalizada com sucesso');
+      clearDraft();
       onSaved(); onClose();
     } catch (err: unknown) {
       const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;

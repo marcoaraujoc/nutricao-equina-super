@@ -588,44 +588,82 @@ function PainelFatura({
 
         {/* Seções por animal */}
         {prop.animais.map(animal => {
-          const itens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
-          const subtotal = itens.reduce((s: number, i: FaturaItem) => s + i.valor * i.quantidade, 0);
+          const todosItens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
+          const itensAssistencia = todosItens.filter(i => i.tipo === 'ASSISTENCIA');
+          const itensOutros      = todosItens.filter(i => i.tipo !== 'ASSISTENCIA');
+          const subtotal = todosItens.reduce((s: number, i: FaturaItem) => s + i.valor * i.quantidade, 0);
+
           return (
             <div key={animal.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              {/* Header do animal */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
-                <div className="flex items-center gap-2.5">
-                  {animal.photoUrl ? (
-                    <img src={animal.photoUrl} alt={animal.nome}
-                      className="w-8 h-8 rounded-lg object-cover flex-shrink-0"/>
-                  ) : (
-                    <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0 text-indigo-500 text-xs font-bold">
-                      {animal.nome?.[0]?.toUpperCase() ?? '?'}
+
+              {/* ── Informação do cavalo ── */}
+              <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-indigo-50/40">
+                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-2">
+                  Informação do Cavalo
+                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    {animal.photoUrl ? (
+                      <img src={animal.photoUrl} alt={animal.nome}
+                        className="w-10 h-10 rounded-xl object-cover flex-shrink-0"/>
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0 text-indigo-600 font-bold text-sm">
+                        {animal.nome?.[0]?.toUpperCase() ?? '?'}
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-bold text-gray-900">{animal.nome}</p>
+                      <p className="text-[10px] text-gray-400">
+                        {animal.especie?.nome}
+                        {animal.raca?.nome ? ` · ${animal.raca.nome}` : ''}
+                      </p>
                     </div>
-                  )}
-                  <div>
-                    <p className="text-sm font-bold text-gray-900">Fatura de {animal.nome}</p>
-                    <p className="text-[10px] text-gray-400">
-                      {animal.especie?.nome}{animal.raca?.nome ? ` (${animal.raca.nome})` : ''}
-                    </p>
                   </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-[9px] text-gray-400 uppercase">Subtotal</p>
-                  <p className="text-sm font-bold text-gray-800">{formatBRL(subtotal)}</p>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
+                    <p className="text-sm font-bold text-gray-800">{formatBRL(subtotal)}</p>
+                  </div>
                 </div>
               </div>
 
-              {/* Itens */}
-              {itens.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-4">Nenhum lançamento para este animal.</p>
-              ) : (
-                <div className="divide-y divide-gray-50">
-                  {itens.map(item => (
-                    <ItemRow key={item.id} item={item} canEdit={canEdit}
-                      onDelete={handleDeleteItem} onSave={handleSaveItem}/>
-                  ))}
-                </div>
+              {/* ── Assistência & Serviços Gerais ── */}
+              {itensAssistencia.length > 0 && (
+                <>
+                  <div className="px-4 py-2 bg-blue-50/50 border-b border-gray-100">
+                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">
+                      Assistência &amp; Serviços Gerais
+                    </p>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {itensAssistencia.map(item => (
+                      <ItemRow key={item.id} item={item} canEdit={canEdit}
+                        onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* ── Itens da fatura ── */}
+              {itensOutros.length > 0 && (
+                <>
+                  <div className="px-4 py-2 bg-gray-50/70 border-y border-gray-100">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                      Itens da Fatura
+                    </p>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {itensOutros.map(item => (
+                      <ItemRow key={item.id} item={item} canEdit={canEdit}
+                        onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {todosItens.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-5">
+                  Nenhum lançamento para este animal.
+                </p>
               )}
             </div>
           );

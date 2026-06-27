@@ -33,7 +33,7 @@ async function notificarGestoresDaEmpresa(empresaId, { animalNome, proprietarioN
 const ANIMAL_INCLUDE = {
   especie:     true,
   raca:        true,
-  user:        { select: { id: true, fullName: true, email: true, phone: true } },
+  user:        { select: { id: true, fullName: true, email: true, phone: true, cpf: true } },
   localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } },
   tratador:    { select: { id: true, nome: true, telefone: true } },
   solicitacoes: {

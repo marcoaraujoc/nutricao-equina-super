@@ -606,18 +606,32 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
   onConcluir:    (id: number) => void;
   onExcluir:     (id: number) => void;
 }) {
+  const isCancelado = ag.status === 'CANCELADO';
+  const isConcluido = ag.status === 'CONCLUIDO';
   return (
-    <div className="border border-gray-200 rounded-2xl p-3 bg-white">
+    <div className={`border rounded-2xl p-3 bg-white ${isCancelado ? 'border-red-100 opacity-70' : 'border-gray-200'}`}>
       <div className="flex items-start gap-3">
-        <div className="flex flex-col items-center justify-center w-11 h-12 border border-gray-200 rounded-xl flex-shrink-0">
+        <div className={`flex flex-col items-center justify-center w-11 h-12 border rounded-xl flex-shrink-0 ${isCancelado ? 'border-red-100' : 'border-gray-200'}`}>
           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ag.dataHora)}</span>
           <span className="text-base font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ag.dataHora)}</span>
         </div>
         <div className="flex-1 min-w-0">
-          <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_TIPO_AG[ag.tipo] ?? 'bg-gray-100 text-gray-500'}`}>
-            {ag.tipo}
-          </span>
-          <p className="text-xs font-bold text-gray-900 mt-1.5 leading-snug">{ag.titulo}</p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_TIPO_AG[ag.tipo] ?? 'bg-gray-100 text-gray-500'}`}>
+              {ag.tipo}
+            </span>
+            {isCancelado && (
+              <span className="inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-red-100 text-red-600">
+                Cancelado
+              </span>
+            )}
+            {isConcluido && (
+              <span className="inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700">
+                Concluído
+              </span>
+            )}
+          </div>
+          <p className={`text-xs font-bold mt-1.5 leading-snug ${isCancelado ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{ag.titulo}</p>
           <div className="flex items-center gap-1 mt-1.5 text-[11px] text-gray-400">
             <Clock size={10} /> {horaDe(ag.dataHora)}
           </div>
@@ -627,13 +641,13 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
             </div>
           )}
         </div>
-        {podeGerenciar && (
+        {podeGerenciar && !isCancelado && !isConcluido && (
           <div className="flex flex-col gap-0.5 flex-shrink-0">
             <button onClick={() => onConcluir(ag.id)} title="Concluir"
               className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
               <Check size={12} />
             </button>
-            <button onClick={() => onExcluir(ag.id)} title="Excluir"
+            <button onClick={() => onExcluir(ag.id)} title="Cancelar agendamento"
               className="p-1 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
               <Trash2 size={12} />
             </button>
@@ -800,8 +814,8 @@ const AnimalDetail = () => {
 
   const handleExcluirAg = async (agId: number) => {
     try {
-      await api.delete(`/clinica/agendamentos/${agId}`);
-      toast.success('Agendamento excluído');
+      await api.patch(`/clinica/agendamentos/${agId}/status`, { status: 'CANCELADO' });
+      toast.success('Agendamento cancelado');
       carregarAgendamentos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };

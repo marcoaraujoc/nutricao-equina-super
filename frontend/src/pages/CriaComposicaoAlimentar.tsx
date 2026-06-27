@@ -215,6 +215,8 @@ const CriaComposicaoAlimentar = () => {
       } else {
         exibirFeedback('erro', mensagem);
       }
+    } else if (err instanceof Error && (err as Error & { isPermissionError?: boolean }).isPermissionError) {
+      exibirFeedback('erro', 'Sem permissão. Apenas administradores podem salvar composições alimentares.');
     } else {
       exibirFeedback('erro', 'Erro inesperado ao salvar');
     }

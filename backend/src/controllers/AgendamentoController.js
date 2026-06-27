@@ -147,9 +147,12 @@ const AgendamentoController = {
 
       const where = { animalId, ativo: true };
       if (req.query.futuros === '1') {
-        where.status   = 'AGENDADO';
+        // Futuros AGENDADOS + todos os CANCELADOS (para histórico/relatórios)
         const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-        where.dataHora = { gte: hoje };
+        where.OR = [
+          { status: 'AGENDADO', dataHora: { gte: hoje } },
+          { status: 'CANCELADO' },
+        ];
       } else if (req.query.status && STATUS_VALIDOS.includes(req.query.status)) {
         where.status = req.query.status;
       }

@@ -96,19 +96,49 @@ const EncaminhamentoController = {
       if (!animal) return res.status(404).json({ error: 'Animal não encontrado' });
 
       const equipeIds = await getEquipeIdsDoAnimal(animal, req.equipeId);
-      if (equipeIds.length === 0) return res.json({ dados: [] });
 
-      const membros = await prisma.membroEquipe.findMany({
-        where: {
-          equipeId: { in: equipeIds },
-          OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
-          user: { ativo: true },
-        },
-        select: {
-          equipeId: true,
-          user: { select: { id: true, fullName: true, email: true, phone: true } },
-        },
-      });
+      const normalizar = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+      const [membros, servicosFornecedor] = await Promise.all([
+        equipeIds.length === 0
+          ? Promise.resolve([])
+          : prisma.membroEquipe.findMany({
+              where: {
+                equipeId: { in: equipeIds },
+                OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
+                user: { ativo: true },
+              },
+              select: {
+                equipeId: true,
+                user: { select: { id: true, fullName: true, email: true, phone: true } },
+              },
+            }),
+        prisma.fornecedor.findMany({
+          where: {
+            ativo: true,
+            tipoEntrada: 'CLIENTE',
+            empresaId: req.empresaId ?? null,
+          },
+          select: { tipoServico: true },
+        }),
+      ]);
+
+      const EXCLUIR_SERVICOS = new Set([
+        'clinico', 'clinica', 'farmacia', 'loja', 'supermercado', 'laboratorio',
+      ]);
+
+      const servicosSet = new Set();
+      for (const f of servicosFornecedor) {
+        if (!f.tipoServico) continue;
+        for (const s of f.tipoServico.split(',')) {
+          const nome = s.trim();
+          if (nome && !EXCLUIR_SERVICOS.has(normalizar(nome))) servicosSet.add(nome);
+        }
+      }
+      const servicosDisponiveis = [...servicosSet]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+
+      if (equipeIds.length === 0) return res.json({ dados: [], servicosDisponiveis });
 
       const userIds = [...new Set(membros.map(m => m.user.id))];
 
@@ -143,7 +173,7 @@ const EncaminhamentoController = {
       }
       dados.sort((a, b) => a.fullName.localeCompare(b.fullName));
 
-      res.json({ dados });
+      res.json({ dados, servicosDisponiveis });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ error: 'Erro ao listar prestadores' });

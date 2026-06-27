@@ -43,6 +43,18 @@ interface ImagemExameItemCat { id: number; codigo: string; nome: string; sigla: 
 type TipoExame  = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
 type MainTab    = 'laboratorial' | 'imagem';
 
+interface GrupoExtraInfo {
+  tipo:             TipoExame;
+  laboratorio:      string | null;
+  dataHoraColeta:   string | null;
+  nome:             string | null;
+  exames:           string[] | null;
+  tipoAmostra:      string | null;
+  qtdAmostra:       number | null;
+  indicacaoClinica: string | null;
+  obs:              string | null;
+}
+
 interface ExtraInfo {
   laboratorio:      string | null;
   dataHoraColeta:   string | null;
@@ -50,7 +62,7 @@ interface ExtraInfo {
   indicacaoClinica: string | null;
   obs:              string | null;
   grupoNome?:       string | null;
-  grupos?:          { tipo: TipoExame }[] | null;
+  grupos?:          GrupoExtraInfo[] | null;
 }
 
 interface PendingExamGroup {
@@ -199,8 +211,22 @@ function Row({ label, value }: { label: string; value: string }) {
 function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void }) {
   const extra    = parseExtra(ex.observacao);
   const tipoMeta = TIPOS_META[ex.tipo];
-  const isMulti  = ex.descricao.includes(', ');
-  const examList = isMulti ? ex.descricao.split(', ') : null;
+
+  // Grupos estruturados (multi-lab) salvos no observacao
+  const grupos   = (extra.grupos ?? []).filter(g => g.exames && g.exames.length > 0);
+
+  // Agrupa por laboratório preservando ordem de aparição
+  const labOrder: string[]                          = [];
+  const labMap:   Map<string, GrupoExtraInfo[]>     = new Map();
+  for (const g of grupos) {
+    const key = g.laboratorio?.trim() || 'Sem laboratório';
+    if (!labMap.has(key)) { labMap.set(key, []); labOrder.push(key); }
+    labMap.get(key)!.push(g);
+  }
+  const temBlocos = labOrder.length > 0;
+
+  // Status display
+  const statusInfo = STATUS_EXAME[ex.status];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
@@ -212,36 +238,111 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
           </div>
           <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
+
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
-          <div className="flex items-center gap-2 mb-1">
+          {/* Cabeçalho: tipo + status */}
+          <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
               {ex.tipo}
             </span>
-            <span className="text-xs text-gray-400">{ex.status}</span>
+            {statusInfo && (
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusInfo.cls}`}>
+                {statusInfo.label}
+              </span>
+            )}
+            <span className="text-xs text-gray-400 ml-auto">{formatDate(ex.dataSolicitacao)}</span>
           </div>
 
-          {examList ? (
-            <div>
-              <p className="text-xs text-gray-400 mb-1.5">Exames solicitados ({examList.length})</p>
-              <div className="flex flex-wrap gap-1.5">
-                {examList.map(e => (
-                  <span key={e} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">{e}</span>
-                ))}
-              </div>
+          {/* Blocos por laboratório (quando há grupos estruturados) */}
+          {temBlocos ? (
+            <div className="space-y-3">
+              {labOrder.map(lab => {
+                const gs = labMap.get(lab)!;
+                const dataColeta = gs.find(g => g.dataHoraColeta)?.dataHoraColeta;
+                const amostra    = gs.find(g => g.tipoAmostra)?.tipoAmostra;
+                const indicacao  = gs.map(g => g.indicacaoClinica).filter(Boolean).join('; ');
+                return (
+                  <div key={lab} className="border border-blue-100 rounded-xl overflow-hidden">
+                    {/* Cabeçalho do laboratório */}
+                    <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 border-b border-blue-100">
+                      <FlaskConical size={13} className="text-blue-500 flex-shrink-0" />
+                      <span className="text-xs font-bold text-blue-800 uppercase tracking-wide">{lab}</span>
+                    </div>
+
+                    {/* Grupos deste laboratório */}
+                    <div className="divide-y divide-gray-50">
+                      {gs.map((g, gi) => (
+                        <div key={gi} className="px-3 py-2.5">
+                          {g.nome && (
+                            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                              {g.nome}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap gap-1">
+                            {g.exames!.map((e, ei) => (
+                              <span key={ei} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                                {e}
+                              </span>
+                            ))}
+                          </div>
+                          {g.obs && (
+                            <p className="text-[11px] text-gray-400 mt-1.5">Preparo: {g.obs}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Metadados comuns do lab */}
+                    {(dataColeta || amostra || indicacao) && (
+                      <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 space-y-0.5">
+                        {dataColeta && (
+                          <p className="text-[11px] text-gray-500">
+                            <span className="font-medium">Coleta:</span> {new Date(dataColeta).toLocaleString('pt-BR')}
+                          </p>
+                        )}
+                        {amostra && (
+                          <p className="text-[11px] text-gray-500">
+                            <span className="font-medium">Amostra:</span> {amostra}
+                          </p>
+                        )}
+                        {indicacao && (
+                          <p className="text-[11px] text-gray-500">
+                            <span className="font-medium">Indicação:</span> {indicacao}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <Row label="Exame" value={ex.descricao} />
+            /* Fallback: exame simples sem grupos estruturados */
+            <>
+              {extra.laboratorio      && <Row label="Laboratório"       value={extra.laboratorio} />}
+              {extra.dataHoraColeta   && <Row label="Data/Hora Coleta"  value={new Date(extra.dataHoraColeta).toLocaleString('pt-BR')} />}
+              {extra.tipoAmostra      && <Row label="Tipo de Amostra"   value={extra.tipoAmostra} />}
+              {ex.qtdAmostra != null  && <Row label="Qtd. de Amostras"  value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />}
+              {extra.indicacaoClinica && <Row label="Indicação Clínica" value={extra.indicacaoClinica} />}
+              {extra.obs              && <Row label="Preparo / Obs."    value={extra.obs} />}
+              <div>
+                <p className="text-xs text-gray-400 mb-1.5">Exames solicitados</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {ex.descricao.split(', ').map(e => (
+                    <span key={e} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">{e}</span>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
 
-          {extra.laboratorio      && <Row label="Laboratório"        value={extra.laboratorio} />}
-          {extra.dataHoraColeta   && <Row label="Data/Hora Coleta"   value={new Date(extra.dataHoraColeta).toLocaleString('pt-BR')} />}
-          {extra.tipoAmostra      && <Row label="Tipo de Amostra"    value={extra.tipoAmostra} />}
-          {ex.qtdAmostra != null  && <Row label="Qtd. de Amostras"   value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />}
-          {extra.indicacaoClinica && <Row label="Indicação Clínica"  value={extra.indicacaoClinica} />}
-          {extra.obs              && <Row label="Preparo / Obs."     value={extra.obs} />}
-          <Row label="Solicitado em" value={formatDate(ex.dataSolicitacao)} />
-          {ex.veterinario && <Row label="Solicitado por" value={ex.veterinario.fullName} />}
+          {ex.veterinario && (
+            <p className="text-[11px] text-gray-400 pt-1">
+              Solicitado por <span className="font-medium text-gray-600">{ex.veterinario.fullName}</span>
+            </p>
+          )}
         </div>
+
         <div className="px-5 pb-5 pt-2 border-t border-gray-100">
           <button onClick={onFechar}
             className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">

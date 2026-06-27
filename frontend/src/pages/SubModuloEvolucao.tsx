@@ -781,9 +781,10 @@ interface Props {
   onEvolucaoChange?:  (ev: EvolucaoAtiva | null) => void;
   onSalvo?:           () => void;
   openItemId?:        number;
+  agendamentoId?:     number;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, agendamentoId: agendamentoIdProp }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
@@ -832,6 +833,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [savingFatura,   setSavingFatura]   = useState(false);
   const [arquivosModal,  setArquivosModal]  = useState<File[]>([]);
 
+  const agendamentoPreSelecionado = useRef(false);
+
   const totalPaginas       = Math.ceil(total / limit);
   const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
   const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel || filterStatus || busca);
@@ -878,6 +881,27 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       .then(res => { if (res.data?.dados) setViewingEv(res.data.dados as EvolucaoItem); })
       .catch(() => {});
   }, [openItemId]);
+
+  // Quando vindo da tela de Agendamentos via "Iniciar" (ou restaurando do localStorage):
+  // pré-seleciona o agendamento no formulário de nova evolução assim que os dados carregarem.
+  useEffect(() => {
+    if (loading || !agendamentoIdProp || agendamentoPreSelecionado.current) return;
+    if (temEvolucaoAberta) return;
+    agendamentoPreSelecionado.current = true;
+    api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`)
+      .then(res => {
+        const lista: AgendamentoItem[] = res.data?.dados ?? [];
+        setAgendamentosDisponiveis(lista);
+        // Se o agendamento já foi concluído (não está mais na lista AGENDADO),
+        // limpa o localStorage para não pré-selecionar novamente.
+        if (lista.some(a => a.id === agendamentoIdProp)) {
+          setAgendamentoSelecionadoId(agendamentoIdProp);
+        } else {
+          localStorage.removeItem(`s2vet_ag_${animalId}`);
+        }
+      })
+      .catch(() => {});
+  }, [loading, agendamentoIdProp, animalId, temEvolucaoAberta]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -969,6 +993,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           tipoAtendimento:  criada.tipoAtendimento ?? null,
           atendimentoNumero: criada.atendimentoNumero ?? null,
         });
+        localStorage.removeItem(`s2vet_ag_${animalId}`);
         toast.success('Evolução registrada');
       }
       if (arquivosModal.length > 0) await uploadMidias(evolucaoId, arquivosModal);
@@ -1012,6 +1037,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           agendamentoId:  agendamentoSelecionadoId,
         });
         evolucaoId = createRes.data.dados?.id as number | undefined;
+        localStorage.removeItem(`s2vet_ag_${animalId}`);
         onEvolucaoChange?.(null);
       }
 

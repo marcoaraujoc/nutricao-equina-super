@@ -287,6 +287,20 @@ const Atendimento = () => {
 
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
 
+  // Persiste o agendamentoId entre navegações e re-logins (localStorage por animal)
+  const [agendamentoIdFromUrl] = useState<number | undefined>(() => {
+    const fromUrl = new URLSearchParams(location.search).get('agendamentoId');
+    if (fromUrl && animalIdParam) {
+      localStorage.setItem(`s2vet_ag_${animalIdParam}`, fromUrl);
+      return Number(fromUrl);
+    }
+    if (animalIdParam) {
+      const stored = localStorage.getItem(`s2vet_ag_${animalIdParam}`);
+      if (stored) return Number(stored);
+    }
+    return undefined;
+  });
+
   const [animal,          setAnimal]          = useState<AnimalExtended | null>(null);
   const [todosAnimais,    setTodosAnimais]    = useState<AnimalExtended[]>([]);
   const [activeTab,       setActiveTab]       = useState<SubModulo>(() => tabFromPath(location.pathname));
@@ -393,6 +407,7 @@ const Atendimento = () => {
             onEvolucaoChange={setEvolucaoAtiva}
             onSalvo={refreshHistorico}
             openItemId={openItemId}
+            agendamentoId={agendamentoIdFromUrl}
           />
         );
       case 'prescricao':

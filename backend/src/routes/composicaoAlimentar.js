@@ -19,10 +19,10 @@ const soAdmin = (req, res, next) => {
 router.get('/',                authenticate, composicaoController.listar);
 router.post('/',               authenticate, soAdmin, composicaoController.criar);
 
+// analisar-llm é somente extração (não persiste) — disponível para todos os autenticados
 router.post(
   '/analisar-llm',
   authenticate,
-  soAdmin,
   upload.single('arquivo'),
   composicaoController.analisarLLM
 );

@@ -9,6 +9,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
+import { imprimirExameCompra, abrirLaudoExameCompra } from '../utils/ExameCompraPrint';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -500,82 +501,18 @@ export default function ExameCompra() {
 
   // ── Imprimir ──────────────────────────────────────────────────────────────
   const imprimirLaudo = (ex: ExameCompraItem) => {
-    const laudo = parseLaudo(ex.observacao);
-    const dataFormatada = fmtData(ex.dataSolicitacao);
-    const animalNome = selectedAnimal?.nome ?? '—';
-
-    const linhas: string[] = [];
-    const add = (txt: string) => linhas.push(txt);
-
-    const secBin = (titulo: string, campos: FieldDef[], valores: Record<string,string>, obs: Record<string,string>) => {
-      add(`<h3>${titulo}</h3><table style="width:100%;border-collapse:collapse;">`);
-      campos.forEach(([k, label, o1]) => {
-        const v = valores?.[k] ?? o1;
-        const o = obs?.[k] ?? '';
-        const cor = v === o1 ? '#166534' : '#92400e';
-        add(`<tr><td style="padding:3px 6px;border:1px solid #e5e7eb;font-size:12px;">${label}</td>
-             <td style="padding:3px 6px;border:1px solid #e5e7eb;color:${cor};font-weight:600;font-size:12px;">${v}</td>
-             ${o ? `<td style="padding:3px 6px;border:1px solid #e5e7eb;font-size:11px;color:#6b7280;">${o}</td>` : '<td style="border:1px solid #e5e7eb;"></td>'}
-             </tr>`);
-      });
-      add('</table>');
-    };
-
-    if (laudo) {
-      const me = laudo.musculoEsqueletico ?? {};
-      secBin('Exame Clínico Geral', F_CLINICO, laudo.clinicoGeral?.valores, laudo.clinicoGeral?.obs);
-      secBin('Cardiovascular', F_CARDIO, laudo.cardiovascular?.valores, laudo.cardiovascular?.obs);
-      secBin('Respiratório', F_RESP, laudo.respiratorio?.valores, laudo.respiratorio?.obs);
-      secBin('Digestório', F_DIGEST, laudo.digestivo?.valores, laudo.digestivo?.obs);
-      secBin('Urogenital', F_UROGEN, laudo.urogenital?.valores, laudo.urogenital?.obs);
-      secBin('Sistema Nervoso', F_NERVOSO, laudo.nervoso?.valores, laudo.nervoso?.obs);
-      secBin('Inspeção / Palpação', F_INSPECAO, me.inspecao?.valores, me.inspecao?.obs);
-      secBin('Cascos', F_CASCOS, me.cascos?.valores, me.cascos?.obs);
-      if (laudo.imagem?.raioXLaudo) add(`<h3>Raio-X</h3><p style="font-size:12px;">${laudo.imagem.raioXLaudo}</p>`);
-      if (laudo.imagem?.ultrassomLaudo) add(`<h3>Ultrassonografia</h3><p style="font-size:12px;">${laudo.imagem.ultrassomLaudo}</p>`);
-      if (laudo.conclusao) add(`<h3>Conclusão / Parecer Final</h3><p style="font-size:13px;font-style:italic;">${laudo.conclusao}</p>`);
-    }
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Exame de Compra ${fmtNumero(ex.numero)} — ${animalNome}</title>
-      <style>body{font-family:sans-serif;padding:24px;color:#111;}h2{margin:0 0 4px;}h3{margin:16px 0 6px;font-size:13px;text-transform:uppercase;color:#6b7280;letter-spacing:.05em;}table{margin-bottom:8px;}@media print{h3{page-break-after:avoid;}}</style>
-      </head><body>
-      <h2>Exame de Compra ${fmtNumero(ex.numero)}</h2>
-      <p style="color:#6b7280;font-size:13px;margin:0 0 16px;">Paciente: <strong>${animalNome}</strong> &nbsp;|&nbsp; Data: ${dataFormatada}${ex.veterinario ? ` &nbsp;|&nbsp; Médico: ${ex.veterinario.fullName}` : ''}</p>
-      ${linhas.join('')}
-      </body></html>`;
-
-    const w = window.open('', '_blank');
-    if (!w) return;
-    w.document.write(html);
-    w.document.close();
-    w.onload = () => w.print();
+    imprimirExameCompra(ex, selectedAnimal ?? undefined);
   };
 
   // ── Compartilhar ──────────────────────────────────────────────────────────
   const compartilharWhatsApp = (ex: ExameCompraItem) => {
-    const laudo = parseLaudo(ex.observacao);
-    const linhas = [
-      `*Exame de Compra ${fmtNumero(ex.numero)}*`,
-      `Paciente: ${selectedAnimal?.nome ?? '—'}`,
-      `Data: ${fmtData(ex.dataSolicitacao)}`,
-      ex.veterinario ? `Médico: ${ex.veterinario.fullName}` : '',
-      laudo?.conclusao ? `\n*Conclusão:*\n${laudo.conclusao}` : '',
-    ].filter(Boolean).join('\n');
-    window.open(`https://wa.me/?text=${encodeURIComponent(linhas)}`, '_blank');
+    // Abre o laudo formatado em nova aba para o usuário salvar como PDF e compartilhar
+    abrirLaudoExameCompra(ex, selectedAnimal ?? undefined);
   };
 
   const compartilharEmail = (ex: ExameCompraItem) => {
-    const laudo = parseLaudo(ex.observacao);
-    const assunto = `Exame de Compra ${fmtNumero(ex.numero)} — ${selectedAnimal?.nome ?? '—'} — ${fmtData(ex.dataSolicitacao)}`;
-    const corpo = [
-      `Exame de Compra ${fmtNumero(ex.numero)}`,
-      `Paciente: ${selectedAnimal?.nome ?? '—'}`,
-      `Data: ${fmtData(ex.dataSolicitacao)}`,
-      ex.veterinario ? `Médico Responsável: ${ex.veterinario.fullName}` : '',
-      laudo?.conclusao ? `\nConclusão / Parecer Final:\n${laudo.conclusao}` : '',
-    ].filter(Boolean).join('\n');
-    window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo)}`;
+    // Abre o laudo formatado em nova aba para o usuário salvar como PDF e enviar por e-mail
+    abrirLaudoExameCompra(ex, selectedAnimal ?? undefined);
   };
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) {

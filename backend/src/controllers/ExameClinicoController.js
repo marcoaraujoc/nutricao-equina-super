@@ -110,6 +110,7 @@ const ExameClinicoController = {
             tipo,
             descricao:       descricao.trim(),
             status:          'SOLICITADO',
+            ativo:           true,
             observacao:      observacaoFinal,
             qtdAmostra:      qtdAmostra != null ? Number(qtdAmostra) : null,
             numero:          proximoNumero,

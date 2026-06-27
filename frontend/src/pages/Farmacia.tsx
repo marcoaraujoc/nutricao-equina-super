@@ -291,6 +291,18 @@ export default function Farmacia() {
   const fmtQtd = (n: number) =>
     parseFloat(n.toFixed(3)).toString().replace('.', ',');
 
+  // Para kg → g; para L/l → ml; demais unidades sem conversão
+  const subUnidade = (u: string) => {
+    const un = u.toLowerCase();
+    if (un === 'kg') return 'g';
+    if (un === 'l')  return 'ml';
+    return u;
+  };
+  const fatorSubUnidade = (u: string) => {
+    const un = u.toLowerCase();
+    return (un === 'kg' || un === 'l') ? 1000 : 1;
+  };
+
   const formatValidade = (v: string | null) => {
     if (!v) return '—';
     const [year, month, day] = v.split('T')[0].split('-').map(Number);
@@ -383,8 +395,8 @@ export default function Farmacia() {
         valorRepassado:   form.valorRepassado * nPacotes,
         lote:             form.lote || null,
         validade:         form.validade || null,
-        estoqueMinimo:    form.estoqueMinimo,
-        estoqueAlarmante: form.estoqueAlarmante,
+        estoqueMinimo:    form.estoqueMinimo / (editandoId ? 1 : fatorSubUnidade(medSelecionado?.unidade ?? '')),
+        estoqueAlarmante: form.estoqueAlarmante / (editandoId ? 1 : fatorSubUnidade(medSelecionado?.unidade ?? '')),
         ativo:            form.ativo,
         fornecedorId:     form.fornecedorId || null,
         notaFiscal:       form.notaFiscal.trim() || null,
@@ -777,7 +789,7 @@ export default function Farmacia() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      {editandoId ? 'Valor Total Comprado (R$)' : 'Valor por Embalagem (R$)'} <span className="text-red-500">*</span>
+                      {editandoId ? 'Valor Total Comprado (R$)' : 'Val por Embalagem (R$)'} <span className="text-red-500">*</span>
                     </label>
                     <input type="text" inputMode="decimal" value={valorStr}
                       onChange={(e) => handleValorChange(e.target.value)}
@@ -791,7 +803,7 @@ export default function Farmacia() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      {editandoId ? 'Valor Total Repassado (R$)' : 'Valor Repassado por Embalagem (R$)'}
+                      {editandoId ? 'Valor Total Repassado (R$)' : 'Val Repassado por Embalagem (R$)'}
                     </label>
                     <input type="text" inputMode="decimal" value={valorRepassadoStr}
                       onChange={(e) => handleValorRepassadoChange(e.target.value)}
@@ -911,7 +923,7 @@ export default function Farmacia() {
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-                      Mínimo <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
+                      Mínimo <span className="text-gray-400 font-normal">({subUnidade(medSelecionado?.unidade ?? 'un')})</span>
                     </label>
                     <input type="number" min={0} value={form.estoqueMinimo === 0 ? '' : form.estoqueMinimo}
                       onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: e.target.value === '' ? 0 : Number(e.target.value) }))}
@@ -921,7 +933,7 @@ export default function Farmacia() {
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                      Alarmante <span className="text-gray-400 font-normal">({medSelecionado?.unidade ?? 'un'})</span>
+                      Alarmante <span className="text-gray-400 font-normal">({subUnidade(medSelecionado?.unidade ?? 'un')})</span>
                     </label>
                     <input type="number" min={0} value={form.estoqueAlarmante === 0 ? '' : form.estoqueAlarmante}
                       onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: e.target.value === '' ? 0 : Number(e.target.value) }))}

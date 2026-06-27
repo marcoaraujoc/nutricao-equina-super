@@ -785,9 +785,15 @@ const executar = async (req, res) => {
 
 const listarParaExecucao = async (req, res) => {
   try {
-    const { busca, empresaId, animalId } = req.query;
+    const { busca, empresaId, animalId, data } = req.query;
 
-    const whereGrupo = { status: 'FINALIZADO' };
+    const whereGrupo = {
+      status: 'FINALIZADO',
+      OR: [
+        { evolucaoId: null },
+        { evolucao: { aprovado: true } },
+      ],
+    };
     if (empresaId) whereGrupo.empresaId = Number(empresaId);
     if (animalId)  whereGrupo.animalId  = Number(animalId);
 
@@ -814,8 +820,10 @@ const listarParaExecucao = async (req, res) => {
       orderBy: [{ animalId: 'asc' }, { numero: 'asc' }],
     });
 
-    // Data de hoje em UTC (YYYY-MM-DD) — evita deslocamento de fuso ao comparar com dataInicio
-    const hojeStr = new Date().toISOString().split('T')[0];
+    // Data de referência — usa param ?data=YYYY-MM-DD ou hoje
+    const hojeStr = (data && /^\d{4}-\d{2}-\d{2}$/.test(data))
+      ? data
+      : new Date().toISOString().split('T')[0];
     const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
     // Mantém apenas grupos onde pelo menos um item cobre hoje

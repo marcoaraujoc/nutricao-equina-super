@@ -24,6 +24,7 @@ type ViewMode          = 'MES' | 'SEMANA';
 
 interface AgendamentoGlobal {
   id:          number;
+  numero:      number | null;
   tipo:        TipoAgendamento;
   titulo:      string;
   dataHora:    string;
@@ -105,7 +106,7 @@ const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
   { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600'  },
 ];
 
-const HORARIOS = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00'];
+const HORARIOS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
 
 const MESES_PT      = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DIAS_PT       = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
@@ -781,6 +782,11 @@ export default function Agendamentos() {
     } catch { toast.error('Erro ao atualizar'); }
   }
 
+  function handleIniciarAtendimento(ag: AgendamentoGlobal) {
+    if (!ag.animal?.id) { toast.error('Animal não identificado no agendamento'); return; }
+    navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
+  }
+
   async function handleTrocarVetAg() {
     if (!trocandoVetAg || !trocandoVetIdAg) { toast.error('Selecione um profissional'); return; }
     if (trocandoVetIdAg === String(trocandoVetAg.veterinario?.id)) {
@@ -822,10 +828,15 @@ export default function Agendamentos() {
     if (novaDataHora === formatarDateInput(reagendando.dataHora)) { toast.error('A nova data deve ser diferente da atual'); return; }
     setSalvandoReag(true);
     try {
-      await api.delete(`/clinica/agendamentos/${reagendando.id}`);
+      const novaData = new Date(novaDataHora);
+      const novaDataStr = novaData.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
+        status: 'CANCELADO',
+        motivo: `Reagendado para ${novaDataStr}`,
+      });
       await api.post('/clinica/agendamentos', {
         animalId: reagendando.animal?.id, tipo: reagendando.tipo, titulo: reagendando.titulo,
-        dataHora: new Date(novaDataHora).toISOString(), observacao: reagendando.observacao ?? undefined,
+        dataHora: novaData.toISOString(), observacao: reagendando.observacao ?? undefined,
         veterinarioId: reagendando.veterinario?.id,
       });
       toast.success('Reagendado');
@@ -963,10 +974,10 @@ export default function Agendamentos() {
       </div>
 
       {/* ── Layout: Calendário + Painel direito ─────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-5">
+      <div className="flex flex-col lg:flex-row gap-5 mb-5">
 
-        {/* Calendário */}
-        <div className="lg:col-span-4">
+        {/* Calendário — largura compacta fixa */}
+        <div className="lg:w-72 flex-shrink-0">
           <CalendarioInterativo
             selectedDate={selectedDate}
             onChange={date => { setSelectedDate(date); if (date.slice(0,7) !== mesCarregado) setMesCarregado(''); }}
@@ -975,7 +986,7 @@ export default function Agendamentos() {
         </div>
 
         {/* Painel direito: Filtros + Profissionais */}
-        <div className="lg:col-span-8 flex flex-col gap-4">
+        <div className="flex-1 flex flex-col gap-4">
 
           {/* Filtros — sem campo Status */}
           <div className="bg-white rounded-2xl border border-gray-200 p-4">
@@ -1067,7 +1078,7 @@ export default function Agendamentos() {
                           {/* Período */}
                           <td className="py-3 px-4">
                             <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
-                              <Clock size={11} className="text-gray-400" /> 08h — 18h
+                              <Clock size={11} className="text-gray-400" /> 00h — 23h
                             </span>
                           </td>
                           {/* Dias */}
@@ -1202,8 +1213,8 @@ export default function Agendamentos() {
                     {podeGerenciar && !isCancelado && (
                       <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
                         {isAgendado && (
-                          <button onClick={() => handleStatus(ag.id, 'CONCLUIDO')} className="flex items-center gap-1 px-2.5 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-semibold">
-                            <Check size={11} /> Confirmar
+                          <button onClick={() => handleIniciarAtendimento(ag)} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
+                            <Stethoscope size={11} /> Iniciar
                           </button>
                         )}
                         {isAgendado && (
@@ -1300,9 +1311,9 @@ export default function Agendamentos() {
                           <td className="py-3.5 px-4">
                             <div className="flex items-center justify-center gap-1.5">
                               {isAgendado && (
-                                <button onClick={() => handleStatus(ag.id, 'CONCLUIDO')} title="Confirmar"
-                                  className="p-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors">
-                                  <Check size={13} />
+                                <button onClick={() => handleIniciarAtendimento(ag)} title="Iniciar atendimento"
+                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
+                                  <Stethoscope size={13} />
                                 </button>
                               )}
                               {isAgendado && (
