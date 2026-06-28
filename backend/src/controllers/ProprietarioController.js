@@ -7,7 +7,7 @@ const emailService = require('../services/emailService');
 const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 
 const SELECT_PROPRIETARIO = {
-  id: true, fullName: true, email: true, phone: true,
+  id: true, fullName: true, email: true, phone: true, phone2: true,
   role: true, userType: true, ativo: true, createdAt: true,
   cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true,
   cpf: true, cnpj: true, mensalista: true, valorAssistencia: true, frequenciaVisitas: true,
@@ -117,7 +117,7 @@ const ProprietarioController = {
   // POST /api/cadastro/proprietarios
   criar: async (req, res) => {
     const {
-      fullName, email, phone, senha,
+      fullName, email, phone, phone2, senha,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas,
     } = req.body;
@@ -139,6 +139,7 @@ const ProprietarioController = {
           fullName:          fullName.trim(),
           email:             email.trim().toLowerCase(),
           phone:             phone?.trim()       || null,
+          phone2:            phone2?.trim()      || null,
           role:              'USER',
           userType:          'PROPRIETARIO',
           cep:               cep?.trim()         || null,
@@ -183,7 +184,7 @@ const ProprietarioController = {
   atualizar: async (req, res) => {
     const { id } = req.params;
     const {
-      fullName, email, phone, senha, ativo,
+      fullName, email, phone, phone2, senha, ativo,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas,
     } = req.body;
@@ -212,6 +213,7 @@ const ProprietarioController = {
         fullName:         fullName.trim(),
         email:            emailNovo,
         phone:            phone?.trim()       || null,
+        phone2:           phone2?.trim()      || null,
         cep:              cep?.trim()         || null,
         endereco:         endereco?.trim()    || null,
         complemento:      complemento?.trim() || null,

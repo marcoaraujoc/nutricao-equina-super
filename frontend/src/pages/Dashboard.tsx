@@ -10,7 +10,6 @@ import {
   FileText, ArrowLeft, Sun, Sunset, Moon, Sparkles, CheckCircle2,
 } from 'lucide-react';
 import api from '../services/api';
-import VetDashboard    from './VetDashboard';
 import PageContainer   from '../components/PageContainer';
 import BotaoVoltar     from '../components/BotaoVoltar';
 
@@ -292,13 +291,15 @@ const Dashboard = () => {
   }, [isConvidado]);
 
   useEffect(() => {
-    // Vets e estagiários vão direto ao VetDashboard — não carregam aqui
-    if (!isClinica) loadAnimais();
-    else            setLoading(false);
-  }, [isClinica, loadAnimais]);
+    if (isClinica || role === 'ADMIN') {
+      navigate('/mapa-atendimento', { replace: true });
+      return;
+    }
+    loadAnimais();
+  }, [isClinica, role, loadAnimais, navigate]);
 
-  // ── Veterinário / Estagiário → delega totalmente ao VetDashboard ─────────
-  if (isClinica) return <VetDashboard />;
+  // ── Veterinário / Estagiário / Admin → aguarda redirect do useEffect ─────
+  if (isClinica || role === 'ADMIN') return null;
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) return (

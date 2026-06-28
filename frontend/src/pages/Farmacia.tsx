@@ -357,9 +357,6 @@ export default function Farmacia() {
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
     if (form.validade && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
 
-    if (!form.lote || !form.lote.trim()) return toast.error('Lote é obrigatório.');
-    if (!form.validade) return toast.error('Validade é obrigatória.');
-
     if (!editandoId && estoqueExistente) {
       if (form.qtdEstoque <= 0) return toast.error('Informe uma quantidade maior que zero.');
       setSalvando(true);
@@ -816,14 +813,14 @@ export default function Farmacia() {
                     )}
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
                     <input type="text" value={form.lote}
                       onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
                       placeholder="Ex: LOT2024"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
                     <input
                       type="date"
                       value={form.validade}
@@ -837,14 +834,14 @@ export default function Farmacia() {
               {estoqueExistente && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
                     <input type="text" value={form.lote}
                       onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
                       placeholder="Ex: LOT2024"
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
                     <input
                       type="date"
                       value={form.validade}

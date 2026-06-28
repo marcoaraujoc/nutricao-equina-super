@@ -209,8 +209,8 @@ function ViewEvolucaoModal({ ev, animal, isGestor, onClose, onEditar, onImprimir
   onEditar?:  () => void;
   onImprimir: () => void;
 }) {
-  const editavel  = ev.status === 'EM_ANDAMENTO';
-  const bloqueado = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
+  const editavel  = ev.status === 'EM_ANDAMENTO' || (isGestor && ev.status === 'FINALIZADA');
+  const bloqueado = (!isGestor && ev.status === 'FINALIZADA') || ev.status === 'CANCELADA';
   const midias    = ev.midias ?? [];
 
   return (
@@ -1419,7 +1419,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           <Eye size={14} />
                         </button>
 
-                        {emAndamento && podeEditarEsta && (
+                        {((emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA')) && (
                           <button onClick={() => abrirEdicao(ev)} title="Alterar"
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Pencil size={14} />
@@ -1433,7 +1433,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           </button>
                         )}
 
-                        {bloqueado && (
+                        {(ev.status === 'CANCELADA' || (!isGestor && ev.status === 'FINALIZADA')) && (
                           <span title={ev.status === 'FINALIZADA' ? 'Finalizada — somente leitura' : 'Cancelada — somente leitura'}
                             className="p-1.5 text-gray-300 cursor-default">
                             <Lock size={14} />
@@ -1499,7 +1499,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             const podeEd = isFornecedor
               ? (nivelEd !== 'NENHUM' && eAutorViewing)
               : (nivelEd === 'FULL' || nivelEd === 'EQUIPE' || (nivelEd === 'PROPRIO' && eAutorViewing));
-            const podeEditar = podeEd && viewingEv.status === 'EM_ANDAMENTO';
+            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (isGestor && viewingEv.status === 'FINALIZADA'));
             return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
           })()}
           onImprimir={() => handleImprimir(viewingEv)}

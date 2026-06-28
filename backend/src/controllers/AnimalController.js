@@ -592,7 +592,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       proprietarioId, veterinarioUserId, local, baia, localizacaoId, tratadorId,
-      pelagem, altura, registroPassaporte, finalidade,
+      pelagem, altura, registroPassaporte, finalidade, seguradora,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -773,7 +773,8 @@ class AnimalController {
                     data: {
                       fullName:           propData.fullName || 'Proprietário',
                       email:              propData.email,
-                      phone:              propData.phone || null,
+                      phone:              propData.phone  || null,
+                      phone2:             propData.phone2 || null,
                       passwordHash:       await bcrypt.hash('Inicial#001', 10),
                       role:               'USER',
                       userType:           'PROPRIETARIO',
@@ -842,6 +843,7 @@ class AnimalController {
           altura:             altura?.trim()             || null,
           registroPassaporte: registroPassaporte?.trim() || null,
           finalidade:         finalidade?.trim()         || null,
+          seguradora:         seguradora?.trim()         || null,
           photoUrl,
           especieId:  Number(especieId),
           racaId:     Number(racaId),
@@ -991,7 +993,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
-      pelagem, altura, registroPassaporte, finalidade,
+      pelagem, altura, registroPassaporte, finalidade, seguradora,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -1075,6 +1077,7 @@ class AnimalController {
           altura:             altura?.trim()             ?? null,
           registroPassaporte: registroPassaporte?.trim() ?? null,
           finalidade:         finalidade?.trim()         ?? null,
+          seguradora:         seguradora?.trim()         ?? null,
           especieId: Number(especieId),
           racaId:    Number(racaId),
           ...(photoUrl && { photoUrl }),

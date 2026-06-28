@@ -25,6 +25,7 @@ model User {
   email                String    @unique @db.VarChar(255)
   passwordHash         String    @db.VarChar(255)
   phone                String?   @db.VarChar(30)
+  phone2               String?   @db.VarChar(30)
   role                 String    @default("USER") @db.VarChar(50)
   userType             String    @default("PROPRIETARIO") @db.VarChar(50)
   cep                  String?   @db.VarChar(10)
@@ -120,6 +121,7 @@ model Animal {
   altura             String?   @db.VarChar(50)
   registroPassaporte String?   @db.VarChar(100) @map("registro_passaporte")
   finalidade         String?   @db.VarChar(100)
+  seguradora         String?   @db.VarChar(150)
 
   especie         Especie              @relation(fields: [especieId],    references: [id])
   raca            Raca?                @relation(fields: [racaId],       references: [id])

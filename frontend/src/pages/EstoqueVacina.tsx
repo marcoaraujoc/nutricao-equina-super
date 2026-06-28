@@ -316,9 +316,7 @@ export default function EstoqueVacina() {
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de vacina'); return; }
 
     if (!form.medicamentoCatId) return toast.error('Selecione a vacina.');
-    if (!form.lote.trim())      return toast.error('Lote do fabricante é obrigatório.');
-    if (!form.validade)         return toast.error('Validade do lote inválida — use DD/MM/AAAA.');
-    if (!editandoId && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
+    if (form.validade && !editandoId && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
     if (form.dataRecebimento && form.dataRecebimento > hoje) return toast.error('Data de recebimento não pode ser futura.');
     if (Number(form.qtdFrascos) <= 0 && !editandoId) return toast.error('Quantidade de frascos deve ser maior que zero.');
 
@@ -326,8 +324,8 @@ export default function EstoqueVacina() {
     try {
       const payload = {
         medicamentoCatId:       form.medicamentoCatId,
-        lote:                   form.lote.trim(),
-        validade:               form.validade,
+        lote:                   form.lote.trim() || null,
+        validade:               form.validade || null,
         qtdFrascos:             Number(form.qtdFrascos),
         dosesPorFrasco:         Number(form.dosesPorFrasco) || 1,
         validadeHoras:          form.validadeHoras !== '' ? Number(form.validadeHoras) : null,
@@ -664,7 +662,7 @@ export default function EstoqueVacina() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Lote Fabricante <span className="text-red-500">*</span>
+                    Lote Fabricante
                   </label>
                   <input
                     type="text"
@@ -696,7 +694,7 @@ export default function EstoqueVacina() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Validade Lote <span className="text-red-500">*</span>
+                    Validade Lote
                   </label>
                   <input
                     type="text"

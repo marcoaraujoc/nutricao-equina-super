@@ -58,7 +58,8 @@ import ControleAcesso from './pages/ControleAcesso';
 import RelatorioNutricional from './pages/RelatorioNutricional';
 
 // Pages — Agenda / Agendamentos
-import Agendamentos from './pages/Agendamentos';
+import Agendamentos    from './pages/Agendamentos';
+import MapaAtendimento from './pages/MapaAtendimento';
 
 // Pages — Módulo Clínico
 import Atendimento  from './pages/Atendimento';
@@ -133,6 +134,7 @@ function App() {
                       <main className="flex-1 min-w-0 overflow-y-auto bg-gray-50 pt-16 md:pt-0">
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
+                          <Route path="/mapa-atendimento" element={<MapaAtendimento />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
 
                           {/* Cadastro */}

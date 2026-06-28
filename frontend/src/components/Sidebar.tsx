@@ -27,9 +27,10 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
-type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'vacina' | 'exames' | 'enfermagem' | 'cadastro';
+type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'vacina' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
 
 function detectSection(pathname: string): ActiveSection {
+  if (pathname.startsWith('/mapa-atendimento'))       return 'mapa';
   if (pathname.startsWith('/agendamentos'))           return 'agenda';
   if (pathname.startsWith('/clinica'))               return 'clinica';
   if (pathname.startsWith('/execucao-prescricao'))   return 'enfermagem';
@@ -80,9 +81,8 @@ export default function Sidebar() {
   const isVetOuSuperior        = isVet || isAdmin || isGestor;
 
   const podeVerAdministracao   = isAdmin || isGestor;
-  // Dashboard: oculto para VET (non-Gestor) e ESTAGIÁRIO — eles têm "Pacientes" como home.
-  // GESTOR (userType=VETERINARIO com cargo GESTOR) continua vendo Dashboard via isGestor.
-  const podeVerDashboard       = (isGestor || (!isVet && !isEstagiario)) && podeExecutar('dashboard.geral.ler');
+  // Mapa de Atendimento: visível para todos com permissão dashboard.geral.ler.
+  const podeVerDashboard       = podeExecutar('dashboard.geral.ler');
   const podeVerAnimais         = podeExecutar('animais.ler');
   const podeVerExames          = podeExecutar('atendimento.exames.ler');
   const podeVerEvolucoes       = podeExecutar('atendimento.evolucoes.ler');
@@ -137,6 +137,7 @@ export default function Sidebar() {
   const animalId         = selectedAnimal?.id;
 
   const activeSection = detectSection(location.pathname);
+  const isMapaActive  = activeSection === 'mapa';
   const p             = location.pathname;
   const search        = location.search;
 
@@ -290,7 +291,7 @@ export default function Sidebar() {
 
               {openGeral && (
                 <div className="mt-1 space-y-0.5 pl-4">
-                  {podeVerDashboard && navLink('/', <LayoutDashboard size={20} />, 'Dashboard', isGeralActive('/'))}
+                  {podeVerDashboard && navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
 
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
                   {temAlgumCadastroItem && (
