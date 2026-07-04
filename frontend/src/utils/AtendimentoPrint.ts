@@ -113,8 +113,9 @@ function gerarResumoTexto(numero: string, dataAtendimento: string, itens: PrintA
 }
 
 // ─── CSS — mesmo padrão visual de Dietaprint.ts ───────────────────────────────
+// Exportado para reuso por outros relatórios (RelatorioAtendimento.ts).
 
-const PRINT_CSS = `
+export const PRINT_CSS = `
   @page { size: A4; margin: 18mm 20mm; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -210,6 +211,41 @@ const PRINT_CSS = `
   }
 `;
 
+// ─── Peças padrão de impressão (reutilizadas por outros relatórios) ──────────
+
+/** Cabeçalho padrão do sistema: logo da empresa (ou marca S2Vet) + subtítulo + data de emissão. */
+export function renderSysHeader(logoUrl: string | null | undefined, subtitulo: string): string {
+  const logo  = resolverUrlAbsoluta(logoUrl);
+  const agora = new Date();
+  return `
+  <div class="sys-header">
+    <div>
+      ${logo ? `<img class="brand-logo" src="${logo}" alt="Logo">` : `<div class="sys-name">S2Vet</div>`}
+      <div class="sys-sub">Sistema Hospitalar Veterinário · ${escaparHtml(subtitulo)}</div>
+    </div>
+    <div class="sys-date">
+      Emitido em ${agora.toLocaleDateString('pt-BR')}<br>às ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+    </div>
+  </div>`;
+}
+
+/** Card padrão "Dados do Animal": foto + nome, raça, idade e proprietário. */
+export function renderAnimalCard(animal: PrintAnimal | null): string {
+  const fotoUrl = resolverUrlAbsoluta(animal?.photoUrl);
+  return `
+  <div class="animal-card">
+    ${fotoUrl
+      ? `<img class="animal-photo" src="${fotoUrl}" alt="${escaparHtml(animal?.nome ?? '')}">`
+      : `<div class="animal-photo-empty">🐾</div>`}
+    <div class="animal-info">
+      <div><div class="f-label">Animal</div><div class="f-val">${escaparHtml(animal?.nome ?? '—')}</div></div>
+      <div><div class="f-label">Raça</div><div class="f-val">${escaparHtml(animal?.raca?.nome ?? '—')}</div></div>
+      <div><div class="f-label">Idade</div><div class="f-val">${animal?.idadeAnos != null ? `${animal.idadeAnos} anos` : '—'}</div></div>
+      <div><div class="f-label">Proprietário</div><div class="f-val">${escaparHtml(animal?.user?.fullName ?? '—')}</div></div>
+    </div>
+  </div>`;
+}
+
 // ─── Registro individual ──────────────────────────────────────────────────────
 
 function buildRegistroHtml(item: PrintAtendimentoItem): string {
@@ -263,9 +299,6 @@ export function gerarHtmlAtendimento(
 ): string {
   const primeiro = at.itens[0] ?? null;
   const resumo   = gerarResumoTexto(at.atendimentoNumero, primeiro?.data ?? new Date().toISOString(), at.itens);
-  const agora    = new Date();
-  const fotoUrl  = resolverUrlAbsoluta(animal?.photoUrl);
-  const logoUrl  = resolverUrlAbsoluta(animal?.logoUrl);
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -276,28 +309,10 @@ export function gerarHtmlAtendimento(
 </head>
 <body>
 
-  <div class="sys-header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<div class="sys-name">S2Vet</div>`}
-      <div class="sys-sub">Sistema Hospitalar Veterinário · Resumo de Atendimento</div>
-    </div>
-    <div class="sys-date">
-      Emitido em ${agora.toLocaleDateString('pt-BR')}<br>às ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-    </div>
-  </div>
+  ${renderSysHeader(animal?.logoUrl, 'Resumo de Atendimento')}
 
   <div class="sec-title">Dados do Animal</div>
-  <div class="animal-card">
-    ${fotoUrl
-      ? `<img class="animal-photo" src="${fotoUrl}" alt="${escaparHtml(animal?.nome ?? '')}">`
-      : `<div class="animal-photo-empty">🐾</div>`}
-    <div class="animal-info">
-      <div><div class="f-label">Animal</div><div class="f-val">${escaparHtml(animal?.nome ?? '—')}</div></div>
-      <div><div class="f-label">Raça</div><div class="f-val">${escaparHtml(animal?.raca?.nome ?? '—')}</div></div>
-      <div><div class="f-label">Idade</div><div class="f-val">${animal?.idadeAnos != null ? `${animal.idadeAnos} anos` : '—'}</div></div>
-      <div><div class="f-label">Proprietário</div><div class="f-val">${escaparHtml(animal?.user?.fullName ?? '—')}</div></div>
-    </div>
-  </div>
+  ${renderAnimalCard(animal)}
 
   <div class="plan-row">
     <span class="plan-name">${escaparHtml(at.atendimentoNumero)}</span>

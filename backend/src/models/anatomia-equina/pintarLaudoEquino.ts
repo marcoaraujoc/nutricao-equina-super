@@ -6,14 +6,23 @@
  * — idêntico em Chrome/Puppeteer, print, cairosvg e wkhtmltoimage. Camada PRESENTATION.
  *
  * Linguagem visual por tipo de registro (decisão de produto, mesmo desenho):
- *   • terapia_aplicada    — preenchimento por cor da modalidade (+ badge D/E/? bilateral)
- *   • achado_exame        — contorno TRACEJADO âmbar
- *   • avaliacao_funcional — contorno TRACEJADO índigo (grupo/membro destacado)
- * Grupo "coluna" — FAIXA contínua sobre o eixo vertebral (não vértebra a vértebra).
+ *   • terapia_aplicada    — cor da modalidade (+ badge D/E/? bilateral)
+ *   • achado_exame        — contorno/faixa TRACEJADA âmbar
+ *   • avaliacao_funcional — contorno/faixa TRACEJADA índigo (grupo/membro destacado)
+ *
+ * Regiões do eixo vertebral (cervical, dorso, lombo, garupa, nuca, coluna) —
+ * pintadas como FAIXA contínua sobre as vértebras do segmento (como o desenho
+ * manual do fisioterapeuta), NÃO vértebra a vértebra. Quando mais de um método
+ * atinge o mesmo segmento, cada faixa adicional é deslocada em paralelo para
+ * que todas fiquem visíveis (traços lado a lado, como no laudo real).
+ *
+ * Legenda embutida no SVG: um item por modalidade/achado/avaliação presente.
  */
 import {
   PARTES_EQUINAS,
+  listarVertebras,
   type ParteAnatomicaId,
+  type SegmentoVertebral,
   type VistaAnatomica,
 } from "./anatomia-equina.taxonomy";
 import { GEOMETRIA_EQUINA, type Placement } from "./anatomia-equina.geometry";
@@ -29,6 +38,17 @@ const AMBER = { fill: "217,119,6", stroke: "#d97706" };
 const INDIGO = { fill: "79,70,229", stroke: "#4f46e5" };
 const BADGE_LADO: Record<string, string> = { direito: "D", esquerdo: "E", bilateral: "D+E" };
 const VISTAS: readonly VistaAnatomica[] = ["lateral", "dorsal_esqueleto"];
+
+const ACHADO_LABEL: Record<string, string> = {
+  reatividade_palpacao: "Reatividade à palpação",
+  fasciculacao: "Fasciculação",
+  dor: "Dor",
+  edema: "Edema",
+  assimetria: "Assimetria",
+  restricao_articular: "Restrição articular",
+  hipertonia: "Hipertonia",
+  atrofia: "Atrofia",
+};
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -62,28 +82,121 @@ function badge(p: Placement, letra: string, stroke: string): string {
   );
 }
 
-/** Polyline do eixo vertebral por vista (para a FAIXA da "coluna"), derivada da geometria. */
+/* ────────────────────────────────────────────────────────────────────────── *
+ * FAIXAS DO EIXO VERTEBRAL — regiões da linha superior pintam como uma faixa
+ * contínua sobre as vértebras do segmento (cervical inteira, dorso = torácicas,
+ * lombo = lombares, garupa = sacrais), igual ao traço manual do laudo real.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Partes "região da linha superior" que pintam como faixa de segmento. */
+const SEGMENTO_POR_PARTE: Partial<Record<ParteAnatomicaId, SegmentoVertebral>> = {
+  regiao_cervical: "cervical",
+  dorso: "toracica",
+  lombo: "lombar",
+  garupa: "sacral",
+};
+
 const VERTEBRAS_ORDENADAS: ParteAnatomicaId[] = Object.values(PARTES_EQUINAS)
   .filter((p) => p.tipo === "vertebra")
   .map((p) => p.id);
-function bandaColuna(vista: VistaAnatomica, fill: string, op: number): string {
-  const pts = VERTEBRAS_ORDENADAS.flatMap((id) =>
-    (GEOMETRIA_EQUINA[id] ?? []).filter((pl) => pl.vista === vista && pl.shape === "ellipse").map((pl) =>
-      pl.shape === "ellipse" ? `${pl.cx},${pl.cy}` : ""
-    )
-  );
-  return `<polyline points="${pts.join(" ")}" fill="none" stroke="rgb(${fill})" stroke-opacity="${op}" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+const vertebrasDoSegmento = (seg: SegmentoVertebral): ParteAnatomicaId[] =>
+  listarVertebras(seg)
+    .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+    .map((p) => p.id);
+
+/** Resolve um alvo em faixa vertebral (key p/ deslocamento paralelo + vértebras). */
+function faixaDoAlvo(alvo: AlvoAnatomico): { key: string; ids: ParteAnatomicaId[] } | null {
+  if (alvo.tipo === "grupo") {
+    if (alvo.grupoId === ("coluna" as GrupoAnatomicoId)) return { key: "coluna", ids: VERTEBRAS_ORDENADAS };
+    if (alvo.grupoId === ("cervical" as GrupoAnatomicoId)) return { key: "cervical", ids: vertebrasDoSegmento("cervical") };
+    if (alvo.grupoId === ("nuca" as GrupoAnatomicoId)) return { key: "nuca", ids: ["vertebra_c1", "vertebra_c2"] };
+    return null;
+  }
+  if (alvo.tipo === "parte") {
+    const seg = SEGMENTO_POR_PARTE[alvo.parteId];
+    if (seg) return { key: seg, ids: vertebrasDoSegmento(seg) };
+  }
+  return null;
 }
 
-function pintarRegistro(r: RegistroClinico): string {
+/**
+ * Correção de calibração da vista lateral: os placements das vértebras
+ * torácicas/lombares/sacrais estão levemente ACIMA da linha do dorso no
+ * desenho base — a faixa desce por segmento para assentar na linha superior
+ * (como o traço manual do laudo real).
+ */
+const SEG_DY_LATERAL: Record<SegmentoVertebral, number> = {
+  cervical: 0,
+  toracica: 28,
+  lombar: 34,
+  sacral: 26,
+  caudal: 12,
+};
+
+/**
+ * Traçados customizados por faixa (vista lateral). Os placements de C1–C7
+ * cobrem só o trecho médio do pescoço (x≈778–878) — curto demais para ler
+ * como "toda a cervical". A faixa cervical usa um traçado próprio que percorre
+ * o pescoço INTEIRO, da nuca (atrás das orelhas) até a base junto à escápula,
+ * seguindo a diagonal do pescoço como o traço manual do fisioterapeuta.
+ */
+const PONTOS_FAIXA_LATERAL: Partial<Record<string, ReadonlyArray<readonly [number, number]>>> = {
+  cervical: [[756, 292], [792, 320], [828, 346], [862, 366], [896, 384]],
+};
+
+/**
+ * Polyline contínua sobre as vértebras do segmento. `nivel` desloca faixas
+ * subsequentes em paralelo (lateral: para baixo; dorsal: para a direita) para
+ * que dois métodos na mesma região fiquem ambos visíveis.
+ */
+function faixaVertebral(
+  vista: VistaAnatomica,
+  ids: ReadonlyArray<ParteAnatomicaId>,
+  corFill: string,
+  op: number,
+  nivel: number,
+  opts: { dash?: string; width?: number; key?: string } = {}
+): string {
+  const dx = vista === "dorsal_esqueleto" ? nivel * 26 : 0;
+  const dy = vista === "lateral" ? nivel * 30 : 0;
+  const custom = vista === "lateral" && opts.key ? PONTOS_FAIXA_LATERAL[opts.key] : undefined;
+  const pts = custom
+    ? custom.map(([x, y]) => `${x + dx},${y + dy}`)
+    : ids.flatMap((id) =>
+        (GEOMETRIA_EQUINA[id] ?? [])
+          .filter((pl) => pl.vista === vista && pl.shape === "ellipse")
+          .map((pl) => {
+            if (pl.shape !== "ellipse") return "";
+            const seg = PARTES_EQUINAS[id].segmento;
+            const dyCalibracao = vista === "lateral" && seg ? SEG_DY_LATERAL[seg] : 0;
+            return `${pl.cx + dx},${pl.cy + dy + dyCalibracao}`;
+          })
+      );
+  if (pts.length < 2) return "";
+  const dash = opts.dash ? ` stroke-dasharray="${opts.dash}"` : "";
+  const w = opts.width ?? 26;
+  return `<polyline points="${pts.join(" ")}" fill="none" stroke="rgb(${corFill})" stroke-opacity="${op}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"${dash}/>`;
+}
+
+function pintarRegistro(r: RegistroClinico, niveis: Map<string, number>): string {
   const alvo = r.alvo;
   if (!ehPintavel(r)) return "";
 
-  // "coluna" tem tratamento especial: faixa, não partes
-  if (alvo.tipo === "grupo" && alvo.grupoId === ("coluna" as GrupoAnatomicoId)) {
-    if (r.kind !== "terapia_aplicada") return "";
-    const cor = MODALIDADES_TERAPIA[r.modalidade].cor;
-    return VISTAS.map((v) => bandaColuna(v, cor.fill, opac(r.intensidade) * 0.6)).join("");
+  // Regiões do eixo vertebral → faixa contínua (com deslocamento paralelo por método)
+  const faixa = faixaDoAlvo(alvo);
+  if (faixa) {
+    const nivel = niveis.get(faixa.key) ?? 0;
+    niveis.set(faixa.key, nivel + 1);
+    if (r.kind === "terapia_aplicada") {
+      const cor = MODALIDADES_TERAPIA[r.modalidade].cor;
+      return VISTAS.map((v) => faixaVertebral(v, faixa.ids, cor.fill, opac(r.intensidade) * 0.85, nivel, { key: faixa.key })).join("");
+    }
+    if (r.kind === "achado_exame") {
+      return VISTAS.map((v) => faixaVertebral(v, faixa.ids, AMBER.fill, 0.55, nivel, { dash: "16 10", width: 18, key: faixa.key })).join("");
+    }
+    // avaliacao_funcional
+    return VISTAS.map((v) => faixaVertebral(v, faixa.ids, INDIGO.fill, 0.45, nivel, { dash: "4 8", width: 18, key: faixa.key })).join("");
   }
 
   const partes = partesDoAlvo(alvo);
@@ -110,6 +223,44 @@ function pintarRegistro(r: RegistroClinico): string {
     .join("");
 }
 
+/* ────────────────────────────────────────────────────────────────────────── *
+ * LEGENDA — um item por método/achado presente nos registros pintáveis,
+ * na cor exata usada na pintura (como a legenda manual do laudo real).
+ * ────────────────────────────────────────────────────────────────────────── */
+function legenda(registros: ReadonlyArray<RegistroClinico>): string {
+  const entradas: Array<{ fill: string; stroke: string; dash: boolean; label: string }> = [];
+  const modalidadesVistas = new Set<string>();
+  const achadosVistos = new Set<string>();
+  let temAvaliacao = false;
+
+  for (const r of registros) {
+    if (!ehPintavel(r)) continue;
+    if (r.kind === "terapia_aplicada" && !modalidadesVistas.has(r.modalidade)) {
+      modalidadesVistas.add(r.modalidade);
+      const m = MODALIDADES_TERAPIA[r.modalidade];
+      entradas.push({ fill: m.cor.fill, stroke: m.cor.stroke, dash: false, label: m.nome["pt-BR"] });
+    } else if (r.kind === "achado_exame" && !achadosVistos.has(r.achado)) {
+      achadosVistos.add(r.achado);
+      entradas.push({ fill: AMBER.fill, stroke: AMBER.stroke, dash: true, label: ACHADO_LABEL[r.achado] ?? r.achado });
+    } else if (r.kind === "avaliacao_funcional" && !temAvaliacao) {
+      temAvaliacao = true;
+      entradas.push({ fill: INDIGO.fill, stroke: INDIGO.stroke, dash: true, label: "Avaliação funcional" });
+    }
+  }
+  if (entradas.length === 0) return "";
+
+  return entradas
+    .map((e, i) => {
+      const y = 82 + i * 32;
+      const dash = e.dash ? ` stroke-dasharray="6 4"` : "";
+      return (
+        `<circle cx="1132" cy="${y}" r="10" fill="rgb(${e.fill})" fill-opacity="${e.dash ? 0.2 : 0.65}" stroke="${e.stroke}" stroke-width="2.5"${dash}/>` +
+        `<text x="1154" y="${y + 6}" font-family="sans-serif" font-size="17" font-weight="600" fill="#0f172a">${esc(e.label)}</text>`
+      );
+    })
+    .join("");
+}
+
 export interface PintarLaudoOptions {
   registros: ReadonlyArray<RegistroClinico>;
   baseInner: string;
@@ -119,7 +270,8 @@ export interface PintarLaudoOptions {
 
 export function pintarLaudoEquino(opts: PintarLaudoOptions): string {
   const { registros, baseInner, titulo, completo = true } = opts;
-  const pintura = registros.map(pintarRegistro).join("");
+  const niveis = new Map<string, number>();
+  const pintura = registros.map((r) => pintarRegistro(r, niveis)).join("");
   const avisoIncompleto = completo
     ? ""
     : `<text x="1120" y="944" font-family="sans-serif" font-size="14" font-weight="700" fill="#b45309">${esc(
@@ -131,6 +283,7 @@ export function pintarLaudoEquino(opts: PintarLaudoOptions): string {
     `<text x="1120" y="40" font-family="sans-serif" font-size="24" font-weight="700" fill="#0f172a">${esc(titulo)}</text>` +
     `<g id="camada-base" fill="#1e293b" stroke="none">${baseInner}</g>` +
     `<g id="camada-pintura">${pintura}</g>` +
+    `<g id="camada-legenda">${legenda(registros)}</g>` +
     avisoIncompleto +
     `</svg>`
   );

@@ -61,13 +61,18 @@ export interface ModalidadeTerapiaDef {
   readonly i18nKey: string;
   readonly exigeLocal: boolean; // false — tende a virar registro não-localizado
   readonly cor: { readonly fill: string; readonly stroke: string };
+  readonly nome: Readonly<Record<Locale, string>>; // usado na legenda do body-map
 }
 
 export const MODALIDADES_TERAPIA = {
-  laser_led: { id: "laser_led", i18nKey: "terapia.laser_led", exigeLocal: true, cor: { fill: "248,113,113", stroke: "#dc2626" } },
-  campo_magnetico: { id: "campo_magnetico", i18nKey: "terapia.campo_magnetico", exigeLocal: true, cor: { fill: "74,222,128", stroke: "#16a34a" } },
-  eletroacupuntura: { id: "eletroacupuntura", i18nKey: "terapia.eletroacupuntura", exigeLocal: false, cor: { fill: "250,204,21", stroke: "#ca8a04" } },
-  terapia_manual: { id: "terapia_manual", i18nKey: "terapia.terapia_manual", exigeLocal: true, cor: { fill: "129,140,248", stroke: "#4f46e5" } },
+  laser_led: { id: "laser_led", i18nKey: "terapia.laser_led", exigeLocal: true, cor: { fill: "248,113,113", stroke: "#dc2626" },
+    nome: { "pt-BR": "Laser + LED", "en-US": "Laser + LED", "es-ES": "Láser + LED" } },
+  campo_magnetico: { id: "campo_magnetico", i18nKey: "terapia.campo_magnetico", exigeLocal: true, cor: { fill: "74,222,128", stroke: "#16a34a" },
+    nome: { "pt-BR": "Campo magnético", "en-US": "Magnetic field", "es-ES": "Campo magnético" } },
+  eletroacupuntura: { id: "eletroacupuntura", i18nKey: "terapia.eletroacupuntura", exigeLocal: false, cor: { fill: "250,204,21", stroke: "#ca8a04" },
+    nome: { "pt-BR": "Eletroacupuntura", "en-US": "Electroacupuncture", "es-ES": "Electroacupuntura" } },
+  terapia_manual: { id: "terapia_manual", i18nKey: "terapia.terapia_manual", exigeLocal: true, cor: { fill: "129,140,248", stroke: "#4f46e5" },
+    nome: { "pt-BR": "Terapia manual", "en-US": "Manual therapy", "es-ES": "Terapia manual" } },
 } as const satisfies Record<string, ModalidadeTerapiaDef>;
 
 export const MODALIDADE_IDS = Object.keys(MODALIDADES_TERAPIA) as [keyof typeof MODALIDADES_TERAPIA];

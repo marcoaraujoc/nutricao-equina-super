@@ -865,6 +865,7 @@ const EvolucaoController = {
             id:                anterior.id,
             especialidade:     anterior.especialidade,
             titulo:            anterior.titulo,
+            texto:             anterior.texto,
             dataInicio:        anterior.dataInicio,
             atendimentoNumero: formatAtendimentoNum(anterior.tipoAtendimento, anterior.numero),
             resumoClinico:     resumoAnterior.resumoClinico ?? null,
@@ -900,16 +901,22 @@ async function garantirResumoIa(evolucao, userId) {
     animalId: evolucao.animalId,
   });
 
-  try {
-    await prisma.evolucaoClinica.update({
-      where: { id: evolucao.id },
-      data: {
-        resumoIaData:   resultado,
-        resumoIaVersao: resultado.meta?.promptVersao ?? RESUMO_IA_VERSAO_ATUAL,
-      },
-    });
-  } catch (err) {
-    console.error('[EvolucaoController.garantirResumoIa] falha ao cachear resumoIaData:', err);
+  // NÃO cachear falha de extração (registros vazios + completo:false = fallback
+  // gracioso do service, ex.: IA indisponível) — senão o vazio fica "definitivo"
+  // e o relatório nunca mais tenta extrair esta evolução.
+  const extracaoFalhou = resultado.completo === false && (resultado.registros?.length ?? 0) === 0;
+  if (!extracaoFalhou) {
+    try {
+      await prisma.evolucaoClinica.update({
+        where: { id: evolucao.id },
+        data: {
+          resumoIaData:   resultado,
+          resumoIaVersao: resultado.meta?.promptVersao ?? RESUMO_IA_VERSAO_ATUAL,
+        },
+      });
+    } catch (err) {
+      console.error('[EvolucaoController.garantirResumoIa] falha ao cachear resumoIaData:', err);
+    }
   }
 
   return resultado;

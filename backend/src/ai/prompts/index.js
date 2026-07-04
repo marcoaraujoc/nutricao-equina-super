@@ -285,8 +285,14 @@ Regras finais:
   //     adicionado bloco opcional "resumoClinico" (claudicação AAEP, dor 0-10, tensão
   //     muscular por região, simetria, ROM, orientações de treino) para o relatório
   //     comparativo entre sessões — usado por EvolucaoController.relatorioAtendimento
+  // v3: léxico de modalidades (PEMF/campo eletromagnético pulsátil → campo_magnetico,
+  //     laser terapêutico → laser_led, etc.) + regra de NEGAÇÃO (achados negados como
+  //     "sem dor à palpação" NÃO geram registro no mapa)
+  // v4: regra REGIÃO INTEIRA assertiva — "cervical"/"dorso"/"garupa" sem vértebra
+  //     explícita = SEMPRE a região completa (grupo cervical / parte dorso / parte
+  //     garupa), NUNCA vértebras isoladas; exemplo 1 reescrito com ditado real
   'extrair_resultado_sessao_equino': {
-    version: 'v2',
+    version: 'v4',
     build: (texto) => {
       // Léxico embutido dinamicamente a partir do domínio (fonte única de verdade —
       // nunca hardcodar IDs aqui: se a taxonomia mudar, o prompt acompanha sozinho).
@@ -349,12 +355,43 @@ ${linhasModalidades}
 - "lombo" / "região lombar" / "lombar" → parte "lombo"
 - "dorso" / "costas" (região torácica) → parte "dorso"
 - "coluna" / "coluna vertebral" (sem indicar um trecho específico) → grupo "coluna"
-- "cervical" / "pescoço" (região inteira) → grupo "cervical"; se o veterinário disser
-  uma vértebra específica ("C3", "terceira cervical") → parte "vertebra_c3" etc.
+- "cervical" / "pescoço" → grupo "cervical" — SEMPRE a região INTEIRA (C1–C7); só use
+  uma vértebra isolada se o veterinário nomear a vértebra ("C3", "terceira cervical")
 - "membros anteriores" / "membros torácicos" → grupo "membro_toracico"
 - "membros posteriores" / "membros pélvicos" / "membros traseiros" → grupo "membro_pelvico"
 - Se o termo dito não corresponder a nada acima nem à lista de partes/grupos, use
   tipo:"nao_localizado" com "descricao" = o termo tal como foi dito.
+
+# LÉXICO DE MODALIDADES (termos que o veterinário usa → modalidadeId)
+- "laser", "laser terapêutico", "laserterapia", "LED", "fotobiomodulação" → "laser_led"
+- "campo magnético", "campo eletromagnético", "campo eletromagnético pulsátil",
+  "magnetoterapia", "PEMF" → "campo_magnetico"
+- "eletroacupuntura", "acupuntura", "agulhamento" → "eletroacupuntura"
+- "terapia manual", "mobilização", "massagem", "liberação miofascial",
+  "ajuste quiroprático" → "terapia_manual"
+- Uma MESMA frase pode aplicar uma modalidade a VÁRIAS regiões ("laser em cervical e
+  dorso/garupa") — gere UM registro por região citada, todos com a mesma modalidade.
+
+# REGRA — REGIÃO INTEIRA (NUNCA subdividir nem encolher o alvo)
+Quando o veterinário citar uma REGIÃO sem nomear uma vértebra específica, o alvo é
+SEMPRE a região COMPLETA — esta regra é OBRIGATÓRIA e tem precedência:
+- "cervical" / "pescoço" → { "tipo": "grupo", "grupoId": "cervical" } = TODA a cervical
+  (C1 a C7). É ERRADO responder com vértebras isoladas (vertebra_c2, vertebra_c3...) ou
+  com a parte "regiao_cervical" quando a região foi citada por inteiro.
+- "dorso" / "costas" → { "tipo": "parte", "parteId": "dorso" } = toda a região torácica.
+- "lombar" / "lombo" → parte "lombo" = toda a região lombar.
+- "garupa" → parte "garupa" = toda a região sacro/pelve.
+- "coluna" (inteira) → grupo "coluna"; "nuca" → grupo "nuca".
+Vértebras individuais (vertebra_c3, vertebra_t10...) APENAS quando o texto nomear a
+vértebra explicitamente ("C3", "T10", "entre T12 e T14", "terceira cervical").
+"em cervical e dorso/garupa" numa MESMA frase = TRÊS registros com alvo inteiro
+(grupo "cervical" + parte "dorso" + parte "garupa"), todos com a modalidade da frase.
+
+# REGRA — NEGAÇÃO (achados ausentes NÃO pintam)
+Frases que NEGAM um achado ("sem dor à palpação dorsal ou cervical", "não apresenta
+edema", "ausência de reatividade") NÃO geram registro de achado_exame — o mapa corporal
+só pinta o que FOI encontrado/aplicado. Se for uma conclusão clínica relevante, registre
+em resumoClinico.observacaoFechamento (ex.: "Sem dor à palpação dorsal ou cervical").
 
 # REGRA — PLURAL IMPLICA BILATERAL
 Se o veterinário usar o PLURAL de uma parte/grupo de paridade "bilateral" SEM mencionar um
@@ -466,31 +503,36 @@ chaves individuais vazias dentro dele.)
 
 # EXEMPLO
 
-Ditado: "Campo magnético em cervical e joelho direito; laser em cervical, dorso e garupa;
-eletroacupuntura neurológica."
+Ditado: "Na sessão de fisioterapia foi feito campo eletromagnético pulsátil em cervical,
+laser terapêutico em cervical e dorso/garupa, além do laser na região do joelho do lado
+direito; eletroacupuntura neurológica. Animal sem dor à palpação dorsal ou cervical."
 
-Saída:
+Saída (note: "cervical" = grupo INTEIRO nos dois registros; "dorso/garupa" = dois alvos
+inteiros separados; a NEGAÇÃO "sem dor" não gera achado — vai para observacaoFechamento):
 {
   "registros": [
     { "kind": "terapia_aplicada", "modalidade": "campo_magnetico",
       "alvo": { "tipo": "grupo", "grupoId": "cervical" },
-      "proveniencia": { "confianca": 0.9, "trechoOriginal": "Campo magnético em cervical", "necessitaRevisao": false } },
-    { "kind": "terapia_aplicada", "modalidade": "campo_magnetico",
-      "alvo": { "tipo": "parte", "parteId": "carpo_ant", "lateralidade": "direito" },
-      "proveniencia": { "confianca": 0.85, "trechoOriginal": "joelho direito", "necessitaRevisao": false } },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "campo eletromagnético pulsátil em cervical", "necessitaRevisao": false } },
     { "kind": "terapia_aplicada", "modalidade": "laser_led",
       "alvo": { "tipo": "grupo", "grupoId": "cervical" },
-      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em cervical", "necessitaRevisao": false } },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser terapêutico em cervical", "necessitaRevisao": false } },
     { "kind": "terapia_aplicada", "modalidade": "laser_led",
       "alvo": { "tipo": "parte", "parteId": "dorso" },
-      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em ... dorso", "necessitaRevisao": false } },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser terapêutico em ... dorso", "necessitaRevisao": false } },
     { "kind": "terapia_aplicada", "modalidade": "laser_led",
       "alvo": { "tipo": "parte", "parteId": "garupa" },
-      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em ... garupa", "necessitaRevisao": false } },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser terapêutico em ... garupa", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "laser_led",
+      "alvo": { "tipo": "parte", "parteId": "carpo_ant", "lateralidade": "direito" },
+      "proveniencia": { "confianca": 0.85, "trechoOriginal": "laser na região do joelho do lado direito", "necessitaRevisao": false } },
     { "kind": "terapia_aplicada", "modalidade": "eletroacupuntura",
       "alvo": { "tipo": "nao_localizado", "descricao": "eletroacupuntura neurológica" },
       "proveniencia": { "confianca": 0.8, "trechoOriginal": "eletroacupuntura neurológica", "necessitaRevisao": false } }
   ],
+  "resumoClinico": {
+    "observacaoFechamento": "Sem dor à palpação dorsal ou cervical."
+  },
   "completo": true,
   "avisos": []
 }

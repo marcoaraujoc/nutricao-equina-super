@@ -5,18 +5,21 @@
 // da sessão atual + da evolução imediatamente anterior do animal (independente da
 // especialidade — a tag da coluna anterior informa qual foi), já com o body-map
 // pintado (`pintarLaudoEquino`, camada backend) e os scores clínicos extraídos por
-// IA (`resumoClinico`), e monta o HTML impresso seguindo o layout de referência.
+// IA (`resumoClinico`), e monta o HTML impresso com o COMPONENTE DE IMPRESSÃO
+// PADRÃO do sistema (PRINT_CSS + renderSysHeader + renderAnimalCard de
+// AtendimentoPrint.ts — mesmo padrão visual de Dietaprint.ts).
 //
 // Diferente dos demais utilitários de impressão (`EvolucaoPrint.ts`, etc.), este
 // é ASSÍNCRONO: a primeira impressão de uma evolução roda a extração por IA no
 // servidor (pode levar alguns segundos); chamadas seguintes usam o cache
 // (`EvolucaoClinica.resumoIaData`) e respondem quase instantaneamente.
-//
-// Exporta as peças (cabeçalho/rodapé/mecanismo de impressão) separadamente para
-// que Prescrição/Vacina/Exame possam reaproveitá-las no futuro — só a impressão
-// de Evolução foi religada a este fluxo nesta primeira etapa.
 import api from '../services/api';
-import { resolverUrlAbsoluta } from './printUrl';
+import {
+  PRINT_CSS,
+  renderSysHeader,
+  renderAnimalCard,
+  type PrintAnimal,
+} from './AtendimentoPrint';
 
 // ─── Tipos (espelham o payload de EvolucaoController.relatorioAtendimento) ───
 
@@ -93,6 +96,19 @@ function num(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1).replace('.', ',');
 }
 
+/**
+ * Junta linhas quebradas no meio da frase (ditado/textarea salvam '\n' onde a
+ * frase ainda não terminou), preservando parágrafos (linha em branco).
+ */
+function textoCorrido(s: string | null | undefined): string {
+  return (s ?? '')
+    .replace(/\r/g, '')
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s*\n\s*/g, ' ').replace(/[ \t]{2,}/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 /** Card de score comparativo (era X → agora Y), com seta e delta quando há sessão anterior. */
 function scorePill(
   label: string,
@@ -115,11 +131,11 @@ function scorePill(
         <div class="delta${melhorou ? '' : ' warn'}">${melhorou ? '▼' : '▲'} ${pctTxt != null ? `${pctTxt}% ` : ''}${melhorou ? 'melhora' : 'atenção'}</div>`;
     } else {
       deltaHtml = `
-        <div class="vals"><span class="now" style="font-size:20px">${atualStr}</span></div>
+        <div class="vals"><span class="now">${atualStr}</span></div>
         <div class="delta warn">era: ${esc(String(anteriorVal))}</div>`;
     }
   } else {
-    deltaHtml = `<div class="vals"><span class="now" style="font-size:20px">${atualStr}${sufixo}</span></div>`;
+    deltaHtml = `<div class="vals"><span class="now">${atualStr}${sufixo}</span></div>`;
   }
 
   return `<div class="score"><div class="lbl">${esc(label)}</div>${deltaHtml}</div>`;
@@ -131,27 +147,24 @@ const TREINO_LED: Record<TreinoItem['status'], string> = { liberado: 'g', restri
 
 export function renderCabecalhoAtendimento(dados: RelatorioAtendimentoDados): string {
   const { animal, atual, logoUrl } = dados;
-  const logo = resolverUrlAbsoluta(logoUrl);
-  const linhas = [
-    animal.especie?.nome || animal.raca?.nome
-      ? [animal.especie?.nome, animal.raca?.nome].filter(Boolean).join(' · ')
-      : null,
-    animal.idadeAnos != null ? `${animal.idadeAnos} anos` : null,
-    animal.sexo,
-  ].filter(Boolean).join(' · ');
+  const printAnimal: PrintAnimal = {
+    nome:      animal.nome,
+    photoUrl:  animal.photoUrl,
+    raca:      animal.raca,
+    user:      animal.user,
+    idadeAnos: animal.idadeAnos,
+  };
 
   return `
-  <div class="card header">
-    <div class="eyebrow">Relatório de evolução · ${esc(atual.especialidade)}</div>
-    <h1>${esc(animal.nome)}</h1>
-    <div class="meta">
-      <div><span>Paciente</span><b>${esc(linhas) || '—'}</b></div>
-      <div><span>Proprietário</span><b>${esc(animal.user?.fullName) || '—'}</b></div>
-      ${animal.tipoExercicio ? `<div><span>Modalidade</span><b>${esc(animal.tipoExercicio)}</b></div>` : ''}
-      <div><span>Veterinário</span><b>${esc(atual.veterinario.fullName)}</b></div>
-    </div>
-    <div class="badge">${esc(atual.atendimentoNumero) || 'Evolução'} · ${fmtData(atual.dataInicio)}</div>
-    ${logo ? `<img class="brand-logo" src="${logo}" alt="Logo">` : ''}
+  ${renderSysHeader(logoUrl, `Relatório de Evolução · ${atual.especialidade}`)}
+
+  <div class="sec-title">Dados do Animal</div>
+  ${renderAnimalCard(printAnimal)}
+
+  <div class="plan-row">
+    <span class="plan-name">${esc(atual.atendimentoNumero) || 'Evolução'}</span>
+    <span class="badge">${fmtData(atual.dataInicio)}</span>
+    <span class="badge">Vet.: ${esc(atual.veterinario.fullName)}</span>
   </div>`;
 }
 
@@ -160,13 +173,14 @@ export function renderRodapeAtendimento(dados: RelatorioAtendimentoDados): strin
   const avisos = atual.avisos ?? [];
   return `
   ${avisos.length > 0 ? `
-  <div class="card avisos">
-    <div class="section-title">Pontos para revisão manual</div>
+  <div class="avisos-card">
+    <div class="avisos-title">Pontos para revisão manual</div>
     <ul>${avisos.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>
   </div>` : ''}
+  <div class="assinatura">${esc(atual.veterinario.fullName)}</div>
   <div class="footer">
-    <div class="sig">${esc(atual.veterinario.fullName)}</div>
-    <div class="brand">Gerado com S2Vet</div>
+    <span>S2Vet · Sistema Hospitalar Veterinário</span>
+    <span>Relatório de Evolução${atual.atendimentoNumero ? ` · ${esc(atual.atendimentoNumero)}` : ''}</span>
   </div>`;
 }
 
@@ -195,6 +209,87 @@ export function imprimirHtml(html: string): void {
   }, 250);
 }
 
+// ─── CSS específico do relatório (complementa o PRINT_CSS padrão) ────────────
+
+const RELATORIO_CSS = `
+  .rep-card{ background:#fff; border:0.5pt solid #e5e7eb; border-radius:8pt; padding:10pt 12pt; margin-bottom:12pt; page-break-inside:avoid; }
+  .rep-sub{ font-size:8.5pt; color:#6b7280; line-height:1.5; margin-bottom:6pt; }
+
+  .scores{ display:grid; grid-template-columns:repeat(4,1fr); gap:8pt; margin-bottom:4pt; }
+  .score{ background:#f9fafb; border:0.5pt solid #e5e7eb; border-radius:8pt; padding:8pt; }
+  .score .lbl{ font-size:7pt; font-weight:700; letter-spacing:0.5pt; text-transform:uppercase; color:#6b7280; min-height:16pt; }
+  .score .vals{ display:flex; align-items:baseline; gap:5pt; margin-top:3pt; }
+  .score .was{ font-size:10pt; font-weight:600; color:#9ca3af; text-decoration:line-through; }
+  .score .now{ font-size:15pt; font-weight:700; color:#065f46; }
+  .score .arrow{ font-size:9pt; color:#059669; font-weight:700; }
+  .score .delta{ margin-top:2pt; font-size:7.5pt; font-weight:700; color:#059669; }
+  .score .delta.warn{ color:#d97706; }
+
+  .maps{ display:grid; grid-template-columns:1fr 1fr; gap:8pt; }
+  .maps.unica{ grid-template-columns:1fr; }
+  .map-col{ text-align:center; }
+  .map-col .tag{ display:inline-block; font-size:7.5pt; font-weight:700; letter-spacing:0.5pt; text-transform:uppercase; border-radius:20pt; padding:2pt 8pt; margin-bottom:4pt; }
+  .tag.before{ background:#fee2e2; color:#dc2626; }
+  .tag.after{ background:#d1fae5; color:#065f46; }
+  .map-col svg{ width:100%; height:auto; border:0.5pt solid #e5e7eb; border-radius:6pt; }
+
+  .row{ display:grid; grid-template-columns:110pt 1fr 26pt; align-items:center; gap:6pt; padding:4pt 0; border-bottom:0.3pt dashed #e5e7eb; }
+  .row:last-child{ border-bottom:none; }
+  .row .name{ font-size:8.5pt; font-weight:700; }
+  .track{ position:relative; height:10pt; background:#f3f4f6; border-radius:20pt; overflow:hidden; }
+  .bar{ position:absolute; top:0; left:0; height:100%; border-radius:20pt; }
+  .bar.s1{ background:#fecaca; }
+  .bar.s4{ background:#059669; }
+  .bar.s4.mid{ background:#d97706; }
+  .row .val{ font-size:8.5pt; font-weight:700; text-align:right; color:#065f46; }
+  .scale-note{ font-size:7.5pt; color:#6b7280; margin-top:6pt; }
+
+  .rom{ display:grid; grid-template-columns:1fr 1fr; gap:6pt; }
+  .rom-item{ background:#f9fafb; border-radius:6pt; padding:7pt 9pt; }
+  .rom-item .t{ font-size:7pt; font-weight:700; text-transform:uppercase; letter-spacing:0.5pt; color:#6b7280; }
+  .rom-item .v{ font-size:9pt; font-weight:600; margin-top:2pt; line-height:1.4; }
+  .rom-item .v s{ color:#9ca3af; font-weight:500; }
+  .rom-item .v b{ color:#065f46; }
+
+  .light{ display:flex; gap:8pt; align-items:flex-start; padding:5pt 0; border-bottom:0.3pt dashed #e5e7eb; }
+  .light:last-child{ border-bottom:none; }
+  .light .led{ flex:none; width:8pt; height:8pt; border-radius:50%; margin-top:2pt; }
+  .led.g{ background:#059669; } .led.y{ background:#d97706; } .led.r{ background:#dc2626; }
+  .light .tx b{ font-size:9pt; display:block; }
+  .light .tx span{ font-size:8.5pt; color:#6b7280; line-height:1.4; display:block; margin-top:1pt; }
+  .quote{ background:#f9fafb; border-left:2pt solid #059669; border-radius:0 6pt 6pt 0; padding:8pt 10pt; font-size:9pt; line-height:1.5; color:#374151; margin-top:6pt; }
+
+  .avisos-card{ background:#fffbeb; border:0.5pt solid #fde68a; border-radius:8pt; padding:10pt 12pt; margin-bottom:12pt; page-break-inside:avoid; }
+  .avisos-title{ font-size:8pt; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:1pt; }
+  .avisos-card ul{ margin:4pt 0 0 14pt; font-size:8.5pt; color:#92400e; line-height:1.6; }
+  .assinatura{ text-align:center; font-size:11pt; color:#065f46; margin-top:18pt; font-family:Georgia,serif; }
+`;
+
+// ─── Blocos do relatório ──────────────────────────────────────────────────────
+
+/**
+ * Bloco textual de uma sessão (o que foi encontrado) — usa o componente padrão
+ * de registro do print (registro-wrapper/header/body de AtendimentoPrint).
+ */
+function renderRegistroSessao(
+  rotulo: string,
+  sessao: SessaoRelatorio & { especialidade?: string },
+  cor: string,
+): string {
+  const cabecalho = [rotulo, sessao.titulo || sessao.especialidade, fmtData(sessao.dataInicio)]
+    .filter(Boolean).join(' · ');
+  return `
+  <div class="registro-wrapper">
+    <div class="registro-header" style="background:${cor}">
+      <span>${esc(cabecalho)}</span>
+      <span class="badge-tag">${esc(sessao.atendimentoNumero) || 'Evolução'}</span>
+    </div>
+    <div class="registro-body">
+      <p class="registro-texto">${esc(textoCorrido(sessao.texto)) || '—'}</p>
+    </div>
+  </div>`;
+}
+
 // ─── Gerador de HTML ──────────────────────────────────────────────────────────
 
 export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados): string {
@@ -214,59 +309,55 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
     rcAtual?.simetria ? scorePill('Simetria', rcAtual.simetria, rcAnterior?.simetria, { menorMelhor: false }) : '',
   ].filter(Boolean).join('') : '';
 
-  const scoresCard = scoresHtml ? `
-  <div>
-    <div class="eyebrow" style="margin:6px 4px 8px">Evolução desde a última sessão</div>
-    <div class="scores">${scoresHtml}</div>
-  </div>` : '';
+  const scoresSection = scoresHtml ? `
+  <div class="sec-title">Evolução desde a última sessão</div>
+  <div class="scores">${scoresHtml}</div>` : '';
 
-  // ── Mapa da coluna (body-map) ──
-  const mapaCard = `
-  <div class="card">
-    <h2>Mapa corporal</h2>
-    <p class="sub">Achados, avaliações e terapias aplicadas — preenchimento = terapia; contorno tracejado âmbar = achado de exame; contorno tracejado índigo = avaliação funcional.</p>
+  // ── Mapa corporal (body-map) ──
+  const mapaSection = `
+  <div class="sec-title">Mapa Corporal</div>
+  <div class="rep-card">
+    <p class="rep-sub">Terapias aplicadas, achados de exame e avaliações funcionais — a legenda de cores dentro de cada mapa identifica os métodos e achados daquela sessão.</p>
     <div class="maps ${anterior ? '' : 'unica'}">
       ${anterior ? `
       <div class="map-col">
         <span class="tag before">Sessão anterior${anterior.especialidade && anterior.especialidade !== atual.especialidade ? ` · ${esc(anterior.especialidade)}` : ''} · ${fmtData(anterior.dataInicio)}</span>
-        ${anterior.svgColuna ?? '<p class="obs">Sem mapa disponível.</p>'}
+        ${anterior.svgColuna ?? '<p class="rep-sub">Sem mapa disponível.</p>'}
       </div>` : ''}
       <div class="map-col">
         <span class="tag after">${anterior ? 'Sessão atual' : 'Primeira avaliação registrada'} · ${fmtData(atual.dataInicio)}</span>
-        ${atual.svgColuna ?? '<p class="obs">Sem mapa disponível.</p>'}
+        ${atual.svgColuna ?? '<p class="rep-sub">Sem mapa disponível.</p>'}
       </div>
     </div>
   </div>`;
 
   // ── Tensão muscular por região ──
-  const tensaoCard = rcAtual?.tensaoMuscular?.length ? `
-  <div class="card">
-    <h2>Tensão muscular por região</h2>
-    <p class="sub">Escala de tônus 0–3 · barra clara = sessão anterior, barra colorida = hoje.</p>
-    <div style="margin-top:12px">
-      ${rcAtual.tensaoMuscular.map((t) => {
-        const anteriorItem = rcAnterior?.tensaoMuscular?.find((a) => a.regiao === t.regiao);
-        const pctAtual = Math.min(100, (t.valor / 3) * 100);
-        const pctAnterior = anteriorItem ? Math.min(100, (anteriorItem.valor / 3) * 100) : pctAtual;
-        const cor = t.valor >= 2 ? 'mid' : '';
-        return `
-        <div class="row">
-          <div class="name">${esc(t.regiao)}</div>
-          <div class="track">
-            ${anteriorItem ? `<div class="bar s1" style="width:${pctAnterior}%"></div>` : ''}
-            <div class="bar s4 ${cor}" style="width:${pctAtual}%"></div>
-          </div>
-          <div class="val">${num(t.valor)}</div>
-        </div>`;
-      }).join('')}
-    </div>
+  const tensaoSection = rcAtual?.tensaoMuscular?.length ? `
+  <div class="sec-title">Tensão muscular por região</div>
+  <div class="rep-card">
+    <p class="rep-sub">Escala de tônus 0–3 · barra clara = sessão anterior, barra colorida = hoje.</p>
+    ${rcAtual.tensaoMuscular.map((t) => {
+      const anteriorItem = rcAnterior?.tensaoMuscular?.find((a) => a.regiao === t.regiao);
+      const pctAtual = Math.min(100, (t.valor / 3) * 100);
+      const pctAnterior = anteriorItem ? Math.min(100, (anteriorItem.valor / 3) * 100) : pctAtual;
+      const cor = t.valor >= 2 ? 'mid' : '';
+      return `
+      <div class="row">
+        <div class="name">${esc(t.regiao)}</div>
+        <div class="track">
+          ${anteriorItem ? `<div class="bar s1" style="width:${pctAnterior}%"></div>` : ''}
+          <div class="bar s4 ${cor}" style="width:${pctAtual}%"></div>
+        </div>
+        <div class="val">${num(t.valor)}</div>
+      </div>`;
+    }).join('')}
     <p class="scale-note">0 = tônus normal · 1 = leve · 2 = moderada · 3 = severa (contratura)</p>
   </div>` : '';
 
   // ── ROM ──
-  const romCard = rcAtual?.rom?.length ? `
-  <div class="card">
-    <h2>Amplitude de movimento</h2>
+  const romSection = rcAtual?.rom?.length ? `
+  <div class="sec-title">Amplitude de movimento</div>
+  <div class="rep-card">
     <div class="rom">
       ${rcAtual.rom.map((r) => {
         const anteriorItem = rcAnterior?.rom?.find((a) => a.teste === r.teste);
@@ -280,109 +371,39 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
   </div>` : '';
 
   // ── Orientações de treino ──
-  const treinoCard = rcAtual?.treino?.length ? `
-  <div class="card">
-    <h2>Orientações para o treino</h2>
-    <div style="margin-top:8px">
-      ${rcAtual.treino.map((t) => `
-      <div class="light">
-        <div class="led ${TREINO_LED[t.status]}"></div>
-        <div class="tx"><b>${esc(t.titulo)}</b><span>${esc(t.detalhe)}</span></div>
-      </div>`).join('')}
-    </div>
+  const treinoSection = rcAtual?.treino?.length ? `
+  <div class="sec-title">Orientações para o treino</div>
+  <div class="rep-card">
+    ${rcAtual.treino.map((t) => `
+    <div class="light">
+      <div class="led ${TREINO_LED[t.status]}"></div>
+      <div class="tx"><b>${esc(t.titulo)}</b><span>${esc(t.detalhe)}</span></div>
+    </div>`).join('')}
     ${rcAtual.observacaoFechamento ? `<div class="quote">"${esc(rcAtual.observacaoFechamento)}"</div>` : ''}
-  </div>` : (rcAtual?.observacaoFechamento ? `<div class="card"><div class="quote">"${esc(rcAtual.observacaoFechamento)}"</div></div>` : '');
+  </div>` : (rcAtual?.observacaoFechamento ? `
+  <div class="rep-card"><div class="quote">"${esc(rcAtual.observacaoFechamento)}"</div></div>` : '');
 
-  // ── Texto integral da evolução (sempre presente — é o registro clínico em si) ──
-  const textoCard = `
-  <div class="card">
-    <h2>${esc(atual.titulo) || 'Registro da evolução'}</h2>
-    <p class="texto-evolucao">${esc(atual.texto)}</p>
-  </div>`;
+  // ── Registro textual das sessões (o que foi encontrado em cada uma) ──
+  const textosSection = `
+  <div class="sec-title">Registro das Sessões</div>
+  ${anterior?.texto ? renderRegistroSessao('Sessão anterior', anterior, '#6b7280') : ''}
+  ${renderRegistroSessao(anterior ? 'Sessão atual' : 'Primeira avaliação registrada', atual, '#059669')}`;
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Relatório de Evolução — ${esc(dados.animal.nome)}</title>
-<style>
-  :root{
-    --ink:#0b3d2e; --ink-soft:#41635a; --emerald:#0e9f6e; --emerald-deep:#065f46;
-    --mist:#eef7f2; --card:#ffffff; --line:#dcece4; --amber:#e8a13c; --red:#e05252;
-    --green:#22a06b; --radius:16px;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{ font-family:'Manrope',Arial,sans-serif; background:#f4faf7; color:var(--ink); font-size:12px; padding:14px; }
-  .card{ background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:12px; page-break-inside:avoid; position:relative; }
-  .eyebrow{ font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--emerald); }
-  h1{ font-family:Georgia,serif; font-weight:600; font-size:22px; line-height:1.15; }
-  h2{ font-family:Georgia,serif; font-weight:600; font-size:15px; margin-bottom:2px; }
-  .sub{ font-size:11px; color:var(--ink-soft); line-height:1.5; }
-  .header{ background:linear-gradient(135deg,var(--emerald-deep) 0%,#0b7a58 100%); color:#fff; border:none; }
-  .header .eyebrow{ color:#a7e3c9; }
-  .header h1{ color:#fff; margin:5px 0 8px; }
-  .header .meta{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px 12px; font-size:10.5px; }
-  .header .meta span{ display:block; color:#bfe8d6; font-size:9px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; }
-  .header .meta b{ font-size:11px; }
-  .badge{ display:inline-block; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); border-radius:999px; padding:3px 10px; font-size:10px; font-weight:700; margin-top:10px; }
-  .brand-logo{ position:absolute; top:16px; right:16px; max-height:28px; max-width:140px; object-fit:contain; background:#fff; border-radius:6px; padding:3px 6px; }
-  .scores{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-  .score{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px 10px 8px; }
-  .score .lbl{ font-size:9px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-soft); min-height:22px; }
-  .score .vals{ display:flex; align-items:baseline; gap:6px; margin-top:4px; }
-  .score .was{ font-size:13px; font-weight:600; color:#9db8ae; text-decoration:line-through; }
-  .score .now{ font-family:Georgia,serif; font-size:20px; font-weight:600; }
-  .score .arrow{ font-size:12px; color:var(--green); font-weight:800; }
-  .score .delta{ margin-top:2px; font-size:9.5px; font-weight:700; color:var(--green); }
-  .score .delta.warn{ color:var(--amber); }
-  .maps{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
-  .maps.unica{ grid-template-columns:1fr; }
-  .map-col{ text-align:center; }
-  .map-col .tag{ display:inline-block; font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; border-radius:999px; padding:2px 9px; margin-bottom:6px; }
-  .tag.before{ background:#fdeeee; color:var(--red); }
-  .tag.after{ background:#e5f6ee; color:var(--green); }
-  .map-col svg{ width:100%; height:auto; border:1px solid var(--line); border-radius:10px; }
-  .row{ display:grid; grid-template-columns:120px 1fr 34px; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); }
-  .row:last-child{ border-bottom:none; }
-  .row .name{ font-size:11px; font-weight:700; }
-  .track{ position:relative; height:16px; background:var(--mist); border-radius:999px; overflow:hidden; }
-  .bar{ position:absolute; top:0; left:0; height:100%; border-radius:999px; }
-  .bar.s1{ background:#f3c6c6; }
-  .bar.s4{ background:linear-gradient(90deg,var(--emerald),#34c98e); }
-  .bar.s4.mid{ background:linear-gradient(90deg,var(--amber),#f0b45f); }
-  .row .val{ font-size:11px; font-weight:800; text-align:right; color:var(--emerald-deep); }
-  .scale-note{ font-size:9.5px; color:var(--ink-soft); margin-top:8px; }
-  .rom{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
-  .rom-item{ background:var(--mist); border-radius:10px; padding:9px 11px; }
-  .rom-item .t{ font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
-  .rom-item .v{ font-size:11.5px; font-weight:700; margin-top:3px; line-height:1.4; }
-  .rom-item .v s{ color:#9db8ae; font-weight:600; }
-  .rom-item .v b{ color:var(--emerald-deep); }
-  .light{ display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px dashed var(--line); }
-  .light:last-child{ border-bottom:none; }
-  .light .led{ flex:none; width:12px; height:12px; border-radius:50%; margin-top:2px; }
-  .led.g{ background:var(--green); } .led.y{ background:var(--amber); } .led.r{ background:var(--red); }
-  .light .tx b{ font-size:11.5px; display:block; }
-  .light .tx span{ font-size:10.5px; color:var(--ink-soft); line-height:1.4; display:block; margin-top:1px; }
-  .quote{ background:var(--mist); border-left:3px solid var(--emerald); border-radius:0 10px 10px 0; padding:10px 12px; font-size:11.5px; line-height:1.5; color:var(--ink-soft); margin-top:8px; }
-  .texto-evolucao{ white-space:pre-wrap; font-size:11.5px; line-height:1.7; }
-  .avisos{ background:#fffbeb; border-color:#fde68a; }
-  .avisos ul{ margin:6px 0 0 16px; font-size:10.5px; color:#92400e; }
-  .footer{ text-align:center; padding:6px 4px 0; }
-  .footer .sig{ font-family:Georgia,serif; font-size:14px; color:var(--emerald-deep); }
-  .footer .brand{ margin-top:6px; font-size:9px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:#8fb5a6; }
-  @page { size: A4; margin: 14mm 16mm; }
-  @media print { body{ -webkit-print-color-adjust:exact; print-color-adjust:exact; background:#fff; } }
-</style>
+<title>Relatório de Evolução — ${esc(dados.animal.nome)} — S2Vet</title>
+<style>${PRINT_CSS}${RELATORIO_CSS}</style>
 </head>
 <body>
 ${renderCabecalhoAtendimento(dados)}
-${scoresCard}
-${mapaCard}
-${tensaoCard}
-${romCard}
-${treinoCard}
-${textoCard}
+${scoresSection}
+${mapaSection}
+${tensaoSection}
+${romSection}
+${treinoSection}
+${textosSection}
 ${renderRodapeAtendimento(dados)}
 </body>
 </html>`;
