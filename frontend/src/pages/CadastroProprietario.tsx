@@ -687,15 +687,16 @@ export default function CadastroProprietario() {
             </button>
           )}
         </div>
-        <select
-          value={filtroAtivo}
-          onChange={e => setFiltroAtivo(e.target.value as 'ativo' | 'inativo' | 'all')}
-          className="px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
-        >
-          <option value="ativo">Somente ativos</option>
-          <option value="inativo">Somente inativos</option>
-          <option value="all">Todos</option>
-        </select>
+        <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+          {(['all', 'ativo', 'inativo'] as const).map(v => (
+            <button key={v} onClick={() => setFiltroAtivo(v)}
+              className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}>
+              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Tabela desktop ────────────────────────────────────────────────────── */}

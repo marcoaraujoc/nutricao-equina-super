@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Search, Loader2, X, User2,
+  Search, Loader2, X, User2, Pencil,
   Phone, ToggleLeft, ToggleRight,
-  Lock, Info, CheckCircle2, Plus, MapPin,
+  Info, CheckCircle2, Plus, MapPin,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -55,29 +55,17 @@ interface FormTratador {
 
 const FORM_INICIAL: FormTratador = { nome: '', telefone: '', localizacaoId: null };
 
-// ─── Badge de tipo de entrada ─────────────────────────────────────────────────
-
-function BadgeEntrada({ tipo }: { tipo: string }) {
-  return tipo === 'SYSTEM' ? (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-      <Lock size={10} /> SYSTEM
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-      CLIENTE
-    </span>
-  );
-}
-
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function CadastroTratador() {
   const { user }                                = useAuth();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
 
-  const isAdmin   = user?.role === 'ADMIN';
-  const podeCriar = isAdmin || podeExecutar('cadastro.tratador.criar');
-  const podeVer   = isAdmin || podeExecutar('cadastro.tratador.ler');
+  const isAdmin    = user?.role === 'ADMIN';
+  const podeCriar  = isAdmin || podeExecutar('cadastro.tratador.criar');
+  const podeVer    = isAdmin || podeExecutar('cadastro.tratador.ler');
+  const podeEditar = isAdmin || podeExecutar('cadastro.tratador.editar');
+  const podeAtivar = isAdmin || podeExecutar('cadastro.tratador.ativar');
 
   const [lista,       setLista]       = useState<Tratador[]>([]);
   const [loading,     setLoading]     = useState(false);
@@ -142,7 +130,8 @@ export default function CadastroTratador() {
   };
 
   const abrirEditar = (t: Tratador) => {
-    if (!isAdmin) { toast.error('Apenas ADMIN pode editar tratadores diretamente.'); return; }
+    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode editar tratadores do catálogo global.'); return; }
+    if (!podeEditar) { toast.error('Sem permissão para editar tratadores.'); return; }
     setEditando(t);
     setForm({ nome: t.nome, telefone: t.telefone ? mascaraTelefone(t.telefone) : '', localizacaoId: t.localizacaoId });
     const loc = t.localizacao ? (localizacoes.find(l => l.id === t.localizacaoId) ?? null) : null;
@@ -179,9 +168,10 @@ export default function CadastroTratador() {
     }
   };
 
-  // ── Toggle ativo (ADMIN only) ─────────────────────────────────────────────
+  // ── Toggle ativo ───────────────────────────────────────────────────────────
   const toggleAtivo = async (t: Tratador) => {
-    if (!isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar tratadores'); return; }
+    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar tratadores do catálogo global.'); return; }
+    if (!podeAtivar) { toast.error('Sem permissão para ativar/inativar tratadores.'); return; }
     try {
       await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
       toast.success(`Tratador ${t.ativo ? 'inativado' : 'ativado'}`);
@@ -248,13 +238,10 @@ export default function CadastroTratador() {
         <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
           <strong>Regras deste cadastro:</strong>
           <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>Dados são compartilhados entre todas as empresas (tabela global).</li>
-            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN e não podem ser editadas por outros.</li>
-            <li>Entradas <strong>CLIENTE</strong> são criadas por gestores/veterinários; solicite ao ADMIN para alterar.</li>
-            <li>Apenas ADMIN pode inativar ou editar qualquer tratador.</li>
+            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN (catálogo global) e só o ADMIN pode editá-las.</li>
+            <li>Entradas <strong>CLIENTE</strong> pertencem à empresa/equipe de quem criou — membros com permissão podem editar e inativar os registros da própria equipe; gestores veem e alteram os de toda a empresa.</li>
             <li>Tratadores nunca são excluídos, apenas inativados.</li>
-            <li>Um tratador pode cuidar de animais de diferentes empresas.</li>
-            <li>Não podem existir dois tratadores com o mesmo nome no mesmo local.</li>
+            <li>Não podem existir dois tratadores com o mesmo nome no mesmo local, dentro da mesma empresa.</li>
           </ul>
         </div>
       )}
@@ -276,15 +263,16 @@ export default function CadastroTratador() {
           )}
         </div>
 
-        <select
-          value={filtroAtivo}
-          onChange={e => setFiltroAtivo(e.target.value as 'ativo' | 'inativo' | 'all')}
-          className="px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
-        >
-          <option value="ativo">Somente ativos</option>
-          <option value="inativo">Somente inativos</option>
-          <option value="all">Todos</option>
-        </select>
+        <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+          {(['all', 'ativo', 'inativo'] as const).map(v => (
+            <button key={v} onClick={() => setFiltroAtivo(v)}
+              className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}>
+              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Tabela desktop ───────────────────────────────────────────────────── */}
@@ -304,7 +292,6 @@ export default function CadastroTratador() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Local de Trabalho</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Entrada</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
@@ -323,7 +310,6 @@ export default function CadastroTratador() {
                       ) : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-600">{t.telefone ?? '—'}</td>
-                    <td className="px-4 py-3"><BadgeEntrada tipo={t.tipoEntrada} /></td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded-xl text-xs font-medium ${t.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                         {t.ativo ? 'Ativo' : 'Inativo'}
@@ -331,21 +317,28 @@ export default function CadastroTratador() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
-                        {isAdmin ? (
-                          <>
-                            <button onClick={() => abrirEditar(t)}
-                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
-                              title="Editar">
-                              <User2 size={15} />
-                            </button>
-                            <button onClick={() => toggleAtivo(t)}
-                              className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
-                              title={t.ativo ? 'Inativar' : 'Ativar'}>
-                              {t.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-                            </button>
-                          </>
+                        {t.tipoEntrada === 'SYSTEM' && !isAdmin ? (
+                          <span className="text-xs text-gray-400 italic">Catálogo global</span>
                         ) : (
-                          <span className="text-xs text-gray-400 italic">Somente leitura</span>
+                          <>
+                            {podeEditar && (
+                              <button onClick={() => abrirEditar(t)}
+                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
+                                title="Editar">
+                                <Pencil size={15} />
+                              </button>
+                            )}
+                            {podeAtivar && (
+                              <button onClick={() => toggleAtivo(t)}
+                                className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
+                                title={t.ativo ? 'Inativar' : 'Ativar'}>
+                                {t.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
+                              </button>
+                            )}
+                            {!podeEditar && !podeAtivar && (
+                              <span className="text-xs text-gray-400 italic">Somente leitura</span>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -377,7 +370,6 @@ export default function CadastroTratador() {
                   </p>
                 )}
               </div>
-              <BadgeEntrada tipo={t.tipoEntrada} />
             </div>
 
             {t.telefone && (
@@ -390,16 +382,20 @@ export default function CadastroTratador() {
               <span className={`px-2 py-1 rounded-xl text-xs font-medium ${t.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                 {t.ativo ? 'Ativo' : 'Inativo'}
               </span>
-              {isAdmin && (
+              {(t.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                 <div className="flex gap-2">
-                  <button onClick={() => abrirEditar(t)}
-                    className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
-                    Editar
-                  </button>
-                  <button onClick={() => toggleAtivo(t)}
-                    className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
-                    {t.ativo ? 'Inativar' : 'Ativar'}
-                  </button>
+                  {podeEditar && (
+                    <button onClick={() => abrirEditar(t)}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
+                      <Pencil size={11} /> Editar
+                    </button>
+                  )}
+                  {podeAtivar && (
+                    <button onClick={() => toggleAtivo(t)}
+                      className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
+                      {t.ativo ? 'Inativar' : 'Ativar'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -428,8 +424,7 @@ export default function CadastroTratador() {
               {/* Banner informativo para não-ADMIN */}
               {!isAdmin && !editando && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800">
-                  Este tratador será cadastrado como <strong>CLIENTE</strong>. Para alterações futuras,
-                  entre em contato com o ADMIN do sistema.
+                  Este tratador será cadastrado como <strong>CLIENTE</strong>, vinculado à sua empresa/equipe ativa.
                 </div>
               )}
 

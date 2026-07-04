@@ -23,11 +23,12 @@ import {
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, CalendarClock, Syringe,
+  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, CalendarClock, Syringe, Package,
   ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
+import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import FieldError, { inputErrCls } from '../components/FieldError';
@@ -179,6 +180,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   agenda:         { label: 'Agenda',              icon: <CalendarDays    size={14} /> },
   atendimento:    { label: 'Atendimento',         icon: <Stethoscope     size={14} /> },
   enfermagem:     { label: 'Enfermagem',          icon: <Activity        size={14} /> },
+  estoque:        { label: 'Estoque',             icon: <Package         size={14} /> },
   farmacia:       { label: 'Farmácia',            icon: <FlaskConical    size={14} /> },
   vacina:         { label: 'Vacinas',             icon: <Syringe         size={14} /> },
   nutricao:       { label: 'Nutricional',         icon: <Apple           size={14} /> },
@@ -193,7 +195,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
 // 'animais' e 'equipe' são filhos de 'cadastro' — ver MODULO_CHILDREN
 const MODULO_ORDER = [
   'dashboard', 'cadastro', 'agendamento', 'agenda', 'atendimento',
-  'enfermagem', 'farmacia', 'vacina', 'nutricao', 'exames', 'financeiro',
+  'enfermagem', 'estoque', 'nutricao', 'exames', 'financeiro',
   'medicamentos', 'procedimentos',
 ];
 
@@ -336,6 +338,12 @@ interface MatrizBodyProps {
 const MODULO_CHILDREN: Record<string, string[]> = { cadastro: ['animais', 'equipe'] };
 const MODULO_ABSORBED = new Set(Object.values(MODULO_CHILDREN).flat());
 
+// Grupos-pai — agrupam visualmente módulos distintos sem mesclar sub-slugs (evita colisão de chaves)
+const MODULO_PARENT_GROUPS: Array<{ key: string; label: string; icon: React.ReactNode; members: string[] }> = [
+  { key: 'estoque', label: 'Estoque', icon: <Package size={14} />, members: ['farmacia', 'vacina'] },
+];
+const MODULO_IN_PARENT = new Set(MODULO_PARENT_GROUPS.flatMap(g => g.members));
+
 // Módulos virtuais — extraem submódulos de outro módulo e os exibem como seção própria
 // Os slugs são os mesmos; alterar em um lugar altera no outro
 const VIRTUAL_MODULES: Array<{ key: string; fromModulo: string; submoduloKeys: string[] }> = [
@@ -349,14 +357,17 @@ const SUBMODULO_LABEL_OVERRIDE: Record<string, Record<string, string>> = {
 };
 
 function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, saving, saveLabel, hideActions }: MatrizBodyProps) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [collapsed,       setCollapsed]       = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const toggleModulo = (mod: string) =>
     setCollapsed(prev => ({ ...prev, [mod]: !(prev[mod] ?? true) }));
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups(prev => ({ ...prev, [key]: !(prev[key] ?? true) }));
 
-  // Entradas reais (excluindo filhos absorvidos)
+  // Entradas reais (excluindo filhos absorvidos e membros de grupos-pai)
   const realEntries = Object.entries(matriz)
-    .filter(([mod]) => !MODULO_ABSORBED.has(mod))
+    .filter(([mod]) => !MODULO_ABSORBED.has(mod) && !MODULO_IN_PARENT.has(mod))
     .map(([mod, subs]) => ({ key: mod, submodulos: subs, isVirtual: false }));
 
   // Entradas virtuais (submódulos extraídos de outro módulo pai)
@@ -374,6 +385,28 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
 
   const entries = [...realEntries, ...virtualEntries]
     .sort((a, b) => (MODULO_ORDER.indexOf(a.key) + 1 || 999) - (MODULO_ORDER.indexOf(b.key) + 1 || 999));
+
+  // Lista de renderização: injeta grupos-pai na posição do MODULO_ORDER
+  type RenderItem =
+    | { kind: 'single'; key: string; submodulos: MatrizAgrupada[string]; isVirtual: boolean }
+    | { kind: 'group';  group: typeof MODULO_PARENT_GROUPS[0]; memberEntries: Array<{ key: string; submodulos: MatrizAgrupada[string] }> };
+
+  const renderList: RenderItem[] = [];
+  for (const orderKey of MODULO_ORDER) {
+    const group = MODULO_PARENT_GROUPS.find(g => g.key === orderKey);
+    if (group) {
+      const memberEntries = group.members
+        .filter(m => matriz[m])
+        .map(m => ({ key: m, submodulos: matriz[m] }));
+      if (memberEntries.length > 0) renderList.push({ kind: 'group', group, memberEntries });
+      continue;
+    }
+    const entry = entries.find(e => e.key === orderKey);
+    if (entry) renderList.push({ kind: 'single', ...entry });
+  }
+  for (const entry of entries) {
+    if (!MODULO_ORDER.includes(entry.key)) renderList.push({ kind: 'single', ...entry });
+  }
 
   const renderSubmodulos = (submodulos: MatrizAgrupada[string], moduloKey: string) => {
     const cols = MODULO_ACAO_COLS_OVERRIDE[moduloKey] ?? ACAO_COLS;
@@ -408,6 +441,45 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
       });
   };
 
+  const renderModulo = (modulo: string, submodulos: MatrizAgrupada[string], isVirtual: boolean) => {
+    const allSubmodulos: MatrizAgrupada[string] = { ...submodulos };
+    if (!isVirtual) {
+      for (const child of MODULO_CHILDREN[modulo] ?? []) {
+        if (matriz[child]) Object.assign(allSubmodulos, matriz[child]);
+      }
+      const virtualClaimed = new Set(
+        VIRTUAL_MODULES.filter(vm => vm.fromModulo === modulo).flatMap(vm => vm.submoduloKeys)
+      );
+      for (const claimed of virtualClaimed) delete allSubmodulos[claimed];
+    }
+    const isCollapsed = collapsed[modulo] ?? true;
+    return (
+      <div key={modulo} className="border border-gray-100 rounded-xl overflow-hidden bg-gray-50">
+        <button
+          onClick={() => toggleModulo(modulo)}
+          className="w-full flex items-center gap-2 px-4 py-3 hover:bg-gray-100 transition-colors"
+        >
+          <span className="text-gray-500">{MODULO_INFO[modulo]?.icon}</span>
+          <p className="flex-1 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+            {MODULO_INFO[modulo]?.label ?? modulo}
+          </p>
+          <ChevronDown size={14} className={`text-gray-400 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+        </button>
+        {!isCollapsed && (
+          <div className="border-t border-gray-100">
+            <div className="flex items-center px-4 py-2 border-b border-gray-100 bg-gray-100/60">
+              <div className="flex-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Funcionalidade</div>
+              {(MODULO_ACAO_COLS_OVERRIDE[modulo] ?? ACAO_COLS).map(c => (
+                <div key={c.acao} className="w-16 text-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">{c.label}</div>
+              ))}
+            </div>
+            {renderSubmodulos(allSubmodulos, modulo)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {!hideActions && (
@@ -424,54 +496,29 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
       )}
 
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-        {entries.map(({ key: modulo, submodulos, isVirtual }) => {
-          // Mescla filhos absorvidos (ex: 'animais' e 'equipe' dentro de 'cadastro')
-          // Módulos virtuais já chegam com os submódulos corretos — não precisam de merge
-          const allSubmodulos: MatrizAgrupada[string] = { ...submodulos };
-          if (!isVirtual) {
-            for (const child of MODULO_CHILDREN[modulo] ?? []) {
-              if (matriz[child]) Object.assign(allSubmodulos, matriz[child]);
-            }
-            // Remove submódulos extraídos por módulos virtuais (já aparecem em suas entradas próprias)
-            const virtualClaimed = new Set(
-              VIRTUAL_MODULES.filter(vm => vm.fromModulo === modulo).flatMap(vm => vm.submoduloKeys)
-            );
-            for (const claimed of virtualClaimed) delete allSubmodulos[claimed];
-          }
-
-          const isCollapsed = collapsed[modulo] ?? true;
-
-          return (
-            <div key={modulo} className="border border-gray-100 rounded-xl overflow-hidden bg-gray-50">
-              {/* Cabeçalho do módulo — clicável */}
-              <button
-                onClick={() => toggleModulo(modulo)}
-                className="w-full flex items-center gap-2 px-4 py-3 hover:bg-gray-100 transition-colors"
-              >
-                <span className="text-gray-500">{MODULO_INFO[modulo]?.icon}</span>
-                <p className="flex-1 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                  {MODULO_INFO[modulo]?.label ?? modulo}
-                </p>
-                <ChevronDown
-                  size={14}
-                  className={`text-gray-400 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}
-                />
-              </button>
-
-              {/* Corpo — oculto quando recolhido */}
-              {!isCollapsed && (
-                <div className="border-t border-gray-100">
-                  <div className="flex items-center px-4 py-2 border-b border-gray-100 bg-gray-100/60">
-                    <div className="flex-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Funcionalidade</div>
-                    {(MODULO_ACAO_COLS_OVERRIDE[modulo] ?? ACAO_COLS).map(c => (
-                      <div key={c.acao} className="w-16 text-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">{c.label}</div>
-                    ))}
+        {renderList.map(item => {
+          if (item.kind === 'group') {
+            const { group, memberEntries } = item;
+            const isGroupCollapsed = collapsedGroups[group.key] ?? true;
+            return (
+              <div key={group.key} className="border border-gray-200 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => toggleGroup(group.key)}
+                  className="w-full flex items-center gap-2 px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+                >
+                  <span className="text-gray-500">{group.icon}</span>
+                  <p className="flex-1 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider">{group.label}</p>
+                  <ChevronDown size={14} className={`text-gray-400 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+                {!isGroupCollapsed && (
+                  <div className="border-t border-gray-100 bg-gray-50/50 p-2 space-y-2">
+                    {memberEntries.map(({ key, submodulos }) => renderModulo(key, submodulos, false))}
                   </div>
-                  {renderSubmodulos(allSubmodulos, modulo)}
-                </div>
-              )}
-            </div>
-          );
+                )}
+              </div>
+            );
+          }
+          return renderModulo(item.key, item.submodulos, item.isVirtual);
         })}
       </div>
 
@@ -482,7 +529,7 @@ function MatrizBody({ matriz, onConceder, onRevogar, onSave, onChange, nDirty, s
             : 'Sem alterações'}
         </p>
         <button onClick={onSave} disabled={saving || nDirty === 0}
-          className="flex items-center gap-1.5 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
+          className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
           {saving ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
           {saveLabel}
         </button>
@@ -622,7 +669,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {loadPerfis ? (
-            <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-indigo-500" /></div>
+            <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-emerald-500" /></div>
           ) : perfis.length === 0 ? (
             <p className="text-center text-xs text-gray-400 py-6">Nenhum perfil encontrado.</p>
           ) : (
@@ -636,7 +683,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
                 <div
                   key={p.cargo}
                   className={`relative group rounded-xl px-3 py-2.5 border transition-all cursor-pointer ${
-                    isSel ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                    isSel ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50'
                   }`}
                   onClick={() => handleSelCargo(p.cargo)}
                 >
@@ -680,22 +727,22 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
       <div className="flex-1 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col overflow-hidden">
         {!cargoSel ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-            <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center mb-4">
-              <Shield size={24} className="text-indigo-400" />
+            <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center mb-4">
+              <Shield size={24} className="text-emerald-400" />
             </div>
             <p className="font-semibold text-gray-700 mb-1">Selecione um perfil</p>
             <p className="text-sm text-gray-400">Clique em um cargo à esquerda para ver e editar sua matriz de permissões.</p>
           </div>
         ) : loadMatriz ? (
           <div className="flex-1 flex items-center justify-center">
-            <Loader2 size={22} className="animate-spin text-indigo-500" />
+            <Loader2 size={22} className="animate-spin text-emerald-500" />
           </div>
         ) : (
           <>
             <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3 flex-wrap">
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 bg-indigo-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Shield size={15} className="text-indigo-600" />
+                <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Shield size={15} className="text-emerald-600" />
                 </div>
                 <div>
                   <p className="font-bold text-gray-900 text-sm">MATRIZ: {infoSel?.label.toUpperCase()}</p>
@@ -885,7 +932,7 @@ function TabPermissoesGlobais() {
                 key={ut}
                 onClick={() => handleSelUserType(ut)}
                 className={`rounded-xl px-3 py-2.5 border cursor-pointer transition-all ${
-                  isSel ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                  isSel ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeCargo(ut)}`}>
@@ -917,7 +964,7 @@ function TabPermissoesGlobais() {
           </div>
         ) : loadMatriz ? (
           <div className="flex-1 flex items-center justify-center">
-            <Loader2 size={22} className="animate-spin text-indigo-500" />
+            <Loader2 size={22} className="animate-spin text-emerald-500" />
           </div>
         ) : (
           <>
@@ -1369,9 +1416,9 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                   carregarPerfis();
                 }
               }}
-              className={`flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-semibold transition-colors ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+              className={`flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-semibold transition-colors ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-emerald-600 hover:bg-emerald-700'}`}
             >
-              {!isAdmin && <Plus size={14} />} {isAdmin ? 'Incluir Gestor' : 'Incluir Membro'}
+              {isAdmin ? 'Incluir Gestor' : 'Incluir Membro'}
             </button>
           </div>
         )}
@@ -1381,7 +1428,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
         /* ── Vista Admin global: lista todas as empresas ─────────────────────── */
         <div className="p-5 space-y-5">
           {loading ? (
-            <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+            <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
           ) : adminEmpresas.length === 0 ? (
             <div className="py-12 text-center text-sm text-gray-400">Nenhuma empresa cadastrada.</div>
           ) : (
@@ -1390,7 +1437,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
               return (
                 <div key={emp.id} className="rounded-2xl border border-gray-200 overflow-hidden">
                   <div className="flex items-center gap-2.5 px-5 py-3 bg-slate-50 border-b border-gray-200">
-                    <Building2 size={14} className="text-indigo-500 flex-shrink-0" />
+                    <Building2 size={14} className="text-emerald-500 flex-shrink-0" />
                     <p className="font-bold text-gray-800 text-sm">{emp.nome}</p>
                     <span className="ml-auto text-[11px] text-gray-400">
                       {totalMembros} membro{totalMembros !== 1 ? 's' : ''}
@@ -1432,7 +1479,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                       ) : (
                         <div key={m.id} className="flex items-center gap-3 pl-12 pr-5 py-3 border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                           <ChevronRight size={11} className="text-gray-300 flex-shrink-0" />
-                          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
                             {m.user.fullName?.[0]?.toUpperCase()}
                           </div>
                           <div className="flex-1 min-w-0">
@@ -1465,10 +1512,10 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input value={busca} onChange={e => setBusca(e.target.value)}
                 placeholder="Buscar por nome ou e-mail..."
-                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-400" />
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
             </div>
             <select value={filtroCargo} onChange={e => setFiltroCargo(e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none focus:border-indigo-400 bg-white">
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none focus:border-emerald-400 bg-white">
               <option value="">Todos os Perfis</option>
               {cargosUnicos.map(c => (
                 <option key={c} value={c}>{CARGO_INFO[c]?.label ?? c}</option>
@@ -1477,7 +1524,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
           </div>
 
           {loading ? (
-            <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+            <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
           ) : filtrados.length === 0 ? (
             <div className="py-12 text-center text-sm text-gray-400">Nenhum profissional encontrado.</div>
           ) : (
@@ -1497,14 +1544,14 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                       <tr key={m.id} className="hover:bg-gray-50/50 transition-colors">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
                               {m.user.fullName?.[0]?.toUpperCase()}
                             </div>
                             <div>
                               <div className="flex items-center gap-1.5">
                                 <p className="text-sm font-semibold text-gray-900">{m.user.fullName}</p>
                                 {m.user.id === user?.id && (
-                                  <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">Você</span>
+                                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>
                                 )}
                               </div>
                               <p className="text-xs text-gray-400">{m.user.email}</p>
@@ -1548,7 +1595,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                             {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
                               <button
                                 onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                                className="p-1.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors"
+                                className="p-1.5 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
                                 title="Editar perfis">
                                 <Pencil size={14} />
                               </button>
@@ -1567,7 +1614,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                   return (
                     <div key={m.id} className="px-4 py-3.5">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
                           {m.user.fullName?.[0]?.toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -1587,7 +1634,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           {isGestor && m.cargo !== 'GESTOR' && (
                             <button
                               onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                              className="px-3 py-1.5 text-xs text-indigo-600 border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-colors">
+                              className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
                               Editar
                             </button>
                           )}
@@ -1620,7 +1667,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
               <p className="font-bold text-gray-900">Convites Enviados</p>
               <p className="text-xs text-gray-400 mt-0.5">Pendentes e aceitos</p>
             </div>
-            {loadingConvites && <Loader2 size={14} className="animate-spin text-indigo-400" />}
+            {loadingConvites && <Loader2 size={14} className="animate-spin text-emerald-400" />}
           </div>
           {convitesEnviados.length === 0 && !loadingConvites ? (
             <div className="px-5 py-8 text-center text-sm text-gray-400">Nenhum convite enviado ainda.</div>
@@ -1677,8 +1724,8 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
           <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isAdmin ? 'bg-emerald-100' : 'bg-indigo-100'}`}>
-                  <Plus size={16} className={isAdmin ? 'text-emerald-700' : 'text-indigo-600'} />
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isAdmin ? 'bg-emerald-100' : 'bg-emerald-100'}`}>
+                  <Plus size={16} className={isAdmin ? 'text-emerald-700' : 'text-emerald-600'} />
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-gray-900">
@@ -1868,7 +1915,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome completo</label>
                   <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Ex: João da Silva"
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
                 </div>
               )}
 
@@ -1965,7 +2012,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                     </div>
                   ) : (
                     <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
-                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-white">
+                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white">
                       {perfisDisponiveis.length > 0
                         ? perfisDisponiveis.filter(p => p.slug !== 'PROPRIETARIO').map(p => (
                             <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
@@ -1981,7 +2028,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 </div>
               )}
 
-              <div className={`flex items-start gap-2 rounded-xl px-3 py-2 text-xs ${isAdmin ? 'bg-emerald-50 border border-emerald-100 text-emerald-700' : 'bg-blue-50 border border-blue-100 text-blue-700'}`}>
+              <div className={`flex items-start gap-2 rounded-xl px-3 py-2 text-xs ${isAdmin ? 'bg-emerald-50 border border-emerald-100 text-emerald-700' : 'bg-emerald-50 border border-emerald-100 text-emerald-700'}`}>
                 <Shield size={12} className="flex-shrink-0 mt-0.5" />
                 <span>
                   {conviteCargo === 'PROPRIETARIO'
@@ -1999,7 +2046,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                 Cancelar
               </button>
               <button onClick={handleConvidar} disabled={enviandoConvite || !conviteEmail.trim()}
-                className={`flex-1 py-2.5 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                className={`flex-1 py-2.5 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
                 {enviandoConvite ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
                 {isAdmin ? 'Incluir Gestor' : 'Enviar Convite'}
               </button>
@@ -2124,8 +2171,8 @@ function EditarCargosModal({
         <p className="text-xs text-gray-400 mb-4">Selecione um ou mais perfis. As permissões serão a combinação de todos os selecionados.</p>
         <div className="space-y-2 max-h-60 overflow-y-auto mb-5">
           {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO').map(([slug, info]) => ({ slug, label: info.label }))).map(p => (
-            <label key={p.slug} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${selecionados.includes(p.slug) ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
-              <input type="checkbox" checked={selecionados.includes(p.slug)} onChange={() => toggle(p.slug)} className="w-4 h-4 accent-indigo-600" />
+            <label key={p.slug} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${selecionados.includes(p.slug) ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={selecionados.includes(p.slug)} onChange={() => toggle(p.slug)} className="w-4 h-4 accent-emerald-600" />
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeCargo(p.slug)}`}>{p.label.toUpperCase()}</span>
             </label>
           ))}
@@ -2137,7 +2184,7 @@ function EditarCargosModal({
           <button
             onClick={() => { if (selecionados.length > 0) onSalvar(selecionados); else toast.error('Selecione ao menos um perfil'); }}
             disabled={selecionados.length === 0}
-            className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold">
+            className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold">
             Salvar
           </button>
         </div>
@@ -2255,14 +2302,14 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
           {total > 0 && (
             <span className="text-xs text-gray-400 bg-gray-100 px-2.5 py-1 rounded-full font-medium">{total} registro{total > 1 ? 's' : ''}</span>
           )}
-          <button onClick={() => carregar(page)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-lg transition-colors">
+          <button onClick={() => carregar(page)} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg transition-colors">
             <RefreshCw size={14} />
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
       ) : grupos.length === 0 ? (
         <div className="py-12 text-center">
           <Activity size={32} className="mx-auto mb-3 text-gray-200" />
@@ -2359,37 +2406,15 @@ function GerenciarAcessoPrestadorModal({
   prestadorNome:   string;
   onClose:         () => void;
 }) {
-  const [abaModal, setAbaModal]       = useState<'animais' | 'permissoes'>('animais');
-  const [loading,  setLoading]        = useState(true);
-  const [salvando, setSalvando]       = useState(false);
-  const [salvandoPerms, setSalvandoPerms] = useState(false);
-  const [dirtyPerms,    setDirtyPerms]    = useState<Record<string, string>>({});
+  const [loading,  setLoading]  = useState(true);
+  const [salvando, setSalvando] = useState(false);
 
   const [designacoes,        setDesignacoes]        = useState<AnimalDesignado[]>([]);
   const [animaisDisponiveis, setAnimaisDisponiveis] = useState<AnimalDisponivel[]>([]);
   const [animalSel,          setAnimalSel]          = useState('');
   const [motivo,             setMotivo]             = useState('');
 
-  const [matriz,        setMatriz]        = useState<Record<string, Record<string, AcaoMatrizItem[]>>>({});
-  const [loadingMatriz, setLoadingMatriz] = useState(false);
   const [confirmRemover, setConfirmRemover] = useState<{ animalId: number; nomeAnimal: string } | null>(null);
-
-  const NIVEL_LABEL: Record<string, string> = {
-    NEGADO:  'Negado',
-    NENHUM:  'Nenhum',
-    LEITURA: 'Leitura',
-    PROPRIO: 'Próprio',
-    EQUIPE:  'Equipe',
-    FULL:    'Full',
-  };
-  const NIVEL_COR: Record<string, string> = {
-    NEGADO:  'bg-red-100 text-red-700',
-    NENHUM:  'bg-gray-100 text-gray-500',
-    LEITURA: 'bg-blue-100 text-blue-700',
-    PROPRIO: 'bg-amber-100 text-amber-700',
-    EQUIPE:  'bg-purple-100 text-purple-700',
-    FULL:    'bg-emerald-100 text-emerald-700',
-  };
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2401,39 +2426,7 @@ function GerenciarAcessoPrestadorModal({
     finally  { setLoading(false); }
   }, [equipeId, prestadorUserId]);
 
-  const carregarMatriz = useCallback(async () => {
-    setLoadingMatriz(true);
-    try {
-      const res = await api.get(`/equipes/${equipeId}/permissoes/${prestadorUserId}`);
-      setMatriz(res.data?.dados ?? {});
-      setDirtyPerms({});
-    } catch { /* silencioso */ }
-    finally  { setLoadingMatriz(false); }
-  }, [equipeId, prestadorUserId]);
-
-  const ciclarNivel = (slug: string, nivelAtual: string) => {
-    const idx     = NIVEL_CICLO.indexOf(nivelAtual as typeof NIVEL_CICLO[number]);
-    const proximo = NIVEL_CICLO[(idx + 1) % NIVEL_CICLO.length];
-    setDirtyPerms(prev => ({ ...prev, [slug]: proximo }));
-  };
-
-  const handleSalvarPermissoes = async () => {
-    if (Object.keys(dirtyPerms).length === 0) return;
-    setSalvandoPerms(true);
-    try {
-      await api.put(`/equipes/${equipeId}/permissoes/${prestadorUserId}`, { alteracoes: dirtyPerms });
-      toast.success('Permissões atualizadas com sucesso');
-      setDirtyPerms({});
-      carregarMatriz();
-    } catch {
-      toast.error('Erro ao salvar permissões');
-    } finally {
-      setSalvandoPerms(false);
-    }
-  };
-
   useEffect(() => { carregar(); }, [carregar]);
-  useEffect(() => { if (abaModal === 'permissoes') carregarMatriz(); }, [abaModal, carregarMatriz]);
 
   const handleAdicionarAnimal = async () => {
     if (!animalSel) { toast.error('Selecione um animal'); return; }
@@ -2487,172 +2480,106 @@ function GerenciarAcessoPrestadorModal({
           </button>
         </div>
 
-        {/* Abas */}
-        <div className="flex gap-1 mx-6 mt-4 bg-gray-100 rounded-xl p-1 flex-shrink-0">
-          {([
-            { id: 'animais' as const,    label: 'Nível 1 — Animais com Acesso' },
-            { id: 'permissoes' as const, label: 'Nível 2 — Permissões do Perfil' },
-          ] as const).map(t => (
-            <button key={t.id} onClick={() => setAbaModal(t.id)}
-              className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all
-                ${abaModal === t.id ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-
         {/* Conteúdo */}
         <div className="overflow-y-auto flex-1 px-6 py-4">
+          {loading ? (
+            <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-teal-500" /></div>
+          ) : (
+            <div className="space-y-5">
 
-          {abaModal === 'animais' && (
-            loading ? (
-              <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-teal-500" /></div>
-            ) : (
-              <div className="space-y-5">
+              {/* Conceder acesso */}
+              <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4">
+                <p className="text-xs font-bold text-teal-700 uppercase tracking-widest mb-3">Conceder acesso a animal</p>
+                <div className="space-y-2">
+                  <select value={animalSel} onChange={e => setAnimalSel(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-teal-500">
+                    <option value="">Selecione um animal...</option>
+                    {animaisDisponiveis.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.nome}{a.especie ? ` — ${a.especie.nome}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <input value={motivo} onChange={e => setMotivo(e.target.value)}
+                    placeholder="Motivo (opcional)"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500" />
+                  <button onClick={handleAdicionarAnimal} disabled={salvando || !animalSel}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors">
+                    {salvando && <Loader2 size={14} className="animate-spin" />}
+                    Inserir Animal
+                  </button>
+                </div>
+              </div>
 
-                {/* Conceder acesso */}
-                <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4">
-                  <p className="text-xs font-bold text-teal-700 uppercase tracking-widest mb-3">Conceder acesso a animal</p>
+              {/* Animais com acesso ativo */}
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
+                  Com acesso ativo ({ativas.length})
+                </p>
+                {ativas.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4">Nenhum animal designado.</p>
+                ) : (
                   <div className="space-y-2">
-                    <select value={animalSel} onChange={e => setAnimalSel(e.target.value)}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-teal-500">
-                      <option value="">Selecione um animal...</option>
-                      {animaisDisponiveis.map(a => (
-                        <option key={a.id} value={a.id}>
-                          {a.nome}{a.especie ? ` — ${a.especie.nome}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <input value={motivo} onChange={e => setMotivo(e.target.value)}
-                      placeholder="Motivo (opcional)"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500" />
-                    <button onClick={handleAdicionarAnimal} disabled={salvando || !animalSel}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors">
-                      {salvando ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                      Conceder Acesso
-                    </button>
-                  </div>
-                </div>
-
-                {/* Animais com acesso ativo */}
-                <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
-                    Com acesso ativo ({ativas.length})
-                  </p>
-                  {ativas.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-4">Nenhum animal designado.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {ativas.map(d => (
-                        <div key={d.id} className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl">
-                          <div className="w-9 h-9 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
-                            {d.animal.photoUrl
-                              ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
-                              : <div className="w-full h-full flex items-center justify-center text-lg">🐴</div>
-                            }
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">{d.animal.nome}</p>
-                            <p className="text-xs text-gray-400">
-                              {d.animal.especie?.nome ?? '—'}
-                              {d.motivo && ` · ${d.motivo}`}
-                            </p>
-                          </div>
-                          <button onClick={() => handleRemover(d.animal.id, d.animal.nome)}
-                            className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0">
-                            <Trash2 size={13} />
-                          </button>
+                    {ativas.map(d => (
+                      <div key={d.id} className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl">
+                        <div className="w-9 h-9 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                          {d.animal.photoUrl
+                            ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-lg">🐴</div>
+                          }
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Histórico inativo */}
-                {inativas.length > 0 && (
-                  <div>
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
-                      Histórico — acessos removidos ({inativas.length})
-                    </p>
-                    <div className="space-y-1.5">
-                      {inativas.map(d => (
-                        <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl opacity-60">
-                          <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
-                            {d.animal.photoUrl
-                              ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
-                              : <div className="w-full h-full flex items-center justify-center text-base">🐴</div>
-                            }
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-gray-600 truncate">{d.animal.nome}</p>
-                            <p className="text-[10px] text-gray-400">
-                              Removido em {d.dataFim ? new Date(d.dataFim).toLocaleDateString('pt-BR') : '—'}
-                            </p>
-                          </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{d.animal.nome}</p>
+                          <p className="text-xs text-gray-400">
+                            {d.animal.especie?.nome ?? '—'}
+                            {d.motivo && ` · ${d.motivo}`}
+                          </p>
                         </div>
-                      ))}
-                    </div>
+                        <button onClick={() => handleRemover(d.animal.id, d.animal.nome)}
+                          className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-            )
-          )}
 
-          {abaModal === 'permissoes' && (
-            loadingMatriz ? (
-              <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-indigo-400" /></div>
-            ) : Object.keys(matriz).length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-10">Nenhuma permissão configurada.</p>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-700">
-                  Permissões individuais deste prestador. Clique em uma permissão para alterar o nível (NENHUM → LEITURA → PRÓPRIO → EQUIPE → FULL). As permissões padrão do perfil são definidas em <strong>Matriz de Perfis</strong>.
-                </div>
-                {Object.entries(matriz).map(([modulo, submodulos]) => (
-                  <div key={modulo} className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-                    <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100">
-                      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{modulo}</p>
-                    </div>
-                    <div className="divide-y divide-gray-50">
-                      {Object.entries(submodulos).map(([sub, acoes]) => (
-                        <div key={sub} className="px-4 py-2.5">
-                          <p className="text-xs font-medium text-gray-600 mb-2">{sub}</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(acoes as AcaoMatrizItem[]).map(a => {
-                              const nivelAtual = dirtyPerms[a.slug] !== undefined ? dirtyPerms[a.slug] : a.nivel;
-                              const isDirty    = dirtyPerms[a.slug] !== undefined;
-                              return (
-                                <button key={a.slug}
-                                  onClick={() => ciclarNivel(a.slug, nivelAtual)}
-                                  title="Clique para alterar o nível"
-                                  className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full cursor-pointer hover:opacity-75 transition-opacity ${isDirty ? 'ring-2 ring-indigo-400 ring-offset-1' : ''} ${NIVEL_COR[nivelAtual] ?? 'bg-gray-100 text-gray-500'}`}>
-                                  {a.label}: {NIVEL_LABEL[nivelAtual] ?? nivelAtual}
-                                </button>
-                              );
-                            })}
-                          </div>
+              {/* Histórico inativo */}
+              {inativas.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
+                    Histórico — acessos removidos ({inativas.length})
+                  </p>
+                  <div className="space-y-1.5">
+                    {inativas.map(d => (
+                      <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl opacity-60">
+                        <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
+                          {d.animal.photoUrl
+                            ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-base">🐴</div>
+                          }
                         </div>
-                      ))}
-                    </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-600 truncate">{d.animal.nome}</p>
+                          <p className="text-[10px] text-gray-400">
+                            Removido em {d.dataFim ? new Date(d.dataFim).toLocaleDateString('pt-BR') : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )
+                </div>
+              )}
+            </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0 flex gap-2">
-          {abaModal === 'permissoes' && Object.keys(dirtyPerms).length > 0 && (
-            <button onClick={handleSalvarPermissoes} disabled={salvandoPerms}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors">
-              {salvandoPerms ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
-              Salvar Permissões ({Object.keys(dirtyPerms).length})
-            </button>
-          )}
+        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            Fechar
+            className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Fechar Janela
           </button>
         </div>
       </div>
@@ -2674,17 +2601,6 @@ function GerenciarAcessoPrestadorModal({
   );
 }
 
-// Cadastro da tabela Fornecedor (tb_fornecedores) — disponível = sem login vinculado (userId null)
-interface Fornecedor {
-  id:          number;
-  nome:        string;
-  email:       string | null;
-  telefone:    string | null;
-  tipoServico: string;
-  userId:      number | null;
-  ativo:       boolean;
-}
-
 function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean }) {
   const { user }       = useAuth();
   const [membros,      setMembros]      = useState<Membro[]>([]);
@@ -2702,24 +2618,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [modalAcesso, setModalAcesso] = useState<{ userId: number; nome: string } | null>(null);
 
   // Modal de inclusão
-  const [showModal,      setShowModal]      = useState(false);
-  const [passo,          setPasso]          = useState<1 | 2>(1); // 1=selecionar tipo, 2=preencher dados
-  const [tipoSel,        setTipoSel]        = useState<'VETERINARIO' | 'ESTAGIARIO' | 'FORNECEDOR' | null>(null);
-  const [conviteNome,    setConviteNome]    = useState('');
-  const [conviteEmail,   setConviteEmail]   = useState('');
-  const [conviteCargo,   setConviteCargo]   = useState('VETERINARIO');
-  const [emailErro,      setEmailErro]      = useState('');
-  const [enviando,       setEnviando]       = useState(false);
-
-  // Fornecedores (para tipo FORNECEDOR) — cadastros da tabela Fornecedor disponíveis
-  const [fornecedores,        setFornecedores]        = useState<Fornecedor[]>([]);
-  const [loadingFornecedores, setLoadingFornecedores] = useState(false);
-  const [buscaFornecedor,     setBuscaFornecedor]     = useState('');
-  const [fornecedorSel,       setFornecedorSel]       = useState<Fornecedor | null>(null);
-  const [modoNovoForn,        setModoNovoForn]        = useState(false);
-  const [conviteTelefone,     setConviteTelefone]     = useState('');
-  const [tiposServico,        setTiposServico]        = useState<string[]>([]);
-  const [tipoServicoSel,      setTipoServicoSel]      = useState('');
+  const [showModal,  setShowModal]  = useState(false);
+  const [enviando,   setEnviando]   = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2743,107 +2643,38 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   useEffect(() => { carregar(); }, [carregar]);
   useEffect(() => { if (isGestor) carregarPerfis(); }, [carregarPerfis, isGestor]);
 
-  const abrirModal = () => {
-    setPasso(1); setTipoSel(null); setConviteNome(''); setConviteEmail(''); setEmailErro('');
-    setFornecedorSel(null); setBuscaFornecedor(''); setFornecedores([]);
-    setModoNovoForn(false); setConviteTelefone(''); setTipoServicoSel('');
-    setShowModal(true);
-  };
-
-  // Tipos que são instituições (não podem ser membros individuais da equipe)
-  const TIPOS_EXCLUIDOS_MEMBRO = ['Laboratório', 'Farmácia'];
-
-  const selecionarTipo = async (tipo: 'VETERINARIO' | 'ESTAGIARIO' | 'FORNECEDOR') => {
-    setTipoSel(tipo);
-    setConviteCargo(tipo);
-    if (tipo === 'FORNECEDOR') {
-      setLoadingFornecedores(true);
-      try {
-        const [resForn, resTipos] = await Promise.all([
-          api.get('/cadastro/fornecedores', { params: { ativo: 'true' } }),
-          api.get('/cadastro/fornecedores/tipos'),
-        ]);
-        const lista = (resForn.data?.dados ?? []) as Fornecedor[];
-        setFornecedores(lista.filter(f => {
-          if (!f.ativo) return false;
-          // Exclui tipos institucionais (Laboratório, Farmácia)
-          const tipos = f.tipoServico.split(',').map(t => t.trim());
-          if (tipos.some(t => TIPOS_EXCLUIDOS_MEMBRO.includes(t))) return false;
-          // Exclui se o usuário vinculado já é membro desta equipe
-          if (f.userId && membros.some(m => m.user.id === f.userId)) return false;
-          return true;
-        }));
-        setTiposServico((resTipos.data?.dados ?? [] as string[]).filter(t => !TIPOS_EXCLUIDOS_MEMBRO.includes(t)));
-      } catch { toast.error('Erro ao carregar fornecedores'); }
-      finally { setLoadingFornecedores(false); }
-    }
-    setPasso(2);
-  };
-
-  const selecionarFornecedor = (f: Fornecedor) => {
-    setFornecedorSel(f);
-    setModoNovoForn(false);
-    setConviteNome(f.nome);
-    setConviteEmail(f.email ?? '');
-    setConviteTelefone(f.telefone ?? '');
-    setEmailErro('');
-  };
-
-  const ativarNovoFornecedor = () => {
-    setModoNovoForn(true);
-    setFornecedorSel(null);
-    setConviteNome(''); setConviteEmail(''); setConviteTelefone(''); setTipoServicoSel('');
-    setEmailErro('');
-  };
-
-  const handleEnviar = async () => {
-    setEmailErro('');
-
-    // FORNECEDOR: inclusão direta — cria/vincula o cadastro Fornecedor à conta de login
-    if (tipoSel === 'FORNECEDOR') {
-      if (!fornecedorSel && !modoNovoForn) { setEmailErro('Selecione um fornecedor ou cadastre um novo'); return; }
-      if (!conviteNome.trim())             { toast.error('Informe o nome');     return; }
-      if (!conviteEmail.trim() || !isValidEmail(conviteEmail)) { setEmailErro('E-mail inválido'); return; }
-      if (!conviteTelefone.trim())         { toast.error('Informe o telefone'); return; }
-      if (modoNovoForn && !tipoServicoSel) { toast.error('Informe o tipo de serviço'); return; }
-
-      setEnviando(true);
-      try {
-        await api.post('/equipes/incluir-membro', {
-          email:        conviteEmail.trim(),
-          cargo:        'FORNECEDOR',
-          fullName:     conviteNome.trim(),
-          phone:        conviteTelefone.trim(),
-          fornecedorId: fornecedorSel?.id ?? null,
-          tipoServico:  modoNovoForn ? tipoServicoSel : null,
-          equipeId,  // inclui na equipe exibida nesta aba (não na do contexto ativo)
-        });
-        toast.success('Fornecedor incluído na equipe');
-        setShowModal(false);
-        carregar();
-      } catch (err: unknown) {
-        const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir prestador';
-        toast.error(msg);
-      } finally { setEnviando(false); }
-      return;
-    }
-
-    const email = conviteEmail.trim();
-    if (!email) { setEmailErro('Informe o e-mail'); return; }
-    if (!isValidEmail(email)) { setEmailErro('E-mail inválido'); return; }
-
+  const handleIncluirModal = async (values: UsuarioFormValues) => {
     setEnviando(true);
     try {
-      await api.post(`/equipes/${equipeId}/convidar`, {
-        email,
-        fullName: conviteNome.trim() || undefined,
-        cargo:    conviteCargo,
-      });
-      toast.success('Convite enviado por e-mail');
-      setShowModal(false);
-      carregar();
+      if (values.perfil === 'FORNECEDOR') {
+        const res = await api.post('/equipes/incluir-membro', {
+          email:        values.email,
+          cargo:        'FORNECEDOR',
+          fullName:     values.fullName,
+          phone:        values.phone,
+          fornecedorId: values.fornecedorId ?? null,
+          tipoServico:  values.tipoServico  ?? null,
+          equipeId,
+        });
+        toast.success('Fornecedor incluído. Selecione os animais com acesso.');
+        setShowModal(false);
+        carregar();
+        const dados = (res.data as { dados?: { userId?: number; fullName?: string } })?.dados;
+        if (dados?.userId) {
+          setModalAcesso({ userId: dados.userId, nome: dados.fullName ?? values.fullName });
+        }
+      } else {
+        await api.post(`/equipes/${equipeId}/convidar`, {
+          email:    values.email,
+          fullName: values.fullName || undefined,
+          cargo:    values.perfil,
+        });
+        toast.success('Convite enviado por e-mail');
+        setShowModal(false);
+        carregar();
+      }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro';
       toast.error(msg);
     } finally { setEnviando(false); }
   };
@@ -2903,19 +2734,6 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
     return buscaOk && cargoOk;
   });
 
-  const fornecedoresFiltrados = fornecedores.filter(f =>
-    !buscaFornecedor
-    || f.nome.toLowerCase().includes(buscaFornecedor.toLowerCase())
-    || (f.email ?? '').toLowerCase().includes(buscaFornecedor.toLowerCase())
-    || f.tipoServico.toLowerCase().includes(buscaFornecedor.toLowerCase())
-  );
-
-  const TIPOS_MEMBRO = [
-    { id: 'VETERINARIO' as const, label: 'Veterinário',  icon: <Stethoscope size={20} className="text-emerald-600" />, cor: 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100' },
-    { id: 'ESTAGIARIO'  as const, label: 'Estagiário',   icon: <Users size={20} className="text-blue-600" />,          cor: 'border-blue-200 bg-blue-50 hover:bg-blue-100' },
-    { id: 'FORNECEDOR'   as const, label: 'Fornecedor',             icon: <Wrench size={20} className="text-teal-600" />, cor: 'border-teal-200 bg-teal-50 hover:bg-teal-100' },
-  ];
-
   const hasPrestador = membros.some(m => m.cargo === 'FORNECEDOR');
 
   return (
@@ -2926,9 +2744,9 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           <p className="text-xs text-gray-400 mt-0.5">Veterinários, estagiários e prestadores de serviço</p>
         </div>
         {isGestor && (
-          <button onClick={abrirModal}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors">
-            <Plus size={14} /> Incluir Membro
+          <button onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold transition-colors">
+            Incluir Membro
           </button>
         )}
       </div>
@@ -2949,10 +2767,10 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={busca} onChange={e => setBusca(e.target.value)}
             placeholder="Buscar por nome ou e-mail..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-400" />
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
         </div>
         <select value={filtroCargo} onChange={e => setFiltroCargo(e.target.value)}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none focus:border-indigo-400 bg-white">
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none focus:border-emerald-400 bg-white">
           <option value="">Todos os Perfis</option>
           {[...new Set(membros.map(m => m.cargo))].sort().map(c => (
             <option key={c} value={c}>{CARGO_INFO[c]?.label ?? c}</option>
@@ -2961,7 +2779,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
       ) : filtrados.length === 0 ? (
         <div className="py-12 text-center text-sm text-gray-400">Nenhum membro encontrado.</div>
       ) : (
@@ -2982,13 +2800,13 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                   <tr key={m.id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
                           {m.user.fullName?.[0]?.toUpperCase()}
                         </div>
                         <div>
                           <div className="flex items-center gap-1.5">
                             <p className="text-sm font-semibold text-gray-900">{m.user.fullName}</p>
-                            {m.user.id === user?.id && <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">Você</span>}
+                            {m.user.id === user?.id && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>}
                           </div>
                           <p className="text-xs text-gray-400">{m.user.email}</p>
                         </div>
@@ -3042,7 +2860,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                         {isGestor && m.user.id !== user?.id && m.cargo !== 'GESTOR' && (
                           <button
                             onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                            className="p-1.5 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors"
+                            className="p-1.5 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
                             title="Editar perfis">
                             <Pencil size={14} />
                           </button>
@@ -3060,7 +2878,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
               return (
                 <div key={m.id} className="px-4 py-3.5">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
                       {m.user.fullName?.[0]?.toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -3087,7 +2905,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                       {isGestor && m.cargo !== 'GESTOR' && (
                         <button
                           onClick={() => setEditandoCargos({ membroId: m.id, userId: m.user.id, atual: m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo] })}
-                          className="px-3 py-1.5 text-xs text-indigo-600 border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-colors">
+                          className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
                           Editar
                         </button>
                       )}
@@ -3122,168 +2940,15 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
 
       {/* Modal — Incluir Membro */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-indigo-100 rounded-xl flex items-center justify-center">
-                  <Plus size={16} className="text-indigo-600" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-gray-900">
-                    {passo === 1 ? 'Incluir Membro' : `Convidar ${tipoSel === 'FORNECEDOR' ? 'Fornecedor' : tipoSel === 'ESTAGIARIO' ? 'Estagiário' : 'Veterinário'}`}
-                  </h2>
-                  <p className="text-xs text-gray-400">
-                    {passo === 1
-                      ? 'Selecione o tipo de membro'
-                      : tipoSel === 'FORNECEDOR'
-                        ? 'O fornecedor será incluído imediatamente na equipe'
-                        : 'Um e-mail de convite será enviado'}
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setShowModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"><X size={16} /></button>
-            </div>
-
-            {passo === 1 ? (
-              <div className="space-y-3">
-                {TIPOS_MEMBRO.map(t => (
-                  <button key={t.id} onClick={() => selecionarTipo(t.id)}
-                    className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all ${t.cor}`}>
-                    <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-sm flex-shrink-0">
-                      {t.icon}
-                    </div>
-                    <div className="text-left">
-                      <p className="font-bold text-gray-900 text-sm">{t.label}</p>
-                      <p className="text-xs text-gray-500">{CARGO_INFO[t.id]?.desc}</p>
-                    </div>
-                    <ChevronRight size={16} className="ml-auto text-gray-400 flex-shrink-0" />
-                  </button>
-                ))}
-              </div>
-            ) : tipoSel === 'FORNECEDOR' ? (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecionar fornecedor cadastrado</label>
-                  <div className="relative mb-2">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input value={buscaFornecedor} onChange={e => setBuscaFornecedor(e.target.value)}
-                      placeholder="Buscar por nome, e-mail ou serviço..."
-                      className="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:border-indigo-500" />
-                  </div>
-                  {loadingFornecedores ? (
-                    <div className="flex justify-center py-4"><Loader2 size={18} className="animate-spin text-indigo-500" /></div>
-                  ) : (
-                    <div className="max-h-48 overflow-y-auto space-y-1.5 border border-gray-200 rounded-xl p-2">
-                      <button onClick={ativarNovoFornecedor}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${modoNovoForn ? 'bg-indigo-50 border border-indigo-300' : 'hover:bg-gray-50 border border-dashed border-gray-300'}`}>
-                        <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center flex-shrink-0">
-                          <Plus size={14} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-900">Cadastrar novo fornecedor</p>
-                          <p className="text-xs text-gray-400">Cria o cadastro e inclui na equipe</p>
-                        </div>
-                        {modoNovoForn && <Check size={14} className="text-indigo-600 flex-shrink-0" />}
-                      </button>
-                      {fornecedoresFiltrados.length === 0 ? (
-                        <p className="text-xs text-gray-400 text-center py-3">
-                          {fornecedores.length === 0 ? 'Nenhum fornecedor disponível no cadastro.' : 'Nenhum resultado.'}
-                        </p>
-                      ) : fornecedoresFiltrados.map(f => (
-                        <button key={f.id} onClick={() => selecionarFornecedor(f)}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${fornecedorSel?.id === f.id ? 'bg-teal-50 border border-teal-300' : 'hover:bg-gray-50 border border-transparent'}`}>
-                          <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                            {f.nome?.[0]?.toUpperCase()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">{f.nome}</p>
-                            <p className="text-xs text-gray-400 truncate">{f.tipoServico}{f.email ? ` · ${f.email}` : ''}</p>
-                          </div>
-                          {fornecedorSel?.id === f.id && <Check size={14} className="text-teal-600 flex-shrink-0" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {(fornecedorSel || modoNovoForn) && (
-                  <div className="space-y-3 border-t border-gray-100 pt-3">
-                    {modoNovoForn && (
-                      <>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome <span className="text-red-500">*</span></label>
-                          <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Nome do profissional"
-                            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Tipo de Serviço <span className="text-red-500">*</span></label>
-                          <select value={tipoServicoSel} onChange={e => setTipoServicoSel(e.target.value)}
-                            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
-                            <option value="">Selecione...</option>
-                            {tiposServico.map(t => <option key={t} value={t}>{t}</option>)}
-                          </select>
-                        </div>
-                      </>
-                    )}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
-                      <input type="email" value={conviteEmail}
-                        onChange={e => { setEmailErro(''); setConviteEmail(e.target.value); }}
-                        placeholder="prestador@exemplo.com"
-                        className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none ${emailErro ? 'border-red-400' : 'border-gray-300 focus:border-indigo-500'}`} />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Telefone <span className="text-red-500">*</span></label>
-                      <input value={conviteTelefone} onChange={e => setConviteTelefone(e.target.value)}
-                        placeholder="(00) 00000-0000"
-                        className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
-                    </div>
-                  </div>
-                )}
-                {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome completo</label>
-                  <input value={conviteNome} onChange={e => setConviteNome(e.target.value)} placeholder="Ex: João da Silva"
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">E-mail <span className="text-red-500">*</span></label>
-                  <input type="email" value={conviteEmail} onChange={e => { setEmailErro(''); setConviteEmail(e.target.value); }}
-                    placeholder="profissional@clinica.com"
-                    className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none ${emailErro ? 'border-red-400' : 'border-gray-300 focus:border-indigo-500'}`} />
-                  {emailErro && <p className="text-xs text-red-500 mt-1">{emailErro}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Perfil de acesso</label>
-                  <select value={conviteCargo} onChange={e => setConviteCargo(e.target.value)}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
-                    {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO').map(([c, info]) => ({ slug: c, label: info.label }))).map(p => (
-                      <option key={p.slug} value={p.slug}>{p.label.toUpperCase()}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => { if (passo === 2) setPasso(1); else setShowModal(false); }}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">
-                {passo === 2 ? 'Voltar' : 'Cancelar'}
-              </button>
-              {passo === 2 && (
-                <button onClick={handleEnviar} disabled={enviando || (tipoSel === 'FORNECEDOR' && !fornecedorSel && !modoNovoForn)}
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold flex items-center justify-center gap-2">
-                  {enviando ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
-                  {tipoSel === 'FORNECEDOR' ? 'Incluir Fornecedor' : 'Enviar Convite'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        <UsuarioFormModal
+          titulo="Incluir Membro"
+          infoNota="Fornecedor: incluído imediatamente. Veterinário/Estagiário: convite por e-mail."
+          textoBotao="Incluir"
+          comFornecedor
+          salvando={enviando}
+          onClose={() => setShowModal(false)}
+          onSubmit={handleIncluirModal}
+        />
       )}
 
       {/* Modal — Confirmar remoção */}
@@ -3349,7 +3014,7 @@ function TabProprietarios({ equipeId }: { equipeId: number }) {
           <p className="font-bold text-gray-900">Proprietários ({proprietarios.length})</p>
           <p className="text-xs text-gray-400 mt-0.5">Clientes com animais vinculados à equipe</p>
         </div>
-        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-lg transition-colors">
+        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg transition-colors">
           <RefreshCw size={14} />
         </button>
       </div>
@@ -3359,12 +3024,12 @@ function TabProprietarios({ equipeId }: { equipeId: number }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={busca} onChange={e => setBusca(e.target.value)}
             placeholder="Buscar proprietário..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-400" />
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
         </div>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-indigo-500" /></div>
+        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
       ) : filtrados.length === 0 ? (
         <div className="py-12 text-center">
           <UserCheck size={32} className="mx-auto mb-3 text-gray-200" />
@@ -3440,8 +3105,8 @@ function TabConvites({ equipeId, isGestor }: { equipeId: number; isGestor: boole
           <p className="font-bold text-gray-900">Convites Enviados</p>
           <p className="text-xs text-gray-400 mt-0.5">Pendentes, aceitos e cancelados</p>
         </div>
-        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-lg transition-colors">
-          {loading ? <Loader2 size={14} className="animate-spin text-indigo-400" /> : <RefreshCw size={14} />}
+        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg transition-colors">
+          {loading ? <Loader2 size={14} className="animate-spin text-emerald-400" /> : <RefreshCw size={14} />}
         </button>
       </div>
 
@@ -3571,7 +3236,7 @@ export default function ControleAcesso() {
       <PageContainer>
         <BotaoVoltar className="mb-6" />
         <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-indigo-500" />
+          <Loader2 size={24} className="animate-spin text-emerald-500" />
         </div>
       </PageContainer>
     );
@@ -3595,8 +3260,8 @@ export default function ControleAcesso() {
       <BotaoVoltar className="mb-6" />
       <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">
-            <Shield size={20} className="text-indigo-700" />
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+            <Shield size={20} className="text-emerald-700" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Controle de Acesso</h1>
@@ -3614,7 +3279,7 @@ export default function ControleAcesso() {
             <select
               value={equipeId ?? ''}
               onChange={e => carregarEquipe(Number(e.target.value))}
-              className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-indigo-400 shadow-sm"
+              className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-400 shadow-sm"
             >
               {todasEquipes.map(eq => (
                 <option key={eq.id} value={eq.id}>
@@ -3635,13 +3300,13 @@ export default function ControleAcesso() {
               onClick={() => setAba(a.id)}
               className={`${isDesktopOnly ? 'hidden md:flex' : 'flex'} items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap transition-all flex-1 justify-center
                 ${aba === a.id
-                  ? 'bg-white text-indigo-700 shadow-sm'
+                  ? 'bg-white text-emerald-700 shadow-sm'
                   : 'text-gray-500 hover:text-gray-700'}`}
             >
               {a.icon}
               {a.label}
               {'badge' in a && a.badge != null && a.badge > 0 && (
-                <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full ml-1">
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-1">
                   {a.badge}
                 </span>
               )}

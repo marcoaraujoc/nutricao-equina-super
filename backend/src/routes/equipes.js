@@ -2,6 +2,8 @@
 'use strict';
 
 const express             = require('express');
+const multer              = require('multer');
+const path                = require('path');
 const EquipeController    = require('../controllers/EquipeController');
 const PermissaoController = require('../controllers/PermissaoController');
 const { authenticate }    = require('../middlewares/auth');
@@ -10,6 +12,16 @@ const { criarEmpresaRules, convidarMembroRules } = require('../validators/equipe
 
 const router = express.Router();
 
+// ─── Configuração do Multer para o logotipo (memoryStorage — mesmo padrão de animais.js) ─
+const uploadLogo = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /jpeg|jpg|png|gif|webp/;
+    cb(null, allowed.test(path.extname(file.originalname).toLowerCase()) && allowed.test(file.mimetype));
+  },
+});
+
 // =============================================================================
 // ROTAS FIXAS (sem parâmetro dinâmico) — DEVEM VIR ANTES de /:equipeId
 // =============================================================================
@@ -17,6 +29,10 @@ const router = express.Router();
 // ─── Empresas ─────────────────────────────────────────────────────────────────
 router.post('/empresas', authenticate, criarEmpresaRules, validate, EquipeController.criarEmpresa);
 router.get ('/empresas', authenticate, EquipeController.listarEmpresas);
+
+// ─── Configurações (logotipo + dia de fechamento de fatura) ──────────────────
+router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
+router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);
 
 // ─── Setup inicial (cria empresa + equipe em uma transação) ──────────────────
 router.post('/setup',  authenticate, EquipeController.setup);

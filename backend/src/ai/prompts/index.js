@@ -278,6 +278,291 @@ Regras finais:
 5. Normalize variações de escrita: "Proteina bruta" e "Proteína Bruta" são o mesmo nutriente.`,
   },
 
+  // ── Body-map + scores equinos: texto da evolução → ResumoAtendimento ────────
+  // v1: prompt inicial — léxico coloquial, plural→bilateral, anáfora "correspondente",
+  //     roteamento de terapia sem local para nao_localizado, sinalização de ditado truncado
+  // v2: generalizado para QUALQUER especialidade de evolução (não só ditado de fisio/quiro);
+  //     adicionado bloco opcional "resumoClinico" (claudicação AAEP, dor 0-10, tensão
+  //     muscular por região, simetria, ROM, orientações de treino) para o relatório
+  //     comparativo entre sessões — usado por EvolucaoController.relatorioAtendimento
+  'extrair_resultado_sessao_equino': {
+    version: 'v2',
+    build: (texto) => {
+      // Léxico embutido dinamicamente a partir do domínio (fonte única de verdade —
+      // nunca hardcodar IDs aqui: se a taxonomia mudar, o prompt acompanha sozinho).
+      const { PARTES_EQUINAS } = require('../../models/anatomia-equina/anatomia-equina.taxonomy');
+      const { GRUPOS_EQUINOS } = require('../../models/anatomia-equina/anatomia-equina.grupos');
+      const { MODALIDADES_TERAPIA } = require('../../models/anatomia-equina/s2vet-clinica.model');
+
+      const linhasPartes = Object.values(PARTES_EQUINAS)
+        .map((p) => `${p.id} — "${p.nome['pt-BR']}" (paridade: ${p.paridade})`)
+        .join('\n');
+      const linhasGrupos = Object.values(GRUPOS_EQUINOS)
+        .map((g) => `${g.id} — "${g.nome['pt-BR']}" (paridade: ${g.paridade}; partes: ${g.partes.join(', ')})`)
+        .join('\n');
+      const linhasModalidades = Object.values(MODALIDADES_TERAPIA)
+        .map((m) => `${m.id} (exigeLocal: ${m.exigeLocal})`)
+        .join('\n');
+
+      return `Você é um assistente de extração clínica veterinária equina. O texto abaixo é
+o registro de uma evolução clínica — pode ser de QUALQUER especialidade (fisioterapia,
+quiropraxia, clínica geral, ortopedia, etc.), escrito ou ditado pelo veterinário. Sua
+tarefa é extrair DUAS coisas, ambas OPCIONAIS — extraia apenas o que estiver realmente
+presente no texto, nunca invente para preencher uma seção:
+
+1. "registros": achados de exame / avaliações funcionais / terapias aplicadas com
+   localização anatômica (para pintar o mapa corporal do cavalo).
+2. "resumoClinico": indicadores clínicos comparáveis entre sessões (claudicação, dor,
+   tensão muscular, simetria, amplitude de movimento, orientações de treino) — só
+   preencha os campos que o texto realmente mencionar; a maioria das evoluções (ex.:
+   vacinação, exame de rotina) não vai mencionar nada disso, e nesse caso
+   "resumoClinico" deve ser omitido inteiramente.
+
+# REGRAS ABSOLUTAS
+
+- NÃO invente achados, testes, terapias ou scores que não estejam explicitamente no texto.
+- NÃO force um "parteId"/"grupoId" que não corresponda ao termo dito — se não houver
+  correspondência clara na lista abaixo, use tipo:"nao_localizado" com a descrição literal.
+- Use APENAS os ids de partes/grupos/modalidades listados abaixo. Nunca invente um id novo.
+- Cada frase do ditado deve virar NO MÁXIMO um registro por achado/teste/terapia mencionado
+  — não funda dois achados distintos num só registro, não duplique o mesmo achado.
+- "proveniencia.trechoOriginal" deve ser um trecho VERBATIM (copiado) do ditado, nunca parafraseado.
+
+# PARTES ANATÔMICAS (parteId — nome — paridade)
+${linhasPartes}
+
+# GRUPOS ANATÔMICOS (grupoId — nome — paridade — partes que expande)
+${linhasGrupos}
+
+# MODALIDADES DE TERAPIA (modalidadeId — exigeLocal)
+${linhasModalidades}
+
+# LÉXICO COLOQUIAL → TÉCNICO (equivalências que o veterinário usa ao falar)
+- "espada" / "espádua" → grupo "espadua" (escápula + articulação do ombro)
+- "nuca" → grupo "nuca" (C1–C2, atlas/áxis)
+- "joelho" (do membro torácico/anterior) → parte "carpo_ant" — no cavalo, o "joelho"
+  popular é anatomicamente o carpo (o joelho verdadeiro é a "soldra", membro pélvico)
+- "curvilhão" / "jarrete" → parte "jarrete_tarso"
+- "canela" → "metacarpo" (anterior) ou "metatarso" (posterior) conforme o membro citado
+- "garupa" → parte "garupa" (sacro/pelve, mediano)
+- "cernelha" → parte "cernelha"
+- "lombo" / "região lombar" / "lombar" → parte "lombo"
+- "dorso" / "costas" (região torácica) → parte "dorso"
+- "coluna" / "coluna vertebral" (sem indicar um trecho específico) → grupo "coluna"
+- "cervical" / "pescoço" (região inteira) → grupo "cervical"; se o veterinário disser
+  uma vértebra específica ("C3", "terceira cervical") → parte "vertebra_c3" etc.
+- "membros anteriores" / "membros torácicos" → grupo "membro_toracico"
+- "membros posteriores" / "membros pélvicos" / "membros traseiros" → grupo "membro_pelvico"
+- Se o termo dito não corresponder a nada acima nem à lista de partes/grupos, use
+  tipo:"nao_localizado" com "descricao" = o termo tal como foi dito.
+
+# REGRA — PLURAL IMPLICA BILATERAL
+Se o veterinário usar o PLURAL de uma parte/grupo de paridade "bilateral" SEM mencionar um
+lado ("joelhos", "boletos", "membros pélvicos") — assuma lateralidade:"bilateral" mesmo sem
+a palavra "bilateral" ser dita. Se disser o singular sem lado ("joelho", sem "direito"/"D"/
+"esquerdo"/"E") e a parte for bilateral, NÃO invente o lado: omita "lateralidade" (o schema
+sinaliza necessitaRevisao automaticamente) e marque necessitaRevisao:true.
+
+# REGRA — ANÁFORA ("correspondente", "o mesmo lado", "idem")
+Quando o ditado referir um lado por anáfora (ex.: "reatividade lombar E + garupa
+correspondente"), resolva a anáfora usando o ÚLTIMO lado explícito mencionado ANTES no
+mesmo ditado (no exemplo, "correspondente" = "esquerdo", porque "lombar E" veio antes).
+Preencha a lateralidade do registro anafórico diretamente — não deixe "correspondente"
+como texto solto em nenhum campo.
+
+# REGRA — TERAPIA SEM LOCAL
+Terapias cuja modalidade tem exigeLocal:false (ex.: eletroacupuntura sistêmica) OU que o
+veterinário aplicou sem citar nenhuma parte/grupo do corpo devem usar
+alvo: { tipo: "nao_localizado", descricao: "<o que foi dito>" } — nunca invente uma parte
+só para ter onde pintar.
+
+# REGRA — ESCOLHA DE "kind" (achado_exame vs. avaliacao_funcional)
+"achado_exame.achado" é uma lista FECHADA: reatividade_palpacao, fasciculacao, dor, edema,
+assimetria, restricao_articular, hipertonia, atrofia. NUNCA invente um valor fora dessa
+lista. Qualquer observação que não seja EXATAMENTE um desses 8 termos (ex.: "déficit
+proprioceptivo", "teste de cauda positivo", "reflexo de elevação da cauda diminuído") é
+uma avaliacao_funcional, não um achado_exame — use "teste" (string livre, ex.:
+"teste.proprioceptivo", "teste.cauda", "reflexo.elevacao_cauda") + "resultado" na escala
+que couber (binario positivo/negativo, graduado ausente/diminuido/normal/aumentado, ou
+presenca presente/ausente).
+
+# REGRA — DITADO TRUNCADO
+Se o texto terminar de forma abrupta (frase incompleta, corte no meio de uma palavra, ou
+contiver um marcador como "[truncado]"), defina "completo": false e adicione um aviso em
+"avisos" explicando o que ficou incompleto. Extraia normalmente tudo que veio ANTES do corte.
+
+# PROVENIÊNCIA (obrigatória em todo registro)
+- "confianca": 0 a 1 — quão certo você está do mapeamento termo→id.
+- "trechoOriginal": trecho verbatim do ditado que originou o registro.
+- "necessitaRevisao": true sempre que houver ambiguidade de lado, termo não mapeado
+  literalmente na lista, ou qualquer inferência (incluindo plural→bilateral e anáfora).
+
+# REGRA — "resumoClinico" (scores comparáveis entre sessões)
+
+Todos os campos abaixo são INDEPENDENTES e OPCIONAIS — preencha só o que o texto disser:
+
+- "claudicacao": só se o texto mencionar um grau de claudicação. Escala AAEP oficial é
+  0 a 5; se o veterinário usar outra escala (ex.: "grau 2 de 4"), NÃO converta — use o
+  valor literal e registre a conversão como incerta em "observacao".
+- "dor": só se houver uma nota de dor à palpação em escala 0–10. Se o texto disser
+  apenas "sensível" ou "dolorido" sem número, NÃO invente um valor — omita o campo.
+- "tensaoMuscular": lista de { regiao, valor } só para as regiões musculares
+  explicitamente avaliadas, escala 0 (tônus normal) a 3 (severa/contratura). Use o nome
+  da região como o veterinário disse (ex.: "Longuíssimo lombar", "Glúteos (dir.)").
+- "simetria": texto curto só se houver avaliação explícita de simetria/assimetria
+  (ex.: "Simétrica", "Assimétrica à direita").
+- "rom": lista de { teste, resultado } só para testes de amplitude de movimento
+  citados (ex.: flexão lateral, flexão ventral, báscula pélvica) — "resultado" é a
+  descrição do estado ATUAL em texto livre (o relatório compara com a sessão anterior
+  automaticamente, você só descreve o que este texto diz sobre HOJE).
+- "treino": lista de { status: "liberado"|"restrito"|"suspenso", titulo, detalhe } só
+  se houver orientações de retorno ao trabalho/treino.
+- "observacaoFechamento": uma frase de síntese SÓ se o texto tiver uma conclusão/
+  observação de fechamento clara — nunca invente uma conclusão que o texto não tem.
+
+Se NENHUM desses campos tiver dado no texto, omita "resumoClinico" por completo (não
+envie um objeto vazio).
+
+# SAÍDA
+
+Retorne SOMENTE um JSON válido, sem markdown, sem explicações, no formato:
+
+{
+  "registros": [
+    {
+      "kind": "achado_exame" | "avaliacao_funcional" | "terapia_aplicada",
+      "alvo": { "tipo": "parte", "parteId": "...", "lateralidade": "direito|esquerdo|bilateral (opcional)" }
+            | { "tipo": "grupo", "grupoId": "...", "lateralidade": "..." (opcional) }
+            | { "tipo": "sistema", "sistemaId": "neurologico|musculoesqueletico|vascular|tegumentar" }
+            | { "tipo": "nao_localizado", "descricao": "..." },
+      // achado_exame:
+      "achado": "reatividade_palpacao|fasciculacao|dor|edema|assimetria|restricao_articular|hipertonia|atrofia",
+      "intensidade": 0.0,
+      // avaliacao_funcional:
+      "teste": "descrição curta do teste, ex: teste.cauda, reflexo.elevacao_cauda",
+      "resultado": { "escala": "binario", "valor": "positivo|negativo" }
+                 | { "escala": "graduado", "valor": "ausente|diminuido|normal|aumentado" }
+                 | { "escala": "presenca", "valor": "presente|ausente" },
+      // terapia_aplicada:
+      "modalidade": "laser_led|campo_magnetico|eletroacupuntura|terapia_manual",
+      "observacao": "opcional, texto livre",
+      "proveniencia": { "confianca": 0.0, "trechoOriginal": "...", "necessitaRevisao": false }
+    }
+  ],
+  "resumoClinico": {
+    "claudicacao": { "grauAAEP": 0, "observacao": "opcional" },
+    "dor": { "valor": 0 },
+    "tensaoMuscular": [ { "regiao": "...", "valor": 0 } ],
+    "simetria": "...",
+    "rom": [ { "teste": "...", "resultado": "..." } ],
+    "treino": [ { "status": "liberado|restrito|suspenso", "titulo": "...", "detalhe": "..." } ],
+    "observacaoFechamento": "..."
+  },
+  "completo": true,
+  "avisos": []
+}
+(campo "resumoClinico" inteiro é omitido se nada do texto se encaixar nele — não envie
+chaves individuais vazias dentro dele.)
+
+# EXEMPLO
+
+Ditado: "Campo magnético em cervical e joelho direito; laser em cervical, dorso e garupa;
+eletroacupuntura neurológica."
+
+Saída:
+{
+  "registros": [
+    { "kind": "terapia_aplicada", "modalidade": "campo_magnetico",
+      "alvo": { "tipo": "grupo", "grupoId": "cervical" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "Campo magnético em cervical", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "campo_magnetico",
+      "alvo": { "tipo": "parte", "parteId": "carpo_ant", "lateralidade": "direito" },
+      "proveniencia": { "confianca": 0.85, "trechoOriginal": "joelho direito", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "laser_led",
+      "alvo": { "tipo": "grupo", "grupoId": "cervical" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em cervical", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "laser_led",
+      "alvo": { "tipo": "parte", "parteId": "dorso" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em ... dorso", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "laser_led",
+      "alvo": { "tipo": "parte", "parteId": "garupa" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "laser em ... garupa", "necessitaRevisao": false } },
+    { "kind": "terapia_aplicada", "modalidade": "eletroacupuntura",
+      "alvo": { "tipo": "nao_localizado", "descricao": "eletroacupuntura neurológica" },
+      "proveniencia": { "confianca": 0.8, "trechoOriginal": "eletroacupuntura neurológica", "necessitaRevisao": false } }
+  ],
+  "completo": true,
+  "avisos": []
+}
+
+# EXEMPLO 2 (achado_exame + avaliacao_funcional + ditado truncado)
+
+Ditado: "Déficit proprioceptivo em membros pélvicos; teste de cauda positivo; reflexo
+elevação cauda diminuído; PEMF [truncado]."
+
+Saída:
+{
+  "registros": [
+    { "kind": "avaliacao_funcional", "teste": "teste.proprioceptivo",
+      "resultado": { "escala": "presenca", "valor": "presente" },
+      "alvo": { "tipo": "grupo", "grupoId": "membro_pelvico" },
+      "proveniencia": { "confianca": 0.85, "trechoOriginal": "Déficit proprioceptivo em membros pélvicos", "necessitaRevisao": false } },
+    { "kind": "avaliacao_funcional", "teste": "teste.cauda",
+      "resultado": { "escala": "binario", "valor": "positivo" },
+      "alvo": { "tipo": "parte", "parteId": "cauda" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "teste de cauda positivo", "necessitaRevisao": false } },
+    { "kind": "avaliacao_funcional", "teste": "reflexo.elevacao_cauda",
+      "resultado": { "escala": "graduado", "valor": "diminuido" },
+      "alvo": { "tipo": "parte", "parteId": "cauda" },
+      "proveniencia": { "confianca": 0.9, "trechoOriginal": "reflexo elevação cauda diminuído", "necessitaRevisao": false } }
+  ],
+  "completo": false,
+  "avisos": ["Ditado truncado após \"PEMF\" — modalidade/local da terapia não foram informados."]
+}
+(Nota: "PEMF" ficou sem modalidade/alvo utilizáveis antes do corte — não gere um registro
+para ele; apenas registre o aviso de truncamento.)
+
+# EXEMPLO 3 (resumoClinico — sessão de quiropraxia com scores)
+
+Texto: "Sessão 4 de 6. Claudicação grau 1 (AAEP), era grau 3 na primeira sessão. Dor à
+palpação 2/10. Tensão muscular: cervical 0,8, longuíssimo torácico 1,5, longuíssimo
+lombar 1,0, glúteos direito 0,5. Simetria pélvica: simétrica, antes era assimétrica à
+direita. Flexão lateral esquerda agora alcança o flanco. Báscula pélvica completa, sem
+dor. Liberado: caminhada e trote em linha reta até 40 min/dia. Restrito: círculos acima
+de 15m, só a partir da 2ª semana. Suspenso: tambores e giros curtos até reavaliar T14.
+O Diamante respondeu muito bem ao ajuste lombossacral; ponto de atenção é T14."
+
+Saída (resumoClinico apenas — "registros" fica de fora deste exemplo por brevidade):
+{
+  "resumoClinico": {
+    "claudicacao": { "grauAAEP": 1, "observacao": "era grau 3 na primeira sessão" },
+    "dor": { "valor": 2 },
+    "tensaoMuscular": [
+      { "regiao": "Cervical (braquiocefálico)", "valor": 0.8 },
+      { "regiao": "Longuíssimo torácico", "valor": 1.5 },
+      { "regiao": "Longuíssimo lombar", "valor": 1.0 },
+      { "regiao": "Glúteos (dir.)", "valor": 0.5 }
+    ],
+    "simetria": "Simétrica",
+    "rom": [
+      { "teste": "Flexão lateral · esq.", "resultado": "alcança o flanco" },
+      { "teste": "Báscula pélvica", "resultado": "completa, sem dor" }
+    ],
+    "treino": [
+      { "status": "liberado", "titulo": "Liberado", "detalhe": "Caminhada e trote em linha reta, terreno plano, até 40 min/dia." },
+      { "status": "restrito", "titulo": "Com restrição", "detalhe": "Círculos acima de 15m de diâmetro, a partir da 2ª semana." },
+      { "status": "suspenso", "titulo": "Suspenso", "detalhe": "Tambores e giros curtos — aguardar reavaliação de T14." }
+    ],
+    "observacaoFechamento": "Respondeu bem ao ajuste lombossacral; ponto de atenção segue sendo T14."
+  }
+}
+
+## DITADO A EXTRAIR:
+
+${texto.slice(0, 12000)}`;
+    },
+  },
+
   // ── Composição alimentar: rótulo em texto (PDF extraído) ────────────────────
   'parse_composicao_texto': {
     version: 'v1',

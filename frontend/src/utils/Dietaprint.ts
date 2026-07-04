@@ -3,12 +3,15 @@
 // Seções independentes: Diário (por período do dia) | Semanal | Mensal
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { resolverUrlAbsoluta } from './printUrl';
+
 export interface PrintAnimal {
   nome: string;
   photoUrl?: string | null;
   raca?: { nome: string } | null;
   dataNascimento?: string | Date | null;
   user?: { fullName: string; email: string } | null;
+  logoUrl?: string | null;
 }
 
 export interface PrintPlan {
@@ -166,6 +169,7 @@ const PRINT_CSS = `
     border-bottom: 2pt solid #059669; padding-bottom: 10pt; margin-bottom: 18pt;
   }
   .sys-name { font-size: 22pt; font-weight: 700; color: #059669; line-height: 1; }
+  .brand-logo { max-height: 28pt; max-width: 160pt; object-fit: contain; }
   .sys-sub  { font-size: 9pt;  color: #6b7280; margin-top: 4pt; }
   .sys-date { font-size: 9pt;  color: #9ca3af; text-align: right; line-height: 1.7; }
 
@@ -261,6 +265,7 @@ export function gerarHtmlDieta(
   const dataEmissao = agora.toLocaleDateString('pt-BR');
   const horaEmissao = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const fotoUrl     = animal?.photoUrl ?? 'https://picsum.photos/id/1015/400/400';
+  const logoUrl     = resolverUrlAbsoluta(animal?.logoUrl);
   const totalItens  = itens.length;
   const groupedHTML = buildGroupedHTML(itens);
 
@@ -275,7 +280,7 @@ export function gerarHtmlDieta(
 
   <div class="sys-header">
     <div>
-      <div class="sys-name">S2Vet</div>
+      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<div class="sys-name">S2Vet</div>`}
       <div class="sys-sub">Sistema Hospitalar Veterinário · Módulo Nutricional</div>
     </div>
     <div class="sys-date">

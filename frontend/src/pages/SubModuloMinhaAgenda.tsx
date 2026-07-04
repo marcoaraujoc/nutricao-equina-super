@@ -2,7 +2,8 @@
 // Aba "Minha Agenda" do módulo Atendimento — atendimentos do dia
 
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban, ShieldCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban, ShieldCheck, Stethoscope } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,7 +12,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO';
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO';
 
 interface Agendamento {
   id:          number;
@@ -52,9 +53,19 @@ const TIPOS: Record<TipoAgendamento, { label: string; cls: string }> = {
 const TIPOS_LIST: TipoAgendamento[] = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 
 const STATUS_CLS: Record<StatusAgendamento, string> = {
-  AGENDADO:  'bg-amber-100 text-amber-700',
-  CONCLUIDO: 'bg-green-100 text-green-700',
-  CANCELADO: 'bg-red-100 text-red-600',
+  AGENDADO:     'bg-amber-100 text-amber-700',
+  EM_ANDAMENTO: 'bg-blue-100 text-blue-700',
+  CONCLUIDO:    'bg-green-100 text-green-700',
+  FINALIZADO:   'bg-green-100 text-green-700',
+  CANCELADO:    'bg-red-100 text-red-600',
+};
+
+const STATUS_LABEL: Record<StatusAgendamento, string> = {
+  AGENDADO:     'AGENDADO',
+  EM_ANDAMENTO: 'EM ANDAMENTO',
+  CONCLUIDO:    'CONCLUÍDO',
+  FINALIZADO:   'FINALIZADO',
+  CANCELADO:    'CANCELADO',
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -100,6 +111,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   const hoje = dataHoje();
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   // ── Carrega vets e agenda ───────────────────────────────────────────────────
 
@@ -134,6 +146,13 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
     carregar();
     fetchVets();
   }, [carregar, fetchVets, loadingPerms]);
+
+  // ── Iniciar atendimento ────────────────────────────────────────────────────
+
+  const handleIniciarAtendimento = (ag: Agendamento) => {
+    if (!ag.animal?.id) { toast.error('Animal não identificado no agendamento'); return; }
+    navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
+  };
 
   // ── Concluir ───────────────────────────────────────────────────────────────
 
@@ -330,12 +349,18 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold ${STATUS_CLS[ag.status]}`}>
-                      {ag.status}
+                      {STATUS_LABEL[ag.status]}
                     </span>
                   </td>
 
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
+                      {isAgendado && (
+                        <button onClick={() => handleIniciarAtendimento(ag)} title="Iniciar atendimento"
+                          className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-lg transition-colors">
+                          <Stethoscope size={13} />
+                        </button>
+                      )}
                       {isAgendado && podeEditar && (
                         <button onClick={() => abrirEditar(ag)} title="Alterar"
                           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
@@ -405,7 +430,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                     {TIPOS[ag.tipo].label}
                   </span>
                   <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold ${STATUS_CLS[ag.status]}`}>
-                    {ag.status}
+                    {STATUS_LABEL[ag.status]}
                   </span>
                 </div>
               </div>
@@ -417,8 +442,13 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
               <div className="flex items-center justify-between mt-2">
                 <span className="font-mono text-sm font-semibold text-gray-800">{formatHora(ag.dataHora)}</span>
-                {isAgendado && podeEditar && (
+                {isAgendado && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    <button onClick={() => handleIniciarAtendimento(ag)}
+                      className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors">
+                      <Stethoscope size={11} /> Iniciar
+                    </button>
+                    {podeEditar && <>
                     <button onClick={() => abrirEditar(ag)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Pencil size={11} /> Alterar
@@ -450,6 +480,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                         <Ban size={11} /> Cancelar
                       </button>
                     )}
+                    </>}
                   </div>
                 )}
               </div>

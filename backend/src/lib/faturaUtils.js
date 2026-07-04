@@ -42,10 +42,24 @@ async function getOrCreateFatura(tx, proprietarioId) {
  * @param {number}  opts.valor
  * @param {number}  opts.quantidade
  * @param {number|null} opts.veterinarioId
+ * @param {number|null} opts.exameClinicoId          - origem: ExameClinico.id
+ * @param {number|null} opts.prescricaoId            - origem: Prescricao.id (item do grupo)
+ * @param {number|null} opts.vacinaClinicaId         - origem: VacinaClinica.id
+ * @param {number|null} opts.encaminhamentoClinicoId - origem: EncaminhamentoClinico.id
  */
-async function adicionarFaturaItem(tx, { faturaId, animalId, tipo, descricao, valor, quantidade, veterinarioId }) {
+async function adicionarFaturaItem(tx, {
+  faturaId, animalId, tipo, descricao, valor, quantidade, veterinarioId,
+  exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
+}) {
   await tx.faturaItem.create({
-    data: { faturaId, animalId, tipo, descricao, valor: valor ?? 0, quantidade: quantidade ?? 1, veterinarioId: veterinarioId ?? null },
+    data: {
+      faturaId, animalId, tipo, descricao,
+      valor: valor ?? 0, quantidade: quantidade ?? 1, veterinarioId: veterinarioId ?? null,
+      exameClinicoId: exameClinicoId ?? null,
+      prescricaoId: prescricaoId ?? null,
+      vacinaClinicaId: vacinaClinicaId ?? null,
+      encaminhamentoClinicoId: encaminhamentoClinicoId ?? null,
+    },
   });
   if ((valor ?? 0) > 0) {
     await tx.fatura.update({
@@ -55,4 +69,206 @@ async function adicionarFaturaItem(tx, { faturaId, animalId, tipo, descricao, va
   }
 }
 
-module.exports = { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem };
+/**
+ * Recalcula o total da fatura a partir da soma de valor × quantidade dos itens.
+ * Aceita tanto o client `prisma` quanto um client de transaction (`tx`).
+ *
+ * @param {object} client
+ * @param {number} faturaId
+ * @returns {number} total recalculado
+ */
+async function recalcularTotal(client, faturaId) {
+  const itens = await client.faturaItem.findMany({ where: { faturaId } });
+  const total = itens.reduce((acc, i) => acc + i.valor * i.quantidade, 0);
+  await client.fatura.update({ where: { id: faturaId }, data: { total } });
+  return total;
+}
+
+/** Erro lançado quando a sincronização esbarra numa fatura já paga. */
+class FaturaPagaError extends Error {
+  constructor(message = 'Não é possível alterar: item já está em uma fatura paga.') {
+    super(message);
+    this.code = 'FATURA_PAGA';
+  }
+}
+
+/**
+ * Busca os FaturaItem vinculados a um registro de origem (exame, prescrição, vacina, encaminhamento).
+ *
+ * @param {object} tx
+ * @param {string} campo - nome da FK no FaturaItem (ex: 'exameClinicoId')
+ * @param {number} origemId
+ */
+async function buscarFaturaItensDaOrigem(tx, campo, origemId) {
+  return tx.faturaItem.findMany({
+    where:   { [campo]: origemId },
+    include: { fatura: { select: { id: true, status: true } } },
+  });
+}
+
+/**
+ * Remove os FaturaItem vinculados a um registro de origem e recalcula os totais das faturas
+ * afetadas. Lança FaturaPagaError (sem alterar nada) se algum item pertencer a fatura PAGA.
+ * Deve ser chamado dentro de uma transaction (tx), antes de excluir o registro de origem.
+ */
+async function removerFaturaItensDaOrigem(tx, campo, origemId) {
+  const itens = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  if (itens.length === 0) return;
+  if (itens.some(i => i.fatura.status === 'PAGA')) throw new FaturaPagaError();
+
+  await tx.faturaItem.deleteMany({ where: { id: { in: itens.map(i => i.id) } } });
+  const faturaIds = [...new Set(itens.map(i => i.faturaId))];
+  for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
+}
+
+/**
+ * Atualiza a descrição (e opcionalmente valor/quantidade) dos FaturaItem vinculados a um
+ * registro de origem e recalcula os totais das faturas afetadas. Lança FaturaPagaError
+ * (sem alterar nada) se algum item pertencer a fatura PAGA.
+ * Deve ser chamado dentro de uma transaction (tx).
+ */
+async function atualizarFaturaItensDaOrigem(tx, campo, origemId, { descricao, valor, quantidade }) {
+  const itens = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  if (itens.length === 0) return;
+  if (itens.some(i => i.fatura.status === 'PAGA')) throw new FaturaPagaError();
+
+  const data = {};
+  if (descricao  !== undefined) data.descricao  = descricao;
+  if (valor      !== undefined) data.valor      = valor;
+  if (quantidade !== undefined) data.quantidade = quantidade;
+
+  await tx.faturaItem.updateMany({ where: { id: { in: itens.map(i => i.id) } }, data });
+  const faturaIds = [...new Set(itens.map(i => i.faturaId))];
+  for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
+}
+
+// ─── Regras de fechamento de fatura (dia fixo | dia útil | último dia do mês) ─────────────
+
+const TIPOS_FECHAMENTO_VALIDOS = ['DIA_FIXO', 'DIA_UTIL', 'ULTIMO_DIA_MES'];
+
+/** Chave "AAAA-MM-DD" em horário local — evita bug de fuso ao comparar com .toISOString() (UTC). */
+function chaveData(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function ehFimDeSemana(data) {
+  const dia = data.getDay(); // 0=domingo, 6=sábado
+  return dia === 0 || dia === 6;
+}
+
+/** Domingo de Páscoa do ano (algoritmo de Gauss/Meeus) — usado para achar a Sexta-feira Santa. */
+function calcularPascoa(ano) {
+  const a = ano % 19;
+  const b = Math.floor(ano / 100);
+  const c = ano % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const mes = Math.floor((h + l - 7 * m + 114) / 31); // 3=março, 4=abril
+  const dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(ano, mes - 1, dia);
+}
+
+/**
+ * Feriados nacionais obrigatórios por lei federal (sem estaduais/municipais, sem pontos
+ * facultativos como Carnaval e Corpus Christi). Calculado algoritmicamente — não precisa
+ * de tabela mantida ano a ano.
+ */
+function feriadosNacionais(ano) {
+  const pascoa = calcularPascoa(ano);
+  const sextaSanta = new Date(pascoa);
+  sextaSanta.setDate(pascoa.getDate() - 2);
+
+  return new Set([
+    chaveData(new Date(ano, 0, 1)),    // Confraternização Universal
+    chaveData(sextaSanta),             // Sexta-feira Santa
+    chaveData(new Date(ano, 3, 21)),   // Tiradentes
+    chaveData(new Date(ano, 4, 1)),    // Dia do Trabalhador
+    chaveData(new Date(ano, 8, 7)),    // Independência do Brasil
+    chaveData(new Date(ano, 9, 12)),   // Nossa Senhora Aparecida
+    chaveData(new Date(ano, 10, 2)),   // Finados
+    chaveData(new Date(ano, 10, 15)),  // Proclamação da República
+    chaveData(new Date(ano, 10, 20)),  // Consciência Negra (federal desde 2024)
+    chaveData(new Date(ano, 11, 25)),  // Natal
+  ]);
+}
+
+function ehDiaUtil(data) {
+  if (ehFimDeSemana(data)) return false;
+  return !feriadosNacionais(data.getFullYear()).has(chaveData(data));
+}
+
+/** Retorna a Date do Nº-ésimo dia útil do mês/ano de `referencia`, ou null se o mês não tiver N dias úteis. */
+function nEsimoDiaUtil(n, referencia) {
+  const d = new Date(referencia.getFullYear(), referencia.getMonth(), 1);
+  let contagem = 0;
+  while (d.getMonth() === referencia.getMonth()) {
+    if (ehDiaUtil(d)) {
+      contagem++;
+      if (contagem === n) return new Date(d);
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+}
+
+function ehUltimoDiaDoMes(hoje) {
+  const amanha = new Date(hoje);
+  amanha.setDate(amanha.getDate() + 1);
+  return amanha.getDate() === 1;
+}
+
+/**
+ * Verifica se um dia fixo configurado (1–31) "bate" com uma data de referência.
+ * Clamp: se o dia configurado é maior que o total de dias do mês, bate no último dia do mês
+ * (ex: dia 31 configurado, fevereiro tem 28 → fecha no dia 28).
+ */
+function diaFixoBateHoje(dia, hoje) {
+  if (hoje.getDate() === dia) return true;
+  const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+  return ehUltimoDiaDoMes(hoje) && dia > diasNoMes;
+}
+
+/**
+ * Decide se uma fatura deve fechar hoje, dada a configuração de fechamento da empresa/equipe.
+ *
+ * @param {object} config
+ * @param {string|null} config.tipoFechamento      - 'DIA_FIXO' | 'DIA_UTIL' | 'ULTIMO_DIA_MES' | null
+ * @param {number|null} config.diaFechamentoFatura - dia do mês (DIA_FIXO) ou Nº dia útil (DIA_UTIL)
+ * @param {Date} hoje
+ */
+function deveFecharHoje(config, hoje) {
+  // Compat: linhas antigas sem tipoFechamento — se tinham um dia setado, é DIA_FIXO;
+  // senão, comportamento original (fecha no último dia do mês).
+  const tipo = config.tipoFechamento ?? (config.diaFechamentoFatura != null ? 'DIA_FIXO' : 'ULTIMO_DIA_MES');
+
+  if (tipo === 'DIA_FIXO') {
+    if (config.diaFechamentoFatura == null) return ehUltimoDiaDoMes(hoje);
+    return diaFixoBateHoje(config.diaFechamentoFatura, hoje);
+  }
+  if (tipo === 'DIA_UTIL') {
+    if (config.diaFechamentoFatura == null) return ehUltimoDiaDoMes(hoje);
+    const data = nEsimoDiaUtil(config.diaFechamentoFatura, hoje);
+    return data != null && chaveData(data) === chaveData(hoje);
+  }
+  return ehUltimoDiaDoMes(hoje);
+}
+
+module.exports = {
+  formatAtendimentoNum,
+  getOrCreateFatura,
+  adicionarFaturaItem,
+  recalcularTotal,
+  removerFaturaItensDaOrigem,
+  atualizarFaturaItensDaOrigem,
+  FaturaPagaError,
+  TIPOS_FECHAMENTO_VALIDOS,
+  deveFecharHoje,
+  ehDiaUtil,
+};

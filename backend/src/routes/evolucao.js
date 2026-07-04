@@ -75,6 +75,7 @@ router.get('/animal/:animalId',       authenticate, checkPermission('atendimento
 // ─── Rotas parametrizadas ─────────────────────────────────────────────────────
 
 router.get('/:id',      authenticate, checkPermission('atendimento.evolucoes.ler',     'LEITURA'), injectTenant, evolucaoIdParam, validate, EvolucaoController.obterPorId);
+router.get('/:id/relatorio-atendimento', authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), injectTenant, evolucaoIdParam, validate, EvolucaoController.relatorioAtendimento);
 router.post('/',        authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), injectTenant, criarEvolucaoRules, validate, EvolucaoController.criar);
 router.put('/:id',      authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.atualizar);
 router.delete('/:id',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.excluir);

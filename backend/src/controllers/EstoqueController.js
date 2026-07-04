@@ -25,6 +25,17 @@ const INCLUDE = {
   fornecedor: { select: { id: true, nome: true, tipoServico: true } },
 };
 
+// Normaliza lote para comparação (case-insensitive, vazio=null)
+function normLote(lote) {
+  const t = (lote ?? '').trim();
+  return t === '' ? null : t.toLowerCase();
+}
+// Normaliza validade para comparação (apenas YYYY-MM-DD)
+function normValidade(v) {
+  if (!v) return null;
+  try { return new Date(v).toISOString().split('T')[0]; } catch { return null; }
+}
+
 // ADMIN pode passar ?empresaId= para ver qualquer empresa; demais sempre usam req.empresaId
 function getEmpresaScope(req) {
   if (req.user?.userType === 'ADMIN') {
@@ -65,12 +76,17 @@ const listar = async (req, res) => {
       };
     }
 
-    const itens = await prisma.estoqueClinica.findMany({
+    const rawItens = await prisma.estoqueClinica.findMany({
       where,
-      include: INCLUDE,
+      include: {
+        ...INCLUDE,
+        _count: { select: { movimentos: { where: { tipo: 'SAIDA' } } } },
+      },
       orderBy: { medicamento: { nome: 'asc' } },
       ...(limit ? { take: parseInt(limit, 10) } : {}),
     });
+
+    const itens = rawItens.map(({ _count, ...i }) => ({ ...i, emUso: (_count?.movimentos ?? 0) > 0 }));
 
     const [total, totalControlados] = await Promise.all([
       prisma.estoqueClinica.count({ where: { ativo: true, ...(empresaId ? { empresaId } : {}) } }),
@@ -134,17 +150,64 @@ const criar = async (req, res) => {
     const med = await prisma.medicamento.findUnique({ where: { id: Number(medicamentoId) } });
     if (!med) return res.status(404).json({ error: 'Medicamento não encontrado no catálogo.' });
 
-    const item = await prisma.$transaction(async (tx) => {
-      const precoUnitarioBase = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), med.unidade);
+    const eId           = empresaId ? Number(empresaId) : (req.empresaId ?? null);
+    const loteNorm      = normLote(lote);
+    const validadeStr   = normValidade(validade);
+    const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), med.unidade);
+    const nfMotivo      = notaFiscal?.trim() ? `NF: ${notaFiscal.trim()}` : null;
 
+    // ── Busca candidatos para consolidação (mesmo medicamento, empresa, ativo) ─
+    const candidatos = await prisma.estoqueClinica.findMany({
+      where: { medicamentoId: Number(medicamentoId), empresaId: eId, ativo: true },
+      include: INCLUDE,
+    });
+
+    // Verifica se existe entrada idêntica (lote+validade+preço)
+    const existente = candidatos.find(c => {
+      if (normLote(c.lote) !== loteNorm) return false;
+      if (normValidade(c.validade) !== validadeStr) return false;
+      const cPreco = c.precoUnitarioBase != null ? Number(c.precoUnitarioBase) : null;
+      if (precoNovo === null && cPreco === null) return true;
+      if (precoNovo === null || cPreco === null) return false;
+      const maxP = Math.max(precoNovo, cPreco);
+      return maxP === 0 || Math.abs(precoNovo - cPreco) / maxP < 0.01; // 1% de tolerância
+    });
+
+    if (existente) {
+      // ── CONSOLIDAR: soma quantidade + cria movimento com NF ──────────────
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.movimentoEstoque.create({
+          data: {
+            estoqueId: existente.id,
+            tipo: 'ENTRADA',
+            quantidade: Number(qtdEstoque),
+            motivo: nfMotivo ?? 'Entrada adicional',
+          },
+        });
+        return tx.estoqueClinica.update({
+          where: { id: existente.id },
+          data: { qtdEstoque: { increment: Number(qtdEstoque) } },
+          include: { ...INCLUDE, _count: { select: { movimentos: { where: { tipo: 'SAIDA' } } } } },
+        });
+      });
+      const { _count, ...rest } = updated;
+      return res.status(200).json({
+        dados: { ...rest, emUso: (_count?.movimentos ?? 0) > 0 },
+        consolidado: true,
+        mensagem: nfMotivo ? `Quantidade somada ao estoque existente (${nfMotivo}).` : 'Quantidade somada ao estoque existente.',
+      });
+    }
+
+    // ── NOVA ENTRADA ──────────────────────────────────────────────────────────
+    const item = await prisma.$transaction(async (tx) => {
       const entry = await tx.estoqueClinica.create({
         data: {
           medicamentoId:    Number(medicamentoId),
-          empresaId:        empresaId ? Number(empresaId) : (req.empresaId ?? null),
+          empresaId:        eId,
           valor:            Number(valor),
           valorRepassado:   Number(valorRepassado),
-          precoUnitarioBase,
-          lote:             lote?.trim() ?? null,
+          precoUnitarioBase: precoNovo,
+          lote:             loteNorm ?? null,
           validade:         validade ? new Date(validade) : null,
           qtdEstoque:       Number(qtdEstoque),
           estoqueMinimo:    Number(estoqueMinimo),
@@ -157,14 +220,14 @@ const criar = async (req, res) => {
 
       if (Number(qtdEstoque) > 0) {
         await tx.movimentoEstoque.create({
-          data: { estoqueId: entry.id, tipo: 'ENTRADA', quantidade: Number(qtdEstoque), motivo: 'Estoque inicial' },
+          data: { estoqueId: entry.id, tipo: 'ENTRADA', quantidade: Number(qtdEstoque), motivo: nfMotivo ?? 'Entrada inicial' },
         });
       }
 
       return entry;
     });
 
-    return res.status(201).json({ dados: item });
+    return res.status(201).json({ dados: { ...item, emUso: false }, consolidado: false });
   } catch (err) {
     console.error('EstoqueController.criar:', err);
     return res.status(500).json({ error: 'Erro ao criar item de estoque.' });

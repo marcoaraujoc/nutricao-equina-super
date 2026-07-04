@@ -1,5 +1,7 @@
 // frontend/src/utils/ExamePrint.ts
 
+import { resolverUrlAbsoluta } from './printUrl';
+
 export interface LaudoCompra {
   gerais:    Record<string, string>;
   sistemas:  Record<string, string>;
@@ -52,6 +54,7 @@ export interface PrintAnimalExame {
   raca?:      { nome: string } | null;
   user?:      { fullName: string; email: string } | null;
   idadeAnos?: number | null;
+  logoUrl?:   string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,6 +107,7 @@ const CSS = `
   .page-break { page-break-before: always; break-before: page; }
   .header { border-bottom: 2px solid #1d4ed8; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
   .header h1 { font-size: 20px; font-weight: 700; color: #1d4ed8; }
+  .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
   .header .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .card-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
@@ -214,6 +218,7 @@ function gerarPaginaExame(
   const tipo       = opts?.tipo ?? ex.tipo;
   const badge      = TIPO_BADGE[tipo] ?? { color: '#374151', bg: '#f3f4f6' };
   const isCompra   = tipo === 'Compra';
+  const logoUrl    = resolverUrlAbsoluta(animal?.logoUrl);
 
   // Valores resolvidos (opts sobrescrevem extra)
   const laboratorio      = opts !== undefined && 'laboratorio'      in opts ? opts.laboratorio      : extra.laboratorio;
@@ -364,7 +369,7 @@ function gerarPaginaExame(
   return `
   <div class="header">
     <div>
-      <h1>S2Vet</h1>
+      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
       <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
       <p class="sub" style="margin-top:4px;">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
     </div>

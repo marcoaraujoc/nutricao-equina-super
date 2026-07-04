@@ -2,7 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 
 // ─── Include padrão ───────────────────────────────────────────────────────────
 
@@ -97,6 +97,35 @@ function calcularQuantidadeDiaria(item) {
   if (item.frequencia === 'agora') return qtdPorDose;
   const dosesPorDia = DOSES_POR_DIA[item.frequencia] ?? 1;
   return qtdPorDose * dosesPorDia;
+}
+
+// Data de hoje no fuso LOCAL do servidor, como 'YYYY-MM-DD'. Não usar
+// `new Date().toISOString()` para "hoje": isso dá a data em UTC, que já virou
+// o dia seguinte a partir das 21h no horário de Brasília (UTC-3) — faria o
+// sistema achar que um tratamento de N dias já acabou um dia mais cedo.
+function hojeLocalStr() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// ─── Janela de execução de um item (dataInicio .. dataInicio+duracaoDias) ────
+// hojeStr: 'YYYY-MM-DD'. Retorna { dentro, ultimoDia } — ultimoDia = hoje é o
+// último dia coberto pela janela do item (ou já passou dela).
+function janelaDoItem(item, hojeStr) {
+  const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
+  const inicio    = new Date(inicioStr + 'T00:00:00Z');
+  const fim       = new Date(inicio);
+  fim.setUTCDate(fim.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
+  const fimStr    = fim.toISOString().split('T')[0];
+  // fimStr é exclusivo (dataInicio + duracaoDias): o último dia válido é fimStr - 1 dia
+  const ultimoDiaValido = new Date(fim);
+  ultimoDiaValido.setUTCDate(ultimoDiaValido.getUTCDate() - 1);
+  const ultimoDiaStr = ultimoDiaValido.toISOString().split('T')[0];
+  return {
+    dentro:    inicioStr <= hojeStr && hojeStr < fimStr,
+    ultimoDia: hojeStr >= ultimoDiaStr,
+  };
 }
 
 function qtdDiariaEstoque(item, unidadeEstoque) {
@@ -238,6 +267,46 @@ async function debitarEstoqueDia(tx, itens, empresaId) {
     unidades.set(item.medicamentoCatId, unidadeEstoque);
   }
   return { precos, unidades };
+}
+
+// ─── Insumos de aplicação injetável (seringa + agulha) ───────────────────────
+// Vias que caracterizam uma aplicação injetável — IV/IM/ID/SC/EV.
+const VIA_INJETAVEL_REGEX = /intramuscular|intraven|subcut|intraderm|endovenos/i;
+
+function isViaInjetavel(via) {
+  return !!via && VIA_INJETAVEL_REGEX.test(via);
+}
+
+// Localiza no estoque da empresa um item cujo nome do medicamento comece com
+// `prefixoNome` (ex: 'Seringa', 'Agulha') e tenha saldo disponível. Sem
+// cadastro/sem estoque → null (não bloqueia, apenas não é lançado).
+async function buscarInsumoDisponivel(tx, prefixoNome, empresaId) {
+  return tx.estoqueClinica.findFirst({
+    where: {
+      ativo:      true,
+      qtdEstoque: { gt: 0 },
+      ...(empresaId != null ? { empresaId } : {}),
+      medicamento: { nome: { startsWith: prefixoNome, mode: 'insensitive' }, ativo: true },
+    },
+    include: { medicamento: { select: { id: true, nome: true } } },
+    orderBy: { id: 'asc' },
+  });
+}
+
+// Debita 1 unidade do insumo (seringa/agulha) e retorna { valor, nome } para lançar na
+// fatura. Sem estoque disponível → retorna null silenciosamente (não bloqueia a execução).
+async function debitarInsumoUnidade(tx, prefixoNome, empresaId, motivo) {
+  const estoque = await buscarInsumoDisponivel(tx, prefixoNome, empresaId);
+  if (!estoque) return null;
+
+  const novaQtd = Math.max(estoque.qtdEstoque - 1, 0);
+  await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: novaQtd } });
+  await tx.movimentoEstoque.create({
+    data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: 1, motivo },
+  });
+
+  const valor = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+  return { valor, nome: estoque.medicamento.nome };
 }
 
 // Verifica estoque para 1 dia de tratamento — retorna lista de alertas.
@@ -536,8 +605,11 @@ const atualizarItem = async (req, res) => {
     const veterinarioId = req.user.id;
 
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
-    if (!item)                           return res.status(404).json({ error: 'Item não encontrado.' });
-    if (item.grupo?.status !== 'SALVO')  return res.status(400).json({ error: 'Prescrição finalizada não pode ser editada.' });
+    if (!item)       return res.status(404).json({ error: 'Item não encontrado.' });
+    if (!item.ativo) return res.status(400).json({ error: 'Item já foi removido.' });
+    if (item.executadoEm && janelaDoItem(item, hojeLocalStr()).ultimoDia) {
+      return res.status(400).json({ error: 'Item já executado integralmente, não pode ser alterado.' });
+    }
 
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
 
@@ -582,16 +654,47 @@ const removerItem = async (req, res) => {
     const itemId = Number(req.params.itemId);
 
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
-    if (!item)                           return res.status(404).json({ error: 'Item não encontrado.' });
-    if (item.grupo?.status !== 'SALVO')  return res.status(400).json({ error: 'Prescrição finalizada não pode ser excluída.' });
+    if (!item)             return res.status(404).json({ error: 'Item não encontrado.' });
+    if (!item.ativo)       return res.status(400).json({ error: 'Item já foi removido.' });
+    if (item.executadoEm)  return res.status(400).json({ error: 'Item já executado, não pode ser excluído.' });
 
-    await prisma.prescricao.update({ where: { id: itemId }, data: { ativo: false } });
+    const grupoJaFinalizado = item.grupo?.status !== 'SALVO';
 
-    // Responsável passa a ser quem removeu
-    await prisma.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId: req.user.id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.prescricao.update({
+        where: { id: itemId },
+        data:  { ativo: false, ...(grupoJaFinalizado ? { status: 'CANCELADA' } : {}) },
+      });
+
+      let statusGrupo;
+      if (grupoJaFinalizado) {
+        // Item nunca foi executado (bloqueado acima), então nunca teve FaturaItem —
+        // chamada apenas por paridade/segurança com os demais controllers.
+        await removerFaturaItensDaOrigem(tx, 'prescricaoId', itemId);
+
+        const restantes = await tx.prescricao.count({
+          where: { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
+        });
+        if (restantes === 0) {
+          await liberarReservas(tx, item.grupoId);
+          statusGrupo = 'CANCELADO';
+        } else {
+          statusGrupo = 'CANCELADO_PARCIALMENTE';
+        }
+      }
+
+      // Responsável passa a ser quem removeu (+ transição de status quando aplicável)
+      await tx.prescricaoGrupo.update({
+        where: { id: item.grupoId },
+        data:  { veterinarioId: req.user.id, ...(statusGrupo ? { status: statusGrupo } : {}) },
+      });
+    });
 
     return res.json({ dados: { message: 'Item removido.' } });
   } catch (err) {
+    if (err.code === 'FATURA_PAGA') {
+      return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+    }
     console.error('PrescricaoGrupoController.removerItem:', err);
     return res.status(500).json({ error: 'Erro ao remover item.' });
   }
@@ -697,8 +800,6 @@ const executar = async (req, res) => {
   try {
     const grupoId       = Number(req.params.id);
     const veterinarioId = req.user.id;
-    // isUltimoDia: enviado pelo frontend; default true para compatibilidade retroativa
-    const isUltimoDia   = req.body?.isUltimoDia !== false;
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
@@ -707,13 +808,28 @@ const executar = async (req, res) => {
         evolucao: { select: { id: true, numero: true, tipoAtendimento: true } },
       },
     });
-    if (!grupo)                        return res.status(404).json({ error: 'Prescrição não encontrada.' });
-    if (grupo.status !== 'FINALIZADO') return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
+    if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    if (!['FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
+      return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
+    }
+
+    const hojeStr = hojeLocalStr();
+
+    // Só processa/trava hoje os itens cuja própria janela (dataInicio + duracaoDias)
+    // cobre o dia de hoje — itens de duração menor já executados em dias anteriores
+    // não são re-debitados/re-faturados, e itens que ainda não começaram são ignorados.
+    const itensHoje = grupo.itens.filter(item => janelaDoItem(item, hojeStr).dentro);
+    if (itensHoje.length === 0) {
+      return res.status(400).json({ error: 'Nenhum item da prescrição está dentro da janela de tratamento hoje.' });
+    }
+    // Transita para EXECUTADO quando, para TODOS os itens ativos do grupo, hoje já é
+    // (ou passou d)o último dia da respectiva janela — respeita itens com durações diferentes.
+    const isUltimoDia = grupo.itens.every(item => janelaDoItem(item, hojeStr).ultimoDia);
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
     // Verifica estoque para a dose do dia (não para o tratamento completo)
-    const alertasEstoque = await verificarEstoqueParaDia(grupo.itens, empresaIdEfetivo);
+    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo);
     if (alertasEstoque.length > 0) {
       return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
     }
@@ -728,16 +844,14 @@ const executar = async (req, res) => {
 
     await prisma.$transaction(async (tx) => {
       // Debita dose do dia e retorna preços/unidades por medicamento
-      const { precos, unidades } = await debitarEstoqueDia(tx, grupo.itens, empresaIdEfetivo);
+      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo);
 
       // Lança na fatura ABERTA do proprietário (quantidade do dia)
       const fatura = await getOrCreateFatura(tx, proprietarioId);
 
-      for (const item of grupo.itens) {
-        // MEDICAMENTO sem estoque debitado: não lança na fatura
-        if (item.tipo === 'MEDICAMENTO' && item.medicamentoCatId && !precos.has(item.medicamentoCatId)) continue;
-
+      for (const item of itensHoje) {
         // precos já contém o valor proporcional da dose (regra de 3)
+        // MEDICAMENTO sem estoque no sistema → valor 0 na fatura (lança para o financeiro saber)
         const valorDaDose = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
         const dose = item.dosagem
           ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
@@ -755,7 +869,38 @@ const executar = async (req, res) => {
           valor:        valorDaDose,  // valor total da dose (regra de 3)
           quantidade:   1,
           veterinarioId,
+          prescricaoId: item.id,
         });
+
+        // Via injetável (IV/IM/ID/SC/EV): 1 seringa + 1 agulha por dose aplicada.
+        // Se não houver estoque cadastrado/disponível, apenas não lança (não bloqueia a execução).
+        if (item.tipo === 'MEDICAMENTO' && isViaInjetavel(item.via)) {
+          for (const prefixo of ['Seringa', 'Agulha']) {
+            const insumo = await debitarInsumoUnidade(
+              tx, prefixo, empresaIdEfetivo,
+              `Aplicação injetável (${item.via}): ${item.medicamento}`,
+            );
+            if (!insumo) continue;
+            const descInsumo = atendNum
+              ? `[${atendNum}] ${insumo.nome} — aplicação ${item.via} (${item.medicamento})`
+              : `${insumo.nome} — aplicação ${item.via} (${item.medicamento})`;
+            await adicionarFaturaItem(tx, {
+              faturaId:     fatura.id,
+              animalId:     grupo.animalId,
+              tipo:         'PROCEDIMENTO',
+              descricao:    descInsumo,
+              valor:        insumo.valor,
+              quantidade:   1,
+              veterinarioId,
+              prescricaoId: item.id,
+            });
+          }
+        }
+
+        // Trava o item (edição/exclusão) e registra a data da última execução —
+        // atualizado a cada dia processado, para o Mapa de Atendimento saber se a
+        // dose de HOJE já foi dada (não só se o item já foi executado alguma vez).
+        await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
       }
 
       // Só transita para EXECUTADO no último dia do tratamento
@@ -788,7 +933,7 @@ const listarParaExecucao = async (req, res) => {
     const { busca, empresaId, animalId, data } = req.query;
 
     const whereGrupo = {
-      status: 'FINALIZADO',
+      status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE'] },
       OR: [
         { evolucaoId: null },
         { evolucao: { aprovado: true } },
@@ -823,19 +968,12 @@ const listarParaExecucao = async (req, res) => {
     // Data de referência — usa param ?data=YYYY-MM-DD ou hoje
     const hojeStr = (data && /^\d{4}-\d{2}-\d{2}$/.test(data))
       ? data
-      : new Date().toISOString().split('T')[0];
+      : hojeLocalStr();
     const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
     // Mantém apenas grupos onde pelo menos um item cobre hoje
     const dentroJanela = grupos.filter(g =>
-      g.itens.some(item => {
-        const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
-        const inicio    = new Date(inicioStr + 'T00:00:00Z');
-        const fim       = new Date(inicio);
-        fim.setUTCDate(fim.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
-        const fimStr    = fim.toISOString().split('T')[0];
-        return inicioStr <= hojeStr && hojeStr < fimStr;
-      })
+      g.itens.some(item => janelaDoItem(item, hojeStr).dentro)
     );
 
     // Filtro de busca textual (nome animal, baia, nº prescrição, vet)

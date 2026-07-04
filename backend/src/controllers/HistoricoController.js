@@ -6,6 +6,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { resumirHistorico } = require('../services/clinicaLLMService');
+const { formatAtendimentoNum } = require('../lib/faturaUtils');
 
 const VET_SELECT = { select: { id: true, fullName: true } };
 
@@ -39,29 +40,29 @@ const HistoricoController = {
 
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['FINALIZADA', 'CONCLUIDO'] } },
-          select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, veterinario: VET_SELECT },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] } },
+          select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, dataFim: true, numero: true, tipoAtendimento: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
         prisma.vacinaClinica.findMany({
           where: whereAtivo,
-          select: { id: true, nome: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, veterinario: VET_SELECT },
+          select: { id: true, nome: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
           where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] } },
-          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, veterinario: VET_SELECT },
+          select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
           where: { ...whereAtivo, status: 'CONCLUIDO' },
-          select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, veterinario: VET_SELECT, prestador: VET_SELECT },
+          select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, evolucaoId: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO'] } },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] } },
           select: {
-            id: true, numero: true, status: true, createdAt: true, veterinario: VET_SELECT,
+            id: true, numero: true, status: true, createdAt: true, evolucaoId: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },
           },
           orderBy: { createdAt: 'desc' }, take: limit,
@@ -70,14 +71,17 @@ const HistoricoController = {
 
       const eventos = [
         ...evolucoes.map(e => ({
-          id:          `evolucao-${e.id}`,
-          origem:      'EVOLUCAO',
-          data:        e.dataInicio,
-          titulo:      e.titulo?.trim() || 'Evolução clínica',
-          badge:       e.especialidade || 'Clínica Geral',
-          status:      e.status,
-          responsavel: e.veterinario?.fullName ?? null,
-          resumo:      e.texto,
+          id:                `evolucao-${e.id}`,
+          origem:            'EVOLUCAO',
+          data:              e.dataInicio,
+          titulo:            e.titulo?.trim() || 'Evolução clínica',
+          badge:             e.especialidade || 'Clínica Geral',
+          status:            e.status,
+          responsavel:       e.veterinario?.fullName ?? null,
+          resumo:            e.texto,
+          evolucaoId:        e.id,
+          dataFim:           e.dataFim,
+          atendimentoNumero: formatAtendimentoNum(e.tipoAtendimento, e.numero),
         })),
         ...vacinas.map(v => ({
           id:          `vacina-${v.id}`,
@@ -93,6 +97,7 @@ const HistoricoController = {
             v.dataReforco ? `Reforço: ${new Date(v.dataReforco).toLocaleDateString('pt-BR')}` : null,
             v.observacao,
           ].filter(Boolean).join(' · '),
+          evolucaoId: v.evolucaoId,
         })),
         ...exames.map(x => {
           const origemEx = EXAM_ORIGEM[x.tipo] ?? 'EXAME';
@@ -123,6 +128,7 @@ const HistoricoController = {
             status:      x.status,
             responsavel: x.veterinario?.fullName ?? null,
             resumo:      x.descricao || x.resultado || null,
+            evolucaoId:  x.evolucaoId,
           };
         }),
         ...encaminhamentos.map(en => ({
@@ -134,6 +140,7 @@ const HistoricoController = {
           status:      en.status,
           responsavel: en.veterinario?.fullName ?? null,
           resumo:      en.prestador ? `Para ${en.prestador.fullName}. ${en.motivo}` : en.motivo,
+          evolucaoId:  en.evolucaoId,
         })),
         ...grupos.map(g => ({
           id:          `prescricao-${g.id}`,
@@ -144,6 +151,7 @@ const HistoricoController = {
           status:      g.status,
           responsavel: g.veterinario?.fullName ?? null,
           resumo:      g.itens.map(i => i.medicamento).join(', '),
+          evolucaoId:  g.evolucaoId,
         })),
       ];
 
@@ -170,7 +178,7 @@ const HistoricoController = {
 
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['FINALIZADA', 'CONCLUIDO'] } },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] } },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
@@ -190,7 +198,7 @@ const HistoricoController = {
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO'] } },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] } },
           select: {
             id: true, numero: true, status: true, createdAt: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },

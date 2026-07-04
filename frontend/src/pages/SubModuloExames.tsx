@@ -104,6 +104,7 @@ interface Props {
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
+  onViewConsumed?:    () => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -399,7 +400,7 @@ function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemo
 // ─── SubModuloExames ──────────────────────────────────────────────────────────
 
 export default function SubModuloExames({
-  animalId, animal, evolucaoId, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId,
+  animalId, animal, evolucaoId, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed,
 }: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -407,6 +408,9 @@ export default function SubModuloExames({
   const procSearchRef      = useRef<HTMLInputElement>(null);
   const imagemDropdownRef  = useRef<HTMLDivElement>(null);
   const imagemSearchRef    = useRef<HTMLInputElement>(null);
+  const isRestoringRef     = useRef(false);
+
+  const DRAFT_KEY = `s2vet_exames_draft_${animalId}`;
 
   // ── Tab state ──────────────────────────────────────────────────────────────
   const [mainTab,      setMainTab]      = useState<MainTab>('laboratorial');
@@ -504,6 +508,50 @@ export default function SubModuloExames({
       .finally(() => setLoadingLabs(false));
   }, []);
 
+  // Restaura rascunho do localStorage ao montar
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as {
+        mainTab?: MainTab;
+        labId?: number | null;
+        outroLabNome?: string;
+        grupoId?: number | null;
+        grupoNome?: string;
+        selectedExams?: string[];
+        dataSolicitacao?: string;
+        dataHoraColeta?: string;
+        tipoAmostra?: string;
+        qtdAmostra?: number;
+        indicacaoClinica?: string;
+        observacao?: string;
+        imagemGrupoId?: number | null;
+        imagemGrupoNome?: string;
+        pendingGroups?: PendingExamGroup[];
+      };
+      isRestoringRef.current = true;
+      if (draft.mainTab)                  setMainTab(draft.mainTab);
+      if (draft.labId != null)            setLabId(draft.labId);
+      if (draft.outroLabNome)             setOutroLabNome(draft.outroLabNome);
+      if (draft.grupoId != null)          setGrupoId(draft.grupoId);
+      if (draft.grupoNome)                setGrupoNome(draft.grupoNome);
+      if (draft.selectedExams?.length)    setSelectedExams(draft.selectedExams);
+      if (draft.dataSolicitacao)          setDataSolicitacao(draft.dataSolicitacao);
+      if (draft.dataHoraColeta)           setDataHoraColeta(draft.dataHoraColeta);
+      if (draft.tipoAmostra)              setTipoAmostra(draft.tipoAmostra);
+      if (draft.qtdAmostra)               setQtdAmostra(draft.qtdAmostra);
+      if (draft.indicacaoClinica)         setIndicacaoClinica(draft.indicacaoClinica);
+      if (draft.observacao)               setObservacao(draft.observacao);
+      if (draft.imagemGrupoId != null)    setImagemGrupoId(draft.imagemGrupoId);
+      if (draft.imagemGrupoNome)          setImagemGrupoNome(draft.imagemGrupoNome);
+      if (draft.pendingGroups?.length)    setPendingGroups(draft.pendingGroups);
+      // Libera os guards de cascata depois que todos os efeitos do render atual rodarem
+      setTimeout(() => { isRestoringRef.current = false; }, 0);
+    } catch { isRestoringRef.current = false; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Carrega grupos de exames de imagem quando a aba imagem é ativada
   useEffect(() => {
     if (mainTab !== 'imagem' || imagemGrupos.length > 0) return;
@@ -517,8 +565,7 @@ export default function SubModuloExames({
 
   // Carrega itens ao trocar grupo de imagem
   useEffect(() => {
-    setImagemExamesCat([]);
-    setSelectedExams([]);
+    if (!isRestoringRef.current) { setImagemExamesCat([]); setSelectedExams([]); }
     if (imagemGrupoId == null) return;
     setLoadingImagemExames(true);
     api.get(`/clinica/imagem-exames/grupos/${imagemGrupoId}/itens`)
@@ -530,11 +577,13 @@ export default function SubModuloExames({
 
   // Carrega grupos ao trocar de lab
   useEffect(() => {
-    setGrupos([]);
-    setGrupoId(null);
-    setGrupoNome('');
-    setExamesCat([]);
-    setSelectedExams([]);
+    if (!isRestoringRef.current) {
+      setGrupos([]);
+      setGrupoId(null);
+      setGrupoNome('');
+      setExamesCat([]);
+      setSelectedExams([]);
+    }
     if (labId == null) return;
 
     setLoadingGrupos(true);
@@ -552,8 +601,7 @@ export default function SubModuloExames({
 
   // Carrega exames ao trocar de grupo
   useEffect(() => {
-    setExamesCat([]);
-    setSelectedExams([]);
+    if (!isRestoringRef.current) { setExamesCat([]); setSelectedExams([]); }
     if (grupoId == null || grupos.length === 0) return;
 
     setLoadingExames(true);
@@ -569,6 +617,7 @@ export default function SubModuloExames({
 
 
   useEffect(() => {
+    if (isRestoringRef.current) return;
     setSelectedExams([]);
     setCustomExamText('');
     setShowCustomInput(false);
@@ -597,6 +646,24 @@ export default function SubModuloExames({
     return () => document.removeEventListener('mousedown', handler);
   }, [showImagemProcDrop]);
 
+  // Persiste rascunho no localStorage sempre que o estado relevante mudar
+  useEffect(() => {
+    if (isRestoringRef.current) return;
+    const draft = {
+      mainTab, labId, outroLabNome, grupoId, grupoNome,
+      selectedExams, dataSolicitacao, dataHoraColeta,
+      tipoAmostra, qtdAmostra, indicacaoClinica, observacao,
+      imagemGrupoId, imagemGrupoNome, pendingGroups,
+    };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  }, [
+    mainTab, labId, outroLabNome, grupoId, grupoNome,
+    selectedExams, dataSolicitacao, dataHoraColeta,
+    tipoAmostra, qtdAmostra, indicacaoClinica, observacao,
+    imagemGrupoId, imagemGrupoNome, pendingGroups,
+    DRAFT_KEY,
+  ]);
+
   // ── Loader ─────────────────────────────────────────────────────────────────
 
   const carregarHistorico = useCallback(async (p = 1) => {
@@ -619,7 +686,8 @@ export default function SubModuloExames({
     if (!openItemId) return;
     api.get(`/clinica/exames/${openItemId}`)
       .then(res => { if (res.data?.dados) setViewingEx(res.data.dados as ExameClinico); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => onViewConsumed?.());
   }, [openItemId]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
@@ -761,6 +829,7 @@ export default function SubModuloExames({
         ? `Pedido criado com ${rawGroups.length} grupos (${nExames} exames)`
         : 'Pedido de exame criado com sucesso';
       toast.success(msg);
+      localStorage.removeItem(DRAFT_KEY);
       setPendingGroups([]);
       resetCurrentForm();
       setPage(1);
@@ -870,7 +939,7 @@ export default function SubModuloExames({
                   <button type="button" onClick={() => setMainTab('laboratorial')}
                     className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
                       mainTab === 'laboratorial'
-                        ? 'bg-blue-700 text-white border-blue-700'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
                     }`}>
                     <FlaskConical size={12} /> Laboratorial
@@ -1487,7 +1556,7 @@ export default function SubModuloExames({
               </span>
             </div>
             <button
-              onClick={() => setPendingGroups([])}
+              onClick={() => { setPendingGroups([]); localStorage.removeItem(DRAFT_KEY); }}
               className="text-xs text-red-400 hover:text-red-600 font-medium transition-colors"
             >
               Limpar

@@ -2,6 +2,8 @@
 
 const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
+const { recalcularTotal: recalcularTotalCompartilhado } = require('../lib/faturaUtils');
+const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -17,11 +19,8 @@ const FATURA_INCLUDE = {
   proprietario: { select: { id: true, fullName: true, email: true, phone: true, valorAssistencia: true, mensalista: true } },
 };
 
-async function recalcularTotal(faturaId) {
-  const itens = await prisma.faturaItem.findMany({ where: { faturaId } });
-  const total = itens.reduce((acc, i) => acc + i.valor * i.quantidade, 0);
-  await prisma.fatura.update({ where: { id: faturaId }, data: { total } });
-  return total;
+function recalcularTotal(faturaId) {
+  return recalcularTotalCompartilhado(prisma, faturaId);
 }
 
 function mesReferenciaAtual() {
@@ -236,6 +235,19 @@ const FaturaController = {
     }
   },
 
+  // GET /proprietario/:proprietarioId/logo-empresa
+  // Logo da empresa/equipe do proprietário — usado na impressão/PDF/compartilhamento
+  // da fatura em vez da marca S2Vet.
+  obterLogoEmpresaProprietario: async (req, res) => {
+    try {
+      const logoUrl = await resolverLogoPorProprietario(req.params.proprietarioId);
+      res.json({ dados: { logoUrl } });
+    } catch (err) {
+      console.error('Erro ao obter logo do proprietário:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
   // POST /:faturaId/itens
   adicionarItem: async (req, res) => {
     const { faturaId }  = req.params;
@@ -247,6 +259,12 @@ const FaturaController = {
     }
 
     try {
+      const fatura = await prisma.fatura.findUnique({ where: { id: Number(faturaId) }, select: { status: true } });
+      if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
+      if (fatura.status === 'PAGA') {
+        return res.status(400).json({ error: 'Fatura já paga não pode receber novos itens.', code: 'FATURA_PAGA' });
+      }
+
       const item = await prisma.faturaItem.create({
         data: {
           faturaId:     Number(faturaId),
@@ -274,8 +292,14 @@ const FaturaController = {
     const { tipo, descricao, valor, quantidade } = req.body;
 
     try {
-      const item = await prisma.faturaItem.findUnique({ where: { id: Number(itemId) } });
+      const item = await prisma.faturaItem.findUnique({
+        where:   { id: Number(itemId) },
+        include: { fatura: { select: { status: true } } },
+      });
       if (!item) return res.status(404).json({ error: 'Item não encontrado' });
+      if (item.fatura.status === 'PAGA') {
+        return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
+      }
 
       const updated = await prisma.faturaItem.update({
         where: { id: Number(itemId) },
@@ -301,8 +325,14 @@ const FaturaController = {
     const { itemId } = req.params;
 
     try {
-      const item = await prisma.faturaItem.findUnique({ where: { id: Number(itemId) } });
+      const item = await prisma.faturaItem.findUnique({
+        where:   { id: Number(itemId) },
+        include: { fatura: { select: { status: true } } },
+      });
       if (!item) return res.status(404).json({ error: 'Item não encontrado' });
+      if (item.fatura.status === 'PAGA') {
+        return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
+      }
 
       await prisma.faturaItem.delete({ where: { id: Number(itemId) } });
       const total = await recalcularTotal(item.faturaId);

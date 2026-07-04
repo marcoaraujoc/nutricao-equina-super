@@ -392,6 +392,7 @@ interface Props {
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
+  onViewConsumed?:    () => void;
 }
 
 const FILTROS: { key: FiltroStatus; label: string }[] = [
@@ -401,7 +402,7 @@ const FILTROS: { key: FiltroStatus; label: string }[] = [
   { key: 'INATIVA',  label: 'Inativas' },
 ];
 
-export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId, atendimentoNumero, onSalvo, openItemId }: Props) {
+export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -508,7 +509,8 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
     if (!openItemId) return;
     api.get(`/clinica/vacinas/${openItemId}`)
       .then(res => { if (res.data?.dados) setViewingV(res.data.dados as VacinaClinica); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => onViewConsumed?.());
   }, [openItemId]);
 
   useEffect(() => {

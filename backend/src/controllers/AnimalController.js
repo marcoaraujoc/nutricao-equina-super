@@ -7,6 +7,7 @@ const emailService     = require('../services/emailService');
 const { storage }      = require('../storage');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 
 const prisma = require('../lib/prisma').default;
@@ -220,7 +221,7 @@ class AnimalController {
         const vetLogadoId = Number(req.user.id);
 
         const animais = await prisma.animal.findMany({
-          where:   { nome: { contains: nome.trim(), mode: 'insensitive' } },
+          where:   { nome: { contains: nome.trim(), mode: 'insensitive' }, ativo: true },
           include: {
             user:    { select: { id: true, fullName: true, email: true, phone: true } },
             especie: { select: { id: true, nome: true } },
@@ -545,7 +546,7 @@ class AnimalController {
                 : {};
 
       const animais = await prisma.animal.findMany({
-        where,
+        where: { ...where, ativo: true },
         include:  ANIMAL_INCLUDE,
         orderBy:  { dataCadastro: 'desc' },
       });
@@ -582,6 +583,29 @@ class AnimalController {
     } catch (error) {
       console.error('[AnimalController.obterPorId]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar animal' });
+    }
+  }
+
+  // ── GET /api/animais/:id/logo-empresa ────────────────────────────────────
+  // Logo da empresa/equipe do animal — usado nos relatórios/impressões (dieta,
+  // evolução, prescrição, exame etc.) em vez da marca S2Vet. Acesso liberado para
+  // qualquer perfil com acesso ao animal (não só GESTOR — diferente de
+  // /equipes/configuracoes, que é gestor-only).
+  async obterLogoEmpresa(req, res) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'ID inválido' });
+    }
+    try {
+      const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      const logoUrl = await resolverLogoPorAnimal(id);
+      res.json({ dados: { logoUrl } });
+    } catch (error) {
+      console.error('[AnimalController.obterLogoEmpresa]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar logo' });
     }
   }
 
@@ -1138,7 +1162,7 @@ class AnimalController {
     }
   }
 
-  // ── DELETE /api/animais/:id ──────────────────────────────────────────────
+  // ── DELETE /api/animais/:id — soft delete (ativo=false), preserva histórico ─
 
   async excluir(req, res) {
     const animalId = Number(req.params.id);
@@ -1147,11 +1171,8 @@ class AnimalController {
       if (acessoExc === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acessoExc)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      await prisma.dieta.deleteMany({ where: { animalId } });
-      await prisma.planoDieta.deleteMany({ where: { animalId } });
-      await prisma.vetAnimalSolicitacao.deleteMany({ where: { animalId } });
-      await prisma.animal.delete({ where: { id: animalId } });
-      res.json({ sucesso: true, mensagem: 'Animal excluído com sucesso' });
+      await prisma.animal.update({ where: { id: animalId }, data: { ativo: false } });
+      res.json({ sucesso: true, mensagem: 'Animal inativado com sucesso' });
     } catch (error) {
       console.error('[AnimalController.excluir]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao excluir animal' });

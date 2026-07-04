@@ -57,7 +57,7 @@ function decodeToken(token: string): User | null {
 
 async function enriquecerComPerfil(userData: User): Promise<User> {
   try {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const res   = await fetch('/api/users/me', {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -80,7 +80,7 @@ async function enriquecerComPerfil(userData: User): Promise<User> {
 
 // ── Token refresh silencioso ────────────────────────────────────────────────
 async function tryRefreshToken(): Promise<string | null> {
-  const refreshToken = localStorage.getItem('refreshToken');
+  const refreshToken = sessionStorage.getItem('refreshToken');
   if (!refreshToken) return null;
   try {
     const res = await fetch('/api/auth/refresh', {
@@ -89,12 +89,12 @@ async function tryRefreshToken(): Promise<string | null> {
       body:    JSON.stringify({ refreshToken }),
     });
     if (!res.ok) {
-      localStorage.removeItem('refreshToken');
+      sessionStorage.removeItem('refreshToken');
       return null;
     }
     const data = await res.json();
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('refreshToken', data.refreshToken);
+    sessionStorage.setItem('token', data.token);
+    sessionStorage.setItem('refreshToken', data.refreshToken);
     return data.token;
   } catch {
     return null;
@@ -103,7 +103,7 @@ async function tryRefreshToken(): Promise<string | null> {
 
 // ── Fetch autenticado com refresh automático em 401 ─────────────────────────
 export async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem('token');
+  const token = sessionStorage.getItem('token');
   const headers = new Headers(init?.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
@@ -127,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      let token = localStorage.getItem('token');
+      let token = sessionStorage.getItem('token');
       if (token) {
         const userData = decodeToken(token);
         if (userData) {
@@ -151,6 +151,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     init();
   }, []);
+
+  // ── Logout automático por inatividade (5 minutos sem interação) ────────────
+  useEffect(() => {
+    if (!user) return;
+
+    const TIMEOUT_MS = 5 * 60 * 1000;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => logout(), TIMEOUT_MS);
+    };
+
+    const eventos: Array<keyof WindowEventMap> = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    eventos.forEach(evento => window.addEventListener(evento, resetTimer));
+    resetTimer();
+
+    return () => {
+      clearTimeout(timer);
+      eventos.forEach(evento => window.removeEventListener(evento, resetTimer));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const registrarAuditoria = async (action: 'LOGIN' | 'LOGOUT') => {
     if (!user) return;
@@ -177,7 +200,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Recarrega perfil do usuário logado sem fazer logout ────────────────────
   const refreshUser = async (): Promise<void> => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     if (!token) return;
     const base = decodeToken(token);
     if (!base) return;
@@ -186,8 +209,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const login = async (token: string, refreshToken?: string) => {
-    localStorage.setItem('token', token);
-    if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
+    sessionStorage.setItem('token', token);
+    if (refreshToken) sessionStorage.setItem('refreshToken', refreshToken);
     const userData = decodeToken(token);
     if (userData) {
       setUser(userData);
@@ -198,7 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     registrarAuditoria('LOGOUT');
-    const refreshToken = localStorage.getItem('refreshToken');
+    const refreshToken = sessionStorage.getItem('refreshToken');
     if (refreshToken) {
       fetch('/api/auth/logout', {
         method:  'POST',
@@ -206,8 +229,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body:    JSON.stringify({ refreshToken }),
       }).catch(() => { /* best-effort */ });
     }
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('refreshToken');
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
     setUser(null);

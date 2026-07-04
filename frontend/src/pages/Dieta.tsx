@@ -25,6 +25,7 @@ type AnimalExtended = Animal & {
   idadeAnos?: number | null;
   raca?: { nome: string } | null;
   user?: { fullName: string; email: string; phone?: string | null } | null;
+  logoUrl?: string | null;
 };
 
 interface PlanoDieta {
@@ -555,6 +556,12 @@ const Dieta = () => {
       if (!res.data) return;
       const a = (res.data?.dados ?? res.data) as AnimalExtended;
       setAnimal(a); setSelectedAnimal(a);
+      api.get(`/animais/${effectiveAnimalId}/logo-empresa`)
+        .then(res2 => {
+          const logoUrl = res2.data?.dados?.logoUrl ?? null;
+          setAnimal(prev => prev ? { ...prev, logoUrl } : prev);
+        })
+        .catch(() => {});
     } catch { /* silencioso */ }
   }, [effectiveAnimalId]);
 

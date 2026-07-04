@@ -191,7 +191,7 @@ const AuthController = {
       }
 
       const newAccessToken = jwt.sign(
-        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
+        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType, mustChangePassword: user.mustChangePassword },
         SECRET,
         { expiresIn: '24h' }
       );

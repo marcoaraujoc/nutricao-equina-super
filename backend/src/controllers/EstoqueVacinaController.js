@@ -289,6 +289,17 @@ const listarCatalogoComEstoque = async (req, res) => {
   }
 };
 
+// ─── Helper: normaliza lote para comparação (case-insensitive, vazio=null) ────
+function normLote(lote) {
+  const t = (lote ?? '').trim();
+  return t === '' ? null : t.toLowerCase();
+}
+// Normaliza validade para comparação (apenas YYYY-MM-DD)
+function normValidade(v) {
+  if (!v) return null;
+  try { return new Date(v).toISOString().split('T')[0]; } catch { return null; }
+}
+
 // ─── Criar lote de vacina ────────────────────────────────────────────────────
 
 const criar = async (req, res) => {
@@ -310,12 +321,11 @@ const criar = async (req, res) => {
 
     if (!vacinaId && !medicamentoCatId)
       return res.status(400).json({ error: 'vacinaId ou medicamentoCatId é obrigatório.' });
-    if (!lote?.trim())  return res.status(400).json({ error: 'Lote é obrigatório.' });
-    if (!validade)      return res.status(400).json({ error: 'Validade é obrigatória.' });
+    if (!validade) return res.status(400).json({ error: 'Validade é obrigatória.' });
 
     const qtdFrascosN     = Number(qtdFrascos);
     const dosesPorFrascoN = Number(dosesPorFrasco) || 1;
-    const qtdTotal        = qtdFrascosN * dosesPorFrascoN;
+    const qtdNovasDoses   = qtdFrascosN * dosesPorFrascoN;
 
     // Valida referência
     if (vacinaId) {
@@ -329,34 +339,55 @@ const criar = async (req, res) => {
 
     const eId = empresaId ? Number(empresaId) : (req.empresaId ?? null);
 
-    // Bloqueia duplicata exata (mesmo medicamento + lote + empresa + validade)
-    // Mas permite mesmo lote com validade diferente (remessa diferente)
-    const validadeDate = new Date(validade);
-    const dup = await prisma.loteVacina.findFirst({
+    // ── Verifica se existe lote idêntico para consolidar ─────────────────────
+    // Critérios: mesmo medicamento/vacina + mesmo lote (case-insensitive, vazio=null)
+    //            + mesma validade (date only, null=null) + mesmo valorUnitario (±R$0,01)
+    const candidatos = await prisma.loteVacina.findMany({
       where: {
-        lote: lote.trim(),
-        validade: validadeDate,
         ativo: true,
         ...(medicamentoCatId ? { medicamentoCatId: Number(medicamentoCatId) } : {}),
         ...(vacinaId         ? { vacinaId: Number(vacinaId) }                : {}),
         ...(eId              ? { empresaId: eId }                            : {}),
       },
     });
-    if (dup) {
-      return res.status(409).json({
-        error: `Já existe um lote ativo com o número "${lote.trim()}" e a mesma data de validade. Para uma remessa diferente, use uma data de validade diferente.`,
+
+    const loteNorm    = normLote(lote);
+    const validadeStr = normValidade(validade);
+    const valorNovo   = valorUnitario != null ? Number(valorUnitario) : null;
+
+    const existente = candidatos.find(c => {
+      if (normLote(c.lote) !== loteNorm) return false;
+      if (normValidade(c.validade) !== validadeStr) return false;
+      const cValor = c.valorUnitario != null ? Number(c.valorUnitario) : null;
+      if (valorNovo === null && cValor === null) return true;
+      if (valorNovo === null || cValor === null) return false;
+      return Math.abs(valorNovo - cValor) < 0.011; // tolerância R$ 0,01
+    });
+
+    if (existente) {
+      // ── CONSOLIDAR: soma frascos e doses ao lote existente ─────────────────
+      const loteAtualizado = await prisma.loteVacina.update({
+        where: { id: existente.id },
+        data: {
+          qtdFrascos:    { increment: qtdFrascosN },
+          qtdTotal:      { increment: qtdNovasDoses },
+          qtdDisponivel: { increment: qtdNovasDoses },
+        },
+        include: INCLUDE_LOTE,
       });
+      return res.status(200).json({ dados: loteAtualizado, consolidado: true, mensagem: 'Frascos somados ao lote existente.' });
     }
 
+    // ── NOVA ENTRADA ──────────────────────────────────────────────────────────
     const loteVacina = await prisma.loteVacina.create({
       data: {
         vacinaId:               vacinaId       ? Number(vacinaId)       : null,
         medicamentoCatId:       medicamentoCatId ? Number(medicamentoCatId) : null,
         empresaId:              eId,
-        lote:                   lote.trim(),
+        lote:                   loteNorm ?? '',
         validade:               new Date(validade),
-        qtdTotal,
-        qtdDisponivel:          qtdTotal,
+        qtdTotal:               qtdNovasDoses,
+        qtdDisponivel:          qtdNovasDoses,
         qtdFrascos:             qtdFrascosN,
         dosesPorFrasco:         dosesPorFrascoN,
         validadeHoras:          validadeHoras  != null ? Number(validadeHoras)  : null,
@@ -370,7 +401,7 @@ const criar = async (req, res) => {
       include: INCLUDE_LOTE,
     });
 
-    return res.status(201).json({ dados: loteVacina });
+    return res.status(201).json({ dados: loteVacina, consolidado: false });
   } catch (err) {
     console.error('EstoqueVacinaController.criar:', err);
     return res.status(500).json({ error: 'Erro ao criar lote de vacina.' });

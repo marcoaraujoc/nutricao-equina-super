@@ -2,6 +2,8 @@
 // Gerador de HTML para impressão e PDF do Exame de Compra Equino.
 // Field definitions duplicadas intencionalmente para desacoplar da página.
 
+import { resolverUrlAbsoluta } from './printUrl';
+
 // ─── Field definitions ────────────────────────────────────────────────────────
 
 type FieldDef = [string, string, string, string]; // [key, label, opt1, opt2]
@@ -124,6 +126,7 @@ export interface ExameCompraPrintAnimal {
   idadeAnos?: number | null;
   especie?:   { nome: string } | null;
   user?:      { fullName: string; email: string } | null;
+  logoUrl?:   string | null;
 }
 
 // ─── CSS ─────────────────────────────────────────────────────────────────────
@@ -135,6 +138,7 @@ const CSS = `
   .page-break { page-break-before: always; break-before: page; }
   .header { border-bottom: 2px solid #d97706; padding-bottom: 10px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-end; }
   .header h1 { font-size: 19px; font-weight: 700; color: #d97706; }
+  .brand-logo { max-height: 30px; max-width: 180px; object-fit: contain; }
   .header .sub { font-size: 9.5px; color: #6b7280; margin-top: 2px; }
   .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
   .card-title { font-size: 9.5px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; border-bottom: 1px solid #f3f4f6; padding-bottom: 5px; }
@@ -387,6 +391,8 @@ export function gerarHtmlExameCompra(
   ex:     ExameCompraPrintItem,
   animal?: ExameCompraPrintAnimal | null,
 ): string {
+  const logoUrl = resolverUrlAbsoluta(animal?.logoUrl);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let laudo: any = parseLaudo(ex.observacao);
 
@@ -449,7 +455,7 @@ export function gerarHtmlExameCompra(
   const body = `
   <div class="header">
     <div>
-      <h1>S2Vet</h1>
+      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
       <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
       <p class="sub" style="margin-top:3px;">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
     </div>

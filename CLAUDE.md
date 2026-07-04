@@ -313,6 +313,11 @@ MatrizPerfil      → template de permissões por perfil — propagado a membros
                     NEGADO = bloqueio explícito; deny-wins sobre outras equipes
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
 PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — substituído por MatrizPerfil PROPRIETARIO
+EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (empresa pessoal/CPF) —
+                    mesmo critério de escopo do EmpresaContext. Campos: logoUrl, tipoFechamento
+                    (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|null=compat), diaFechamentoFatura (dia do mês
+                    1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL). unique(empresaId, equipeId).
+                    Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes
 ```
 
 ### Catálogo de Módulos do Sistema (ModuloSistema)
@@ -936,6 +941,53 @@ New-Item -ItemType Junction `
   - Controllers: `PrescricaoGrupoController` — removido check hardcoded `membroEquipe.cargo=GESTOR`; adicionado FORNECEDOR ownership check. `PrescricaoController.finalizarTodas` — FORNECEDOR filtra por `veterinarioId`. `ExameClinicoController.criar` — `veterinarioId` sempre `req.user.id` (antes: null para não-VET). `EvolucaoController.aprovar` e `EncaminhamentoController` — FORNECEDOR ownership check.
   - VacinaClinica: sem finalizar (modelo sem status/draft). TODO: migration futura para campo `status`.
 - [x] **Regra de autoria em editar** — `EvolucaoController.atualizar`, `PrescricaoController.atualizar`, `ExameClinicoController.atualizar`, `EncaminhamentoController.atualizar`: GESTOR edita qualquer item (via `req.membroCargo === 'GESTOR'`); demais só editam itens que criaram (`veterinarioId === req.user.id` → 403 caso contrário). VacinaClinica.atualizar: pendente de migration para campo `status`.
+- [x] **Rastreabilidade FaturaItem ↔ origem clínica** (migration `20260701000001_fatura_item_origem`) —
+      `FaturaItem` ganhou 4 FKs nullable: `exameClinicoId`, `prescricaoId`, `vacinaClinicaId`,
+      `encaminhamentoClinicoId`, setadas por `adicionarFaturaItem` (`faturaUtils.js`) em todo ponto que
+      lança cobrança (`ExameClinicoController.finalizar`, `VacinaClinicaController.registrar`,
+      `EncaminhamentoController.criar`, `PrescricaoGrupoController.executar`). Editar (descrição) ou
+      excluir um exame/vacina/encaminhamento já faturado agora sincroniza (`atualizarFaturaItensDaOrigem`/
+      `removerFaturaItensDaOrigem`) o(s) `FaturaItem` vinculado(s) dentro da mesma transaction — se a
+      fatura de destino já estiver `PAGA`, a operação é bloqueada com 400 `{ code: 'FATURA_PAGA' }` e
+      nada muda (nem o item de origem). Prescrição não precisou de bloqueio novo: `PrescricaoGrupoController`
+      já impede editar/excluir item fora do status `SALVO`, e `FaturaItem` só existe a partir de
+      `FINALIZADO`/`executar` — logo o gate de status existente já cobre a regra; `prescricaoId` foi
+      adicionado só para rastreabilidade/relatórios. `HistoricoController` não precisou de mudança — já
+      filtra `ativo: true` nas 4 origens, então soft delete já remove do histórico automaticamente.
+      `FaturaController.recalcularTotal` foi movido para `faturaUtils.js` (aceita `prisma` ou `tx`) e é
+      reusado pelos helpers novos.
+- [x] **Página Configurações (logotipo + dia de fechamento de fatura)** — migrations `20260702000001_empresa_configuracao`
+      e `20260702010000_fatura_tipo_fechamento`. Model `EmpresaConfiguracao` (único por empresa CNPJ ou
+      por equipe/empresa pessoal — mesmo critério do `EmpresaContext`) com `logoUrl`, `tipoFechamento`
+      (`DIA_FIXO` | `DIA_UTIL` | `ULTIMO_DIA_MES` | `null`=compat) e `diaFechamentoFatura` (dia do mês
+      1-31 p/ `DIA_FIXO`, Nº do dia útil 1-10 p/ `DIA_UTIL`). `EquipeController.obterConfiguracao`/
+      `salvarConfiguracao` (reusam os helpers privados `getEmpresaDoGestor`/`getEquipeAtiva` já
+      existentes no arquivo); rotas `GET/PUT /api/equipes/configuracoes` (antes de `/:equipeId`), upload
+      de logo via `storage` (`StorageProvider`, pasta `empresas/`) igual ao padrão de foto de animal.
+      Frontend: `Configuracoes.tsx` (baseada em `Animal.tsx` — mesma função `comprimirImagem` e widget
+      de upload), select com 4 opções amigáveis (Último dia do mês / Primeiro dia do mês / Dia
+      específico / Dia útil do mês — "Primeiro dia do mês" é só um atalho de UX pra `DIA_FIXO` dia=1,
+      o backend não distingue os dois), rota `/configuracoes`, link no Sidebar dentro de **Geral**
+      (`isGestor &&`, não dentro do sub-accordion Cadastro).
+      **Cálculo de dia útil** (`faturaUtils.js`): considera fins de semana + feriados nacionais
+      obrigatórios por lei federal (sem estaduais/municipais, sem pontos facultativos como Carnaval/
+      Corpus Christi). Feriados móveis (Sexta-feira Santa) calculados via algoritmo de Gauss para a
+      Páscoa — não depende de tabela mantida ano a ano. `deveFecharHoje(config, hoje)` é o dispatcher
+      único (usado tanto pelo cron quanto testável isoladamente); tem compat com configs antigas
+      (linhas com `diaFechamentoFatura` mas sem `tipoFechamento` são tratadas como `DIA_FIXO`).
+      **Mudança de comportamento em produção:** o cron `fecharFaturasDoMes` (`server.ts`) que antes
+      rodava só no último dia do mês para TODAS as faturas `ABERTA` agora roda **todo dia às 23:45** e
+      decide por fatura, via `resolverConfigsFechamento` (resolve as equipes do proprietário com
+      `getEquipeIdsDoProprietario`, já exportado de `permissao.middleware.js`, mapeia para o escopo de
+      `EmpresaConfiguracao` de cada uma). Fallback: se nenhuma equipe do proprietário tiver
+      configuração, o comportamento antigo é preservado — fecha só no último dia do mês.
+      **Fatura fechada vs paga:** `FECHADA` continua permitindo edição de itens existentes E
+      lançamento manual de novos itens pelo financeiro (`FaturaController.adicionarItem`) — só `PAGA`
+      bloqueia qualquer alteração (`adicionarItem`/`atualizarItem`/`removerItem` agora checam
+      `fatura.status === 'PAGA'` → 400 `FATURA_PAGA`, mesmo código usado pelos helpers de sincronização
+      de `faturaUtils.js`). Itens de origem clínica (exame/vacina/encaminhamento/prescrição) nunca
+      caem numa fatura fechada por construção: `getOrCreateFatura` só busca fatura `status: 'ABERTA'` —
+      se a do mês já fechou, cria uma nova automaticamente. Não precisou de nenhuma mudança pra isso.
 - [ ] Slugs orphans `exames.laboratorial.*` e `exames.imagem.*` — existem no seed e aparecem no ControleAcesso mas não protegem nenhum endpoint real (backends usam `atendimento.exames.*`). Gestores que configurarem esses slugs não controlam nada efetivamente. Decisão pendente: remover do seed ou implementar granularidade real por tipo de exame.
 - [x] Sidebar/páginas de agenda: migrar gate de role check (`isVetOuSuperior`) para `podeExecutar('atendimento.agendamentos.ler')` — Agenda usa permissão real; Minha Agenda mantém `isVetOuSuperior && podeVerAgendamentos` (sub-view específica de vet). Dashboard oculto para VET (non-Gestor) e ESTAGIÁRIO no Sidebar — eles têm "Pacientes" como home; GESTOR (bypass) continua vendo.
 - [ ] UI de gestão de designações no ControleAcesso (aba Equipe → membro PRESTADOR → animais designados)
@@ -1138,6 +1190,8 @@ DELETE /clinica/agendamentos/:id              → soft delete
 /api/composicoes-alimentares → ComposicaoAlimentarController
 /api/clinica/faturas → FaturaController
 GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPorEquipe (busca FORNECEDOR da empresa, exclui já-membros)
+GET  /api/equipes/configuracoes → EquipeController.obterConfiguracao (logo + diaFechamentoFatura do escopo ativo)
+PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipart: logo?, diaFechamentoFatura, removerLogo?) — GESTOR/dono only
 ```
 
 ### Backend — Middlewares
@@ -1185,6 +1239,7 @@ GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPor
 | `ControleAcesso.tsx` | `/controle-acesso` — gerenciamento de permissões. Abas para ADMIN: TabPermissoesGlobais (UserTypes VET/EST/PROP). Abas para GESTOR (5): Matriz de Perfis (TabMatriz, locked items imutáveis), Equipe (TabEquipe, modal 2 passos), Proprietários (TabProprietarios), Convites (TabConvites), Logs de Auditoria. Nível NEGADO como 3º estado no PermCheck (ciclo: NENHUM→EQUIPE→NEGADO→NENHUM). |
 | `Equipe.tsx` | `/equipe` — gestão de equipe do vet |
 | `EquipeManager.tsx` | `/equipe-manager` — admin de equipes |
+| `Configuracoes.tsx` | `/configuracoes` — GESTOR only. Logotipo (upload, base em `Animal.tsx`) + dia de fechamento de fatura (1-31). Única por empresa (CNPJ) ou equipe (empresa pessoal). Link no Sidebar dentro de Geral (`isGestor &&`). |
 | `Alimentos.tsx` | `/alimentos` — banco de alimentos |
 | `ComposicaoAlimentar.tsx` | `/composicao` — composição nutricional |
 | `Nutrientes.tsx` | `/nutrientes` — banco de nutrientes |
@@ -1413,6 +1468,18 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     O padrão de FORNECEDOR ownership NÃO é suficiente para essa regra — um VET não-GESTOR também
     é barrado de editar itens de outros. Aplicado em: EvolucaoController, PrescricaoController,
     ExameClinicoController, EncaminhamentoController. VacinaClinica pendente de migration `status`.
+
+30. Sincronização FaturaItem ↔ origem — helpers `removerFaturaItensDaOrigem`/`atualizarFaturaItensDaOrigem`
+    (`faturaUtils.js`) recebem `(tx, campo, origemId, ...)` onde `campo` é o nome literal da FK no
+    `FaturaItem` (ex: `'exameClinicoId'`) — usado como chave computada (`where: { [campo]: id }`).
+    SEMPRE chamar dentro da mesma `prisma.$transaction` que também altera o registro de origem —
+    se a fatura estiver `PAGA`, o helper lança `FaturaPagaError` (`err.code === 'FATURA_PAGA'`) e a
+    transaction inteira faz rollback (o registro de origem não é tocado). O controller só precisa
+    capturar esse código no catch e responder 400 — não precisa checar `status === 'PAGA'` manualmente
+    antes. Para prescrição não existe chamada de remoção/edição: o gate `grupo.status !== 'SALVO'` em
+    `PrescricaoGrupoController.atualizarItem`/`removerItem` já impede qualquer alteração em item que
+    já tenha `FaturaItem` (que só é criado a partir de `FINALIZADO`/`executar`, ou seja, depois de
+    `SALVO`) — `prescricaoId` no `FaturaItem` é só para rastreabilidade, não há novo bloqueio ali.
 ```
 
 ---

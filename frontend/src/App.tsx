@@ -53,6 +53,7 @@ import CriaExameNutricional from './pages/CriaExameNutricional';
 
 import Equipe         from './pages/Equipe';
 import ControleAcesso from './pages/ControleAcesso';
+import Configuracoes  from './pages/Configuracoes';
 
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
@@ -225,6 +226,7 @@ function App() {
                           {/* Equipe */}
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
+                          <Route path="/configuracoes"    element={<Configuracoes />} />
 
                           {/* Troca Senha */}
                           {/* Onboarding de convidado — aceitar convite de equipe */}

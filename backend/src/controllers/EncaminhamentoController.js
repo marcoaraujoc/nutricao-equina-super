@@ -5,7 +5,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -299,6 +299,7 @@ const EncaminhamentoController = {
               valor:        Number(valor),
               quantidade:   1,
               veterinarioId: req.user.id,
+              encaminhamentoClinicoId: enc.id,
             });
           }
         }
@@ -365,7 +366,13 @@ const EncaminhamentoController = {
       const { id } = req.params;
       const { especialidade, motivo, urgencia, observacao, veterinarioDestino, clinicaDestino } = req.body;
 
-      const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
+      const enc = await prisma.encaminhamentoClinico.findUnique({
+        where:   { id: Number(id) },
+        include: {
+          evolucao:  { select: { numero: true, tipoAtendimento: true } },
+          prestador: { select: { fullName: true } },
+        },
+      });
       if (!enc || !enc.ativo) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
 
       if (enc.status !== 'PENDENTE') {
@@ -382,21 +389,45 @@ const EncaminhamentoController = {
         return res.status(403).json({ error: 'Você só pode editar encaminhamentos criados por você.' });
       }
 
-      const atualizado = await prisma.encaminhamentoClinico.update({
-        where: { id: enc.id },
-        data: {
-          ...(especialidade      !== undefined && { especialidade }),
-          ...(motivo             !== undefined && { motivo }),
-          ...(urgencia           !== undefined && { urgencia }),
-          ...(observacao         !== undefined && { observacao }),
-          ...(veterinarioDestino !== undefined && { veterinarioDestino }),
-          ...(clinicaDestino     !== undefined && { clinicaDestino }),
-        },
-        include: INCLUDE,
+      const atualizado = await prisma.$transaction(async (tx) => {
+        const upd = await tx.encaminhamentoClinico.update({
+          where: { id: enc.id },
+          data: {
+            ...(especialidade      !== undefined && { especialidade }),
+            ...(motivo             !== undefined && { motivo }),
+            ...(urgencia           !== undefined && { urgencia }),
+            ...(observacao         !== undefined && { observacao }),
+            ...(veterinarioDestino !== undefined && { veterinarioDestino }),
+            ...(clinicaDestino     !== undefined && { clinicaDestino }),
+          },
+          include: INCLUDE,
+        });
+
+        // Especialidade/destino mudaram → sincroniza a descrição do FaturaItem vinculado
+        // (se houver). Bloqueia (lança FaturaPagaError) se a fatura já estiver PAGA.
+        const descricaoAfetada = especialidade !== undefined || veterinarioDestino !== undefined || clinicaDestino !== undefined;
+        if (descricaoAfetada && enc.evolucao) {
+          const especialidadeFinal      = especialidade      !== undefined ? especialidade      : enc.especialidade;
+          const veterinarioDestinoFinal = veterinarioDestino  !== undefined ? veterinarioDestino  : enc.veterinarioDestino;
+          const clinicaDestinoFinal     = clinicaDestino      !== undefined ? clinicaDestino      : enc.clinicaDestino;
+
+          const atendNum = formatAtendimentoNum(enc.evolucao.tipoAtendimento, enc.evolucao.numero);
+          const destino  = enc.prestadorId
+            ? (enc.prestador?.fullName ?? especialidadeFinal)
+            : (veterinarioDestinoFinal || clinicaDestinoFinal || 'externo');
+          const descricao = `[${atendNum}] ${especialidadeFinal} — ${destino}`;
+
+          await atualizarFaturaItensDaOrigem(tx, 'encaminhamentoClinicoId', enc.id, { descricao });
+        }
+
+        return upd;
       });
 
       res.json({ dados: atualizado });
     } catch (err) {
+      if (err.code === 'FATURA_PAGA') {
+        return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+      }
       console.error('Erro ao atualizar encaminhamento:', err);
       res.status(500).json({ error: 'Erro ao atualizar encaminhamento' });
     }
@@ -464,6 +495,9 @@ const EncaminhamentoController = {
       }
 
       await prisma.$transaction(async (tx) => {
+        // Remove o FaturaItem vinculado, se houver. Bloqueia (lança FaturaPagaError)
+        // se a fatura de destino já estiver PAGA.
+        await removerFaturaItensDaOrigem(tx, 'encaminhamentoClinicoId', enc.id);
         await tx.encaminhamentoClinico.update({ where: { id: enc.id }, data: { ativo: false } });
         await tx.designacaoPrestador.updateMany({
           where: { encaminhamentoId: enc.id, ativo: true },
@@ -473,6 +507,9 @@ const EncaminhamentoController = {
 
       res.json({ dados: { id: enc.id, excluido: true } });
     } catch (err) {
+      if (err.code === 'FATURA_PAGA') {
+        return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+      }
       console.error('Erro ao excluir encaminhamento:', err);
       res.status(500).json({ error: 'Erro ao excluir encaminhamento' });
     }

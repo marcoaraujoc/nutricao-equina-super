@@ -9,6 +9,7 @@ const { checkPermission } = require('../middlewares/permissao.middleware');
 // Listagem e consulta por proprietário
 router.get('/proprietarios',                   authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), Ctrl.listarProprietarios);
 router.get('/proprietario/:proprietarioId',    authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), Ctrl.obterFaturaProprietario);
+router.get('/proprietario/:proprietarioId/logo-empresa', authenticate, checkPermission('financeiro.faturas.ler', 'LEITURA'), Ctrl.obterLogoEmpresaProprietario);
 
 // Itens
 router.post('/:faturaId/itens',  authenticate, checkPermission('financeiro.faturas.criar',  'PROPRIO'), Ctrl.adicionarItem);

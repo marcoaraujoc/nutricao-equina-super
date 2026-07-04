@@ -392,6 +392,18 @@ export default function ExameCompra() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAnimal?.id]);
 
+  // Logo da empresa/equipe para o laudo — busca best-effort, nunca bloqueia a tela.
+  useEffect(() => {
+    if (!selectedAnimal?.id || selectedAnimal.logoUrl !== undefined) return;
+    const id = selectedAnimal.id;
+    api.get(`/animais/${id}/logo-empresa`)
+      .then(res => {
+        const logoUrl = res.data?.dados?.logoUrl ?? null;
+        setSelectedAnimal(prev => prev && prev.id === id ? { ...prev, logoUrl } : prev);
+      })
+      .catch(() => {});
+  }, [selectedAnimal?.id, selectedAnimal?.logoUrl, setSelectedAnimal]);
+
   // ── Editar ────────────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEditar = (ex: ExameCompraItem, silent = false) => {

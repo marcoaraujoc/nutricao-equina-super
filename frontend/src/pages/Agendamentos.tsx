@@ -18,7 +18,7 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO';
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO';
 type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
 type ViewMode          = 'MES' | 'SEMANA';
 
@@ -152,6 +152,21 @@ function labelDia(dateStr: string) {
 }
 function corTipo(tipo: TipoAgendamento) { return TIPOS.find(t => t.value === tipo)?.cor ?? 'bg-gray-100 text-gray-700'; }
 function labelTipo(tipo: TipoAgendamento) { return TIPOS.find(t => t.value === tipo)?.label ?? tipo; }
+
+const STATUS_COR: Record<StatusAgendamento, string> = {
+  AGENDADO:     'bg-amber-100 text-amber-700',
+  EM_ANDAMENTO: 'bg-blue-100 text-blue-700',
+  CONCLUIDO:    'bg-green-100 text-green-700',
+  FINALIZADO:   'bg-green-100 text-green-700',
+  CANCELADO:    'bg-red-100 text-red-700',
+};
+const STATUS_LABEL: Record<StatusAgendamento, string> = {
+  AGENDADO:     'AGENDADO',
+  EM_ANDAMENTO: 'EM ANDAMENTO',
+  CONCLUIDO:    'CONCLUÍDO',
+  FINALIZADO:   'FINALIZADO',
+  CANCELADO:    'CANCELADO',
+};
 function formatarDataPT(dateStr: string) {
   const [a, m, d] = dateStr.split('-').map(Number);
   return `${d} de ${MESES_PT[m-1]} de ${a}`;
@@ -406,7 +421,10 @@ export default function Agendamentos() {
   const [openSlotVetId, setOpenSlotVetId] = useState<number | null>(null);
 
   // ── Calendar + agendamentos ─────────────────────────────────────────────────
-  const [selectedDate, setSelectedDate] = useState<string>(hoje());
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const p = new URLSearchParams(location.search);
+    return p.get('date') ?? hoje();
+  });
   const [agendamentos, setAgendamentos] = useState<AgendamentoGlobal[]>([]);
   const [loading, setLoading]           = useState(false);
   const [busca, setBusca]               = useState('');
@@ -465,17 +483,19 @@ export default function Agendamentos() {
     if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
   }
 
-  // Auto-abre voz quando ?auto=1; pré-seleciona animal quando ?animalId=X
+  // Auto-abre voz quando ?auto=1; pré-seleciona animal quando ?animalId=X; salta para ?date=X
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const auto     = params.get('auto') === '1';
     const animalQP = params.get('animalId');
+    const dateQP   = params.get('date');
     if (auto) {
       setVozAberto(true); setVozEtapa('IDLE');
       setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
     }
     if (animalQP) setSelectedAnimalId(animalQP);
-    if (auto || animalQP) navigate('/agendamentos', { replace: true });
+    if (dateQP)   setSelectedDate(dateQP);
+    if (auto || animalQP || dateQP) navigate('/agendamentos', { replace: true });
   }, [location.search]);
 
   // ── statusPorDia — bolinhas só com profissional selecionado ─────────────────
@@ -1178,11 +1198,17 @@ export default function Agendamentos() {
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-gray-100">
               {listaFiltrada.map(ag => {
-                const isAgendado  = ag.status === 'AGENDADO';
-                const isConcluido = ag.status === 'CONCLUIDO';
-                const isCancelado = ag.status === 'CANCELADO';
+                const isAgendado    = ag.status === 'AGENDADO';
+                const isConcluido   = ag.status === 'CONCLUIDO';
+                const isCancelado   = ag.status === 'CANCELADO';
+                const isEmAndamento = ag.status === 'EM_ANDAMENTO';
+                const podeContinuar = isEmAndamento && podeGerenciar;
                 return (
-                  <div key={ag.id} className={`p-4 flex flex-col gap-3 ${isCancelado ? 'opacity-60' : ''}`}>
+                  <div
+                    key={ag.id}
+                    onClick={podeContinuar ? () => handleIniciarAtendimento(ag) : undefined}
+                    className={`p-4 flex flex-col gap-3 ${isCancelado ? 'opacity-60' : ''} ${podeContinuar ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
@@ -1196,7 +1222,7 @@ export default function Agendamentos() {
                             )}
                           </span>
                         ) : (
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>{ag.status}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COR[ag.status]}`}>{STATUS_LABEL[ag.status]}</span>
                         )}
                       </div>
                       <span className="text-xs font-bold font-mono text-gray-500">{formatarHora(ag.dataHora)}</span>
@@ -1268,11 +1294,17 @@ export default function Agendamentos() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {listaFiltrada.map(ag => {
-                    const isAgendado  = ag.status === 'AGENDADO';
-                    const isConcluido = ag.status === 'CONCLUIDO';
-                    const isCancelado = ag.status === 'CANCELADO';
+                    const isAgendado    = ag.status === 'AGENDADO';
+                    const isConcluido   = ag.status === 'CONCLUIDO';
+                    const isCancelado   = ag.status === 'CANCELADO';
+                    const isEmAndamento = ag.status === 'EM_ANDAMENTO';
+                    const podeContinuar = isEmAndamento && podeGerenciar;
                     return (
-                      <tr key={ag.id} className={`hover:bg-gray-50/50 transition-colors ${isCancelado ? 'opacity-60' : ''}`}>
+                      <tr
+                        key={ag.id}
+                        onClick={podeContinuar ? () => handleIniciarAtendimento(ag) : undefined}
+                        className={`hover:bg-gray-50/50 transition-colors ${isCancelado ? 'opacity-60' : ''} ${podeContinuar ? 'cursor-pointer' : ''}`}
+                      >
                         <td className="py-3.5 px-4">
                           <span className="flex items-center gap-1.5 font-bold font-mono text-emerald-700">
                             <Clock size={13} /> {formatarHora(ag.dataHora)}
@@ -1304,7 +1336,7 @@ export default function Agendamentos() {
                               )}
                             </div>
                           ) : (
-                            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isAgendado ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>{ag.status}</span>
+                            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${STATUS_COR[ag.status]}`}>{STATUS_LABEL[ag.status]}</span>
                           )}
                         </td>
                         {podeGerenciar && (

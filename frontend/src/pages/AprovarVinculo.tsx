@@ -59,7 +59,7 @@ export default function AprovarVinculo() {
         // Usuário logado não é o vet correto — faz logout e redireciona para login
         if (status === 403 && codigo === 'VET_INCORRETO') {
           // Limpa sessão atual completamente
-          localStorage.removeItem('token');
+          sessionStorage.removeItem('token');
           localStorage.removeItem('lastSelectedAnimalId');
           localStorage.removeItem('s2vet_ob');
 

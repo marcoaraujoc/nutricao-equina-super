@@ -11,7 +11,7 @@ import {
   Calendar, User, Filter, Search, Eye, Ban, Paperclip,
   Image, Film, Volume2, Lock, CheckSquare,
 } from 'lucide-react';
-import { imprimirEvolucao } from '../utils/EvolucaoPrint';
+import { imprimirRelatorioAtendimento } from '../utils/RelatorioAtendimento';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
 import ConfirmModal from '../components/ConfirmModal';
@@ -124,6 +124,7 @@ export interface AnimalInfo {
   raca?:      { nome: string } | null;
   user?:      { fullName: string; email: string } | null;
   idadeAnos?: number | null;
+  logoUrl?:   string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -201,17 +202,13 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
 
 // ─── ViewEvolucaoModal ────────────────────────────────────────────────────────
 
-function ViewEvolucaoModal({ ev, animal, isGestor, onClose, onEditar, onImprimir }: {
+function ViewEvolucaoModal({ ev, animal, onClose, onImprimir }: {
   ev:         EvolucaoItem;
   animal:     AnimalInfo | null;
-  isGestor:    boolean;
   onClose:    () => void;
-  onEditar?:  () => void;
   onImprimir: () => void;
 }) {
-  const editavel  = ev.status === 'EM_ANDAMENTO' || (isGestor && ev.status === 'FINALIZADA');
-  const bloqueado = (!isGestor && ev.status === 'FINALIZADA') || ev.status === 'CANCELADA';
-  const midias    = ev.midias ?? [];
+  const midias = ev.midias ?? [];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
@@ -281,20 +278,6 @@ function ViewEvolucaoModal({ ev, animal, isGestor, onClose, onEditar, onImprimir
             className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             <Printer size={14} /> Imprimir
           </button>
-          {editavel && onEditar && (
-            <button onClick={() => { onClose(); onEditar(); }}
-              className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-1.5">
-              <Pencil size={14} /> Editar evolução
-            </button>
-          )}
-          {bloqueado && (
-            <div className="flex-1 flex items-center justify-center gap-1.5">
-              <Lock size={12} className="text-gray-400" />
-              <span className="text-xs text-gray-400 italic">
-                {ev.status === 'FINALIZADA' ? 'Finalizada — edição restrita a gestores' : 'Cancelada — somente leitura'}
-              </span>
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -781,10 +764,13 @@ interface Props {
   onEvolucaoChange?:  (ev: EvolucaoAtiva | null) => void;
   onSalvo?:           () => void;
   openItemId?:        number;
+  onViewConsumed?:    () => void;
+  editItemId?:        number | null;
+  onEditConsumed?:    () => void;
   agendamentoId?:     number;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, agendamentoId: agendamentoIdProp }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
@@ -832,6 +818,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [showLLM,        setShowLLM]        = useState(false);
   const [savingFatura,   setSavingFatura]   = useState(false);
   const [arquivosModal,  setArquivosModal]  = useState<File[]>([]);
+  const [imprimindoId,   setImprimindoId]   = useState<number | null>(null);
 
   const agendamentoPreSelecionado = useRef(false);
 
@@ -879,7 +866,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     if (!openItemId) return;
     api.get(`/clinica/evolucoes/${openItemId}`)
       .then(res => { if (res.data?.dados) setViewingEv(res.data.dados as EvolucaoItem); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => onViewConsumed?.());
   }, [openItemId]);
 
   // Quando vindo da tela de Agendamentos via "Iniciar" (ou restaurando do localStorage):
@@ -940,6 +928,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setArquivosModal([]);
     setShowModal(true);
   };
+
+  // Vindo do botão "Editar" do Histórico do Paciente (AG-XXXX/EV-XXXX): abre
+  // direto no formulário de edição, sem passar pela visualização.
+  const editIdAplicado = useRef<number | null>(null);
+  useEffect(() => {
+    if (!editItemId || editIdAplicado.current === editItemId) return;
+    editIdAplicado.current = editItemId;
+    api.get(`/clinica/evolucoes/${editItemId}`)
+      .then(res => {
+        if (res.data?.dados) abrirEdicao(res.data.dados as EvolucaoItem);
+        onEditConsumed?.();
+      })
+      .catch(() => {});
+  }, [editItemId]);
 
   const uploadMidias = async (evolucaoId: number, arquivos: File[]) => {
     for (const arquivo of arquivos) {
@@ -1175,15 +1177,22 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     finally { setSavingFatura(false); }
   };
 
-  const handleImprimir = (ev: EvolucaoItem) => {
+  const handleImprimir = async (ev: EvolucaoItem) => {
     if (!podeImprimir) { semPermissao('imprimir evolução'); return; }
-    imprimirEvolucao(ev, animal ? {
-      nome:      animal.nome,
-      photoUrl:  animal.photoUrl as string | undefined,
-      raca:      animal.raca,
-      user:      animal.user,
-      idadeAnos: animal.idadeAnos,
-    } : null);
+    if (imprimindoId) return; // já há uma geração de relatório em andamento
+
+    setImprimindoId(ev.id);
+    try {
+      await toast.promise(imprimirRelatorioAtendimento(ev.id), {
+        loading: 'Gerando relatório comparativo…',
+        success: 'Relatório pronto para impressão.',
+        error: 'Não foi possível gerar o relatório. Tente novamente.',
+      });
+    } catch {
+      // silencioso — toast.promise já notificou o erro
+    } finally {
+      setImprimindoId(null);
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1454,9 +1463,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           </button>
                         )}
 
-                        <button onClick={() => handleImprimir(ev)} title="Imprimir"
-                          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                          <Printer size={14} />
+                        <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id} title="Imprimir"
+                          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50">
+                          {imprimindoId === ev.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
                         </button>
                       </div>
                     </td>
@@ -1490,18 +1499,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <ViewEvolucaoModal
           ev={viewingEv}
           animal={animal}
-          isGestor={isGestor}
           onClose={() => setViewingEv(null)}
-          onEditar={(() => {
-            const nivelEd = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
-            const eAutorViewing = viewingEv.veterinarioId === userId;
-            // FORNECEDOR: autoria obrigatória independente do nível
-            const podeEd = isFornecedor
-              ? (nivelEd !== 'NENHUM' && eAutorViewing)
-              : (nivelEd === 'FULL' || nivelEd === 'EQUIPE' || (nivelEd === 'PROPRIO' && eAutorViewing));
-            const podeEditar = podeEd && (viewingEv.status === 'EM_ANDAMENTO' || (isGestor && viewingEv.status === 'FINALIZADA'));
-            return podeEditar ? () => abrirEdicao(viewingEv) : undefined;
-          })()}
           onImprimir={() => handleImprimir(viewingEv)}
         />
       )}

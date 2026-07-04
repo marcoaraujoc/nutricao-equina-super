@@ -742,7 +742,7 @@ const VeterinarioController = {
         orderBy: { updatedAt: 'desc' },
       });
 
-      let animais = solicitacoes.map(s => s.animal).filter(Boolean);
+      let animais = solicitacoes.map(s => s.animal).filter(Boolean).filter(a => a.ativo);
 
       // Vínculo direto de OUTRA equipe da mesma empresa fica fora desta listagem
       if (empresaId && equipeScope) {

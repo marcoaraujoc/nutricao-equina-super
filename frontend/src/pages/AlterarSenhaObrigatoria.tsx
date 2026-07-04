@@ -31,7 +31,7 @@ export default function AlterarSenhaObrigatoria() {
     if (!senhasIguais) return toast.error('As senhas não coincidem');
     try {
       setSalvando(true);
-      await api.patch('/users/me/senha', { novaSenha });
+      await api.patch('/users/me/senha', { novaSenha, obrigatoria: true });
       await refreshUser();
       toast.success('Senha definida! Agora complete o seu cadastro pessoal.');
       localStorage.setItem('s2vet_ob', 'convite');

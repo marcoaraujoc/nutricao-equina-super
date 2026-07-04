@@ -18,6 +18,7 @@ interface Animal {
   raca?: { nome: string };
   especie?: { nome: string };
   user?: { fullName: string; email: string };
+  logoUrl?: string | null;
 }
 
 interface SelectedAnimalContextType {

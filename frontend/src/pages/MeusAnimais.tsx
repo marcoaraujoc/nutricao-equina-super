@@ -434,9 +434,9 @@ const MeusAnimais = () => {
             </div>
             <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir animal?</h2>
             <p className="text-gray-500 text-sm mb-6">
-              Isso removerá permanentemente{' '}
-              <strong className="text-gray-700">{animalToDelete.nome}</strong> do sistema.
-              Esta ação não pode ser desfeita.
+              Isso removerá{' '}
+              <strong className="text-gray-700">{animalToDelete.nome}</strong> das suas listagens.
+              O histórico clínico e nutricional é preservado.
             </p>
 
             {/* Preview do animal */}

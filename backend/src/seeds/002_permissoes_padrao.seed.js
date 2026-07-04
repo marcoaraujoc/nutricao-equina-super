@@ -29,6 +29,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'FULL',
     'cadastro.localizacao.ler':    'FULL',
     'cadastro.localizacao.criar':  'FULL',
+    'cadastro.localizacao.editar': 'FULL',
+    'cadastro.localizacao.ativar': 'FULL',
 
     'dashboard.geral.ler':      'FULL',
     'dashboard.geral.imprimir': 'FULL',
@@ -176,6 +178,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'PROPRIO',
     'cadastro.localizacao.ler':    'LEITURA',
     'cadastro.localizacao.criar':  'LEITURA',
+    'cadastro.localizacao.editar': 'PROPRIO',
+    'cadastro.localizacao.ativar': 'PROPRIO',
 
     // Dashboard
     'dashboard.geral.ler':      'EQUIPE',
@@ -343,6 +347,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'NENHUM',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
 
     'dashboard.geral.ler': 'LEITURA',
     'animais.ler':         'LEITURA',
@@ -395,6 +403,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'NENHUM',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
 
     'dashboard.geral.ler':      'LEITURA',
     'dashboard.geral.imprimir': 'NENHUM',
@@ -543,6 +553,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'LEITURA',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
 
     // Dashboard
     'dashboard.geral.ler':      'LEITURA',
@@ -710,6 +722,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'LEITURA',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'PROPRIO',
+    'cadastro.localizacao.ativar': 'PROPRIO',
 
     'dashboard.geral.ler':      'LEITURA',
     'dashboard.geral.imprimir': 'NENHUM',
@@ -856,6 +870,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'NENHUM',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
 
     'dashboard.geral.ler':      'LEITURA',
     'dashboard.geral.imprimir': 'NENHUM',
@@ -1002,6 +1018,8 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.localizacao.ler':    'LEITURA',
     'cadastro.localizacao.criar':  'NENHUM',
+    'cadastro.localizacao.editar': 'NENHUM',
+    'cadastro.localizacao.ativar': 'NENHUM',
 
     'dashboard.geral.ler':      'LEITURA',
     'dashboard.geral.imprimir': 'NENHUM',
@@ -1156,8 +1174,10 @@ const MODULOS_SISTEMA = [
 
   // ── Cadastro — Localização de Animal ────────────────────────────────────────
   // Tabela global (não por empresa). Edição/inativação restritas ao ADMIN (enforced no controller).
-  { slug: 'cadastro.localizacao.ler',   modulo: 'cadastro', submodulo: 'localizacao', acao: 'ler',   label: 'Localização — Visualizar', ordemExib: 17 },
-  { slug: 'cadastro.localizacao.criar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'criar', label: 'Localização — Cadastrar',  ordemExib: 18 },
+  { slug: 'cadastro.localizacao.ler',    modulo: 'cadastro', submodulo: 'localizacao', acao: 'ler',    label: 'Localização — Visualizar',    ordemExib: 17 },
+  { slug: 'cadastro.localizacao.criar',  modulo: 'cadastro', submodulo: 'localizacao', acao: 'criar',  label: 'Localização — Cadastrar',     ordemExib: 18 },
+  { slug: 'cadastro.localizacao.editar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'editar', label: 'Localização — Editar',        ordemExib: 18.5 },
+  { slug: 'cadastro.localizacao.ativar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'ativar', label: 'Localização — Ativar/Inativar', ordemExib: 18.7 },
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
   { slug: 'dashboard.geral.ler',      modulo: 'dashboard', submodulo: 'geral', acao: 'ler',      label: 'Dashboard — Visualizar',  ordemExib:  1 },

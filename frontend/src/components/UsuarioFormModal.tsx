@@ -9,11 +9,12 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import {
-  X, AlertCircle, Info, Eye, EyeOff, Loader2,
-  User as UserIcon, MapPin, Users, Truck,
+  X, AlertCircle, Info, Eye, EyeOff, Loader2, Plus,
+  User as UserIcon, MapPin, Users,
 } from 'lucide-react';
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
+import ModalNovoFornecedor, { type NovoFornecedorResult } from './ModalNovoFornecedor';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -133,42 +134,37 @@ export default function UsuarioFormModal({
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
 
-  // Perfil Fornecedor: cadastros disponíveis (sem conta de login vinculada)
+  // Seletor de fornecedor existente
   const [fornecedores,        setFornecedores]        = useState<FornecedorDisponivel[]>([]);
   const [loadingFornecedores, setLoadingFornecedores] = useState(false);
   const [fornecedorId,        setFornecedorId]        = useState<number | ''>('');
-  const [tiposServico,        setTiposServico]        = useState<string[]>([]);
-  const [tipoServico,         setTipoServico]         = useState('');
+  const [criandoNovo,         setCriandoNovo]         = useState(false);
 
-  const fornecedorAtivo = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
+  const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
   useEffect(() => {
-    if (!fornecedorAtivo || fornecedores.length > 0 || loadingFornecedores) return;
+    if (!mostrarSeletorFornecedor || fornecedores.length > 0 || loadingFornecedores) return;
     let cancelado = false;
     (async () => {
       setLoadingFornecedores(true);
       try {
-        const [resForn, resTipos] = await Promise.all([
-          api.get('/cadastro/fornecedores'),
-          api.get('/cadastro/fornecedores/tipos'),
-        ]);
+        const res = await api.get('/cadastro/fornecedores');
         if (cancelado) return;
-        const lista = (resForn.data?.dados ?? []) as FornecedorDisponivel[];
-        setFornecedores(lista.filter(f => f.ativo && !f.userId)); // disponíveis = sem login vinculado
-        setTiposServico(resTipos.data?.dados ?? []);
+        const lista = (res.data?.dados ?? []) as FornecedorDisponivel[];
+        setFornecedores(lista.filter(f => f.ativo && !f.userId));
       } catch { /* silencioso */ }
       finally { if (!cancelado) setLoadingFornecedores(false); }
     })();
     return () => { cancelado = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fornecedorAtivo]);
+  }, [mostrarSeletorFornecedor]);
 
   const selecionarFornecedor = (id: number | '') => {
     setFornecedorId(id);
+    setCriandoNovo(false);
     if (id === '') return;
     const f = fornecedores.find(x => x.id === id);
     if (!f) return;
-    // Pré-preenche os dados da conta com o cadastro do fornecedor (editáveis)
     setForm(prev => ({
       ...prev,
       fullName: f.nome,
@@ -216,14 +212,11 @@ export default function UsuarioFormModal({
     if (!form.fullName.trim())     { toast.error('Informe o nome');           return; }
     if (!form.email.trim())        { toast.error('Informe o e-mail');         return; }
     if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
-    if (!form.phone.trim())                             { toast.error('Informe o telefone');          return; }
-    if (form.phone.replace(/\D/g, '').length < 10)    { toast.error('Telefone inválido');            return; }
+    if (!form.phone.trim())                          { toast.error('Informe o telefone'); return; }
+    if (form.phone.replace(/\D/g, '').length < 10)  { toast.error('Telefone inválido');  return; }
     const cargosFinais = form.cargos ?? [form.perfil];
     if (permitirMultiCargos && cargosFinais.length === 0) {
       toast.error('Selecione ao menos um perfil de acesso'); return;
-    }
-    if (fornecedorAtivo && fornecedorId === '' && !tipoServico) {
-      toast.error('Informe o tipo de serviço do fornecedor'); return;
     }
     if (permitirSenha && form.senha) {
       const erroSenha = validarSenha(form.senha);
@@ -236,15 +229,15 @@ export default function UsuarioFormModal({
       phone:        form.phone.trim(),
       cargos:       cargosFinais,
       perfil:       cargosFinais[0],
-      fornecedorId: fornecedorAtivo && fornecedorId !== '' ? fornecedorId : null,
-      tipoServico:  fornecedorAtivo && fornecedorId === '' ? tipoServico : undefined,
+      fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
+      tipoServico:  undefined,
     });
   };
 
   const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
   const labelCls = 'block text-xs text-gray-500 mb-1';
 
-  return (
+  return (<>
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl max-h-[92vh] flex flex-col border border-gray-100">
 
@@ -276,7 +269,7 @@ export default function UsuarioFormModal({
                           sel ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                         }`}>
                           <input type="checkbox" checked={sel}
-                            onChange={e => { toggleCargo(p.value, e.target.checked); setFornecedorId(''); }}
+                            onChange={e => { toggleCargo(p.value, e.target.checked); }}
                             className="w-3.5 h-3.5 accent-emerald-600" />
                           {p.label}
                         </label>
@@ -285,120 +278,113 @@ export default function UsuarioFormModal({
                   </div>
                 ) : (
                   <select value={form.perfil}
-                    onChange={e => { set('perfil', e.target.value); set('cargos', [e.target.value]); setFornecedorId(''); }}
+                    onChange={e => {
+                      const val = e.target.value;
+                      set('perfil', val); set('cargos', [val]);
+                      setFornecedorId(''); setCriandoNovo(false);
+                    }}
                     className={inputCls}>
                     {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 )}
               </div>}
 
-              {fornecedorAtivo && (
-                <div className="sm:col-span-2 bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 space-y-3">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
-                    <Truck size={13} /> Fornecedor cadastrado
-                  </div>
+              {/* Seletor de fornecedor existente */}
+              {mostrarSeletorFornecedor && (
+                <div className="sm:col-span-2 space-y-2">
                   {loadingFornecedores ? (
-                    <div className="flex items-center gap-2 text-xs text-gray-400 py-1">
-                      <Loader2 size={12} className="animate-spin" /> Buscando fornecedores disponíveis…
+                    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                      <Loader2 size={12} className="animate-spin" /> Buscando fornecedores…
                     </div>
                   ) : (
+                    <select value={fornecedorId}
+                      onChange={e => selecionarFornecedor(e.target.value === '' ? '' : Number(e.target.value))}
+                      className={inputCls}>
+                      <option value="">Selecionar fornecedor existente…</option>
+                      {fornecedores.map(f => (
+                        <option key={f.id} value={f.id}>{f.nome}{f.tipoServico ? ` · ${f.tipoServico}` : ''}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button type="button"
+                    onClick={() => setCriandoNovo(true)}
+                    className="flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-800 font-medium transition-colors">
+                    <Plus size={13} />
+                    Incluir novo fornecedor
+                  </button>
+                </div>
+              )}
+
+              <>
+                  <div className="sm:col-span-2">
+                    <label className={labelCls}>Nome completo *</label>
+                    <input type="text" value={form.fullName}
+                      onChange={e => set('fullName', e.target.value)}
+                      placeholder="Nome do usuário" className={inputCls} />
+                  </div>
+
+                  <div>
+                    <label className={labelCls}>E-mail *</label>
+                    <input type="email" value={form.email}
+                      onChange={e => set('email', e.target.value)}
+                      disabled={emailBloqueado}
+                      title={emailBloqueado ? 'O e-mail de acesso não pode ser alterado aqui' : undefined}
+                      placeholder="email@exemplo.com"
+                      className={`${inputCls} ${emailBloqueado ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                  </div>
+
+                  <div>
+                    <label className={labelCls}>Telefone *</label>
+                    <input type="text" value={form.phone}
+                      onChange={e => set('phone', mascaraTelefone(e.target.value))}
+                      placeholder="(00) 00000-0000" className={inputCls} />
+                  </div>
+
+                  {modoEdicao && permitirSenha && (
                     <div>
-                      <select value={fornecedorId}
-                        onChange={e => selecionarFornecedor(e.target.value === '' ? '' : Number(e.target.value))}
-                        className={inputCls}>
-                        <option value="">— Cadastrar novo fornecedor —</option>
-                        {fornecedores.map(f => (
-                          <option key={f.id} value={f.id}>{f.nome} · {f.tipoServico}</option>
-                        ))}
-                      </select>
-                      <p className="text-[11px] text-gray-400 mt-1">
-                        {fornecedores.length === 0
-                          ? 'Nenhum fornecedor disponível — preencha os dados abaixo para criar um novo cadastro.'
-                          : 'Selecione um cadastro existente (preenche os dados abaixo) ou crie um novo.'}
-                      </p>
+                      <label className={labelCls}>Nova senha (em branco para manter)</label>
+                      <div className="relative">
+                        <input type={mostrarSenha ? 'text' : 'password'} value={form.senha}
+                          onChange={e => set('senha', e.target.value)}
+                          placeholder="Nova senha..."
+                          autoComplete="new-password"
+                          className={`${inputCls} pr-10`} />
+                        <button type="button" onClick={() => setMostrarSenha(v => !v)}
+                          title={mostrarSenha ? 'Ocultar senha' : 'Mostrar senha'}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                          {mostrarSenha ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
+                        <AlertCircle size={11} />
+                        Mín. 8 caracteres, com maiúscula, número e especial.
+                      </div>
                     </div>
                   )}
-                  {fornecedorId === '' && (
-                    <div>
-                      <label className={labelCls}>Tipo de Serviço *</label>
-                      <select value={tipoServico} onChange={e => setTipoServico(e.target.value)}
-                        className={`${inputCls} ${!tipoServico ? 'border-amber-200 focus:border-amber-400' : ''}`}>
-                        <option value="">Selecione o tipo de serviço...</option>
-                        {tiposServico.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
+
+                  {!modoEdicao && (
+                    <div className="sm:col-span-2">
+                      <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">
+                        <Info size={12} className="flex-shrink-0 mt-0.5" />
+                        <span>
+                          A senha inicial é a padrão <strong>{SENHA_PADRAO_INICIAL}</strong> —
+                          o usuário deverá alterá-la no primeiro acesso.
+                        </span>
+                      </div>
                     </div>
                   )}
-                </div>
-              )}
 
-              <div className="sm:col-span-2">
-                <label className={labelCls}>Nome completo *</label>
-                <input type="text" value={form.fullName}
-                  onChange={e => set('fullName', e.target.value)}
-                  placeholder="Nome do usuário" className={inputCls} />
-              </div>
-
-              <div>
-                <label className={labelCls}>E-mail *</label>
-                <input type="email" value={form.email}
-                  onChange={e => set('email', e.target.value)}
-                  disabled={emailBloqueado}
-                  title={emailBloqueado ? 'O e-mail de acesso não pode ser alterado aqui' : undefined}
-                  placeholder="email@exemplo.com"
-                  className={`${inputCls} ${emailBloqueado ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
-              </div>
-
-              <div>
-                <label className={labelCls}>Telefone *</label>
-                <input type="text" value={form.phone}
-                  onChange={e => set('phone', mascaraTelefone(e.target.value))}
-                  placeholder="(00) 00000-0000" className={inputCls} />
-              </div>
-
-              {modoEdicao && permitirSenha && (
-                <div>
-                  <label className={labelCls}>Nova senha (em branco para manter)</label>
-                  <div className="relative">
-                    <input type={mostrarSenha ? 'text' : 'password'} value={form.senha}
-                      onChange={e => set('senha', e.target.value)}
-                      placeholder="Nova senha..."
-                      autoComplete="new-password"
-                      className={`${inputCls} pr-10`} />
-                    <button type="button" onClick={() => setMostrarSenha(v => !v)}
-                      title={mostrarSenha ? 'Ocultar senha' : 'Mostrar senha'}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                      {mostrarSenha ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
-                    <AlertCircle size={11} />
-                    Mín. 8 caracteres, com maiúscula, número e especial.
-                  </div>
-                </div>
-              )}
-
-              {!modoEdicao && (
-                <div className="sm:col-span-2">
-                  <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">
-                    <Info size={12} className="flex-shrink-0 mt-0.5" />
-                    <span>
-                      A senha inicial é a padrão <strong>{SENHA_PADRAO_INICIAL}</strong> —
-                      o usuário deverá alterá-la no primeiro acesso.
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {modoEdicao && (
-                <div className="sm:col-span-2 flex items-center gap-3 pt-1">
-                  <input type="checkbox" id="ativo-modal" checked={form.ativo}
-                    onChange={e => set('ativo', e.target.checked)}
-                    className="w-4 h-4 accent-emerald-600" />
-                  <label htmlFor="ativo-modal" className="text-sm font-medium text-gray-700">
-                    Usuário ativo
-                  </label>
-                </div>
-              )}
+                  {modoEdicao && (
+                    <div className="sm:col-span-2 flex items-center gap-3 pt-1">
+                      <input type="checkbox" id="ativo-modal" checked={form.ativo}
+                        onChange={e => set('ativo', e.target.checked)}
+                        className="w-4 h-4 accent-emerald-600" />
+                      <label htmlFor="ativo-modal" className="text-sm font-medium text-gray-700">
+                        Usuário ativo
+                      </label>
+                    </div>
+                  )}
+                </>
             </div>
           </section>
 
@@ -478,5 +464,28 @@ export default function UsuarioFormModal({
         </div>
       </div>
     </div>
+
+    {criandoNovo && mostrarSeletorFornecedor && (
+      <ModalNovoFornecedor
+        onClose={() => setCriandoNovo(false)}
+        onSalvo={(result: NovoFornecedorResult) => {
+          // Fornecedor criado — inclui imediatamente na equipe e fecha tudo
+          setCriandoNovo(false);
+          onSubmit({
+            fullName:     result.nome,
+            email:        result.email ?? '',
+            phone:        result.telefone ?? '',
+            perfil:       'FORNECEDOR',
+            cargos:       ['FORNECEDOR'],
+            senha:        '',
+            ativo:        true,
+            cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
+            fornecedorId: result.id,
+            tipoServico:  undefined,
+          });
+        }}
+      />
+    )}
+  </>
   );
 }

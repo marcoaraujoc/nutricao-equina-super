@@ -54,6 +54,9 @@ router.post('/',    authenticate, checkPermission('animais.criar', 'EQUIPE'), in
 // GET  /api/animais/:id     → obter animal por ID
 router.get('/:id',  authenticate, checkPermission('animais.ler', 'LEITURA'), animalIdParam, validate, animalController.obterPorId);
 
+// GET  /api/animais/:id/logo-empresa → logo da empresa/equipe do animal (relatórios/impressões)
+router.get('/:id/logo-empresa', authenticate, checkPermission('animais.ler', 'LEITURA'), animalIdParam, validate, animalController.obterLogoEmpresa);
+
 // PUT  /api/animais/:id     → atualizar animal (com upload de foto opcional)
 router.put('/:id',  authenticate, checkPermission('animais.editar', 'EQUIPE'), upload.single('foto'), animalIdParam, validate, animalController.atualizar);
 

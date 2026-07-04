@@ -2,7 +2,7 @@
 // Tela do animal — header com dados resumidos, Histórico unificado (evoluções,
 // vacinas, exames, prescrições, encaminhamentos) e painel de Agendamentos.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
@@ -44,14 +44,16 @@ interface AnimalData {
 type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'EXAME_LAB' | 'EXAME_IMG' | 'EXAME_BIO' | 'EXAME_COMPRA' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
 
 interface EventoHistorico {
-  id:          string;
-  origem:      OrigemEvento;
-  data:        string;
-  titulo:      string;
-  badge:       string;
-  status:      string | null;
-  responsavel: string | null;
-  resumo:      string;
+  id:                string;
+  origem:            OrigemEvento;
+  data:              string;
+  titulo:            string;
+  badge:             string;
+  status:            string | null;
+  responsavel:       string | null;
+  resumo:            string;
+  evolucaoId:        number | null;
+  atendimentoNumero?: string | null;
 }
 
 type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
@@ -131,6 +133,13 @@ type DetalheRecord =
   | { tipo: 'ENCAMINHAMENTO'; dados: DetalheEncaminhamento }
   | { tipo: 'PRESCRICAO';     dados: DetalhePrescricao };
 
+interface GrupoHistorico {
+  key:      string;
+  data:     string;
+  evolucao: EventoHistorico | null;
+  subitems: EventoHistorico[];
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BADGE_ORIGEM: Record<OrigemEvento, string> = {
@@ -176,6 +185,11 @@ const horaDe = (iso: string) =>
 
 const formatDate = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
 
+// Para datas que vêm de um <input type="date"> (sem horário — salvas como meia-noite
+// UTC): formatar no fuso do navegador jogaria para o dia anterior em fusos negativos
+// (ex: Brasil). Mantém a data que o usuário escolheu.
+const formatDateSemHora = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+
 const labelFreq = (v: string) => POSOLOGIAS[v] ?? v;
 
 function parseExtraExame(obs: string | null): { grupos?: GrupoExameDetalhe[] | null; laboratorio?: string | null; [k: string]: unknown } | null {
@@ -204,6 +218,50 @@ function parseEventoId(ev: EventoHistorico): { origem: OrigemEvento; numId: numb
   const numId = Number(rawId);
   if (!origem || isNaN(numId)) return null;
   return { origem: origem.toUpperCase() as OrigemEvento, numId };
+}
+
+const ISO_DIA = (iso: string) => iso.substring(0, 10);
+
+function agruparEventos(eventos: EventoHistorico[]): GrupoHistorico[] {
+  const evolucoes = eventos.filter(e => e.origem === 'EVOLUCAO');
+  const outros    = eventos.filter(e => e.origem !== 'EVOLUCAO');
+
+  const evolucaoIds = new Set(evolucoes.map(e => e.evolucaoId));
+
+  // Agrupa filhos pelo vínculo real evolucaoId (AG-XXXX/EV-XXXX pai); sem
+  // vínculo válido (ex: vacina avulsa, exame de compra) cai no bucket "avulso" por dia.
+  const subPorEvolucao = new Map<number, EventoHistorico[]>();
+  const avulsosPorDia  = new Map<string, EventoHistorico[]>();
+
+  for (const ev of outros) {
+    if (ev.evolucaoId != null && evolucaoIds.has(ev.evolucaoId)) {
+      if (!subPorEvolucao.has(ev.evolucaoId)) subPorEvolucao.set(ev.evolucaoId, []);
+      subPorEvolucao.get(ev.evolucaoId)!.push(ev);
+    } else {
+      const k = ISO_DIA(ev.data);
+      if (!avulsosPorDia.has(k)) avulsosPorDia.set(k, []);
+      avulsosPorDia.get(k)!.push(ev);
+    }
+  }
+
+  const grupos: GrupoHistorico[] = evolucoes.map(ev => ({
+    key:      ev.id,
+    data:     ev.data,
+    evolucao: ev,
+    subitems: subPorEvolucao.get(ev.evolucaoId!) ?? [],
+  }));
+
+  for (const [dia, subs] of avulsosPorDia) {
+    grupos.push({
+      key:      `avulso-${dia}`,
+      data:     dia + 'T12:00:00',
+      evolucao: null,
+      subitems: subs,
+    });
+  }
+
+  grupos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+  return grupos;
 }
 
 // ─── Header — dados do animal ─────────────────────────────────────────────────
@@ -302,12 +360,12 @@ function DetalheModalVacina({ dados }: { dados: DetalheVacina }) {
       <RowDetalhe label="Status"        value={!dados.ativo ? 'Inativa' : dados.dataReforco && new Date(dados.dataReforco) < new Date() ? 'Vencida' : 'Vigente'} />
       <RowDetalhe label="Fabricante"    value={dados.fabricante} />
       <RowDetalhe label="Lote"          value={dados.lote} />
-      {dados.loteVacina && <RowDetalhe label="Val. Lote" value={formatDate(dados.loteVacina.validade)} />}
+      {dados.loteVacina && <RowDetalhe label="Val. Lote" value={formatDateSemHora(dados.loteVacina.validade)} />}
       <RowDetalhe label="Tipo dose"     value={dados.dose} />
       {dados.quantidade != null && dados.quantidade > 1 && <RowDetalhe label="Qtd doses" value={String(dados.quantidade)} />}
       <RowDetalhe label="Via"           value={dados.via} />
-      <RowDetalhe label="Data aplicação" value={formatDate(dados.dataAplicacao)} />
-      {dados.dataReforco && <RowDetalhe label="Reforço" value={formatDate(dados.dataReforco)} />}
+      <RowDetalhe label="Data aplicação" value={formatDateSemHora(dados.dataAplicacao)} />
+      {dados.dataReforco && <RowDetalhe label="Reforço" value={formatDateSemHora(dados.dataReforco)} />}
       <RowDetalhe label="Executor"      value={dados.veterinario?.fullName} />
       <RowDetalhe label="Observação"    value={dados.observacao} />
       {!dados.ativo && dados.motivoInativacao && (
@@ -338,7 +396,7 @@ function DetalheModalExame({ dados }: { dados: DetalheExame }) {
   return (
     <div className="space-y-0">
       <RowDetalhe label="Status"      value={dados.status} />
-      <RowDetalhe label="Data"        value={formatDate(dados.dataSolicitacao)} />
+      <RowDetalhe label="Data"        value={formatDateSemHora(dados.dataSolicitacao)} />
       <RowDetalhe label="Responsável" value={dados.veterinario?.fullName} />
 
       {/* Blocos por laboratório */}
@@ -556,45 +614,126 @@ function DetalheModal({
   );
 }
 
-// ─── Histórico ────────────────────────────────────────────────────────────────
+// ─── Histórico — componentes cascata ─────────────────────────────────────────
 
-function ItemHistorico({
-  ev, onClick,
-}: {
+function SubItemHistorico({ ev, onClick }: {
   ev:      EventoHistorico;
   onClick: (ev: EventoHistorico) => void;
 }) {
+  const cfg = DETALHE_CONFIG[ev.origem];
   return (
-    <button
-      onClick={() => onClick(ev)}
-      className="w-full flex items-start gap-3 sm:gap-4 p-3 sm:p-4 border border-gray-100 rounded-2xl bg-white shadow-sm hover:border-gray-300 hover:shadow transition-all text-left group"
-    >
-      <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
-        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ev.data)}</span>
-        <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ev.data)}</span>
-      </div>
+    <button onClick={() => onClick(ev)}
+      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-gray-50 hover:bg-gray-100 text-left transition-colors border border-transparent hover:border-gray-200 group">
+      <span className={`${cfg.accentCls} flex-shrink-0`}>{cfg.icon}</span>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-bold text-gray-900">{ev.titulo}</span>
-          <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
+        <span className="text-sm font-medium text-gray-800 truncate block">{ev.titulo}</span>
+        <div className="flex items-center gap-2 flex-wrap mt-0.5">
+          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
             {ev.badge}
           </span>
-          {ev.responsavel && (
-            <span className="text-[10px] text-gray-400 font-mono uppercase">por: {ev.responsavel}</span>
-          )}
+          {ev.status && <span className="text-[10px] text-gray-400">{ev.status}</span>}
         </div>
-        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{ev.resumo || '—'}</p>
-        {ev.status && (
-          <p className="text-[10px] text-gray-400 mt-1">
-            Status: <span className="font-semibold text-gray-500">{ev.status}</span>
-            {' · '}{new Date(ev.data).toLocaleDateString('pt-BR')}
-          </p>
+      </div>
+      <ExternalLink size={12} className="text-gray-300 group-hover:text-gray-500 flex-shrink-0" />
+    </button>
+  );
+}
+
+function GrupoHistoricoItem({
+  grupo, expandido, onToggle, onClickEvento,
+}: {
+  grupo:         GrupoHistorico;
+  expandido:     boolean;
+  onToggle:      (key: string) => void;
+  onClickEvento: (ev: EventoHistorico) => void;
+}) {
+  const ev       = grupo.evolucao;
+  const totalSub = grupo.subitems.length;
+
+  if (!ev) {
+    return (
+      <div className="border border-gray-100 rounded-2xl bg-white shadow-sm overflow-hidden">
+        <button onClick={() => onToggle(grupo.key)}
+          className="w-full flex items-start gap-3 p-3 sm:p-4 hover:bg-gray-50 text-left transition-colors">
+          <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(grupo.data)}</span>
+            <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(grupo.data)}</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-sm font-bold text-gray-600">Registros avulsos</span>
+            <p className="text-xs text-gray-400 mt-0.5">{totalSub} registro{totalSub !== 1 ? 's' : ''}</p>
+          </div>
+          <ChevronDown size={16} className={`text-gray-400 flex-shrink-0 mt-1 transition-transform ${expandido ? 'rotate-180' : ''}`} />
+        </button>
+        {expandido && (
+          <div className="border-t border-gray-50 px-3 pb-3 pt-2 space-y-1.5">
+            {grupo.subitems.map(sub => (
+              <SubItemHistorico key={sub.id} ev={sub} onClick={onClickEvento} />
+            ))}
+          </div>
         )}
       </div>
-      <span className="p-1.5 border border-gray-100 rounded-full text-gray-300 group-hover:text-gray-500 group-hover:border-gray-300 flex-shrink-0 mt-1 transition-colors">
-        <ExternalLink size={13} />
-      </span>
-    </button>
+    );
+  }
+
+  return (
+    <div className="border border-gray-100 rounded-2xl bg-white shadow-sm overflow-hidden">
+      {/* Cabeçalho — evolução (toggle) */}
+      <button onClick={() => onToggle(grupo.key)}
+        className="w-full flex items-start gap-3 sm:gap-4 p-3 sm:p-4 hover:bg-gray-50 text-left transition-colors group">
+        <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
+          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">{mesAbrev(ev.data)}</span>
+          <span className="text-lg font-bold text-gray-900 leading-none mt-0.5">{diaDoMes(ev.data)}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded font-mono tracking-wider">{ev.atendimentoNumero ?? 'EV-'}</span>
+            <span className="text-sm font-bold text-gray-900">{ev.titulo}</span>
+            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_ORIGEM[ev.origem]}`}>
+              {ev.badge}
+            </span>
+          </div>
+          {ev.responsavel && (
+            <p className="text-[10px] text-gray-400 font-mono uppercase mt-0.5">por: {ev.responsavel}</p>
+          )}
+          {!expandido && totalSub > 0 && (
+            <p className="text-xs text-gray-400 mt-1">
+              {totalSub} registro{totalSub !== 1 ? 's' : ''} vinculado{totalSub !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 mt-1">
+          {totalSub > 0 && (
+            <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+              {totalSub}
+            </span>
+          )}
+          <ChevronDown size={16} className={`text-gray-400 transition-transform ${expandido ? 'rotate-180' : ''}`} />
+        </div>
+      </button>
+
+      {/* Sub-itens */}
+      {expandido && (
+        <div className="border-t border-gray-50">
+          <div className="px-3 pt-2 pb-1">
+            <button onClick={() => onClickEvento(ev)}
+              className="flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-800 py-1 font-medium transition-colors">
+              <FileText size={12} />
+              Ver detalhes da evolução
+              <ExternalLink size={11} />
+            </button>
+          </div>
+          {totalSub > 0 && (
+            <div className="px-3 pb-3 space-y-1.5">
+              {grupo.subitems.map(sub => (
+                <SubItemHistorico key={sub.id} ev={sub} onClick={onClickEvento} />
+              ))}
+            </div>
+          )}
+          {totalSub === 0 && <div className="pb-2" />}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -606,8 +745,11 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
   onConcluir:    (id: number) => void;
   onExcluir:     (id: number) => void;
 }) {
-  const isCancelado = ag.status === 'CANCELADO';
-  const isConcluido = ag.status === 'CONCLUIDO';
+  const isCancelado    = ag.status === 'CANCELADO';
+  const isConcluido    = ag.status === 'CONCLUIDO';
+  const isEmAndamento  = ag.status === 'EM_ANDAMENTO';
+  const isFinalizado   = ag.status === 'FINALIZADO';
+  const isEncerrado    = isConcluido || isFinalizado;
   return (
     <div className={`border rounded-2xl p-3 bg-white ${isCancelado ? 'border-red-100 opacity-70' : 'border-gray-200'}`}>
       <div className="flex items-start gap-3">
@@ -625,9 +767,14 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
                 Cancelado
               </span>
             )}
-            {isConcluido && (
+            {isEmAndamento && (
+              <span className="inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-blue-100 text-blue-700">
+                Em andamento
+              </span>
+            )}
+            {isEncerrado && (
               <span className="inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700">
-                Concluído
+                {isFinalizado ? 'Finalizado' : 'Concluído'}
               </span>
             )}
           </div>
@@ -641,7 +788,7 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
             </div>
           )}
         </div>
-        {podeGerenciar && !isCancelado && !isConcluido && (
+        {podeGerenciar && !isCancelado && !isEncerrado && !isEmAndamento && (
           <div className="flex flex-col gap-0.5 flex-shrink-0">
             <button onClick={() => onConcluir(ag.id)} title="Concluir"
               className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
@@ -772,6 +919,7 @@ const AnimalDetail = () => {
   const [loading,      setLoading]      = useState(true);
   const [busca,        setBusca]        = useState('');
   const [showNovoAg,   setShowNovoAg]   = useState(false);
+  const [expandidos,   setExpandidos]   = useState<Set<string>>(new Set());
 
   // Detalhe
   const [detalheEv,      setDetalheEv]      = useState<EventoHistorico | null>(null);
@@ -848,15 +996,50 @@ const AnimalDetail = () => {
     setDetalheRecord(null);
   };
 
-  const historicoFiltrado = busca.trim()
-    ? historico.filter(ev => {
-        const q = busca.toLowerCase();
-        return ev.titulo.toLowerCase().includes(q)
-          || ev.resumo.toLowerCase().includes(q)
-          || ev.badge.toLowerCase().includes(q)
-          || (ev.responsavel ?? '').toLowerCase().includes(q);
-      })
-    : historico;
+  const grupos = useMemo(() => agruparEventos(historico), [historico]);
+
+  const gruposFiltrados = useMemo(() => {
+    if (!busca.trim()) return grupos;
+    const q = busca.toLowerCase();
+    return grupos.filter(g => {
+      const ev = g.evolucao;
+      const matchEv = ev
+        ? (ev.titulo.toLowerCase().includes(q) ||
+           ev.resumo.toLowerCase().includes(q) ||
+           ev.badge.toLowerCase().includes(q) ||
+           (ev.responsavel ?? '').toLowerCase().includes(q))
+        : false;
+      const matchSub = g.subitems.some(s =>
+        s.titulo.toLowerCase().includes(q) ||
+        s.resumo.toLowerCase().includes(q) ||
+        s.badge.toLowerCase().includes(q)
+      );
+      return matchEv || matchSub;
+    });
+  }, [grupos, busca]);
+
+  // Auto-expande grupos cujo sub-item bate na busca
+  useEffect(() => {
+    if (!busca.trim()) return;
+    const q = busca.toLowerCase();
+    const toExpand = new Set<string>();
+    for (const g of grupos) {
+      if (g.subitems.some(s =>
+        s.titulo.toLowerCase().includes(q) ||
+        s.resumo.toLowerCase().includes(q) ||
+        s.badge.toLowerCase().includes(q)
+      )) toExpand.add(g.key);
+    }
+    if (toExpand.size > 0) setExpandidos(toExpand);
+  }, [busca, grupos]);
+
+  const toggleExpand = (key: string) => {
+    setExpandidos(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   if (loading) return (
     <div className="flex items-center justify-center py-32">
@@ -911,12 +1094,18 @@ const AnimalDetail = () => {
           </div>
 
           <div className="p-3 sm:p-4 space-y-2.5">
-            {historicoFiltrado.length === 0 ? (
+            {gruposFiltrados.length === 0 ? (
               <p className="text-center text-sm text-gray-300 py-12">
                 {historico.length === 0 ? 'Nenhum registro no histórico ainda' : 'Nenhum resultado para a busca'}
               </p>
-            ) : historicoFiltrado.map(ev => (
-              <ItemHistorico key={ev.id} ev={ev} onClick={handleAbrirDetalhe} />
+            ) : gruposFiltrados.map(g => (
+              <GrupoHistoricoItem
+                key={g.key}
+                grupo={g}
+                expandido={expandidos.has(g.key)}
+                onToggle={toggleExpand}
+                onClickEvento={handleAbrirDetalhe}
+              />
             ))}
           </div>
         </div>

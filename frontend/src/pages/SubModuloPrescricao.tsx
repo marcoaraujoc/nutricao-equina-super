@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Pencil, Trash2, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Calendar, Search, FileText, Eye, Printer,
+  Clock, Calendar, Search, FileText, Eye, Printer, Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -53,6 +53,7 @@ interface ItemGrupo {
   observacao:        string | null;
   veterinario:       { id: number; fullName: string };
   medicamentoCliente: boolean;
+  executadoEm:       string | null;
 }
 
 interface PrescricaoGrupo {
@@ -90,6 +91,9 @@ interface Props {
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
+  onViewConsumed?:    () => void;
+  editItemId?:        number | null;
+  onEditConsumed?:    () => void;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -137,7 +141,7 @@ const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
 const FORM_VAZIO = (): FormItem => ({
   tipo: 'MEDICAMENTO', medicamento: '', medicamentoCatId: null,
   dosagem: '', unidade: '', via: '', frequencia: '',
-  horaInicio: '', duracaoDias: '', dataInicio: new Date().toISOString().split('T')[0],
+  horaInicio: '', duracaoDias: '', dataInicio: hojeLocalStr(),
   observacao: '', medicamentoCliente: false,
 });
 
@@ -148,6 +152,35 @@ const formatarData = (d: string | null) => {
   const [year, month, day] = d.split('T')[0].split('-').map(Number);
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 };
+
+// Data de hoje no fuso LOCAL do navegador, como 'YYYY-MM-DD'. Não usar
+// `new Date().toISOString()`: isso dá a data em UTC, que já vira o dia
+// seguinte a partir das 21h no horário de Brasília (UTC-3) — faria o sistema
+// achar que um tratamento de N dias já tinha acabado um dia mais cedo.
+function hojeLocalStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Dia atual do tratamento (1-indexado) e dias restantes — mesmo cálculo usado
+// no backend (janelaDoItem, PrescricaoGrupoController.js) para decidir se um
+// item já foi executado integralmente ou ainda tem dias pendentes.
+function diaAtualDoItem(dataInicio: string, hojeStr = hojeLocalStr()): number {
+  const inicioStr = dataInicio.split('T')[0];
+  const inicio = new Date(inicioStr + 'T00:00:00Z');
+  const hoje = new Date(hojeStr + 'T00:00:00Z');
+  return Math.floor((hoje.getTime() - inicio.getTime()) / 86400000) + 1;
+}
+
+function itemTotalmenteExecutado(item: { executadoEm: string | null; dataInicio: string; duracaoDias: number }): boolean {
+  if (!item.executadoEm) return false;
+  return diaAtualDoItem(item.dataInicio) >= item.duracaoDias;
+}
+
+function itemDiasRestantes(item: { dataInicio: string; duracaoDias: number }): number {
+  return Math.max(item.duracaoDias - diaAtualDoItem(item.dataInicio), 0);
+}
 
 function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null) {
   imprimirPrescricaoPrint({
@@ -273,7 +306,9 @@ interface GrupoModalProps {
 
 function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, evolucaoId, onClose, onSaved, isInline = false }: GrupoModalProps) {
   const isCreate   = !grupo;
-  const isReadOnly = grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO' || grupo?.status === 'CANCELADO';
+  // Impede inserir item novo fora de SALVO (edição/exclusão de itens já existentes,
+  // por item, é liberada separadamente via ItemRow.canEdit — ver Prescricao.executadoEm)
+  const isReadOnly = grupo != null && grupo.status !== 'SALVO';
   // Abre diretamente na "segunda tela" (form visível) quando editando uma prescrição SALVA
   const openWithForm = !isCreate && !isReadOnly && canEdit;
 
@@ -318,6 +353,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [saving,           setSaving]           = useState(false);
   const [finalizing,       setFinalizing]       = useState(false);
   const [alertaEstoque,    setAlertaEstoque]    = useState<AlertaEstoque[] | null>(null);
+  const [savedGrupo,       setSavedGrupo]       = useState<{ id: number; numeroFormatado: string } | null>(null);
   const [showAddForm,      setShowAddForm]      = useState(openWithForm);
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
   const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string }[]>([]);
@@ -557,6 +593,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   const handleEditarServer = (item: ItemGrupo) => {
     setShowAddForm(false);
+    // Item já em execução (mas não totalmente): a edição vale para os dias que
+    // faltam, não para o tratamento inteiro de novo — reabre a partir de hoje
+    // com a duração restante, preservando a mesma data final original.
+    const emAndamento = !!item.executadoEm && !itemTotalmenteExecutado(item);
+    if (emAndamento) {
+      const diaAtual = diaAtualDoItem(item.dataInicio);
+      const restantes = itemDiasRestantes(item);
+      toast(`Item em execução (dia ${String(diaAtual).padStart(2, '0')}/${String(item.duracaoDias).padStart(2, '0')}). A edição valerá para os ${restantes} dia${restantes !== 1 ? 's' : ''} restante${restantes !== 1 ? 's' : ''}.`, { icon: 'ℹ️', duration: 6000 });
+    }
     setForm({
       tipo:               item.tipo,
       medicamento:        item.medicamento,
@@ -566,8 +611,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       via:                item.via,
       frequencia:         item.frequencia,
       horaInicio:         item.horaInicio ?? '',
-      duracaoDias:        item.duracaoDias,
-      dataInicio:         item.dataInicio?.split('T')[0] ?? '',
+      duracaoDias:        emAndamento ? itemDiasRestantes(item) : item.duracaoDias,
+      dataInicio:         emAndamento ? hojeLocalStr() : (item.dataInicio?.split('T')[0] ?? ''),
       observacao:         item.observacao ?? '',
       medicamentoCliente: item.medicamentoCliente,
     });
@@ -601,10 +646,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (!formEstaVazio() && !validarForm()) return;
     setSaving(true);
     try {
-      await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
+      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
+      const dados = res.data.dados;
       toast.success('Prescrição salva');
       clearDraft();
-      onSaved(); onClose();
+      setLocalItens([]);
+      resetForm();
+      setSavedGrupo({ id: dados.id, numeroFormatado: dados.numeroFormatado });
+      onSaved();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao salvar prescrição');
@@ -616,8 +665,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const executarFinalizacao = async (forcar = false) => {
     setFinalizing(true);
     try {
-      let grupoId = grupo?.id;
-      if (isCreate) {
+      let grupoId = savedGrupo?.id ?? grupo?.id;
+      if (isCreate && !savedGrupo) {
         const itens = formEstaVazio() ? localItens : [...localItens, form];
         if (itens.length === 0) { toast.error('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
@@ -626,6 +675,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       }
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
       setAlertaEstoque(null);
+      setSavedGrupo(null);
       toast.success('Prescrição finalizada com sucesso');
       clearDraft();
       onSaved(); onClose();
@@ -710,7 +760,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
   // Em modo edição: formulário aparece ao editar item existente ou ao clicar "Inserir item"
-  const showItemForm  = canEdit && !isReadOnly && (isCreate || editandoItem || showAddForm);
+  const showItemForm  = canEdit && !isReadOnly && !savedGrupo && (isCreate || editandoItem || showAddForm);
 
   return (
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
@@ -1031,8 +1081,17 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               </div>
             )}
 
+            {/* Confirmação após Salvar em modo criação */}
+            {isCreate && savedGrupo && (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <CheckCircle2 size={28} className="mb-2 text-emerald-500" />
+                <p className="font-semibold text-sm text-gray-800">Prescrição #{savedGrupo.numeroFormatado} salva</p>
+                <p className="text-xs text-gray-400 mt-1">Finalize para ativar ou crie uma nova prescrição</p>
+              </div>
+            )}
+
             {/* Lista de itens — empty state só aparece quando o form está fechado */}
-            {!showItemForm && itensExibidos.length === 0 ? (
+            {!showItemForm && !savedGrupo && itensExibidos.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-gray-300">
                 <FileText size={28} className="mb-2" />
                 <p className="text-sm text-gray-400">Nenhum item adicionado</p>
@@ -1070,7 +1129,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
                         />
                       ))
-                    : serverItens.map((item, idx) => (
+                    : serverItens.map((item, idx) => {
+                        const completo = itemTotalmenteExecutado(item);
+                        const emAndamentoItem = !!item.executadoEm && !completo;
+                        return (
                         <ItemRow
                           key={item.id}
                           label={item.medicamento}
@@ -1084,8 +1146,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           dataInicio={item.dataInicio}
                           observacao={item.observacao}
                           medicamentoCliente={item.medicamentoCliente}
+                          executado={completo}
+                          emAndamento={emAndamentoItem ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
                           isEditing={editingServerId === item.id}
-                          canEdit={canEdit && !isReadOnly}
+                          canEdit={canEdit && !completo}
+                          canRemove={canEdit && !item.executadoEm}
                           onEdit={() => handleEditarServer(item)}
                           onRemove={() => handleRemoverServer(item.id)}
                           isDragging={draggedIdx === idx}
@@ -1095,7 +1160,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           onDrop={() => handleReorder(draggedIdx ?? idx, idx)}
                           onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
                         />
-                      ))
+                        );
+                      })
                   }
                 </div>
               </>
@@ -1105,58 +1171,84 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
         {/* Footer */}
         <div className={`flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-wrap ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
-          <div className="flex items-center gap-2 ml-auto">
-            {/* Imprimir — FINALIZADO ou EXECUTADO */}
-            {(grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir && (
-              <button onClick={() => imprimirPrescricao(grupo!, animal)}
-                className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm transition-colors">
-                <Printer size={14} /> Imprimir
-              </button>
-            )}
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
 
-            {/* Inserir item — só edit mode SALVO, quando o form está fechado */}
-            {!isCreate && canEdit && !isReadOnly && !showItemForm && (
-              <button onClick={() => { setShowAddForm(true); setForm(FORM_VAZIO()); }}
-                className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-                Inserir
-              </button>
-            )}
+            {/* Estado "recém-salvo": prescrição salva aguardando finalização */}
+            {isCreate && savedGrupo ? (
+              <>
+                <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1 flex-shrink-0">
+                  <CheckCircle2 size={12} /> #{savedGrupo.numeroFormatado} salva
+                </span>
+                <button
+                  onClick={() => { setSavedGrupo(null); clearDraft(); onClose(); }}
+                  className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                  Nova Prescrição
+                </button>
+                {canFinalizarCancelar && (
+                  <button
+                    onClick={handleFinalizar}
+                    disabled={finalizing}
+                    className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                    {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                    Finalizar
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Imprimir — FINALIZADO ou EXECUTADO */}
+                {(grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir && (
+                  <button onClick={() => imprimirPrescricao(grupo!, animal)}
+                    className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm transition-colors">
+                    <Printer size={14} /> Imprimir
+                  </button>
+                )}
 
-            {/* Inserir / Atualizar item — quando o form está aberto */}
-            {showItemForm && canEdit && !isReadOnly && (
-              <button
-                onClick={handleAdicionarMais}
-                disabled={saving || formEstaVazio()}
-                className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
-                {saving && <Loader2 size={13} className="animate-spin" />}
-                {editandoItem ? 'Atualizar item' : 'Inserir'}
-              </button>
-            )}
+                {/* Inserir item — só edit mode SALVO, quando o form está fechado */}
+                {!isCreate && canEdit && !isReadOnly && !showItemForm && (
+                  <button onClick={() => { setShowAddForm(true); setForm(FORM_VAZIO()); }}
+                    className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                    Inserir
+                  </button>
+                )}
 
-            {/* Fechar / Cancelar — modal only */}
-            {!isInline && (
-              <button onClick={onClose}
-                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-                {isReadOnly ? 'Fechar' : 'Cancelar'}
-              </button>
-            )}
+                {/* Inserir / Atualizar item — quando o form está aberto */}
+                {showItemForm && canEdit && !isReadOnly && (
+                  <button
+                    onClick={handleAdicionarMais}
+                    disabled={saving || formEstaVazio()}
+                    className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+                    {saving && <Loader2 size={13} className="animate-spin" />}
+                    {editandoItem ? 'Atualizar item' : 'Inserir'}
+                  </button>
+                )}
 
-            {/* Salvar — create mode ou edit mode SALVO */}
-            {canEdit && !isReadOnly && (
-              <button onClick={isCreate ? handleSalvar : handleSalvarEditMode} disabled={saving || finalizing}
-                className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
-                {saving ? <Loader2 size={13} className="animate-spin" /> : null}
-                Salvar
-              </button>
-            )}
+                {/* Fechar / Cancelar — modal only */}
+                {!isInline && (
+                  <button onClick={onClose}
+                    className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                    {isReadOnly ? 'Fechar' : 'Cancelar'}
+                  </button>
+                )}
 
-            {/* Finalizar */}
-            {canEdit && canFinalizarCancelar && !isReadOnly && (
-              <button onClick={handleFinalizar} disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
-                className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
-                {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                Finalizar
-              </button>
+                {/* Salvar — create mode ou edit mode SALVO (só GESTOR em edição) */}
+                {canEdit && !isReadOnly && (
+                  <button onClick={isCreate ? handleSalvar : handleSalvarEditMode} disabled={saving || finalizing}
+                    className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
+                    {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+                    Salvar
+                  </button>
+                )}
+
+                {/* Finalizar — desacoplado de canEdit */}
+                {canFinalizarCancelar && !isReadOnly && (
+                  <button onClick={handleFinalizar} disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
+                    className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                    {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                    Finalizar
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1188,20 +1280,23 @@ function InfoChip({ label, value }: { label: string; value: string | null | unde
 
 function ItemRow({
   label, tipo, dosagem, unidade, via, frequencia,
-  horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente,
-  isEditing, canEdit, onEdit, onRemove,
+  horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente, executado, emAndamento,
+  isEditing, canEdit, canRemove, onEdit, onRemove,
   isDragging, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   label: string; tipo: TipoItem;
   dosagem: string | null; unidade: string | null; via: string; frequencia: string;
   horaInicio?: string | null; duracaoDias?: number | ''; dataInicio?: string; observacao?: string | null;
-  medicamentoCliente?: boolean;
-  isEditing: boolean; canEdit: boolean;
+  medicamentoCliente?: boolean; executado?: boolean;
+  /** Item já teve dose(s) dada(s) mas ainda tem dias restantes — editável, não excluível */
+  emAndamento?: { diaAtual: number; totalDias: number } | null;
+  isEditing: boolean; canEdit: boolean; canRemove?: boolean;
   onEdit: () => void; onRemove: () => void;
   isDragging?: boolean; isDragOver?: boolean;
   onDragStart?: () => void; onDragOver?: (e: React.DragEvent) => void;
   onDrop?: () => void; onDragEnd?: () => void;
 }) {
+  const podeRemover = canRemove ?? canEdit;
   const isMed  = tipo === 'MEDICAMENTO';
   const dtFim  = dataInicio && duracaoDias ? calcDataFim(dataInicio, duracaoDias) : '';
   const dtIni  = dataInicio ? formatarData(dataInicio) : '';
@@ -1233,6 +1328,18 @@ function ItemRow({
             Cliente
           </span>
         )}
+        {executado && (
+          <span title="Já executado integralmente — não pode ser alterado"
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+            <Lock size={9} /> Executado
+          </span>
+        )}
+        {!executado && emAndamento && (
+          <span title="Já em execução — a alteração vale só para os dias restantes"
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+            <Clock size={9} /> Em execução ({String(emAndamento.diaAtual).padStart(2, '0')}/{String(emAndamento.totalDias).padStart(2, '0')})
+          </span>
+        )}
         {isMed && dosagem && (
           <InfoChip label="Dose:" value={`${dosagem}${unidade ? ' '+unidade : ''}`} />
         )}
@@ -1245,16 +1352,20 @@ function ItemRow({
         {observacao      && <InfoChip label="Obs:" value={observacao} />}
       </div>
 
-      {canEdit && (
+      {(canEdit || podeRemover) && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button onClick={onEdit}
-            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
-            <Pencil size={12} />
-          </button>
-          <button onClick={onRemove}
-            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-            <Trash2 size={12} />
-          </button>
+          {canEdit && (
+            <button onClick={onEdit}
+              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
+              <Pencil size={12} />
+            </button>
+          )}
+          {podeRemover && (
+            <button onClick={onRemove}
+              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={12} />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1305,9 +1416,92 @@ function CancelarModal({
   );
 }
 
+// ─── ViewPrescricaoModal ──────────────────────────────────────────────────────
+// Janela de visualização somente leitura — usada pelo clique no Histórico do
+// Paciente. Abre sempre, independente do status da prescrição (SALVO,
+// FINALIZADO, EXECUTADO, CANCELADO_PARCIALMENTE); nenhum botão de editar/excluir.
+
+function ViewPrescricaoModal({ grupo, onClose, onImprimir }: {
+  grupo:      PrescricaoGrupo;
+  onClose:    () => void;
+  onImprimir: () => void;
+}) {
+  const st = STATUS_GRUPO[grupo.status as StatusGrupo] ?? { label: grupo.status, cls: 'bg-gray-100 text-gray-600' };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-xl max-h-[88vh] flex flex-col border border-gray-100">
+
+        <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex-1 min-w-0 pr-3">
+            <p className="text-sm font-semibold text-gray-900 mb-1.5 font-mono">Prescrição #{grupo.numeroFormatado}</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${st.cls}`}>
+                {st.label}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
+              <span className="text-[11px] text-gray-400">
+                <span className="font-medium text-gray-600">{grupo.veterinario.fullName}</span>
+              </span>
+              <span className="text-[11px] text-gray-400">
+                Criada em: <span className="text-gray-600">{formatarData(grupo.createdAt)}</span>
+              </span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+          {grupo.itens.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-6">Nenhum item ativo nesta prescrição.</p>
+          ) : grupo.itens.map(item => {
+            const completo = itemTotalmenteExecutado(item);
+            return (
+            <ItemRow
+              key={item.id}
+              label={item.medicamento}
+              tipo={item.tipo}
+              dosagem={item.dosagem}
+              unidade={item.unidade}
+              via={item.via}
+              frequencia={item.frequencia}
+              horaInicio={item.horaInicio}
+              duracaoDias={item.duracaoDias}
+              dataInicio={item.dataInicio}
+              observacao={item.observacao}
+              medicamentoCliente={item.medicamentoCliente}
+              executado={completo}
+              emAndamento={!!item.executadoEm && !completo ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
+              isEditing={false}
+              canEdit={false}
+              onEdit={() => {}}
+              onRemove={() => {}}
+            />
+            );
+          })}
+        </div>
+
+        <div className="flex gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose}
+            className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Fechar
+          </button>
+          <button onClick={onImprimir}
+            className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            <Printer size={14} /> Imprimir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── SubModuloPrescricao ──────────────────────────────────────────────────────
 
-export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, atendimentoNumero, onSalvo, openItemId }: Props) {
+export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -1332,6 +1526,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [limit]                                     = useState(20);
   const [showEditModal,      setShowEditModal]      = useState(false);
   const [editingGrupo,       setEditingGrupo]       = useState<PrescricaoGrupo | null>(null);
+  const [viewingGrupo,       setViewingGrupo]       = useState<PrescricaoGrupo | null>(null);
   const [inlineFormKey,      setInlineFormKey]      = useState(0);
   const [deletingId,         setDeletingId]         = useState<number | null>(null);
   const [alertaDireto,       setAlertaDireto]       = useState<{ grupoId: number; alertas: AlertaEstoque[] } | null>(null);
@@ -1354,14 +1549,32 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
 
+  // Clique no Histórico do Paciente: sempre abre em modo visualização (somente
+  // leitura), independente do status da prescrição — não reaproveita o modal
+  // de edição (que exige SALVO/GESTOR e não é garantido abrir para todo status).
   useEffect(() => {
     if (!openItemId) return;
     api.get(`/clinica/prescricoes/grupos/${openItemId}`)
       .then(res => {
+        if (res.data?.dados) setViewingGrupo(res.data.dados as PrescricaoGrupo);
+      })
+      .catch(() => {})
+      .finally(() => onViewConsumed?.());
+  }, [openItemId]);
+
+  // Vindo do botão "Editar" do Histórico do Paciente (AG-XXXX/EV-XXXX): abre a
+  // prescrição vinculada ao atendimento direto no formulário de edição.
+  const editIdAplicadoRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!editItemId || editIdAplicadoRef.current === editItemId) return;
+    editIdAplicadoRef.current = editItemId;
+    api.get(`/clinica/prescricoes/grupos/${editItemId}`)
+      .then(res => {
         if (res.data?.dados) { setEditingGrupo(res.data.dados as PrescricaoGrupo); setShowEditModal(true); }
+        onEditConsumed?.();
       })
       .catch(() => {});
-  }, [openItemId]);
+  }, [editItemId]);
 
   const handleFinalizarDireto = async (grupoId: number) => {
     if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
@@ -1426,35 +1639,38 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     </div>
   );
 
-  if (!evolucaoId) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-        <FileText size={32} className="mb-3 text-gray-200" />
-        <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
-        <p className="text-xs mt-1 text-center max-w-xs">
-          Inicie uma evolução na aba Evolução para registrar prescrições neste atendimento.
-        </p>
-      </div>
-    );
-  }
+  // Só a CRIAÇÃO de uma nova prescrição exige evolução ativa — o histórico de
+  // prescrições já existentes (e os modais de visualização/edição, abaixo)
+  // ficam sempre visíveis, do mesmo jeito que Evolução e Exames já fazem.
+  const semEvolucaoAtiva = !evolucaoId;
 
   return (
     <>
       {/* Formulário inline de criação */}
       {canEdit && (
-        <GrupoModal
-          key={inlineFormKey}
-          animalId={animalId}
-          animal={animal}
-          grupo={null}
-          canEdit={canEdit}
-          canFinalizarCancelar={canFinalizarCancelar}
-          podeImprimir={podeImprimir}
-          evolucaoId={evolucaoId}
-          onClose={() => setInlineFormKey(k => k + 1)}
-          onSaved={onSaved}
-          isInline
-        />
+        semEvolucaoAtiva ? (
+          <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4 border-b border-gray-100">
+            <FileText size={28} className="mb-2 text-gray-200" />
+            <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
+            <p className="text-xs mt-1 text-center max-w-xs">
+              Inicie uma evolução na aba Evolução para registrar prescrições neste atendimento.
+            </p>
+          </div>
+        ) : (
+          <GrupoModal
+            key={inlineFormKey}
+            animalId={animalId}
+            animal={animal}
+            grupo={null}
+            canEdit={canEdit}
+            canFinalizarCancelar={canFinalizarCancelar}
+            podeImprimir={podeImprimir}
+            evolucaoId={evolucaoId}
+            onClose={() => setInlineFormKey(k => k + 1)}
+            onSaved={onSaved}
+            isInline
+          />
+        )
       )}
 
       {/* Badge de salvos aguardando */}
@@ -1497,7 +1713,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
               const isViewOnly = g.status !== 'SALVO';
               const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
               const editavel   = g.status === 'SALVO' && canEdit && (!isFornecedor || eProprioAutor);
-              const cancelavel = ['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutor);
+              const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
@@ -1586,7 +1802,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <Printer size={11} /> Imprimir
                 </button>
               )}
-              {['SALVO', 'FINALIZADO'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutorMobile) && (
+              {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutorMobile) && (
                 <button onClick={() => setDeletingId(g.id)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                   <Trash2 size={11} /> Cancelar
@@ -1619,17 +1835,29 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       </>
       )}
 
-      {/* Modal de edição de prescrição existente */}
+      {/* Modal de edição de prescrição existente — só GESTOR pode alterar itens */}
       {showEditModal && editingGrupo && (
         <GrupoModal
+          // Força remount ao trocar de prescrição (ex: clicar em outro item do
+          // histórico com o modal já aberto) — sem isso, o estado interno do
+          // modal (itens carregados na abertura) ficava travado no primeiro
+          // grupo aberto e não mostrava os itens da nova prescrição selecionada.
+          key={editingGrupo.id}
           animalId={animalId}
           animal={animal}
           grupo={editingGrupo}
-          canEdit={canEdit}
+          canEdit={isGestor}
           canFinalizarCancelar={canFinalizarCancelar}
           podeImprimir={podeImprimir}
           onClose={fecharModal}
           onSaved={onSaved}
+        />
+      )}
+      {viewingGrupo && (
+        <ViewPrescricaoModal
+          grupo={viewingGrupo}
+          onClose={() => setViewingGrupo(null)}
+          onImprimir={() => imprimirPrescricao(viewingGrupo, animal)}
         />
       )}
       {deletingId !== null && (

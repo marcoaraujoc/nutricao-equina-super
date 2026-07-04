@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Search, Loader2, X, MapPin,
-  Phone, Building2, User, ToggleLeft, ToggleRight,
-  ChevronDown, Lock, Info,
+  Search, Loader2, X, MapPin, Pencil,
+  Phone, User, ToggleLeft, ToggleRight,
+  ChevronDown, Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -81,20 +81,6 @@ const FORM_INICIAL: FormLocalizacao = {
   tipoLocalizacao:   '',
 };
 
-// ─── Badge de tipo de entrada ─────────────────────────────────────────────────
-
-function BadgeEntrada({ tipo }: { tipo: string }) {
-  return tipo === 'SYSTEM' ? (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-      <Lock size={10} /> SYSTEM
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-      CLIENTE
-    </span>
-  );
-}
-
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function CadastroLocalizacao() {
@@ -104,6 +90,8 @@ export default function CadastroLocalizacao() {
   const isAdmin    = user?.role === 'ADMIN';
   const podeCriar  = isAdmin || podeExecutar('cadastro.localizacao.criar');
   const podeVer    = isAdmin || podeExecutar('cadastro.localizacao.ler');
+  const podeEditar = isAdmin || podeExecutar('cadastro.localizacao.editar');
+  const podeAtivar = isAdmin || podeExecutar('cadastro.localizacao.ativar');
 
   const [lista,          setLista]          = useState<Localizacao[]>([]);
   const [loading,        setLoading]        = useState(false);
@@ -162,8 +150,12 @@ export default function CadastroLocalizacao() {
   };
 
   const abrirEditar = (loc: Localizacao) => {
-    if (!isAdmin) {
-      toast.error('Apenas ADMIN pode editar localizações diretamente.');
+    if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) {
+      toast.error('Apenas ADMIN pode editar localizações do catálogo global.');
+      return;
+    }
+    if (!podeEditar) {
+      toast.error('Sem permissão para editar localizações.');
       return;
     }
     setEditando(loc);
@@ -215,9 +207,10 @@ export default function CadastroLocalizacao() {
     }
   };
 
-  // ── Toggle ativo (apenas ADMIN) ─────────────────────────────────────────────
+  // ── Toggle ativo ───────────────────────────────────────────────────────────
   const toggleAtivo = async (loc: Localizacao) => {
-    if (!isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar localizações'); return; }
+    if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar localizações do catálogo global.'); return; }
+    if (!podeAtivar) { toast.error('Sem permissão para ativar/inativar localizações.'); return; }
     try {
       await api.patch(`/cadastro/localizacoes/${loc.id}/toggle`);
       toast.success(`Localização ${loc.ativo ? 'inativada' : 'ativada'}`);
@@ -268,11 +261,10 @@ export default function CadastroLocalizacao() {
         <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
           <strong>Regras deste cadastro:</strong>
           <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>Dados são compartilhados entre todas as empresas (tabela global).</li>
-            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN e não podem ser editadas por outras entidades.</li>
-            <li>Entradas <strong>CLIENTE</strong> são criadas por gestores/veterinários; solicite ao ADMIN para alterar.</li>
-            <li>Apenas ADMIN pode inativar ou editar qualquer localização.</li>
+            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN (catálogo global) e só o ADMIN pode editá-las.</li>
+            <li>Entradas <strong>CLIENTE</strong> pertencem à empresa/equipe de quem criou — membros com permissão podem editar e inativar os registros da própria equipe; gestores veem e alteram os de toda a empresa.</li>
             <li>Localizações nunca são excluídas, apenas inativadas.</li>
+            <li>Duas empresas diferentes podem ter localizações com o mesmo nome.</li>
           </ul>
         </div>
       )}
@@ -294,15 +286,16 @@ export default function CadastroLocalizacao() {
           )}
         </div>
 
-        <select
-          value={filtroAtivo}
-          onChange={e => setFiltroAtivo(e.target.value as 'ativo' | 'inativo' | 'all')}
-          className="px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
-        >
-          <option value="ativo">Somente ativos</option>
-          <option value="inativo">Somente inativos</option>
-          <option value="all">Todos</option>
-        </select>
+        <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+          {(['all', 'ativo', 'inativo'] as const).map(v => (
+            <button key={v} onClick={() => setFiltroAtivo(v)}
+              className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}>
+              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Tabela desktop ────────────────────────────────────────────────────── */}
@@ -323,7 +316,6 @@ export default function CadastroLocalizacao() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Tipo</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Responsável</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Contato</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Entrada</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
@@ -342,7 +334,6 @@ export default function CadastroLocalizacao() {
                       </td>
                       <td className="px-4 py-3 text-gray-700">{loc.pessoaResponsavel ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{loc.telefone ?? '—'}</td>
-                      <td className="px-4 py-3"><BadgeEntrada tipo={loc.tipoEntrada} /></td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-1 rounded-xl text-xs font-medium ${loc.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                           {loc.ativo ? 'Ativo' : 'Inativo'}
@@ -350,22 +341,28 @@ export default function CadastroLocalizacao() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-2">
-                          {isAdmin && (
+                          {loc.tipoEntrada === 'SYSTEM' && !isAdmin ? (
+                            <span className="text-xs text-gray-400 italic">Catálogo global</span>
+                          ) : (
                             <>
-                              <button onClick={() => abrirEditar(loc)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
-                                title="Editar">
-                                <Building2 size={15} />
-                              </button>
-                              <button onClick={() => toggleAtivo(loc)}
-                                className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
-                                title={loc.ativo ? 'Inativar' : 'Ativar'}>
-                                {loc.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-                              </button>
+                              {podeEditar && (
+                                <button onClick={() => abrirEditar(loc)}
+                                  className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
+                                  title="Editar">
+                                  <Pencil size={15} />
+                                </button>
+                              )}
+                              {podeAtivar && (
+                                <button onClick={() => toggleAtivo(loc)}
+                                  className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
+                                  title={loc.ativo ? 'Inativar' : 'Ativar'}>
+                                  {loc.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
+                                </button>
+                              )}
+                              {!podeEditar && !podeAtivar && (
+                                <span className="text-xs text-gray-400 italic">Somente leitura</span>
+                              )}
                             </>
-                          )}
-                          {!isAdmin && (
-                            <span className="text-xs text-gray-400 italic">Somente leitura</span>
                           )}
                         </div>
                       </td>
@@ -393,7 +390,6 @@ export default function CadastroLocalizacao() {
                   <p className="font-semibold text-gray-800">{loc.nome}</p>
                   <p className="text-xs text-gray-500">{formatarTipo(loc.tipoLocalizacao)}</p>
                 </div>
-                <BadgeEntrada tipo={loc.tipoEntrada} />
               </div>
 
               {loc.endereco && (
@@ -416,16 +412,20 @@ export default function CadastroLocalizacao() {
                 <span className={`px-2 py-1 rounded-xl text-xs font-medium ${loc.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                   {loc.ativo ? 'Ativo' : 'Inativo'}
                 </span>
-                {isAdmin && (
+                {(loc.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                   <div className="flex gap-2">
-                    <button onClick={() => abrirEditar(loc)}
-                      className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
-                      Editar
-                    </button>
-                    <button onClick={() => toggleAtivo(loc)}
-                      className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
-                      {loc.ativo ? 'Inativar' : 'Ativar'}
-                    </button>
+                    {podeEditar && (
+                      <button onClick={() => abrirEditar(loc)}
+                        className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
+                        <Pencil size={11} /> Editar
+                      </button>
+                    )}
+                    {podeAtivar && (
+                      <button onClick={() => toggleAtivo(loc)}
+                        className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
+                        {loc.ativo ? 'Inativar' : 'Ativar'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -453,8 +453,7 @@ export default function CadastroLocalizacao() {
               {/* Banner informativo para não-ADMIN */}
               {!isAdmin && !editando && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800">
-                  Esta localização será cadastrada como <strong>CLIENTE</strong>. Para alterações futuras,
-                  entre em contato com o ADMIN do sistema.
+                  Esta localização será cadastrada como <strong>CLIENTE</strong>, vinculada à sua empresa/equipe ativa.
                 </div>
               )}
 

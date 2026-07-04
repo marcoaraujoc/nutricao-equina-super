@@ -109,7 +109,7 @@ export default function CadastroPessoal() {
   useEffect(() => {
     if (loadingPerms) return;
     const loadUserData = async () => {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       if (!token || !user?.email) { setLoading(false); return; }
       try {
         const res = await fetch('/api/users/me', {
@@ -274,7 +274,7 @@ export default function CadastroPessoal() {
 
     setSaving(true);
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     if (!token) {
       toast.error('Você precisa estar logado para continuar');
       setSaving(false);
@@ -308,7 +308,7 @@ export default function CadastroPessoal() {
 
       if (res.ok) {
         if (resData.token) {
-          localStorage.setItem('token', resData.token);
+          sessionStorage.setItem('token', resData.token);
           await refreshUser();
         }
         toast.success('Cadastro pessoal salvo com sucesso!');

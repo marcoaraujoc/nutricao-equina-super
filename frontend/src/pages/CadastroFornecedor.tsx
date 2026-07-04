@@ -1,13 +1,13 @@
 // frontend/src/pages/CadastroFornecedor.tsx
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Lock,
+  Phone, MapPin, BadgeCheck, AlertCircle,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -125,18 +125,34 @@ const FORM_INICIAL: FormForn = {
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
-// ─── Badge ────────────────────────────────────────────────────────────────────
+// ─── Modal de confirmação para duplicata inativa ──────────────────────────────
 
-function BadgeEntrada({ tipo }: { tipo: string }) {
-  if (tipo === 'SYSTEM') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-      <Lock size={8} /> SISTEMA
-    </span>
-  );
+function ModalDuplicataInativa({
+  mensagem, onConfirmar, onCancelar,
+}: { mensagem: string; onConfirmar: () => void; onCancelar: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-      CLIENTE
-    </span>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
+        <div className="flex items-start gap-3">
+          <AlertCircle size={22} className="text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-gray-900 text-sm mb-1">Cadastro já existente (inativo)</p>
+            <p className="text-sm text-gray-600">{mensagem}</p>
+            <p className="text-sm text-gray-500 mt-2">Deseja continuar e criar um novo cadastro mesmo assim?</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancelar}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Cancelar
+          </button>
+          <button onClick={onConfirmar}
+            className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition-colors">
+            Continuar mesmo assim
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -323,7 +339,7 @@ function ModalFornecedor({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">E-mail *</label>
+                  <label className="block text-xs text-gray-500 mb-1">E-mail</label>
                   <input type="email" value={form.email}
                     onChange={e => onFormChange({ email: e.target.value })}
                     placeholder="email@exemplo.com" className={inputCls} />
@@ -408,39 +424,53 @@ function ModalFornecedor({
 
 export default function CadastroFornecedor() {
   const navigate                                = useNavigate();
+  const location                                = useLocation();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
 
-  const podeCriar = isAdmin || podeExecutar('cadastro.fornecedor.criar');
+  const podeCriar  = isAdmin || podeExecutar('cadastro.fornecedor.criar');
+  const podeEditar = isAdmin || podeExecutar('cadastro.fornecedor.editar');
+  const podeAtivar = isAdmin || podeExecutar('cadastro.fornecedor.ativar');
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
-  const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [busca,        setBusca]        = useState('');
-  const [showModal,    setShowModal]    = useState(false);
-  const [editando,     setEditando]     = useState<Fornecedor | null>(null);
-  const [form,         setForm]         = useState<FormForn>(FORM_INICIAL);
-  const [saving,       setSaving]       = useState(false);
+  const [fornecedores,    setFornecedores]    = useState<Fornecedor[]>([]);
+  const [loading,         setLoading]         = useState(true);
+  const [busca,           setBusca]           = useState('');
+  const [filtroAtivo,     setFiltroAtivo]     = useState<'all' | 'ativo' | 'inativo'>('ativo');
+  const [showModal,       setShowModal]       = useState(false);
+  const [editando,        setEditando]        = useState<Fornecedor | null>(null);
+  const [form,            setForm]            = useState<FormForn>(FORM_INICIAL);
+  const [saving,          setSaving]          = useState(false);
+  const [dupInativoInfo,  setDupInativoInfo]  = useState<{ mensagem: string } | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (busca.trim()) params.set('busca', busca.trim());
-      params.set('ativo', 'all');
+      params.set('ativo', filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false');
       const res = await api.get(`/cadastro/fornecedores?${params}`);
       if (!res.data) return;
       setFornecedores(res.data.dados ?? []);
     } catch { toast.error('Erro ao carregar fornecedores'); }
     finally { setLoading(false); }
-  }, [busca]);
+  }, [busca, filtroAtivo]);
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
   const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setShowModal(true); };
+
+  // Veio de "Incluir Membro" (Equipe) via "+ Cadastrar Novo Fornecedor" — abre o modal direto
+  useEffect(() => {
+    if ((location.state as { abrirNovo?: boolean } | null)?.abrirNovo) {
+      abrirNovo();
+      window.history.replaceState({}, '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const abrirEdicao = (f: Fornecedor) => {
     setEditando(f);
@@ -467,13 +497,13 @@ export default function CadastroFornecedor() {
   const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); };
   const handleFormChange = (updates: Partial<FormForn>) => setForm(prev => ({ ...prev, ...updates }));
 
-  const handleSalvar = async () => {
-    if (editando && !isAdmin) { semPermissao('alterar fornecedor'); return; }
+  const handleSalvar = async (force = false) => {
+    if (editando && editando.tipoEntrada === 'SYSTEM' && !isAdmin) { semPermissao('alterar fornecedor do catálogo global'); return; }
+    if (editando && !podeEditar) { semPermissao('alterar fornecedor'); return; }
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
     if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
     if (form.tipoServico.length === 0) { toast.error('Selecione ao menos um tipo de serviço'); return; }
-    if (!form.email.trim())      { toast.error('E-mail é obrigatório'); return; }
-    if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
+    if (form.email.trim() && !isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
@@ -490,7 +520,7 @@ export default function CadastroFornecedor() {
       cpf:         form.tipoDoc === 'cpf'  && docCPF  ? form.cpf  : null,
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
-      email:       form.email.trim().toLowerCase(),
+      email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
       tipoServico: form.tipoServico.length > 0 ? form.tipoServico.join(',') : null,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
@@ -498,6 +528,7 @@ export default function CadastroFornecedor() {
       bairro:      form.bairro      || null,
       cidade:      form.cidade      || null,
       estado:      form.estado      || null,
+      ...(force ? { force: true } : {}),
     };
 
     try {
@@ -511,13 +542,18 @@ export default function CadastroFornecedor() {
       fecharModal();
       carregar();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar');
+      const errData = (err as { response?: { data?: { mensagem?: string; inativo?: boolean } } })?.response?.data;
+      if (errData?.inativo) {
+        setDupInativoInfo({ mensagem: errData.mensagem ?? '' });
+        return;
+      }
+      toast.error(errData?.mensagem ?? 'Erro ao salvar');
     } finally { setSaving(false); }
   };
 
   const handleToggle = async (f: Fornecedor) => {
-    if (!isAdmin) { semPermissao('alternar status do fornecedor'); return; }
+    if (f.tipoEntrada === 'SYSTEM' && !isAdmin) { semPermissao('alternar status de fornecedor do catálogo global'); return; }
+    if (!podeAtivar) { semPermissao('alternar status do fornecedor'); return; }
     try {
       await api.patch(`/cadastro/fornecedores/${f.id}/toggle`);
       toast.success(f.ativo ? 'Fornecedor inativado' : 'Fornecedor ativado');
@@ -559,12 +595,24 @@ export default function CadastroFornecedor() {
         )}
       </div>
 
-      {/* Busca */}
-      <div className="relative mb-4">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-        <input type="text" placeholder="Buscar por nome, CPF, CNPJ, telefone..."
-          value={busca} onChange={e => setBusca(e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors" />
+      {/* Busca + Filtro */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input type="text" placeholder="Buscar por nome, CPF, CNPJ, telefone..."
+            value={busca} onChange={e => setBusca(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors" />
+        </div>
+        <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+          {(['all', 'ativo', 'inativo'] as const).map(v => (
+            <button key={v} onClick={() => setFiltroAtivo(v)}
+              className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}>
+              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (
@@ -586,7 +634,6 @@ export default function CadastroFornecedor() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                       <p className="text-sm font-semibold text-gray-900 truncate">{f.nome}</p>
-                      <BadgeEntrada tipo={f.tipoEntrada} />
                     </div>
                     {f.telefone && (
                       <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
@@ -614,17 +661,21 @@ export default function CadastroFornecedor() {
                     {f.ativo ? 'Ativo' : 'Inativo'}
                   </span>
                 </div>
-                {isAdmin && (
+                {(f.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                    <button onClick={() => abrirEdicao(f)}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                      <Pencil size={11} /> Editar
-                    </button>
-                    <button onClick={() => handleToggle(f)}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                      {f.ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />}
-                      {f.ativo ? 'Inativar' : 'Ativar'}
-                    </button>
+                    {podeEditar && (
+                      <button onClick={() => abrirEdicao(f)}
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                        <Pencil size={11} /> Editar
+                      </button>
+                    )}
+                    {podeAtivar && (
+                      <button onClick={() => handleToggle(f)}
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                        {f.ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />}
+                        {f.ativo ? 'Inativar' : 'Ativar'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -640,9 +691,8 @@ export default function CadastroFornecedor() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Documento</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Serviço</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Origem</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  {isAdmin && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
+                  {(podeEditar || podeAtivar) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -675,25 +725,30 @@ export default function CadastroFornecedor() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <BadgeEntrada tipo={f.tipoEntrada} />
-                    </td>
-                    <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${f.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
                         {f.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
-                    {isAdmin && (
+                    {(podeEditar || podeAtivar) && (
                       <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => abrirEdicao(f)} title="Editar"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Pencil size={14} />
-                          </button>
-                          <button onClick={() => handleToggle(f)} title={f.ativo ? 'Inativar' : 'Ativar'}
-                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                            {f.ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />}
-                          </button>
-                        </div>
+                        {f.tipoEntrada === 'SYSTEM' && !isAdmin ? (
+                          <span className="text-xs text-gray-300 italic block text-right">Catálogo global</span>
+                        ) : (
+                          <div className="flex items-center justify-end gap-1">
+                            {podeEditar && (
+                              <button onClick={() => abrirEdicao(f)} title="Editar"
+                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                            {podeAtivar && (
+                              <button onClick={() => handleToggle(f)} title={f.ativo ? 'Inativar' : 'Ativar'}
+                                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                                {f.ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />}
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -712,6 +767,14 @@ export default function CadastroFornecedor() {
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}
+        />
+      )}
+
+      {dupInativoInfo && (
+        <ModalDuplicataInativa
+          mensagem={dupInativoInfo.mensagem}
+          onConfirmar={() => { setDupInativoInfo(null); handleSalvar(true); }}
+          onCancelar={() => setDupInativoInfo(null)}
         />
       )}
     </PageContainer>

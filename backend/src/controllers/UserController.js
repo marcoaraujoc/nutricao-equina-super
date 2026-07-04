@@ -271,8 +271,12 @@ alterarSenha: async (req, res) => {
         return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
       }
 
-      // Troca voluntária exige senha atual; troca obrigatória (primeiro login) não
-      if (!user.mustChangePassword) {
+      // Troca obrigatória: dispensa senhaAtual se DB, JWT ou flag explícita indicarem.
+      // req.body.obrigatoria=true é enviado por AlterarSenhaObrigatoria (fluxo de 1º login);
+      // cobre o caso em que o JWT foi renovado sem mustChangePassword ou o DB já foi atualizado
+      // por um PATCH anterior bem-sucedido mas cujo refreshUser subsequente falhou.
+      const isObrigatoria = !!user.mustChangePassword || !!req.user.mustChangePassword || req.body.obrigatoria === true;
+      if (!isObrigatoria) {
         if (!senhaAtual) {
           return res.status(400).json({ sucesso: false, mensagem: 'Senha atual é obrigatória' });
         }

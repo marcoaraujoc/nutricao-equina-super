@@ -513,22 +513,72 @@ cron.schedule('0 8 * * *', () => {
 
 logger.info('[Lembrete-Cron] Agendado: diariamente às 08:00 (Brasília)');
 
-// ===================== CRON — FECHAMENTO MENSAL AUTOMÁTICO DE FATURAS =====================
+// ===================== CRON — FECHAMENTO AUTOMÁTICO DE FATURAS =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { adicionarAssistenciaMensal, recalcularTotal } = require('./controllers/FaturaController');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { getEquipeIdsDoProprietario } = require('./middlewares/permissao.middleware');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { deveFecharHoje } = require('./lib/faturaUtils');
+
+interface ConfigFechamento {
+  tipoFechamento: string | null;
+  diaFechamentoFatura: number | null;
+}
+
+const FALLBACK_ULTIMO_DIA_MES: ConfigFechamento = { tipoFechamento: 'ULTIMO_DIA_MES', diaFechamentoFatura: null };
+
+// Resolve as configurações de fechamento (EmpresaConfiguracao) das equipes/empresas do
+// proprietário. Escopo: empresa com CNPJ → configuração por empresa; empresa pessoal
+// (CNPJ null) → configuração por equipe — mesmo critério de EquipeController.resolverEscopoConfiguracao.
+// Retorna [] quando não há nenhuma configuração aplicável (proprietário sem equipe, ou nenhuma
+// EmpresaConfiguracao criada ainda) — o caller cai no fallback do último dia do mês (comportamento
+// anterior, preservado).
+async function resolverConfigsFechamento(proprietarioId: number | null): Promise<ConfigFechamento[]> {
+  if (!proprietarioId) return [];
+  const equipeIds: number[] = await getEquipeIdsDoProprietario(proprietarioId);
+  if (equipeIds.length === 0) return [];
+
+  const equipes = await prisma.equipe.findMany({
+    where:  { id: { in: equipeIds } },
+    select: { id: true, empresaId: true, empresa: { select: { cnpj: true } } },
+  });
+
+  const escopos = new Map<string, { empresaId: number; equipeId: number | null }>();
+  for (const eq of equipes) {
+    const escopo = eq.empresa.cnpj
+      ? { empresaId: eq.empresaId, equipeId: null }
+      : { empresaId: eq.empresaId, equipeId: eq.id };
+    escopos.set(`${escopo.empresaId}:${escopo.equipeId}`, escopo);
+  }
+  if (escopos.size === 0) return [];
+
+  return prisma.empresaConfiguracao.findMany({
+    where:  { OR: [...escopos.values()] },
+    select: { tipoFechamento: true, diaFechamentoFatura: true },
+  });
+}
 
 async function fecharFaturasDoMes() {
   try {
+    const hoje = new Date();
     const faturas = await prisma.fatura.findMany({
       where:   { status: 'ABERTA' },
       include: { proprietario: { select: { id: true, valorAssistencia: true, mensalista: true } } },
     });
 
-    logger.info(`[FaturaFechamento-Cron] ${faturas.length} fatura(s) ABERTA(s) a fechar`);
+    logger.info(`[FaturaFechamento-Cron] ${faturas.length} fatura(s) ABERTA(s) — verificando dia de fechamento`);
 
     let fechadas = 0;
     for (const fatura of faturas) {
       try {
+        const configs = await resolverConfigsFechamento(fatura.proprietarioId);
+        const deveFechar = configs.length > 0
+          ? configs.some((c: ConfigFechamento) => deveFecharHoje(c, hoje))
+          : deveFecharHoje(FALLBACK_ULTIMO_DIA_MES, hoje); // fallback: nenhuma equipe/empresa do proprietário configurou fechamento
+
+        if (!deveFechar) continue;
+
         await adicionarAssistenciaMensal(fatura.id, fatura.proprietario, null);
 
         const total = await recalcularTotal(fatura.id);
@@ -551,15 +601,14 @@ async function fecharFaturasDoMes() {
   }
 }
 
-// Executa nos dias 28–31 às 23:45 (Brasília) e verifica se é o último dia do mês
-cron.schedule('45 23 28-31 * *', () => {
-  const amanha = new Date();
-  amanha.setDate(amanha.getDate() + 1);
-  if (amanha.getDate() !== 1) return; // só executa no último dia do mês
-  logger.info('[FaturaFechamento-Cron] Iniciando fechamento mensal automático...');
+// Executa todo dia às 23:45 (Brasília) — cada fatura decide se fecha hoje com base no dia
+// configurado (EmpresaConfiguracao.diaFechamentoFatura) da equipe/empresa do proprietário,
+// com fallback para o último dia do mês quando nada foi configurado.
+cron.schedule('45 23 * * *', () => {
+  logger.info('[FaturaFechamento-Cron] Verificando faturas a fechar hoje...');
   fecharFaturasDoMes();
 }, { timezone: 'America/Sao_Paulo' });
 
-logger.info('[FaturaFechamento-Cron] Agendado: último dia do mês às 23:45 (Brasília)');
+logger.info('[FaturaFechamento-Cron] Agendado: diariamente às 23:45 (Brasília) — por dia de fechamento configurado, com fallback no último dia do mês');
 
 export default app;

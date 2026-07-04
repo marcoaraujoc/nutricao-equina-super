@@ -6,6 +6,8 @@ const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
+const { storage }      = require('../storage');
+const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 
 const prisma = require('../lib/prisma').default;
 
@@ -82,6 +84,20 @@ async function getEquipeAtiva(empresaId, equipeIdPreferida = null) {
     if (equipe) return equipe;
   }
   return prisma.equipe.findFirst({ where: { empresaId } });
+}
+
+// ─── Helper: resolve o escopo (empresaId + equipeId) da EmpresaConfiguracao ───
+// Empresa com CNPJ → configuração única por empresa (equipeId null).
+// Empresa pessoal (CNPJ null) → configuração única por equipe ativa.
+// Retorna null se o usuário não for dono nem gestor de nenhuma empresa/equipe (mesmo
+// critério de getEmpresaDoGestor/getEquipeAtiva — caller trata como 404).
+async function resolverEscopoConfiguracao(req) {
+  const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+  if (!empresa) return null;
+  if (empresa.cnpj) return { empresaId: empresa.id, equipeId: null };
+  const equipe = await getEquipeAtiva(empresa.id, req.equipeId);
+  if (!equipe) return null;
+  return { empresaId: empresa.id, equipeId: equipe.id };
 }
 
 // ─── Helper: onboarding de vet convidado ─────────────────────────────────────
@@ -189,6 +205,115 @@ const EquipeController = {
       res.json({ sucesso: true, dados: empresas });
     } catch (err) {
       console.error('Erro ao listar empresas:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Configurações (logotipo + dia de fechamento de fatura) ────────────────────
+  // Única por empresa (CNPJ) ou por equipe (empresa pessoal) — ver resolverEscopoConfiguracao.
+  // Sem checagem de role explícita: getEmpresaDoGestor só resolve empresa para quem é
+  // ownerId ou tem cargo GESTOR — não-gestor cai em 404 naturalmente (mesmo padrão de
+  // renomearEquipe/listarEmpresas).
+
+  obterConfiguracao: async (req, res) => {
+    try {
+      const escopo = await resolverEscopoConfiguracao(req);
+      if (!escopo) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      const config = await prisma.empresaConfiguracao.findUnique({
+        where: { empresaId_equipeId: escopo },
+      });
+
+      // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
+      // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
+      const tipoFechamentoEfetivo = config?.tipoFechamento
+        ?? (config?.diaFechamentoFatura != null ? 'DIA_FIXO' : 'ULTIMO_DIA_MES');
+
+      res.json({
+        sucesso: true,
+        dados: {
+          logoUrl:             config?.logoUrl             ?? null,
+          tipoFechamento:      tipoFechamentoEfetivo,
+          diaFechamentoFatura: config?.diaFechamentoFatura  ?? null,
+        },
+      });
+    } catch (err) {
+      console.error('Erro ao obter configuração:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  salvarConfiguracao: async (req, res) => {
+    try {
+      const escopo = await resolverEscopoConfiguracao(req);
+      if (!escopo) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      const { tipoFechamento, diaFechamentoFatura, removerLogo } = req.body;
+
+      let tipoFinal;
+      let diaFinal;
+      if (tipoFechamento === undefined) {
+        tipoFinal = undefined; // não altera
+        diaFinal  = undefined;
+      } else {
+        if (!TIPOS_FECHAMENTO_VALIDOS.includes(tipoFechamento)) {
+          return res.status(400).json({ sucesso: false, mensagem: `tipoFechamento deve ser um de: ${TIPOS_FECHAMENTO_VALIDOS.join(', ')}` });
+        }
+        tipoFinal = tipoFechamento;
+
+        if (tipoFechamento === 'ULTIMO_DIA_MES') {
+          diaFinal = null; // ignora qualquer valor enviado
+        } else {
+          const n = Number(diaFechamentoFatura);
+          const limite = tipoFechamento === 'DIA_UTIL' ? 10 : 31;
+          if (!Number.isInteger(n) || n < 1 || n > limite) {
+            return res.status(400).json({
+              sucesso: false,
+              mensagem: tipoFechamento === 'DIA_UTIL'
+                ? 'Para dia útil, informe um número entre 1 e 10.'
+                : 'Para dia fixo, informe um número entre 1 e 31.',
+            });
+          }
+          diaFinal = n;
+        }
+      }
+
+      const existente = await prisma.empresaConfiguracao.findUnique({ where: { empresaId_equipeId: escopo } });
+
+      let logoUrlFinal;
+      if (req.file) {
+        logoUrlFinal = await storage.upload(req.file, 'empresas');
+        if (existente?.logoUrl) await storage.delete(existente.logoUrl);
+      } else if (removerLogo === 'true' || removerLogo === true) {
+        if (existente?.logoUrl) await storage.delete(existente.logoUrl);
+        logoUrlFinal = null;
+      }
+
+      const config = await prisma.empresaConfiguracao.upsert({
+        where:  { empresaId_equipeId: escopo },
+        update: {
+          ...(tipoFinal    !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
+          ...(logoUrlFinal !== undefined && { logoUrl: logoUrlFinal }),
+        },
+        create: {
+          empresaId:           escopo.empresaId,
+          equipeId:            escopo.equipeId,
+          tipoFechamento:      tipoFinal ?? null,
+          diaFechamentoFatura: diaFinal  ?? null,
+          logoUrl:             logoUrlFinal ?? null,
+        },
+      });
+
+      res.json({
+        sucesso: true,
+        dados: {
+          logoUrl:             config.logoUrl,
+          tipoFechamento:      config.tipoFechamento ?? (config.diaFechamentoFatura != null ? 'DIA_FIXO' : 'ULTIMO_DIA_MES'),
+          diaFechamentoFatura: config.diaFechamentoFatura,
+        },
+      });
+    } catch (err) {
+      console.error('Erro ao salvar configuração:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -373,7 +498,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -404,7 +529,7 @@ const EquipeController = {
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -653,7 +778,7 @@ const EquipeController = {
   atualizarMembro: async (req, res) => {
     try {
       const { id } = req.params;
-      const { cargo, phone, senha, fullName, ativo, cep, endereco, complemento, bairro, cidade, estado } = req.body;
+      const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado } = req.body;
 
       const membro = await prisma.membroEquipe.findUnique({
         where:   { id: Number(id) },
@@ -677,6 +802,17 @@ const EquipeController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
+      if (email !== undefined) {
+        const emailNorm = email.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm)) {
+          return res.status(400).json({ sucesso: false, mensagem: 'E-mail inválido' });
+        }
+        const existente = await prisma.user.findFirst({ where: { email: emailNorm, id: { not: membro.userId } } });
+        if (existente) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este e-mail já está em uso por outro usuário.' });
+        }
+      }
+
       if (senha) {
         if (senha.length < 8)            return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 8 caracteres' });
         if (!/[A-Z]/.test(senha))        return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
@@ -688,6 +824,7 @@ const EquipeController = {
 
       const dadosUser = {};
       if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
+      if (email    !== undefined && email.trim())    dadosUser.email    = email.trim().toLowerCase();
       if (phone       !== undefined) dadosUser.phone       = phone?.trim()       || null;
       if (cep         !== undefined) dadosUser.cep         = cep?.trim()         || null;
       if (endereco    !== undefined) dadosUser.endereco    = endereco?.trim()    || null;
@@ -699,6 +836,32 @@ const EquipeController = {
       if (senha)                     dadosUser.passwordHash = await bcrypt.hash(senha, 10);
       if (Object.keys(dadosUser).length > 0) {
         await prisma.user.update({ where: { id: membro.userId }, data: dadosUser });
+      }
+
+      // Sincroniza com o cadastro Fornecedor vinculado (quando o membro é PRESTADOR)
+      const dadosFornecedor = {};
+      if (fullName    !== undefined && fullName.trim()) dadosFornecedor.nome        = fullName.trim();
+      if (email       !== undefined && email.trim())    dadosFornecedor.email       = email.trim().toLowerCase();
+      if (phone       !== undefined) dadosFornecedor.telefone    = phone?.trim()       || null;
+      if (cep         !== undefined) dadosFornecedor.cep         = cep?.trim()         || null;
+      if (endereco    !== undefined) dadosFornecedor.endereco    = endereco?.trim()    || null;
+      if (complemento !== undefined) dadosFornecedor.complemento = complemento?.trim() || null;
+      if (bairro      !== undefined) dadosFornecedor.bairro      = bairro?.trim()      || null;
+      if (cidade      !== undefined) dadosFornecedor.cidade      = cidade?.trim()      || null;
+      if (estado      !== undefined) dadosFornecedor.estado      = estado?.trim()      || null;
+      if (Object.keys(dadosFornecedor).length > 0) {
+        // Lookup primário: por userId (vínculo estabelecido via incluirMembroDireto)
+        let fornecedorAlvo = await prisma.fornecedor.findFirst({ where: { userId: membro.userId } });
+        // Fallback: por e-mail atual do usuário (registros legados sem userId populado)
+        if (!fornecedorAlvo && membro.user?.email) {
+          fornecedorAlvo = await prisma.fornecedor.findFirst({ where: { email: membro.user.email } });
+        }
+        if (fornecedorAlvo) {
+          await prisma.fornecedor.update({
+            where: { id: fornecedorAlvo.id },
+            data:  { ...dadosFornecedor, userId: membro.userId }, // estabelece o link se ainda não estava
+          });
+        }
       }
 
       res.json({ sucesso: true, mensagem: 'Membro atualizado' });
@@ -1044,6 +1207,7 @@ const EquipeController = {
               tipoServico: tipoServico.trim(),
               tipoEntrada: 'CLIENTE',
               empresaId:   req.empresaId ?? null,
+              equipeId:    equipe.id,
               userId:      usuario.id,
             },
           });
@@ -1090,7 +1254,7 @@ const EquipeController = {
         especiesNomes: especiesDono.map(e => e.nome).filter(Boolean),
       }).catch(err => console.error('[emailService] Falha ao enviar notificação de inclusão:', err));
 
-      res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!' });
+      res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!', dados: { userId: usuario.id, fullName: usuario.fullName } });
     } catch (err) {
       console.error('Erro ao incluir membro:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

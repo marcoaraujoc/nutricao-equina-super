@@ -15,6 +15,8 @@ export interface PrintItemPrescricao {
   dataInicio:       string;
 }
 
+import { resolverUrlAbsoluta } from './printUrl';
+
 export interface PrintAnimalPrescricao {
   nome:     string;
   photoUrl: string | null;
@@ -22,6 +24,7 @@ export interface PrintAnimalPrescricao {
   baia:     string | null;
   especie:  { nome: string } | null;
   raca:     { nome: string } | null;
+  logoUrl?: string | null;
 }
 
 export interface PrintGrupoPrescricao {
@@ -112,6 +115,7 @@ function labelFrequencia(freq: string, horarios: string[] | null): string {
 
 export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
   const { animal } = g;
+  const logoUrl     = resolverUrlAbsoluta(animal.logoUrl);
   const statusLabel = STATUS_LABEL[g.status] ?? g.status;
   const statusColor = STATUS_COLOR[g.status] ?? '#6b7280';
   const statusBg    = STATUS_BG[g.status]    ?? '#f3f4f6';
@@ -168,6 +172,7 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
 
     .header { border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
     .header h1 { font-size: 20px; font-weight: 700; color: #059669; }
+    .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
     .header .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
     .header .emissao { font-size: 9px; color: #9ca3af; text-align: right; }
 
@@ -215,7 +220,7 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
 
   <div class="header">
     <div>
-      <h1>S2Vet</h1>
+      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
       <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
       <p class="sub" style="margin-top:4px">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
     </div>

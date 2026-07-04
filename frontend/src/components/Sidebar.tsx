@@ -13,7 +13,7 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
-  Sparkles, CalendarPlus, CalendarDays,
+  Sparkles, CalendarPlus, CalendarDays, Package, Settings,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -27,15 +27,15 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
-type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'farmacia' | 'vacina' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
+type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'estoque' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
 
 function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/mapa-atendimento'))       return 'mapa';
   if (pathname.startsWith('/agendamentos'))           return 'agenda';
   if (pathname.startsWith('/clinica'))               return 'clinica';
   if (pathname.startsWith('/execucao-prescricao'))   return 'enfermagem';
-  if (pathname.startsWith('/estoque-vacina'))         return 'vacina';
-  if (pathname.startsWith('/farmacia'))              return 'farmacia';
+  if (pathname.startsWith('/estoque-vacina'))         return 'estoque';
+  if (pathname.startsWith('/farmacia'))              return 'estoque';
   if (pathname.startsWith('/exames'))                return 'exames';
   if (pathname.startsWith('/cadastro/') || pathname === '/equipe') return 'cadastro';
   if (pathname.startsWith('/animais-vet'))           return 'geral';
@@ -114,7 +114,7 @@ export default function Sidebar() {
     podeVerAgendamentos                        ||
     (temAcessoClinico && temAcessoAtendimento) ||
     (temAcessoClinico && podeVerPrescricoes)   ||
-    podeVerFarmacia                            ||
+    podeVerFarmacia || podeVerEstoqueVacina    ||
     temAcessoNutricional                       ||
     podeVerFaturas;
 
@@ -149,6 +149,7 @@ export default function Sidebar() {
   };
   const isModuleActive         = (mod: ActiveSection) => activeSection === mod;
   const isNutricionalSubActive = (path: string) => activeSection === 'nutricional' && p.startsWith(path);
+  const isEstoqueSubActive     = (path: string) => activeSection === 'estoque'     && p.startsWith(path);
   const isAdminActive          = (path: string) => activeSection === 'admin' && p.startsWith(path);
 
   // ── Estados dos menus ─────────────────────────────────────────────────────
@@ -156,6 +157,7 @@ export default function Sidebar() {
   const [openModulos,       setOpenModulos]       = useState(true);
   const [openClinica,       setOpenClinica]       = useState(() => p.startsWith('/clinica'));
   const [openEnfermagem,    setOpenEnfermagem]    = useState(() => p.startsWith('/execucao-prescricao'));
+  const [openEstoque,       setOpenEstoque]       = useState(() => p.startsWith('/estoque-vacina') || p.startsWith('/farmacia'));
   const [openExames,        setOpenExames]        = useState(() => p.startsWith('/exames'));
   const [openNutricional,   setOpenNutricional]   = useState(() =>
     p.startsWith('/dieta') ||
@@ -292,6 +294,7 @@ export default function Sidebar() {
               {openGeral && (
                 <div className="mt-1 space-y-0.5 pl-4">
                   {podeVerDashboard && navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
+                  {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
 
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
                   {temAlgumCadastroItem && (
@@ -359,6 +362,40 @@ export default function Sidebar() {
               {openModulos && (
                 <div className="mt-1 pl-4 space-y-0.5">
 
+                  {/* ── Estoque ───────────────────────────────────────── */}
+                  {(podeVerEstoqueVacina || podeVerFarmacia) && (
+                    <div>
+                      {moduleButton('Estoque', <Package size={20} />, 'estoque', openEstoque, () => toggle(setOpenEstoque))}
+                      {openEstoque && (
+                        <div className="mt-1 pl-6 space-y-0.5">
+                          {podeVerEstoqueVacina && subLink('/estoque-vacina', <Syringe size={14} />, 'Vacina', isEstoqueSubActive('/estoque-vacina'))}
+                          {podeVerFarmacia && subLink('/farmacia', <FlaskConical size={14} />, 'Farmácia', isEstoqueSubActive('/farmacia'))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Resultado de Exame ───────────────────────────────── */}
+                  {podeVerExames && (
+                    <div>
+                      {moduleButton('Resultado de Exame', <Microscope size={20} />, 'exames', openExames, () => toggle(setOpenExames))}
+                      {openExames && (
+                        <div className="mt-1 pl-6 space-y-0.5">
+                          {subLink(
+                            animalId ? `/exames/${animalId}?tipo=laboratorial` : '/exames?tipo=laboratorial',
+                            <ClipboardList size={14} />, 'Laboratorial',
+                            p.startsWith('/exames') && search.includes('tipo=laboratorial'),
+                          )}
+                          {subLink(
+                            animalId ? `/exames/${animalId}?tipo=imagem` : '/exames?tipo=imagem',
+                            <Scan size={14} />, 'Imagem',
+                            p.startsWith('/exames') && search.includes('tipo=imagem'),
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* ── Agendamento ──────────────────────────────────── */}
                   {podeVerAgendamentos && (
                     <button
@@ -421,34 +458,6 @@ export default function Sidebar() {
                     </div>
                   )}
 
-                  {/* ── Vacina ────────────────────────────────────────── */}
-                  {podeVerEstoqueVacina && (
-                    <Link
-                      to="/estoque-vacina"
-                      onClick={closeMobile}
-                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                        p.startsWith('/estoque-vacina') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
-                      }`}
-                    >
-                      <Syringe size={20} />
-                      Vacina
-                    </Link>
-                  )}
-
-                  {/* ── Farmácia ──────────────────────────────────────── */}
-                  {podeVerFarmacia && (
-                    <Link
-                      to="/farmacia"
-                      onClick={closeMobile}
-                      className={`flex items-center gap-3 px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                        p.startsWith('/farmacia') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
-                      }`}
-                    >
-                      <FlaskConical size={20} />
-                      Farmácia
-                    </Link>
-                  )}
-
                   {/* ── Nutricional ──────────────────────────────────────── */}
                   {temAcessoNutricional && (
                     <div>
@@ -468,27 +477,6 @@ export default function Sidebar() {
                           {isAdmin && subLink('/alimentos',            <Wheat    size={14} />, 'Alimentos',            isNutricionalSubActive('/alimentos'))}
                           {isAdmin && subLink('/nutrientes',           <TestTube size={14} />, 'Nutrientes',           isNutricionalSubActive('/nutrientes'))}
                           {isAdmin && subLink('/composicao-alimentar', <ChartBar size={14} />, 'Composição Alimentar', isNutricionalSubActive('/composicao-alimentar'))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* ── Exames ───────────────────────────────────────────── */}
-                  {podeVerExames && (
-                    <div>
-                      {moduleButton('Exames', <Microscope size={20} />, 'exames', openExames, () => toggle(setOpenExames))}
-                      {openExames && (
-                        <div className="mt-1 pl-6 space-y-0.5">
-                          {subLink(
-                            animalId ? `/exames/${animalId}?tipo=laboratorial` : '/exames?tipo=laboratorial',
-                            <ClipboardList size={14} />, 'Laboratorial',
-                            p.startsWith('/exames') && search.includes('tipo=laboratorial'),
-                          )}
-                          {subLink(
-                            animalId ? `/exames/${animalId}?tipo=imagem` : '/exames?tipo=imagem',
-                            <Scan size={14} />, 'Imagem',
-                            p.startsWith('/exames') && search.includes('tipo=imagem'),
-                          )}
                         </div>
                       )}
                     </div>

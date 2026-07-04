@@ -1,6 +1,6 @@
 // VacinaClinicaController.js — registro clínico de vacinas por animal
 const prisma = require('../lib/prisma').default;
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -247,18 +247,19 @@ async function registrar(req, res) {
       criada.id
     );
 
-    // Lança na fatura apenas quando não for vacina do cliente E houver lote debitado
-    if (!isCliente && loteIdFinal) setImmediate(async () => {
+    // Lança na fatura quando não for vacina do cliente.
+    // Sem lote (sem estoque debitado) → valor 0, para o financeiro saber o que foi aplicado.
+    if (!isCliente) setImmediate(async () => {
       try {
         const animal = await prisma.animal.findUnique({
           where:  { id: Number(animalId) },
           select: { userId: true },
         });
         if (animal?.userId) {
-          const vcNum   = `VC-${String(numero).padStart(4, '0')}`;
-          const evNum   = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
+          const vcNum     = `VC-${String(numero).padStart(4, '0')}`;
+          const evNum     = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
           const descricao = `[${vcNum}] ${evNum}${nomeVacina.trim()}${dose ? ` — ${dose.trim()}` : ''}`;
-          const valorItem = valorFinal ?? Number(loteValor) ?? 0;
+          const valorItem = loteIdFinal ? (valorFinal ?? Number(loteValor) ?? 0) : 0;
           await prisma.$transaction(async (tx) => {
             const fatura = await getOrCreateFatura(tx, animal.userId);
             await adicionarFaturaItem(tx, {
@@ -269,6 +270,7 @@ async function registrar(req, res) {
               valor:        valorItem,
               quantidade:   qtdFinal,
               veterinarioId,
+              vacinaClinicaId: criada.id,
             });
           });
         }
@@ -318,29 +320,38 @@ async function excluir(req, res) {
     if (!vacina) return res.status(404).json({ error: 'Registro não encontrado' });
     if (!vacina.ativo) return res.status(400).json({ error: 'Registro já está inativo' });
 
-    // Restaura as doses ao lote se havia vínculo
-    if (vacina.loteId) {
-      const lote = await prisma.loteVacina.findUnique({ where: { id: vacina.loteId } });
-      if (lote) {
-        const qtdRows = await prisma.$queryRawUnsafe(
-          `SELECT quantidade FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`, Number(id)
-        );
-        const qtdRestaurar = Number(qtdRows[0]?.quantidade ?? 1);
-        await prisma.loteVacina.update({
-          where: { id: lote.id },
-          data: { qtdDisponivel: lote.qtdDisponivel + qtdRestaurar },
-        });
-      }
-    }
+    await prisma.$transaction(async (tx) => {
+      // Remove o FaturaItem vinculado, se houver (vacina do cliente nunca gerou um).
+      // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
+      await removerFaturaItensDaOrigem(tx, 'vacinaClinicaId', vacina.id);
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE schs2vet.tb_vacinas_clinicas SET ativo = false, motivo_inativacao = $1 WHERE id = $2`,
-      motivo.trim(),
-      Number(id)
-    );
+      // Restaura as doses ao lote se havia vínculo
+      if (vacina.loteId) {
+        const lote = await tx.loteVacina.findUnique({ where: { id: vacina.loteId } });
+        if (lote) {
+          const qtdRows = await tx.$queryRawUnsafe(
+            `SELECT quantidade FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`, Number(id)
+          );
+          const qtdRestaurar = Number(qtdRows[0]?.quantidade ?? 1);
+          await tx.loteVacina.update({
+            where: { id: lote.id },
+            data: { qtdDisponivel: lote.qtdDisponivel + qtdRestaurar },
+          });
+        }
+      }
+
+      await tx.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_vacinas_clinicas SET ativo = false, motivo_inativacao = $1 WHERE id = $2`,
+        motivo.trim(),
+        Number(id)
+      );
+    });
 
     res.json({ mensagem: 'Registro inativado com sucesso' });
   } catch (err) {
+    if (err.code === 'FATURA_PAGA') {
+      return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+    }
     console.error('excluir vacina:', err);
     res.status(500).json({ error: 'Erro ao remover registro' });
   }

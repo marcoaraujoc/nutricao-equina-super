@@ -20,6 +20,20 @@ const normalizarUnidade = (unidade) => {
     .trim() || 'g';
 };
 
+// Converte valor entre unidades de massa (g, mg, mcg/µg).
+// Unidades desconhecidas retornam o valor original sem conversão.
+const FATOR_PARA_G = { g: 1, mg: 1e-3, mcg: 1e-6, 'µg': 1e-6 };
+
+const converterUnidade = (valor, unidadeOrigem, unidadeDestino) => {
+  const orig = String(unidadeOrigem || '').toLowerCase().trim();
+  const dest = String(unidadeDestino || '').toLowerCase().trim();
+  if (orig === dest) return valor;
+  const fo = FATOR_PARA_G[orig];
+  const fd = FATOR_PARA_G[dest];
+  if (!fo || !fd) return valor;
+  return (Number(valor) * fo) / fd;
+};
+
 // =====================================================================
 // CONVERSÃO DE UNIDADES → g/g (base interna do banco)
 // =====================================================================
@@ -289,21 +303,35 @@ const ComposicaoAlimentarController = {
         const unidadeComp = normalizarUnidade(comp.unidade);
         const nomeSemAcento = normalizarNomeNutriente(comp.nutrienteNome.trim());
 
+        // 1ª tentativa: match exato por nome + unidade
         let nutriente = await prisma.nutriente.findFirst({
-          where: {
-            nome: nomeSemAcento,
-            unidadePadrao: unidadeComp,
-          },
+          where: { nome: nomeSemAcento, unidadePadrao: unidadeComp },
         });
 
+        // Valor final — pode ser convertido se houver conflito de unidade
+        let valorFinal = Number(comp.valorPorKg);
+
         if (!nutriente) {
-          nutriente = await prisma.nutriente.create({
-            data: {
-              nome: nomeSemAcento,
-              categoria: 'Importado',
-              unidadePadrao: unidadeComp,
-            },
+          // 2ª tentativa: mesmo nome com unidade diferente (nutriente canônico mais antigo)
+          const nutrienteMesmoNome = await prisma.nutriente.findFirst({
+            where: { nome: nomeSemAcento },
+            orderBy: { id: 'asc' }, // o mais antigo é o canônico
           });
+
+          if (nutrienteMesmoNome) {
+            // Converte o valor para a unidade do nutriente canônico e reutiliza o registro
+            valorFinal = converterUnidade(valorFinal, unidadeComp, nutrienteMesmoNome.unidadePadrao);
+            nutriente = nutrienteMesmoNome;
+          } else {
+            // Nutriente genuinamente novo — cria
+            nutriente = await prisma.nutriente.create({
+              data: {
+                nome: nomeSemAcento,
+                categoria: 'Importado',
+                unidadePadrao: unidadeComp,
+              },
+            });
+          }
         }
 
         try {
@@ -311,7 +339,7 @@ const ComposicaoAlimentarController = {
             data: {
               alimentoId: alimento.id,
               nutrienteId: nutriente.id,
-              valorPorKg: Number(comp.valorPorKg),
+              valorPorKg: valorFinal,
               base: comp.base || 'Seca',
               ...(especieId ? { especieId: Number(especieId) } : {}),
             },

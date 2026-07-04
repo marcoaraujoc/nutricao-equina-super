@@ -260,7 +260,16 @@ function PainelFatura({
   const [loading,        setLoading]        = useState(true);
   const [salvando,       setSalvando]       = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [logoUrl,        setLogoUrl]        = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  // Logo da empresa/equipe do proprietário para PDF/impressão/compartilhamento —
+  // busca best-effort, nunca bloqueia a tela (fallback: marca S2Vet no template).
+  useEffect(() => {
+    api.get(`/clinica/faturas/proprietario/${prop.id}/logo-empresa`)
+      .then(res => setLogoUrl(res.data?.dados?.logoUrl ?? null))
+      .catch(() => setLogoUrl(null));
+  }, [prop.id]);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -274,7 +283,7 @@ function PainelFatura({
 
   const handlePDF = () => {
     if (!fatura) return;
-    imprimirFatura(fatura, prop.animais);
+    imprimirFatura(fatura, prop.animais, logoUrl);
     setShowExportMenu(false);
   };
 
@@ -291,7 +300,7 @@ function PainelFatura({
     if (!fatura) return;
     setCompartilhando(true);
     try {
-      await compartilharFatura(fatura, prop.animais);
+      await compartilharFatura(fatura, prop.animais, logoUrl);
     } catch {
       toast.error('Erro ao gerar PDF');
     } finally {

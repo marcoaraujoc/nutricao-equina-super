@@ -400,9 +400,9 @@ const AnimaisVet = () => {
             <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">⚠️</div>
             <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir paciente?</h2>
             <p className="text-gray-500 text-sm mb-6">
-              Isso removerá permanentemente{' '}
-              <strong className="text-gray-700">{animalToDelete.nome}</strong> do sistema.
-              Esta ação não pode ser desfeita.
+              Isso removerá{' '}
+              <strong className="text-gray-700">{animalToDelete.nome}</strong> das suas listagens.
+              O histórico clínico e nutricional é preservado.
             </p>
             <div className="flex gap-3">
               <button onClick={() => setAnimalToDelete(null)}

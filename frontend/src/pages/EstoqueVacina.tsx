@@ -10,7 +10,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import {
   AlertTriangle, Plus, Pencil, Trash2,
   Search, RefreshCw, X, Syringe, Calendar,
-  ChevronDown, FlaskConical,
+  ChevronDown, FlaskConical, Eye,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 
@@ -97,6 +97,7 @@ export default function EstoqueVacina() {
   const [modalFormAberto,   setModalFormAberto]   = useState(false);
   const [confirmExcluir,    setConfirmExcluir]    = useState<LoteVacina | null>(null);
   const [repassadoEditado,  setRepassadoEditado]  = useState(false);
+  const [loteView,          setLoteView]          = useState<LoteVacina | null>(null);
 
   // Combobox vacina
   const [buscaVac,          setBuscaVac]          = useState('');
@@ -316,6 +317,7 @@ export default function EstoqueVacina() {
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de vacina'); return; }
 
     if (!form.medicamentoCatId) return toast.error('Selecione a vacina.');
+    if (!editandoId && !form.validade) return toast.error('Informe a validade do lote.');
     if (form.validade && !editandoId && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
     if (form.dataRecebimento && form.dataRecebimento > hoje) return toast.error('Data de recebimento não pode ser futura.');
     if (Number(form.qtdFrascos) <= 0 && !editandoId) return toast.error('Quantidade de frascos deve ser maior que zero.');
@@ -340,8 +342,8 @@ export default function EstoqueVacina() {
         await api.put(`/vacinas/estoque/${editandoId}`, payload);
         toast.success('Lote atualizado.');
       } else {
-        await api.post('/vacinas/estoque', payload);
-        toast.success('Lote de vacina registrado.');
+        const res = await api.post('/vacinas/estoque', payload);
+        toast.success(res.data?.consolidado ? 'Frascos somados ao lote existente.' : 'Lote de vacina registrado.');
       }
       limparForm();
       carregarLotes();
@@ -536,17 +538,26 @@ export default function EstoqueVacina() {
 
                     {/* Célula 3 — ações */}
                     <div className={`flex items-center gap-1 bg-white px-4 py-2.5 border-y border-r rounded-r-xl ${borderCls.replace('border-l-[4px] border-l-red-500 ', '').replace('border-l-[4px] border-l-amber-400 ', '').replace('border-l-[4px] border-l-gray-400 ', '')}`}>
-                      {podeEditar && (() => {
+                      {(() => {
                         const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
-                        return (
+                        if (jaUsado) {
+                          return (
+                            <button
+                              onClick={() => setLoteView(lote)}
+                              title="Visualizar lote (já utilizado — não pode ser alterado)"
+                              className="p-1.5 rounded-lg border border-teal-200 text-teal-500 hover:bg-teal-50">
+                              <Eye size={13} />
+                            </button>
+                          );
+                        }
+                        return podeEditar ? (
                           <button
-                            onClick={() => { if (!jaUsado) preencherEdicao(lote); }}
-                            title={jaUsado ? 'Lote já utilizado — não pode ser alterado' : 'Editar'}
-                            disabled={jaUsado}
-                            className={`p-1.5 rounded-lg border text-gray-400 ${jaUsado ? 'border-gray-100 opacity-40 cursor-not-allowed' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            onClick={() => preencherEdicao(lote)}
+                            title="Editar"
+                            className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
                             <Pencil size={13} />
                           </button>
-                        );
+                        ) : null;
                       })()}
                       {podeDeletar && (
                         <button onClick={() => setConfirmExcluir(lote)} title="Inativar"
@@ -826,6 +837,90 @@ export default function EstoqueVacina() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Modal: visualização de lote em uso (read-only) ─────────────────── */}
+      {loteView && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg flex flex-col max-h-[88vh] overflow-hidden">
+            <div className="bg-teal-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <Eye size={15} className="text-white/80" />
+                <p className="font-bold text-sm text-white">Visualizar Lote</p>
+              </div>
+              <button onClick={() => setLoteView(null)} className="text-white/60 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <div className="bg-teal-50 border border-teal-100 rounded-xl p-3 text-xs text-teal-800">
+                <span className="font-semibold">Lote em uso</span> — alterações não são permitidas enquanto houver doses aplicadas.
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Vacina</p>
+                  <p className="font-semibold text-gray-800">{loteView.medicamentoCat?.nome ?? loteView.vacina?.nome ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Fabricante</p>
+                  <p className="text-gray-700">{loteView.medicamentoCat?.fabricante ?? loteView.vacina?.fabricante ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Lote</p>
+                  <p className="text-gray-700">{loteView.lote || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Validade</p>
+                  <p className="text-gray-700">{loteView.validade ? formatDate(loteView.validade) : '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Qtd Frascos</p>
+                  <p className="text-gray-700">{loteView.qtdFrascos}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Doses por Frasco</p>
+                  <p className="text-gray-700">{loteView.dosesPorFrasco}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Total de Doses</p>
+                  <p className="font-bold text-teal-700">{loteView.qtdTotal}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Doses Disponíveis</p>
+                  <p className={`font-bold ${loteView.qtdDisponivel === 0 ? 'text-red-600' : 'text-teal-700'}`}>{loteView.qtdDisponivel}</p>
+                </div>
+                {loteView.valorUnitario != null && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Valor Unit./Frasco</p>
+                    <p className="text-gray-700">R$ {loteView.valorUnitario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                  </div>
+                )}
+                {loteView.valorUnitarioRepassado != null && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Valor Repassado/Frasco</p>
+                    <p className="text-gray-700">R$ {loteView.valorUnitarioRepassado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                  </div>
+                )}
+                {loteView.dataRecebimento && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Data Recebimento</p>
+                    <p className="text-gray-700">{formatDate(loteView.dataRecebimento)}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Status</p>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${loteView.ativo ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {loteView.ativo ? 'ATIVO' : 'INATIVO'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setLoteView(null)}
+                className="w-full py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── FAB mobile ────────────────────────────────────────────────────── */}

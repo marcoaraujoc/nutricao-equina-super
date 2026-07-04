@@ -10,7 +10,10 @@ const whatsappService                             = require('../services/whatsap
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
-const STATUS_VALIDOS = ['AGENDADO', 'CONCLUIDO', 'CANCELADO'];
+// EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
+// (EvolucaoController.criar/atualizar/cancelar) — CONCLUIDO permanece disponível para o
+// "Concluir" manual (confirmação de comparecimento sem abrir uma evolução).
+const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO'];
 // Proprietário e fornecedor visualizam; quem agenda é a equipe clínica
 const PODE_GERENCIAR = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
 

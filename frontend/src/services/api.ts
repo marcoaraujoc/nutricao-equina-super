@@ -5,7 +5,7 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  const token = sessionStorage.getItem('token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   // Contexto ativo do gestor (EmpresaContext) — backend valida o vínculo antes de usar
   // CNPJ trabalha por empresa (x-empresa-id); CPF trabalha por equipe (x-equipe-id)
@@ -26,18 +26,18 @@ function drainQueue(token: string | null) {
 }
 
 async function tryRefresh(): Promise<string | null> {
-  const refreshToken = localStorage.getItem('refreshToken');
+  const refreshToken = sessionStorage.getItem('refreshToken');
   if (!refreshToken) return null;
 
   try {
     const res = await axios.post('/api/auth/refresh', { refreshToken }, { skipRefreshInterceptor: true } as object);
     const { token, refreshToken: newRefresh } = res.data;
-    localStorage.setItem('token', token);
-    localStorage.setItem('refreshToken', newRefresh);
+    sessionStorage.setItem('token', token);
+    sessionStorage.setItem('refreshToken', newRefresh);
     return token;
   } catch {
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('refreshToken');
     return null;
   }
 }

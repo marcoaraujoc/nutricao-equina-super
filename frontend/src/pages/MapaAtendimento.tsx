@@ -1,9 +1,13 @@
 // frontend/src/pages/MapaAtendimento.tsx
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, RefreshCw, PlayCircle, Loader2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
+import toast from 'react-hot-toast';
+import { ModalExecucao, localToday } from './ExecucaoPrescricao';
+import type { GrupoExecucao } from './ExecucaoPrescricao';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Localizacao { id: number; nome: string }
@@ -11,13 +15,14 @@ interface Veterinario { id: number; fullName: string }
 interface AnimalInfo  { id: number; nome: string; especie?: string }
 
 interface CronogramaItem {
-  id:            number;
+  id:            number | string;
+  grupoId?:      number | null;
   tipo:          string;
   animal:        AnimalInfo;
   localizacao:   Localizacao | null;
   procedimento:  string;
   descricao:     string;
-  status:        'AGENDADO' | 'CONCLUIDO' | 'CANCELADO' | 'SEM_ATENDIMENTO';
+  status:        'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'SEM_ATENDIMENTO';
   dataHora:      string | null;
   responsavel:   string | null;
   responsavelId: number | null;
@@ -151,9 +156,14 @@ function DonutChart({
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
-  if (status === 'CONCLUIDO') return (
+  if (status === 'CONCLUIDO' || status === 'FINALIZADO' || status === 'EXECUTADO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-      <CheckCircle2 size={11} /> Concluído
+      <CheckCircle2 size={11} /> {status === 'FINALIZADO' ? 'Finalizado' : status === 'EXECUTADO' ? 'Executado' : 'Concluído'}
+    </span>
+  );
+  if (status === 'EM_ANDAMENTO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+      <Clock size={11} /> Em andamento
     </span>
   );
   if (status === 'CANCELADO') return (
@@ -175,18 +185,31 @@ function StatusBadge({ status }: { status: string }) {
 
 const STATUS_LABELS: Record<string, string> = {
   AGENDADO:        'Agendado',
+  EM_ANDAMENTO:    'Em andamento',
   CONCLUIDO:       'Concluído',
+  FINALIZADO:      'Finalizado',
+  EXECUTADO:       'Executado',
   CANCELADO:       'Cancelado',
   SEM_ATENDIMENTO: 'Sem atendimento',
 };
 
 // ── Tipo badge ────────────────────────────────────────────────────────────────
 const TIPO_LABELS: Record<string, string> = {
-  CONSULTA:    'Consulta',
-  VACINA:      'Vacina',
-  RETORNO:     'Retorno',
-  EXAME:       'Exame',
+  CONSULTA:     'Consulta',
+  VACINA:       'Vacina',
+  RETORNO:      'Retorno',
+  EXAME:        'Exame',
   PROCEDIMENTO: 'Procedimento',
+  PRESCRICAO:   'Prescrição',
+};
+
+const TIPO_COLORS: Record<string, string> = {
+  CONSULTA:     'bg-indigo-50 text-indigo-700',
+  RETORNO:      'bg-blue-50 text-blue-700',
+  VACINA:       'bg-emerald-50 text-emerald-700',
+  EXAME:        'bg-amber-50 text-amber-700',
+  PROCEDIMENTO: 'bg-purple-50 text-purple-700',
+  PRESCRICAO:   'bg-rose-50 text-rose-700',
 };
 
 // ── Colors ────────────────────────────────────────────────────────────────────
@@ -216,7 +239,10 @@ function SimpleSelect({
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+const TIPOS_AGENDAMENTO = new Set(['CONSULTA', 'PROCEDIMENTO']);
+
 export default function MapaAtendimento() {
+  const navigate = useNavigate();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
 
   const [resumo,        setResumo]        = useState<ResumoData | null>(null);
@@ -229,6 +255,33 @@ export default function MapaAtendimento() {
   const [activeHaras,   setActiveHaras]   = useState<number | null>(null);
   const [activeStatus,  setActiveStatus]  = useState<string | null>(null);
   const cronogramaRef = useRef<HTMLDivElement>(null);
+
+  // Modal de execução de prescrição
+  const [execModal,      setExecModal]      = useState<GrupoExecucao | null>(null);
+  const [loadingModal,   setLoadingModal]   = useState(false);
+
+  const isHoje = dataFiltro === localToday();
+
+  const abrirExecucaoPrescricao = async (item: CronogramaItem) => {
+    if (!item.grupoId) { toast.error('Prescrição sem grupo associado'); return; }
+    setLoadingModal(true);
+    try {
+      const res = await api.get('/clinica/prescricoes/grupos/execucao', {
+        params: { animalId: item.animal.id, data: dataFiltro },
+      });
+      const grupos: GrupoExecucao[] = res.data?.dados ?? [];
+      const grupo = grupos.find(g => g.id === item.grupoId);
+      if (grupo) {
+        setExecModal(grupo);
+      } else {
+        toast.error('Prescrição não disponível para execução neste dia');
+      }
+    } catch {
+      toast.error('Erro ao carregar prescrição');
+    } finally {
+      setLoadingModal(false);
+    }
+  };
 
   const carregar = useCallback(async () => {
     if (loadingPerms) return;
@@ -288,6 +341,14 @@ export default function MapaAtendimento() {
     if (tipoFiltro && item.procedimento !== tipoFiltro) return false;
     return true;
   });
+
+  const irParaAgendamento = (item: CronogramaItem) => {
+    if (item.status === 'EM_ANDAMENTO') {
+      navigate(`/clinica/evolucao/${item.animal.id}?agendamentoId=${item.id}`);
+    } else {
+      navigate(`/agendamentos?date=${dataFiltro}`);
+    }
+  };
 
   const scrollToCronograma = () => {
     setTimeout(() => cronogramaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
@@ -539,37 +600,61 @@ export default function MapaAtendimento() {
                   </td>
                 </tr>
               )}
-              {cronogramaFiltrado.map(item => (
-                <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{item.animal.nome}</div>
-                    {item.localizacao && <div className="text-xs text-gray-400">{item.localizacao.nome}</div>}
-                  </td>
-                  <td className="px-4 py-3">
-                    {item.status === 'SEM_ATENDIMENTO' ? (
-                      <span className="text-gray-300">—</span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">
-                        {TIPO_LABELS[item.procedimento] ?? item.procedimento}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 max-w-xs">
-                    <span className="line-clamp-2">{item.descricao}</span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                    {item.dataHora
-                      ? new Date(item.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-                      : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={item.status} />
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">
-                    {item.responsavel ?? <span className="text-gray-300">—</span>}
-                  </td>
-                </tr>
-              ))}
+              {cronogramaFiltrado.map(item => {
+                const isPrescricao = item.procedimento === 'PRESCRICAO' && item.grupoId;
+                const podeExecutarItem = isPrescricao && isHoje && item.status !== 'EXECUTADO';
+                const isAgendamentoClick = TIPOS_AGENDAMENTO.has(item.procedimento);
+                const isClickable = podeExecutarItem || isAgendamentoClick;
+                const handleRowClick = isAgendamentoClick
+                  ? () => irParaAgendamento(item)
+                  : podeExecutarItem ? () => abrirExecucaoPrescricao(item) : undefined;
+                return (
+                  <tr
+                    key={item.id}
+                    className={`hover:bg-gray-50 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
+                    onClick={handleRowClick}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{item.animal.nome}</div>
+                      {item.localizacao && <div className="text-xs text-gray-400">{item.localizacao.nome}</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.status === 'SEM_ATENDIMENTO' ? (
+                        <span className="text-gray-300">—</span>
+                      ) : (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${TIPO_COLORS[item.procedimento] ?? 'bg-gray-100 text-gray-600'}`}>
+                          {TIPO_LABELS[item.procedimento] ?? item.procedimento}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 max-w-xs">
+                      <span className="line-clamp-2">{item.descricao}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                      {item.dataHora
+                        ? new Date(item.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {podeExecutarItem ? (
+                        <button
+                          onClick={e => { e.stopPropagation(); abrirExecucaoPrescricao(item); }}
+                          disabled={loadingModal}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors disabled:opacity-60"
+                        >
+                          {loadingModal ? <Loader2 size={10} className="animate-spin" /> : <PlayCircle size={10} />}
+                          Executar
+                        </button>
+                      ) : (
+                        <StatusBadge status={item.status} />
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {item.responsavel ?? <span className="text-gray-300">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -587,33 +672,60 @@ export default function MapaAtendimento() {
               Nenhum atendimento encontrado.
             </div>
           )}
-          {cronogramaFiltrado.map(item => (
-            <div key={item.id} className="p-4 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="font-semibold text-gray-900">{item.animal.nome}</div>
-                  {item.localizacao && <div className="text-xs text-gray-400">{item.localizacao.nome}</div>}
+          {cronogramaFiltrado.map(item => {
+            const isPrescricao = item.procedimento === 'PRESCRICAO' && item.grupoId;
+            const podeExecutarItem = isPrescricao && isHoje && item.status !== 'EXECUTADO';
+            const isAgendamentoClick = TIPOS_AGENDAMENTO.has(item.procedimento);
+            return (
+              <div
+                key={item.id}
+                className={`p-4 space-y-2 ${isAgendamentoClick ? 'cursor-pointer' : ''}`}
+                onClick={isAgendamentoClick ? () => irParaAgendamento(item) : undefined}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-gray-900">{item.animal.nome}</div>
+                    {item.localizacao && <div className="text-xs text-gray-400">{item.localizacao.nome}</div>}
+                  </div>
+                  {podeExecutarItem ? (
+                    <button
+                      onClick={() => abrirExecucaoPrescricao(item)}
+                      disabled={loadingModal}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors disabled:opacity-60 flex-shrink-0"
+                    >
+                      {loadingModal ? <Loader2 size={10} className="animate-spin" /> : <PlayCircle size={10} />}
+                      Executar
+                    </button>
+                  ) : (
+                    <StatusBadge status={item.status} />
+                  )}
                 </div>
-                <StatusBadge status={item.status} />
-              </div>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                {item.status !== 'SEM_ATENDIMENTO' && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">
-                    {TIPO_LABELS[item.procedimento] ?? item.procedimento}
-                  </span>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  {item.status !== 'SEM_ATENDIMENTO' && (
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-medium ${TIPO_COLORS[item.procedimento] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {TIPO_LABELS[item.procedimento] ?? item.procedimento}
+                    </span>
+                  )}
+                  {item.dataHora && (
+                    <span>{new Date(item.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                  )}
+                </div>
+                <p className="text-sm text-gray-600">{item.descricao}</p>
+                {item.responsavel && (
+                  <p className="text-xs text-gray-400">Responsável: {item.responsavel}</p>
                 )}
-                {item.dataHora && (
-                  <span>{new Date(item.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                )}
               </div>
-              <p className="text-sm text-gray-600">{item.descricao}</p>
-              {item.responsavel && (
-                <p className="text-xs text-gray-400">Responsável: {item.responsavel}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
+      {execModal && (
+        <ModalExecucao
+          grupo={execModal}
+          soVisualizacao={!isHoje}
+          onClose={() => { setExecModal(null); carregar(); }}
+        />
+      )}
     </PageContainer>
   );
 }

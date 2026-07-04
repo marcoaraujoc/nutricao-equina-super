@@ -3,6 +3,7 @@
 
 const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 
 const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
 
@@ -177,20 +178,37 @@ const ExameClinicoController = {
         observacaoAtualizada = JSON.stringify(extra);
       }
 
-      const atualizado = await prisma.exameClinico.update({
-        where: { id: item.id },
-        data: {
-          ...(descricao       && { descricao: descricao.trim() }),
-          ...(status          && { status }),
-          ...(dataSolicitacao && { dataSolicitacao: new Date(dataSolicitacao) }),
-          ...(qtdAmostra != null && { qtdAmostra: Number(qtdAmostra) }),
-          observacao: observacaoAtualizada,
-        },
-        include: INCLUDE,
+      const descricaoTrim  = descricao ? descricao.trim() : undefined;
+      const descricaoMudou = descricaoTrim !== undefined && descricaoTrim !== item.descricao;
+
+      const atualizado = await prisma.$transaction(async (tx) => {
+        // Exame já faturado (CONCLUIDO) e descrição mudou → sincroniza o FaturaItem vinculado.
+        // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
+        if (descricaoMudou && item.status === 'CONCLUIDO') {
+          const exNum = `EX-${String(item.numero).padStart(4, '0')}`;
+          await atualizarFaturaItensDaOrigem(tx, 'exameClinicoId', item.id, {
+            descricao: `[${exNum}] ${item.tipo}: ${descricaoTrim}`,
+          });
+        }
+
+        return tx.exameClinico.update({
+          where: { id: item.id },
+          data: {
+            ...(descricaoTrim !== undefined && { descricao: descricaoTrim }),
+            ...(status          && { status }),
+            ...(dataSolicitacao && { dataSolicitacao: new Date(dataSolicitacao) }),
+            ...(qtdAmostra != null && { qtdAmostra: Number(qtdAmostra) }),
+            observacao: observacaoAtualizada,
+          },
+          include: INCLUDE,
+        });
       });
 
       res.json({ dados: atualizado });
     } catch (err) {
+      if (err.code === 'FATURA_PAGA') {
+        return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+      }
       console.error('Erro ao atualizar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao atualizar exame' });
     }
@@ -225,6 +243,33 @@ const ExameClinicoController = {
       });
 
       res.json({ dados: atualizado });
+
+      // Lança na fatura com valor zerado — exame clínico não tem preço automático no sistema
+      setImmediate(async () => {
+        try {
+          const animal = await prisma.animal.findUnique({
+            where:  { id: item.animalId },
+            select: { userId: true },
+          });
+          if (animal?.userId) {
+            const exNum     = `EX-${String(item.numero).padStart(4, '0')}`;
+            const descricao = `[${exNum}] ${item.tipo}: ${item.descricao}`;
+            await prisma.$transaction(async (tx) => {
+              const fatura = await getOrCreateFatura(tx, animal.userId);
+              await adicionarFaturaItem(tx, {
+                faturaId:      fatura.id,
+                animalId:      item.animalId,
+                tipo:          'EXAME',
+                descricao,
+                valor:         0,
+                quantidade:    1,
+                veterinarioId: item.veterinarioId,
+                exameClinicoId: item.id,
+              });
+            });
+          }
+        } catch { /* silencioso — fatura não bloqueia a finalização */ }
+      });
     } catch (err) {
       console.error('Erro ao finalizar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao finalizar exame' });
@@ -248,9 +293,20 @@ const ExameClinicoController = {
         return res.status(403).json({ error: 'Você só pode excluir exames criados por você.' });
       }
 
-      await prisma.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
+      await prisma.$transaction(async (tx) => {
+        // Exame já faturado (CONCLUIDO) → remove o FaturaItem vinculado.
+        // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
+        if (item.status === 'CONCLUIDO') {
+          await removerFaturaItensDaOrigem(tx, 'exameClinicoId', item.id);
+        }
+        await tx.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
+      });
+
       res.json({ dados: { id: item.id, excluido: true } });
     } catch (err) {
+      if (err.code === 'FATURA_PAGA') {
+        return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+      }
       console.error('Erro ao excluir exame clínico:', err);
       res.status(500).json({ error: 'Erro ao excluir exame' });
     }

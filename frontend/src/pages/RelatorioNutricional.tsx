@@ -176,7 +176,7 @@ const formatarValor = (valor: number | string | null): string => {
   if (valor === null || valor === undefined) return '—';
   const num = typeof valor === 'number' ? valor : parseFloat(String(valor));
   if (isNaN(num)) return String(valor);
-  return num.toFixed(1);
+  return num.toFixed(3);
 };
 
 // ─── Componente ───────────────────────────────────────────────────────────────
@@ -347,10 +347,10 @@ const RelatorioNutricional = () => {
       <tr>
         <td>${item.nutriente}</td>
         <td>${item.unidade}</td>
-        <td>${typeof item.Total_Dieta === 'number' ? item.Total_Dieta.toFixed(1) : '—'}</td>
+        <td>${typeof item.Total_Dieta === 'number' ? item.Total_Dieta.toFixed(3) : '—'}</td>
         <td>${item.Exigido_NRC ?? '—'}</td>
-        <td>${typeof item.Saldo === 'number' ? item.Saldo.toFixed(1) : '—'}</td>
-        <td>${item.Percentual_Atendido != null ? Number(item.Percentual_Atendido).toFixed(1) + '%' : '—'}</td>
+        <td>${typeof item.Saldo === 'number' ? item.Saldo.toFixed(3) : '—'}</td>
+        <td>${item.Percentual_Atendido != null ? Number(item.Percentual_Atendido).toFixed(3) + '%' : '—'}</td>
         <td>${item.status_nutricional}</td>
       </tr>`).join('');
     const iframe = document.createElement('iframe');
@@ -651,7 +651,7 @@ const RelatorioNutricional = () => {
                         </td>
                         <td className="px-4 py-2 text-right text-gray-700">
                           {item.Percentual_Atendido !== null
-                            ? `${(item.Percentual_Atendido as number).toFixed(1)}%`
+                            ? `${(item.Percentual_Atendido as number).toFixed(3)}%`
                             : '—'}
                         </td>
                         <td className="px-4 py-2 text-center">

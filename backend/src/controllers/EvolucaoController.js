@@ -5,6 +5,16 @@ const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { formatAtendimentoNum }  = require('../lib/faturaUtils');
+const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
+const { PROMPTS }               = require('../ai/prompts');
+const { extrairResumoAtendimento } = require('../services/laudoEquinoExtracao.service');
+const { pintarLaudoEquino }         = require('../models/anatomia-equina/pintarLaudoEquino');
+const { carregarBaseInnerEquino }   = require('../models/anatomia-equina/equinoBaseLoader');
+
+// Versão do prompt de extração — usada para invalidar o cache de resumoIaData
+// quando o prompt evoluir (ver ai/prompts/index.js#extrair_resultado_sessao_equino).
+const RESUMO_IA_PROMPT_KEY = 'extrair_resultado_sessao_equino';
+const RESUMO_IA_VERSAO_ATUAL = `${RESUMO_IA_PROMPT_KEY}@${PROMPTS[RESUMO_IA_PROMPT_KEY].version}`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INCLUDE PADRÃO — retorna veterinário, modificador e mídias
@@ -202,7 +212,8 @@ const EvolucaoController = {
         let agendamentoIdFinal = null;
 
         if (agendamentoId) {
-          // Vinculado a agendamento: herda numero do agendamento e marca como CONCLUIDO
+          // Vinculado a agendamento: herda numero do agendamento e marca como EM_ANDAMENTO
+          // (só vira FINALIZADO quando a evolução for finalizada — ver EvolucaoController.atualizar)
           const agendamento = await tx.agendamentoClinico.findFirst({
             where: { id: Number(agendamentoId), animalId: Number(animalId), ativo: true },
             select: { id: true, numero: true, status: true },
@@ -211,7 +222,7 @@ const EvolucaoController = {
             throw Object.assign(new Error('Agendamento não encontrado para este animal'), { statusCode: 404, code: 'AGENDAMENTO_NOT_FOUND' });
           }
           if (agendamento.status !== 'AGENDADO') {
-            throw Object.assign(new Error('Agendamento já foi concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
+            throw Object.assign(new Error('Agendamento já foi iniciado, concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
           }
           numero = agendamento.numero;
           tipoAtendimento = 'AG';
@@ -219,7 +230,7 @@ const EvolucaoController = {
 
           await tx.agendamentoClinico.update({
             where: { id: agendamento.id },
-            data:  { status: 'CONCLUIDO' },
+            data:  { status: 'EM_ANDAMENTO' },
           });
         } else {
           // Autônomo: sequência EV por animal
@@ -325,21 +336,35 @@ const EvolucaoController = {
       // veterinarioId só muda quando o status muda (quem finaliza/cancela = responsável)
       const statusMudou   = status && status !== existente.status;
       const novoVetId     = statusMudou ? userId : existente.veterinarioId;
+      const vaiFinalizar  = status === 'FINALIZADA' && existente.status !== 'FINALIZADA';
 
-      const atualizada = await prisma.evolucaoClinica.update({
-        where: { id: Number(id) },
-        data: {
-          especialidade:   especialidade ?? existente.especialidade,
-          texto:           texto?.trim() ?? existente.texto,
-          status:          status        ?? existente.status,
-          veterinarioId:   novoVetId,
-          modificadoPorId: userId,
-          dataModificacao: new Date(),
-          dataFim: (status === 'FINALIZADA' && !existente.dataFim)
-            ? new Date()
-            : existente.dataFim,
-        },
-        include: INCLUDE_PADRAO,
+      const atualizada = await prisma.$transaction(async (tx) => {
+        const upd = await tx.evolucaoClinica.update({
+          where: { id: Number(id) },
+          data: {
+            especialidade:   especialidade ?? existente.especialidade,
+            texto:           texto?.trim() ?? existente.texto,
+            status:          status        ?? existente.status,
+            veterinarioId:   novoVetId,
+            modificadoPorId: userId,
+            dataModificacao: new Date(),
+            dataFim: (status === 'FINALIZADA' && !existente.dataFim)
+              ? new Date()
+              : existente.dataFim,
+          },
+          include: INCLUDE_PADRAO,
+        });
+
+        // Evolução vinculada a um agendamento (AG-XXXX): ao finalizar, o agendamento
+        // sai de EM_ANDAMENTO para FINALIZADO (distinto do CONCLUIDO manual, sem evolução).
+        if (vaiFinalizar && existente.agendamentoId) {
+          await tx.agendamentoClinico.updateMany({
+            where: { id: existente.agendamentoId, status: 'EM_ANDAMENTO' },
+            data:  { status: 'FINALIZADO' },
+          });
+        }
+
+        return upd;
       });
 
       await registrarAuditoria(
@@ -395,14 +420,24 @@ const EvolucaoController = {
         });
       }
 
-      await prisma.evolucaoClinica.update({
-        where: { id: Number(id) },
-        data: {
-          ativo:                 false,
-          justificativaExclusao: justificativa.trim(),
-          modificadoPorId:       userId,
-          dataModificacao:       new Date(),
-        },
+      await prisma.$transaction(async (tx) => {
+        await tx.evolucaoClinica.update({
+          where: { id: Number(id) },
+          data: {
+            ativo:                 false,
+            justificativaExclusao: justificativa.trim(),
+            modificadoPorId:       userId,
+            dataModificacao:       new Date(),
+          },
+        });
+
+        // Mesma regra de cancelar(): excluir a evolução libera o agendamento vinculado.
+        if (existente.agendamentoId) {
+          await tx.agendamentoClinico.updateMany({
+            where: { id: existente.agendamentoId, status: { in: ['EM_ANDAMENTO', 'FINALIZADO'] } },
+            data:  { status: 'AGENDADO' },
+          });
+        }
       });
 
       await registrarAuditoria(
@@ -449,16 +484,30 @@ const EvolucaoController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está cancelada' });
       }
 
-      const cancelada = await prisma.evolucaoClinica.update({
-        where: { id: Number(id) },
-        data: {
-          status:                'CANCELADA',
-          veterinarioId:         userId,
-          modificadoPorId:       userId,
-          dataModificacao:       new Date(),
-          justificativaExclusao: justificativa.trim(),
-        },
-        include: INCLUDE_PADRAO,
+      const cancelada = await prisma.$transaction(async (tx) => {
+        const upd = await tx.evolucaoClinica.update({
+          where: { id: Number(id) },
+          data: {
+            status:                'CANCELADA',
+            veterinarioId:         userId,
+            modificadoPorId:       userId,
+            dataModificacao:       new Date(),
+            justificativaExclusao: justificativa.trim(),
+          },
+          include: INCLUDE_PADRAO,
+        });
+
+        // Evolução vinculada a um agendamento: cancelar libera o agendamento de volta
+        // para AGENDADO (permite iniciar de novo), em vez de deixá-lo preso em
+        // EM_ANDAMENTO/FINALIZADO sem nenhuma evolução ativa por trás.
+        if (existente.agendamentoId) {
+          await tx.agendamentoClinico.updateMany({
+            where: { id: existente.agendamentoId, status: { in: ['EM_ANDAMENTO', 'FINALIZADO'] } },
+            data:  { status: 'AGENDADO' },
+          });
+        }
+
+        return upd;
       });
 
       await registrarAuditoria(
@@ -725,11 +774,146 @@ const EvolucaoController = {
     }
   },
 
+  // ── Relatório comparativo de atendimento (body-map + scores vs. sessão anterior) ──
+  // GET /clinica/evolucoes/:id/relatorio-atendimento
+
+  relatorioAtendimento: async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+      const atual = await prisma.evolucaoClinica.findUnique({
+        where: { id: Number(id) },
+        include: {
+          ...INCLUDE_PADRAO,
+          animal: {
+            select: {
+              id: true, nome: true, dataNascimento: true, idadeAnos: true, peso: true,
+              sexo: true, tipoExercicio: true, photoUrl: true,
+              especie: { select: { nome: true } },
+              raca:    { select: { nome: true } },
+              user:    { select: { id: true, fullName: true } },
+            },
+          },
+        },
+      });
+
+      if (!atual || !atual.ativo) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      const acesso = await verificarAcessoAnimal({ animalId: atual.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Evolução imediatamente anterior do animal, INDEPENDENTE da especialidade —
+      // o comparativo é sempre contra o último atendimento registrado, mesmo que
+      // tenha sido de outra especialidade (a tag do relatório informa qual foi).
+      const anterior = await prisma.evolucaoClinica.findFirst({
+        where: {
+          animalId:   atual.animalId,
+          ativo:      true,
+          id:         { not: atual.id },
+          dataInicio: { lt: atual.dataInicio },
+        },
+        orderBy: { dataInicio: 'desc' },
+        include: INCLUDE_PADRAO,
+      });
+
+      const [resumoAtual, resumoAnterior] = await Promise.all([
+        garantirResumoIa(atual, userId),
+        anterior ? garantirResumoIa(anterior, userId) : Promise.resolve(null),
+      ]);
+
+      const baseInner = carregarBaseInnerEquino();
+      const svgAtual = pintarLaudoEquino({
+        registros: resumoAtual.registros,
+        baseInner,
+        titulo:    atual.titulo || `Evolução ${formatAtendimentoNum(atual.tipoAtendimento, atual.numero)}`,
+        completo:  resumoAtual.completo,
+      });
+      const svgAnterior = anterior
+        ? pintarLaudoEquino({
+            registros: resumoAnterior.registros,
+            baseInner,
+            titulo:    anterior.titulo || `Evolução ${formatAtendimentoNum(anterior.tipoAtendimento, anterior.numero)}`,
+            completo:  resumoAnterior.completo,
+          })
+        : null;
+
+      const logoUrl = await resolverLogoPorAnimal(atual.animalId);
+
+      res.json({
+        sucesso: true,
+        dados: {
+          animal:  atual.animal,
+          logoUrl,
+          atual: {
+            id:                atual.id,
+            especialidade:     atual.especialidade,
+            titulo:            atual.titulo,
+            texto:             atual.texto,
+            dataInicio:        atual.dataInicio,
+            veterinario:       atual.veterinario,
+            atendimentoNumero: formatAtendimentoNum(atual.tipoAtendimento, atual.numero),
+            resumoClinico:     resumoAtual.resumoClinico ?? null,
+            avisos:            resumoAtual.avisos ?? [],
+            completo:          resumoAtual.completo,
+            svgColuna:         svgAtual,
+          },
+          anterior: anterior ? {
+            id:                anterior.id,
+            especialidade:     anterior.especialidade,
+            titulo:            anterior.titulo,
+            dataInicio:        anterior.dataInicio,
+            atendimentoNumero: formatAtendimentoNum(anterior.tipoAtendimento, anterior.numero),
+            resumoClinico:     resumoAnterior.resumoClinico ?? null,
+            svgColuna:         svgAnterior,
+          } : null,
+        },
+      });
+    } catch (error) {
+      console.error('Erro ao gerar relatório de atendimento:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS PRIVADOS
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Retorna o ResumoAtendimento cacheado em `resumoIaData` se ainda válido para a
+ * versão atual do prompt; caso contrário, extrai via IA e persiste o cache.
+ * Nunca lança — extrairResumoAtendimento já degrada graciosamente.
+ */
+async function garantirResumoIa(evolucao, userId) {
+  if (evolucao.resumoIaData && evolucao.resumoIaVersao === RESUMO_IA_VERSAO_ATUAL) {
+    return evolucao.resumoIaData;
+  }
+
+  const resultado = await extrairResumoAtendimento({
+    texto:    evolucao.texto,
+    userId,
+    animalId: evolucao.animalId,
+  });
+
+  try {
+    await prisma.evolucaoClinica.update({
+      where: { id: evolucao.id },
+      data: {
+        resumoIaData:   resultado,
+        resumoIaVersao: resultado.meta?.promptVersao ?? RESUMO_IA_VERSAO_ATUAL,
+      },
+    });
+  } catch (err) {
+    console.error('[EvolucaoController.garantirResumoIa] falha ao cachear resumoIaData:', err);
+  }
+
+  return resultado;
+}
 
 function derivarTipo(mimetype = '') {
   if (mimetype.startsWith('image/')) return 'IMAGEM';

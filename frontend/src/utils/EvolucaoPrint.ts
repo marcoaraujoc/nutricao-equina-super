@@ -1,12 +1,15 @@
 // frontend/src/utils/EvolucaoPrint.ts
 // Utilitário de impressão para Evolução Clínica — segue o padrão de Dietaprint.ts
 
+import { resolverUrlAbsoluta } from './printUrl';
+
 export interface PrintAnimal {
   nome:      string;
   photoUrl?: string | null;
   raca?:     { nome: string } | null;
   user?:     { fullName: string } | null;
   idadeAnos?: number | null;
+  logoUrl?:  string | null;
 }
 
 export interface PrintEvolucaoMidia {
@@ -84,6 +87,7 @@ export function gerarHtmlEvolucao(
   const statusLabel = STATUS_LABEL[ev.status] ?? ev.status;
   const statusColor = STATUS_COLOR[ev.status] ?? '#6b7280';
   const statusBg    = STATUS_BG[ev.status]    ?? '#f3f4f6';
+  const logoUrl     = resolverUrlAbsoluta(animal?.logoUrl);
 
   const animalSection = animal ? `
     <div class="card">
@@ -153,6 +157,7 @@ export function gerarHtmlEvolucao(
     /* Header */
     .header { border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 18px; }
     .header h1 { font-size: 20px; font-weight: 700; color: #059669; }
+    .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
     .header .subtitle { font-size: 11px; color: #6b7280; margin-top: 2px; }
     .header .emissao { font-size: 10px; color: #9ca3af; margin-top: 4px; }
 
@@ -213,7 +218,7 @@ export function gerarHtmlEvolucao(
 <body>
 
   <div class="header">
-    <h1>S2Vet</h1>
+    ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
     <p class="subtitle">Sistema Hospitalar Veterinário · Módulo Clínico</p>
     <p class="emissao">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
   </div>
