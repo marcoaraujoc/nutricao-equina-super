@@ -14,9 +14,9 @@
 // servidor (pode levar alguns segundos); chamadas seguintes usam o cache
 // (`EvolucaoClinica.resumoIaData`) e respondem quase instantaneamente.
 import api from '../services/api';
+import { resolverUrlAbsoluta } from './printUrl';
 import {
   PRINT_CSS,
-  renderSysHeader,
   renderAnimalCard,
   type PrintAnimal,
 } from './AtendimentoPrint';
@@ -147,6 +147,8 @@ const TREINO_LED: Record<TreinoItem['status'], string> = { liberado: 'g', restri
 
 export function renderCabecalhoAtendimento(dados: RelatorioAtendimentoDados): string {
   const { animal, atual, logoUrl } = dados;
+  const logo  = resolverUrlAbsoluta(logoUrl);
+  const agora = new Date();
   const printAnimal: PrintAnimal = {
     nome:      animal.nome,
     photoUrl:  animal.photoUrl,
@@ -156,13 +158,17 @@ export function renderCabecalhoAtendimento(dados: RelatorioAtendimentoDados): st
   };
 
   return `
-  ${renderSysHeader(logoUrl, `Relatório de Evolução · ${atual.especialidade}`)}
+  <div class="cab">
+    <div>${logo ? `<img src="${logo}" alt="Logo">` : `<div class="cab-marca">S2Vet</div>`}</div>
+    <div class="cab-emissao">Emitido em ${agora.toLocaleDateString('pt-BR')}<br>às ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
+  </div>
 
   <div class="sec-title">Dados do Animal</div>
   ${renderAnimalCard(printAnimal)}
 
   <div class="plan-row">
     <span class="plan-name">${esc(atual.atendimentoNumero) || 'Evolução'}</span>
+    <span class="badge">${esc(atual.especialidade)}</span>
     <span class="badge">${fmtData(atual.dataInicio)}</span>
     <span class="badge">Vet.: ${esc(atual.veterinario.fullName)}</span>
   </div>`;
@@ -212,28 +218,45 @@ export function imprimirHtml(html: string): void {
 // ─── CSS específico do relatório (complementa o PRINT_CSS padrão) ────────────
 
 const RELATORIO_CSS = `
-  .rep-card{ background:#fff; border:0.5pt solid #e5e7eb; border-radius:8pt; padding:10pt 12pt; margin-bottom:12pt; page-break-inside:avoid; }
+  /* Aproveita a folha A4 inteira: margens de página justas e sem padding duplo */
+  @page { size: A4; margin: 10mm 12mm; }
+  body { padding: 10px 12px; }
+
+  /* Cabeçalho: logo da equipe à esquerda, emissão à direita */
+  .cab{ display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:8pt; margin-bottom:10pt; }
+  .cab img{ max-height:36pt; max-width:220pt; object-fit:contain; }
+  .cab-marca{ font-size:20pt; font-weight:700; color:#059669; }
+  .cab-emissao{ font-size:8.5pt; color:#0e9f6e; text-align:right; line-height:1.7; }
+
+  .rep-card{ background:#fff; border:0.5pt solid #e5e7eb; border-radius:10pt; padding:9pt 11pt; margin-bottom:9pt; page-break-inside:avoid; }
   .rep-sub{ font-size:8.5pt; color:#6b7280; line-height:1.5; margin-bottom:6pt; }
 
-  .scores{ display:grid; grid-template-columns:repeat(4,1fr); gap:8pt; margin-bottom:4pt; }
-  .score{ background:#f9fafb; border:0.5pt solid #e5e7eb; border-radius:8pt; padding:8pt; }
-  .score .lbl{ font-size:7pt; font-weight:700; letter-spacing:0.5pt; text-transform:uppercase; color:#6b7280; min-height:16pt; }
+  /* Cartões de seção com título serifado (Amplitude / Treino / Tensão) */
+  .sec-card{ background:#fff; border:0.5pt solid #e5e7eb; border-radius:12pt; padding:12pt 14pt; margin-bottom:9pt; page-break-inside:avoid; }
+  .sec-card h2{ font-family:Georgia,'Times New Roman',serif; font-size:14pt; font-weight:700; color:#1f2937; margin-bottom:1pt; }
+  .sec-card .sub{ font-size:9pt; color:#0e9f6e; margin-bottom:8pt; }
+
+  .scores{ display:grid; grid-template-columns:repeat(4,1fr); gap:8pt; margin-bottom:9pt; }
+  .score{ background:#f3f4f6; border-radius:10pt; padding:8pt 10pt; }
+  .score .lbl{ font-size:7pt; font-weight:800; letter-spacing:0.5pt; text-transform:uppercase; color:#9ca3af; min-height:16pt; }
   .score .vals{ display:flex; align-items:baseline; gap:5pt; margin-top:3pt; }
   .score .was{ font-size:10pt; font-weight:600; color:#9ca3af; text-decoration:line-through; }
-  .score .now{ font-size:15pt; font-weight:700; color:#065f46; }
+  .score .now{ font-size:15pt; font-weight:800; color:#065f46; }
   .score .arrow{ font-size:9pt; color:#059669; font-weight:700; }
   .score .delta{ margin-top:2pt; font-size:7.5pt; font-weight:700; color:#059669; }
   .score .delta.warn{ color:#d97706; }
 
+  /* Mapa corporal: faixa larga de sessão em cima de cada coluna */
   .maps{ display:grid; grid-template-columns:1fr 1fr; gap:8pt; }
   .maps.unica{ grid-template-columns:1fr; }
   .map-col{ text-align:center; }
-  .map-col .tag{ display:inline-block; font-size:7.5pt; font-weight:700; letter-spacing:0.5pt; text-transform:uppercase; border-radius:20pt; padding:2pt 8pt; margin-bottom:4pt; }
+  .map-col .tag{ display:block; width:100%; box-sizing:border-box; text-align:center; font-size:8pt; font-weight:800; letter-spacing:0.6pt; text-transform:uppercase; border-radius:8pt; padding:4pt 6pt; margin-bottom:5pt; }
   .tag.before{ background:#fee2e2; color:#dc2626; }
   .tag.after{ background:#d1fae5; color:#065f46; }
-  .map-col svg{ width:100%; height:auto; border:0.5pt solid #e5e7eb; border-radius:6pt; }
+  .map-col svg{ width:100%; height:auto; border:0.5pt solid #e5e7eb; border-radius:8pt; }
 
-  .row{ display:grid; grid-template-columns:110pt 1fr 26pt; align-items:center; gap:6pt; padding:4pt 0; border-bottom:0.3pt dashed #e5e7eb; }
+  /* Tensão muscular (barras) */
+  .row{ display:grid; grid-template-columns:110pt 1fr 26pt; align-items:center; gap:6pt; padding:4pt 0; border-bottom:0.8pt dashed #d1d5db; }
   .row:last-child{ border-bottom:none; }
   .row .name{ font-size:8.5pt; font-weight:700; }
   .track{ position:relative; height:10pt; background:#f3f4f6; border-radius:20pt; overflow:hidden; }
@@ -242,27 +265,30 @@ const RELATORIO_CSS = `
   .bar.s4{ background:#059669; }
   .bar.s4.mid{ background:#d97706; }
   .row .val{ font-size:8.5pt; font-weight:700; text-align:right; color:#065f46; }
-  .scale-note{ font-size:7.5pt; color:#6b7280; margin-top:6pt; }
+  .scale-note{ font-size:7.5pt; color:#9ca3af; margin-top:6pt; }
 
-  .rom{ display:grid; grid-template-columns:1fr 1fr; gap:6pt; }
-  .rom-item{ background:#f9fafb; border-radius:6pt; padding:7pt 9pt; }
-  .rom-item .t{ font-size:7pt; font-weight:700; text-transform:uppercase; letter-spacing:0.5pt; color:#6b7280; }
-  .rom-item .v{ font-size:9pt; font-weight:600; margin-top:2pt; line-height:1.4; }
-  .rom-item .v s{ color:#9ca3af; font-weight:500; }
-  .rom-item .v b{ color:#065f46; }
+  /* Amplitude de movimento: tiles 2 colunas — anterior riscado → atual em negrito */
+  .rom{ display:grid; grid-template-columns:1fr 1fr; gap:8pt; }
+  .rom-item{ background:#f3f4f6; border-radius:10pt; padding:9pt 11pt; }
+  .rom-item .t{ font-size:7.5pt; font-weight:800; text-transform:uppercase; letter-spacing:0.8pt; color:#9ca3af; margin-bottom:3pt; }
+  .rom-item .antes{ font-size:9.5pt; color:#9ca3af; text-decoration:line-through; font-weight:600; }
+  .rom-item .agora{ font-size:10pt; font-weight:800; color:#111827; margin-top:1pt; }
 
-  .light{ display:flex; gap:8pt; align-items:flex-start; padding:5pt 0; border-bottom:0.3pt dashed #e5e7eb; }
-  .light:last-child{ border-bottom:none; }
-  .light .led{ flex:none; width:8pt; height:8pt; border-radius:50%; margin-top:2pt; }
+  /* Orientações para o treino: LED colorido + separador tracejado */
+  .light{ display:flex; gap:9pt; align-items:flex-start; padding:7pt 0; border-bottom:0.8pt dashed #d1d5db; }
+  .light:last-child{ border-bottom:none; padding-bottom:2pt; }
+  .light .led{ flex:none; width:10pt; height:10pt; border-radius:50%; margin-top:2pt; }
   .led.g{ background:#059669; } .led.y{ background:#d97706; } .led.r{ background:#dc2626; }
-  .light .tx b{ font-size:9pt; display:block; }
-  .light .tx span{ font-size:8.5pt; color:#6b7280; line-height:1.4; display:block; margin-top:1pt; }
-  .quote{ background:#f9fafb; border-left:2pt solid #059669; border-radius:0 6pt 6pt 0; padding:8pt 10pt; font-size:9pt; line-height:1.5; color:#374151; margin-top:6pt; }
+  .light .tx b{ font-size:10.5pt; display:block; color:#111827; }
+  .light .tx span{ font-size:9pt; color:#4b5563; line-height:1.5; display:block; margin-top:1pt; }
 
-  .avisos-card{ background:#fffbeb; border:0.5pt solid #fde68a; border-radius:8pt; padding:10pt 12pt; margin-bottom:12pt; page-break-inside:avoid; }
+  /* Citação de fechamento */
+  .quote-card{ background:#ecfdf5; border-left:3pt solid #059669; border-radius:0 10pt 10pt 0; padding:10pt 12pt; margin-bottom:9pt; font-family:Georgia,'Times New Roman',serif; font-style:italic; font-size:10pt; color:#065f46; line-height:1.6; page-break-inside:avoid; }
+
+  .avisos-card{ background:#fffbeb; border:0.5pt solid #fde68a; border-radius:10pt; padding:10pt 12pt; margin-bottom:9pt; page-break-inside:avoid; }
   .avisos-title{ font-size:8pt; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:1pt; }
   .avisos-card ul{ margin:4pt 0 0 14pt; font-size:8.5pt; color:#92400e; line-height:1.6; }
-  .assinatura{ text-align:center; font-size:11pt; color:#065f46; margin-top:18pt; font-family:Georgia,serif; }
+  .assinatura{ text-align:center; font-size:11pt; color:#065f46; margin-top:14pt; font-family:Georgia,serif; }
 `;
 
 // ─── Blocos do relatório ──────────────────────────────────────────────────────
@@ -317,11 +343,10 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
   const mapaSection = `
   <div class="sec-title">Mapa Corporal</div>
   <div class="rep-card">
-    <p class="rep-sub">Terapias aplicadas, achados de exame e avaliações funcionais — a legenda de cores dentro de cada mapa identifica os métodos e achados daquela sessão.</p>
     <div class="maps ${anterior ? '' : 'unica'}">
       ${anterior ? `
       <div class="map-col">
-        <span class="tag before">Sessão anterior${anterior.especialidade && anterior.especialidade !== atual.especialidade ? ` · ${esc(anterior.especialidade)}` : ''} · ${fmtData(anterior.dataInicio)}</span>
+        <span class="tag before">Sessão anterior · ${fmtData(anterior.dataInicio)}</span>
         ${anterior.svgColuna ?? '<p class="rep-sub">Sem mapa disponível.</p>'}
       </div>` : ''}
       <div class="map-col">
@@ -333,9 +358,9 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
 
   // ── Tensão muscular por região ──
   const tensaoSection = rcAtual?.tensaoMuscular?.length ? `
-  <div class="sec-title">Tensão muscular por região</div>
-  <div class="rep-card">
-    <p class="rep-sub">Escala de tônus 0–3 · barra clara = sessão anterior, barra colorida = hoje.</p>
+  <div class="sec-card">
+    <h2>Tensão muscular por região</h2>
+    <p class="sub">Escala de tônus 0–3 · barra clara = sessão anterior, barra colorida = hoje.</p>
     ${rcAtual.tensaoMuscular.map((t) => {
       const anteriorItem = rcAnterior?.tensaoMuscular?.find((a) => a.regiao === t.regiao);
       const pctAtual = Math.min(100, (t.valor / 3) * 100);
@@ -354,34 +379,40 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
     <p class="scale-note">0 = tônus normal · 1 = leve · 2 = moderada · 3 = severa (contratura)</p>
   </div>` : '';
 
-  // ── ROM ──
+  // ── Amplitude de movimento — anterior riscado → atual em negrito ──
   const romSection = rcAtual?.rom?.length ? `
-  <div class="sec-title">Amplitude de movimento</div>
-  <div class="rep-card">
+  <div class="sec-card">
+    <h2>Amplitude de movimento</h2>
     <div class="rom">
       ${rcAtual.rom.map((r) => {
         const anteriorItem = rcAnterior?.rom?.find((a) => a.teste === r.teste);
         return `
         <div class="rom-item">
           <div class="t">${esc(r.teste)}</div>
-          <div class="v">${anteriorItem ? `<s>${esc(anteriorItem.resultado)}</s><br>→ ` : ''}<b>${esc(r.resultado)}</b></div>
+          ${anteriorItem ? `<div class="antes">${esc(anteriorItem.resultado)}</div>` : ''}
+          <div class="agora">→ ${esc(r.resultado)}</div>
         </div>`;
       }).join('')}
     </div>
   </div>` : '';
 
-  // ── Orientações de treino ──
+  // ── Orientações para o treino — LED colorido por status ──
   const treinoSection = rcAtual?.treino?.length ? `
-  <div class="sec-title">Orientações para o treino</div>
-  <div class="rep-card">
-    ${rcAtual.treino.map((t) => `
-    <div class="light">
-      <div class="led ${TREINO_LED[t.status]}"></div>
-      <div class="tx"><b>${esc(t.titulo)}</b><span>${esc(t.detalhe)}</span></div>
-    </div>`).join('')}
-    ${rcAtual.observacaoFechamento ? `<div class="quote">"${esc(rcAtual.observacaoFechamento)}"</div>` : ''}
-  </div>` : (rcAtual?.observacaoFechamento ? `
-  <div class="rep-card"><div class="quote">"${esc(rcAtual.observacaoFechamento)}"</div></div>` : '');
+  <div class="sec-card">
+    <h2>Orientações para o treino</h2>
+    <p class="sub">Válidas até a próxima sessão.</p>
+    <div>
+      ${rcAtual.treino.map((t) => `
+      <div class="light">
+        <div class="led ${TREINO_LED[t.status]}"></div>
+        <div class="tx"><b>${esc(t.titulo)}</b><span>${esc(t.detalhe)}</span></div>
+      </div>`).join('')}
+    </div>
+  </div>` : '';
+
+  // ── Observação de fechamento — citação em destaque ──
+  const quoteSection = rcAtual?.observacaoFechamento ? `
+  <div class="quote-card">“${esc(rcAtual.observacaoFechamento)}”</div>` : '';
 
   // ── Registro textual das sessões (o que foi encontrado em cada uma) ──
   const textosSection = `
@@ -400,10 +431,11 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
 ${renderCabecalhoAtendimento(dados)}
 ${scoresSection}
 ${mapaSection}
+${textosSection}
 ${tensaoSection}
 ${romSection}
 ${treinoSection}
-${textosSection}
+${quoteSection}
 ${renderRodapeAtendimento(dados)}
 </body>
 </html>`;

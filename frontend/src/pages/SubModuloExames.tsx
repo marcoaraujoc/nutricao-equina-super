@@ -460,6 +460,9 @@ export default function SubModuloExames({
   const [saving,      setSaving]      = useState(false);
   const [viewingEx,   setViewingEx]   = useState<ExameClinico | null>(null);
   const [confirmId,   setConfirmId]   = useState<number | null>(null);
+  // Visualização vinda do Histórico de Evolução Clínica: popula os campos do
+  // formulário da página em SOMENTE LEITURA (sem abrir popup).
+  const [exameVisualizando, setExameVisualizando] = useState<ExameClinico | null>(null);
 
   const [pendingGroups, setPendingGroups] = useState<PendingExamGroup[]>([]);
 
@@ -508,8 +511,8 @@ export default function SubModuloExames({
       .finally(() => setLoadingLabs(false));
   }, []);
 
-  // Restaura rascunho do localStorage ao montar
-  useEffect(() => {
+  // Restaura rascunho do localStorage (usado ao montar e ao fechar a visualização)
+  const restaurarRascunho = () => {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) return;
@@ -549,6 +552,10 @@ export default function SubModuloExames({
       // Libera os guards de cascata depois que todos os efeitos do render atual rodarem
       setTimeout(() => { isRestoringRef.current = false; }, 0);
     } catch { isRestoringRef.current = false; }
+  };
+
+  useEffect(() => {
+    restaurarRascunho();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -647,8 +654,9 @@ export default function SubModuloExames({
   }, [showImagemProcDrop]);
 
   // Persiste rascunho no localStorage sempre que o estado relevante mudar
+  // (pausado enquanto um exame está populado em visualização — não sobrescreve o rascunho)
   useEffect(() => {
-    if (isRestoringRef.current) return;
+    if (isRestoringRef.current || exameVisualizando) return;
     const draft = {
       mainTab, labId, outroLabNome, grupoId, grupoNome,
       selectedExams, dataSolicitacao, dataHoraColeta,
@@ -661,7 +669,7 @@ export default function SubModuloExames({
     selectedExams, dataSolicitacao, dataHoraColeta,
     tipoAmostra, qtdAmostra, indicacaoClinica, observacao,
     imagemGrupoId, imagemGrupoNome, pendingGroups,
-    DRAFT_KEY,
+    DRAFT_KEY, exameVisualizando,
   ]);
 
   // ── Loader ─────────────────────────────────────────────────────────────────
@@ -685,15 +693,62 @@ export default function SubModuloExames({
   useEffect(() => {
     if (!openItemId) return;
     api.get(`/clinica/exames/${openItemId}`)
-      .then(res => { if (res.data?.dados) setViewingEx(res.data.dados as ExameClinico); })
+      .then(res => { if (res.data?.dados) abrirVisualizacaoExame(res.data.dados as ExameClinico); })
       .catch(() => {})
       .finally(() => onViewConsumed?.());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openItemId]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const toggleExam = (name: string) =>
     setSelectedExams(prev => prev.includes(name) ? prev.filter(e => e !== name) : [...prev, name]);
+
+  // Popula os campos do formulário com um exame já registrado (somente leitura).
+  // Usa o mesmo guard de cascata do restore de rascunho para os efeitos de
+  // labId/mainTab não limparem os exames populados.
+  const viewTopRef = useRef<HTMLDivElement>(null);
+  const abrirVisualizacaoExame = (ex: ExameClinico) => {
+    const extra = parseExtra(ex.observacao);
+    const tipos: TipoExame[] = extra.grupos && extra.grupos.length > 0
+      ? [...new Set(extra.grupos.map(g => g.tipo))]
+      : [ex.tipo];
+    isRestoringRef.current = true;
+    setExameVisualizando(ex);
+    setMainTab(tipos.length === 1 && tipos[0] === 'Imagem' ? 'imagem' : 'laboratorial');
+    if (extra.laboratorio) {
+      const lab = labs.find(l => l.nome === extra.laboratorio);
+      if (lab) { setLabId(lab.id); setOutroLabNome(''); }
+      else     { setLabId(OUTROS_ID); setOutroLabNome(extra.laboratorio); }
+    } else {
+      setLabId(null); setOutroLabNome('');
+    }
+    setSelectedExams(ex.descricao.split(',').map(s => s.trim()).filter(Boolean));
+    setDataSolicitacao(ex.dataSolicitacao.slice(0, 10));
+    if (extra.dataHoraColeta) setDataHoraColeta(extra.dataHoraColeta);
+    setTipoAmostra(extra.tipoAmostra ?? '');
+    setQtdAmostra(ex.qtdAmostra ?? 1);
+    setIndicacaoClinica(extra.indicacaoClinica ?? '');
+    setObservacao(extra.obs ?? '');
+    setTimeout(() => { isRestoringRef.current = false; }, 0);
+    setTimeout(() => viewTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
+
+  // Fecha a visualização: limpa os campos e devolve o rascunho do usuário (se havia).
+  const fecharVisualizacaoExame = () => {
+    setExameVisualizando(null);
+    isRestoringRef.current = true;
+    setMainTab('laboratorial');
+    setLabId(null); setOutroLabNome('');
+    setGrupoId(null); setGrupoNome(''); setExamesCat([]);
+    setImagemGrupoId(null); setImagemGrupoNome('');
+    setSelectedExams([]); setCustomExamText(''); setShowCustomInput(false);
+    setDataSolicitacao(hoje());
+    setDataHoraColeta(new Date().toISOString().slice(0, 16));
+    setTipoAmostra(''); setQtdAmostra(1); setIndicacaoClinica(''); setObservacao('');
+    setTimeout(() => { isRestoringRef.current = false; }, 0);
+    restaurarRascunho();
+  };
 
   const addCustomExam = () => {
     const trimmed = customExamText.trim();
@@ -921,9 +976,24 @@ export default function SubModuloExames({
   return (
     <>
       {/* ── Formulário ────────────────────────────────────────────────────── */}
-      {podeCriar && (
+      <div ref={viewTopRef} />
+      {(podeCriar || exameVisualizando) && (
         <div className="border-b border-gray-100">
-          {!evolucaoId ? (
+          {exameVisualizando && (
+            <div className="flex items-center justify-between px-4 pt-3">
+              <div className="flex items-center gap-1.5">
+                <Eye size={12} className="text-gray-400" />
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Exame {fmtNumero(exameVisualizando.numero)} — somente leitura
+                </p>
+              </div>
+              <button onClick={fecharVisualizacaoExame} title="Fechar visualização"
+                className="p-1 text-gray-400 hover:text-gray-600 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {!evolucaoId && !exameVisualizando ? (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4">
               <FileText size={28} className="mb-2 text-gray-200" />
               <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
@@ -932,7 +1002,7 @@ export default function SubModuloExames({
               </p>
             </div>
           ) : (
-            <div className="p-4 space-y-4">
+            <fieldset disabled={!!exameVisualizando} className="p-4 space-y-4 border-0 m-0 min-w-0">
 
                 {/* Main tabs */}
                 <div className="flex flex-wrap gap-2">
@@ -1541,7 +1611,7 @@ export default function SubModuloExames({
                   </div>
                 )}
 
-            </div>
+            </fieldset>
           )}
         </div>
       )}

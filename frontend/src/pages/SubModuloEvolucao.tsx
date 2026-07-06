@@ -11,7 +11,8 @@ import {
   Calendar, User, Filter, Search, Eye, Ban, Paperclip,
   Image, Film, Volume2, Lock, CheckSquare,
 } from 'lucide-react';
-import { imprimirRelatorioAtendimento } from '../utils/RelatorioAtendimento';
+import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../utils/RelatorioAtendimento';
+import RelatorioAtendimentoModal from '../components/RelatorioAtendimentoModal';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
 import ConfirmModal from '../components/ConfirmModal';
@@ -131,8 +132,9 @@ export interface AnimalInfo {
 
 const ESPECIALIDADES = [
   'Acupuntura', 'Cardiologia', 'Cirurgia', 'Clínico',
-  'Dermatologia', 'Diagnóstico por Imagem', 'Fisioterapia',
-  'Neurologia', 'Nutrição', 'Oftalmologia', 'Patologia', 'Quiropraxia',
+  'Dermatologia', 'Diagnóstico por Imagem', 'Ferrageamento', 'Fisioterapia',
+  'Neurologia', 'Nutrição', 'Odontologia', 'Oftalmologia', 'Patologia',
+  'Quiropraxia', 'Radiologia',
 ] as const;
 
 const STATUS_OPTIONS: { value: EvolucaoStatus; label: string }[] = [
@@ -167,6 +169,10 @@ const getTipoMidia = (mimeType: string): TipoMidia => {
 // ─── MidiaViewer ─────────────────────────────────────────────────────────────
 
 function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: () => void }) {
+  // Formato não suportado pelo navegador (ex: .ogg/Opus de nota de voz do
+  // WhatsApp no Safari/iOS) → mostra aviso + download em vez de player morto.
+  const [audioIncompativel, setAudioIncompativel] = useState(false);
+
   const icone = midia.tipo === 'IMAGEM' ? <Image size={14} className="text-blue-500" />
     : midia.tipo === 'VIDEO' ? <Film size={14} className="text-purple-500" />
     : <Volume2 size={14} className="text-emerald-500" />;
@@ -184,7 +190,21 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
           className="w-full rounded-xl border border-gray-100" style={{ maxHeight: 200 }} />
       )}
       {midia.tipo === 'AUDIO' && (
-        <audio src={midia.url} controls className="w-full" />
+        audioIncompativel ? (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertTriangle size={14} className="text-amber-600 flex-shrink-0" />
+            <span className="text-xs text-amber-800 flex-1">
+              Este navegador não reproduz o formato do áudio.
+            </span>
+            <a href={midia.url} download={midia.nome}
+              className="text-xs font-semibold text-amber-800 underline flex-shrink-0">
+              Baixar
+            </a>
+          </div>
+        ) : (
+          <audio src={midia.url} controls className="w-full"
+            onError={() => setAudioIncompativel(true)} />
+        )
       )}
       <div className="flex items-center gap-1.5">
         {icone}
@@ -401,7 +421,7 @@ function NovaEvolucaoModal({
   form, editingId, midias, saving, interpretando,
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
-  onArquivosChange, onRemoverMidia,
+  onArquivosChange, onRemoverMidia, somenteLeitura = false,
 }: {
   form:              FormEvolucao;
   editingId:         number | null;
@@ -417,6 +437,7 @@ function NovaEvolucaoModal({
   onClose:           () => void;
   onArquivosChange:  (files: File[]) => void;
   onRemoverMidia:    (id: number) => void;
+  somenteLeitura?:   boolean;
 }) {
   const [gravacaoAtiva,        setGravacaoAtiva]        = useState(false);
   const [transcrevendo,        setTranscrevendo]        = useState(false);
@@ -425,6 +446,8 @@ function NovaEvolucaoModal({
   const [showRecordAgain,      setShowRecordAgain]      = useState(false);
   const [mobile,               setMobile]               = useState(false);
   const [arquivosSelecionados, setArquivosSelecionados] = useState<File[]>([]);
+  // Áudios anexados aguardando resposta de "deseja transcrever?" (um por vez)
+  const [audiosPendentes,      setAudiosPendentes]      = useState<File[]>([]);
 
   const recognitionRef   = useRef<ISpeechRecognition | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -449,12 +472,18 @@ function NovaEvolucaoModal({
       onArquivosChange(atualizados);
       return atualizados;
     });
+    // Áudio anexado → pergunta se o usuário quer transcrever para o campo
+    // "Evolução clínica". O arquivo permanece anexado em qualquer resposta.
+    const audios = novos.filter(f => getTipoMidia(f.type) === 'AUDIO');
+    if (audios.length > 0) setAudiosPendentes(prev => [...prev, ...audios]);
   };
 
   const removerNovoArquivo = (idx: number) => {
     setArquivosSelecionados(prev => {
+      const removido   = prev[idx];
       const atualizados = prev.filter((_, i) => i !== idx);
       onArquivosChange(atualizados);
+      if (removido) setAudiosPendentes(p => p.filter(f => f !== removido));
       return atualizados;
     });
   };
@@ -486,11 +515,11 @@ function NovaEvolucaoModal({
     setTranscrevendo(true);
   };
 
-  const transcreverBlob = async (blob: Blob) => {
+  const transcreverBlob = async (blob: Blob, nomeArquivo = 'recording.webm', mostrarContinuar = true) => {
     try {
       if (estaOnline()) {
         const fd = new FormData();
-        fd.append('audio', blob, 'recording.webm');
+        fd.append('audio', blob, nomeArquivo);
         const res = await api.post('/clinica/evolucoes/transcrever', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
@@ -500,9 +529,19 @@ function NovaEvolucaoModal({
         const texto = await transcreverOffline(blob);
         onFormChange('texto', (textoRef.current + ' ' + texto).trim());
       }
-      setShowRecordAgain(true);
+      if (mostrarContinuar) setShowRecordAgain(true);
     } catch { toast.error(estaOnline() ? 'Erro ao transcrever' : 'Erro no Whisper offline'); }
     finally { setTranscrevendo(false); }
+  };
+
+  // Transcreve um áudio ANEXADO (após confirmação do usuário) — o texto vai
+  // para o campo "Evolução clínica" e o arquivo continua anexado normalmente.
+  const transcreverAudioAnexado = async () => {
+    const arquivo = audiosPendentes[0];
+    if (!arquivo) return;
+    setAudiosPendentes(prev => prev.slice(1));
+    setTranscrevendo(true);
+    await transcreverBlob(arquivo, arquivo.name, false);
   };
 
   const iniciarSpeechAPI = () => {
@@ -570,7 +609,15 @@ function NovaEvolucaoModal({
 
   return (
     <div className="border-b border-gray-100">
-      <div className="p-5 space-y-4">
+      {somenteLeitura && (
+        <div className="flex items-center gap-1.5 px-5 pt-4 -mb-2">
+          <Eye size={12} className="text-gray-400" />
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            Visualização — somente leitura
+          </p>
+        </div>
+      )}
+      <fieldset disabled={somenteLeitura} className="p-5 space-y-4 border-0 m-0 min-w-0">
 
           {!editingId && agendamentos.length > 0 && (
             <div>
@@ -730,25 +777,53 @@ function NovaEvolucaoModal({
                   onChange={e => adicionarArquivos(e.target.files)} />
               </label>
             )}
+
+            {audiosPendentes.length > 0 && !transcrevendo && (
+              <div className="mt-2 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl">
+                <p className="text-xs font-semibold text-blue-800 mb-2 flex items-center gap-1.5">
+                  <Volume2 size={13} className="flex-shrink-0" />
+                  Transcrever o áudio "{audiosPendentes[0].name}" para o campo Evolução clínica?
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={transcreverAudioAnexado}
+                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors">
+                    Sim, transcrever
+                  </button>
+                  <button onClick={() => setAudiosPendentes(prev => prev.slice(1))}
+                    className="flex-1 py-2 border border-blue-200 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-semibold transition-colors">
+                    Não, apenas anexar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
-        </div>
+        </fieldset>
 
       <div className="flex items-center justify-end gap-2 px-5 pb-5 pt-4 border-t border-gray-100">
-        <button onClick={onClose} disabled={desativado}
-          className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
-          Cancelar
-        </button>
-        <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-          className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
-          {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
-          Salvar
-        </button>
-        <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-          className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
-          {interpretando && <Loader2 size={13} className="animate-spin" />}
-          {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
-        </button>
+        {somenteLeitura ? (
+          <button onClick={onClose}
+            className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+            Fechar
+          </button>
+        ) : (
+          <>
+            <button onClick={onClose} disabled={desativado}
+              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
+              Cancelar
+            </button>
+            <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+              className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
+              {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
+              Salvar
+            </button>
+            <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+              {interpretando && <Loader2 size={13} className="animate-spin" />}
+              {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -768,9 +843,12 @@ interface Props {
   editItemId?:        number | null;
   onEditConsumed?:    () => void;
   agendamentoId?:     number;
+  /** Visualizar/Editar no Histórico de Evolução Clínica: pede ao shell para
+   *  carregar prescrição/exame/vacina do atendimento nas abas correspondentes. */
+  onAbrirAtendimento?: (evolucaoId: number, modo: 'visualizar' | 'editar') => void;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp, onAbrirAtendimento }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
@@ -806,6 +884,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [showModal,      setShowModal]      = useState(true);
   const [viewingEv,      setViewingEv]      = useState<EvolucaoItem | null>(null);
   const [editingEv,      setEditingEv]      = useState<EvolucaoItem | null>(null);
+  // Visualizar no Histórico de Evolução Clínica: popula os campos do formulário
+  // da página em SOMENTE LEITURA (sem abrir popup).
+  const [formLeitura,    setFormLeitura]    = useState(false);
   const [deletingEv,     setDeletingEv]     = useState<EvolucaoItem | null>(null);
   const [cancelandoEv,   setCancelandoEv]   = useState<EvolucaoItem | null>(null);
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
@@ -819,8 +900,15 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [savingFatura,   setSavingFatura]   = useState(false);
   const [arquivosModal,  setArquivosModal]  = useState<File[]>([]);
   const [imprimindoId,   setImprimindoId]   = useState<number | null>(null);
+  const [relatorioModal, setRelatorioModal] = useState<{ ev: EvolucaoItem; dados: RelatorioAtendimentoDados } | null>(null);
 
   const agendamentoPreSelecionado = useRef(false);
+
+  // Rola a página até o formulário quando ele é populado via Visualizar/Alterar
+  // (a tabela do histórico fica abaixo — sem isso o usuário não vê os campos).
+  const formTopRef = useRef<HTMLDivElement>(null);
+  const rolarParaFormulario = () =>
+    setTimeout(() => formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 
   const totalPaginas       = Math.ceil(total / limit);
   const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
@@ -905,6 +993,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setArquivosModal([]);
     setForm(FORM_INICIAL);
     setEditingEv(null);
+    setFormLeitura(false);
     setAgendamentoSelecionadoId(null);
     try {
       const res = await api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`);
@@ -920,20 +1009,34 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setForm(FORM_INICIAL);
     setArquivosModal([]);
     setAgendamentoSelecionadoId(null);
+    setFormLeitura(false);
   };
 
   const abrirEdicao = (ev: EvolucaoItem) => {
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
     setArquivosModal([]);
+    setFormLeitura(false);
     setShowModal(true);
+    rolarParaFormulario();
+  };
+
+  // Visualizar: mesmos campos populados, mas bloqueados para edição.
+  const abrirVisualizacao = (ev: EvolucaoItem) => {
+    setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
+    setEditingEv(ev);
+    setArquivosModal([]);
+    setFormLeitura(true);
+    setShowModal(true);
+    rolarParaFormulario();
   };
 
   // Vindo do botão "Editar" do Histórico do Paciente (AG-XXXX/EV-XXXX): abre
   // direto no formulário de edição, sem passar pela visualização.
   const editIdAplicado = useRef<number | null>(null);
   useEffect(() => {
-    if (!editItemId || editIdAplicado.current === editItemId) return;
+    if (!editItemId) { editIdAplicado.current = null; return; }
+    if (editIdAplicado.current === editItemId) return;
     editIdAplicado.current = editItemId;
     api.get(`/clinica/evolucoes/${editItemId}`)
       .then(res => {
@@ -1177,17 +1280,21 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     finally { setSavingFatura(false); }
   };
 
+  // Abre a pré-visualização do relatório (com opções Imprimir / Editar relatório).
+  // A extração por IA roda uma única vez e fica salva (resumoIaData) — abrir/
+  // imprimir de novo reutiliza o relatório salvo, sem gastar tokens.
   const handleImprimir = async (ev: EvolucaoItem) => {
     if (!podeImprimir) { semPermissao('imprimir evolução'); return; }
     if (imprimindoId) return; // já há uma geração de relatório em andamento
 
     setImprimindoId(ev.id);
     try {
-      await toast.promise(imprimirRelatorioAtendimento(ev.id), {
+      const dados = await toast.promise(buscarRelatorioAtendimento(ev.id), {
         loading: 'Gerando relatório comparativo…',
-        success: 'Relatório pronto para impressão.',
+        success: 'Relatório pronto.',
         error: 'Não foi possível gerar o relatório. Tente novamente.',
       });
+      setRelatorioModal({ ev, dados });
     } catch {
       // silencioso — toast.promise já notificou o erro
     } finally {
@@ -1296,6 +1403,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         )}
       </div>
 
+      <div ref={formTopRef} />
+
       {showModal && (!temEvolucaoAberta || editingEv) && (
         <NovaEvolucaoModal
           form={form}
@@ -1312,6 +1421,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           onClose={fecharModal}
           onArquivosChange={setArquivosModal}
           onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
+          somenteLeitura={formLeitura}
         />
       )}
 
@@ -1423,13 +1533,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           </button>
                         )}
 
-                        <button onClick={() => setViewingEv(ev)} title="Visualizar"
+                        <button
+                          onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
+                          title="Visualizar"
                           className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
                           <Eye size={14} />
                         </button>
 
                         {((emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA')) && (
-                          <button onClick={() => abrirEdicao(ev)} title="Alterar"
+                          <button
+                            onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
+                            title="Alterar"
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Pencil size={14} />
                           </button>
@@ -1520,6 +1634,24 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           saving={savingCancelamento}
         />
       )}
+
+      {relatorioModal && (() => {
+        const relEv = relatorioModal.ev;
+        const eProprioAutorRel     = relEv.veterinarioId === userId;
+        const podeEditarRelatorio  = isGestor || (podeEditar && (!isFornecedor || eProprioAutorRel));
+        const podeAlterarEvolucao  = (relEv.status === 'EM_ANDAMENTO' && podeEditarRelatorio)
+          || (isGestor && relEv.status === 'FINALIZADA');
+        return (
+          <RelatorioAtendimentoModal
+            dadosIniciais={relatorioModal.dados}
+            podeEditar={podeEditarRelatorio}
+            onClose={() => setRelatorioModal(null)}
+            onEditarEvolucao={podeAlterarEvolucao
+              ? () => { setRelatorioModal(null); abrirEdicao(relEv); }
+              : undefined}
+          />
+        );
+      })()}
 
       {showLLM && (
         <ConfirmacaoEncaminhamentoModal

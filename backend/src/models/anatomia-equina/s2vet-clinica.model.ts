@@ -17,6 +17,8 @@ import {
   type Locale,
 } from "./anatomia-equina.taxonomy";
 import { GRUPO_IDS } from "./anatomia-equina.grupos";
+import { PARTE_CASCO_IDS, MEMBROS_CASCO } from "../anatomia-casco/casco.model";
+import { PARTE_DENTE_IDS } from "../anatomia-dental/dental.model";
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * 1. ALVO ANATÔMICO — a abstração que unifica ponto, região, vértebra, grupo,
@@ -46,6 +48,16 @@ export const alvoAnatomicoSchema = z.discriminatedUnion("tipo", [
   }),
   // sistema sem localização pontual (ex.: "avaliação neurológica")
   z.object({ tipo: z.literal("sistema"), sistemaId: sistemaFuncionalSchema }),
+  // parte do CASCO (laudo de ferrageamento — pintado sobre casco.png);
+  // membro = qual casco: AE/AD/PE/PD (anterior/posterior + esquerdo/direito)
+  z.object({
+    tipo: z.literal("casco"),
+    parteId: z.enum(PARTE_CASCO_IDS),
+    membro: z.enum(MEMBROS_CASCO).optional(),
+  }),
+  // dente (laudo odontológico — pintado sobre odontologia.png);
+  // parteId = "d<quadrante>_<posição 2 dígitos>" (Triadan 208 → d2_08)
+  z.object({ tipo: z.literal("dente"), parteId: z.enum(PARTE_DENTE_IDS) }),
   // sem sítio anatômico (pontos de acupuntura, terapia sistêmica)
   z.object({ tipo: z.literal("nao_localizado"), descricao: z.string().min(1) }),
 ]);
@@ -73,6 +85,8 @@ export const MODALIDADES_TERAPIA = {
     nome: { "pt-BR": "Eletroacupuntura", "en-US": "Electroacupuncture", "es-ES": "Electroacupuntura" } },
   terapia_manual: { id: "terapia_manual", i18nKey: "terapia.terapia_manual", exigeLocal: true, cor: { fill: "129,140,248", stroke: "#4f46e5" },
     nome: { "pt-BR": "Terapia manual", "en-US": "Manual therapy", "es-ES": "Terapia manual" } },
+  procedimento: { id: "procedimento", i18nKey: "terapia.procedimento", exigeLocal: true, cor: { fill: "16,185,129", stroke: "#059669" },
+    nome: { "pt-BR": "Procedimento", "en-US": "Procedure", "es-ES": "Procedimiento" } },
 } as const satisfies Record<string, ModalidadeTerapiaDef>;
 
 export const MODALIDADE_IDS = Object.keys(MODALIDADES_TERAPIA) as [keyof typeof MODALIDADES_TERAPIA];
@@ -174,6 +188,7 @@ export const resultadoSessaoSchema = z.object({
 });
 export type ResultadoSessao = z.infer<typeof resultadoSessaoSchema>;
 
-/** Só os registros pintáveis (têm alvo concreto: parte ou grupo). */
+/** Só os registros pintáveis (têm alvo concreto: parte, grupo, casco ou dente). */
 export const ehPintavel = (r: RegistroClinico): boolean =>
-  r.alvo.tipo === "parte" || r.alvo.tipo === "grupo";
+  r.alvo.tipo === "parte" || r.alvo.tipo === "grupo" ||
+  r.alvo.tipo === "casco" || r.alvo.tipo === "dente";

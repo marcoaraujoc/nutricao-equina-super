@@ -1,15 +1,18 @@
 // src/controllers/EvolucaoController.js
 
 const prisma = require('../lib/prisma').default;
+const { Prisma } = require('@prisma/client');
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { formatAtendimentoNum }  = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
+const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 const { PROMPTS }               = require('../ai/prompts');
 const { extrairResumoAtendimento } = require('../services/laudoEquinoExtracao.service');
 const { pintarLaudoEquino }         = require('../models/anatomia-equina/pintarLaudoEquino');
 const { carregarBaseInnerEquino }   = require('../models/anatomia-equina/equinoBaseLoader');
+const { pintarLaudoCasco, pintarLaudoDental } = require('../models/pintarLaudoRaster');
 
 // Versão do prompt de extração — usada para invalidar o cache de resumoIaData
 // quando o prompt evoluir (ver ai/prompts/index.js#extrair_resultado_sessao_equino).
@@ -338,6 +341,10 @@ const EvolucaoController = {
       const novoVetId     = statusMudou ? userId : existente.veterinarioId;
       const vaiFinalizar  = status === 'FINALIZADA' && existente.status !== 'FINALIZADA';
 
+      // Texto alterado → o mapa corporal do relatório fica desatualizado:
+      // invalida o cache de extração IA para regenerar na próxima impressão.
+      const textoMudou = texto != null && texto.trim() !== existente.texto;
+
       const atualizada = await prisma.$transaction(async (tx) => {
         const upd = await tx.evolucaoClinica.update({
           where: { id: Number(id) },
@@ -351,6 +358,7 @@ const EvolucaoController = {
             dataFim: (status === 'FINALIZADA' && !existente.dataFim)
               ? new Date()
               : existente.dataFim,
+            ...(textoMudou ? { resumoIaData: Prisma.DbNull, resumoIaVersao: null } : {}),
           },
           include: INCLUDE_PADRAO,
         });
@@ -649,13 +657,35 @@ const EvolucaoController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
 
+      // Áudio em formato que o Safari/iOS não reproduz (Ogg/Opus/WebM — ex:
+      // nota de voz do WhatsApp) → converte para MP3 no upload, garantindo
+      // reprodução em qualquer navegador. Em falha do ffmpeg mantém o original.
+      let nomeArquivoFinal = file.filename;
+      let tamanhoFinal     = file.size;
+      let nomeExibicao     = file.originalname;
+      if (tipoFinal === 'AUDIO' && EXTS_INCOMPATIVEIS_SAFARI.has(path.extname(file.filename).toLowerCase())) {
+        const mp3Nome = `${path.basename(file.filename, path.extname(file.filename))}.mp3`;
+        const mp3Path = path.join(path.dirname(file.path), mp3Nome);
+        try {
+          await transcodeParaMp3(file.path, mp3Path);
+          fs.unlink(file.path, () => {});
+          nomeArquivoFinal = mp3Nome;
+          tamanhoFinal     = fs.statSync(mp3Path).size;
+          // Nome de exibição acompanha o formato real (evita parecer que segue .ogg)
+          const extOrig = path.extname(file.originalname);
+          nomeExibicao  = extOrig ? `${file.originalname.slice(0, -extOrig.length)}.mp3` : `${file.originalname}.mp3`;
+        } catch (convErr) {
+          console.error('Falha ao converter áudio para MP3 (mantendo original):', convErr.message);
+        }
+      }
+
       const midia = await prisma.evolucaoMidia.create({
         data: {
           evolucaoId: Number(id),
           tipo:       tipoFinal,
-          url:        `/uploads/evolucoes/${file.filename}`,
-          nome:       file.originalname,
-          tamanho:    file.size,
+          url:        `/uploads/evolucoes/${nomeArquivoFinal}`,
+          nome:       nomeExibicao,
+          tamanho:    tamanhoFinal,
         },
       });
 
@@ -730,12 +760,22 @@ const EvolucaoController = {
 
     const inicio = Date.now();
 
+    // O Groq Whisper valida a EXTENSÃO do nome do arquivo, mas o multer salva o
+    // temporário sem extensão (dest:). Renomeia com a extensão original
+    // (whitelist do Groq) antes de enviar — fallback .webm (gravações do app).
+    const GROQ_EXTS = new Set(['.flac', '.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.ogg', '.opus', '.wav', '.webm']);
+    const extOrig   = path.extname(req.file.originalname || '').toLowerCase();
+    const audioPath = `${req.file.path}${GROQ_EXTS.has(extOrig) ? extOrig : '.webm'}`;
+    try { fs.renameSync(req.file.path, audioPath); } catch {
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao preparar o áudio' });
+    }
+
     try {
       const Groq = require('groq-sdk');
       const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
       const transcription = await groq.audio.transcriptions.create({
-        file:     fs.createReadStream(req.file.path),
+        file:     fs.createReadStream(audioPath),
         model:    'whisper-large-v3',
         language: 'pt',
       });
@@ -743,7 +783,7 @@ const EvolucaoController = {
       const latencia = Date.now() - inicio;
       const texto    = transcription.text?.trim() ?? '';
 
-      try { fs.unlinkSync(req.file.path); } catch {}
+      try { fs.unlinkSync(audioPath); } catch {}
 
       try {
         await prisma.aiUsageLog.create({
@@ -766,11 +806,63 @@ const EvolucaoController = {
 
       res.json({ sucesso: true, dados: { texto } });
     } catch (error) {
-      if (req.file?.path) {
-        try { fs.unlinkSync(req.file.path); } catch {}
-      }
+      try { fs.unlinkSync(audioPath); } catch {}
       console.error('Erro ao transcrever áudio:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro na transcrição do áudio' });
+    }
+  },
+
+  // ── Edição do relatório pelo veterinário ──────────────────────────────────
+  // PUT /clinica/evolucoes/:id/resumo-ia — sobrescreve o resumo clínico do
+  // relatório (scores, treino, observação). A edição manual passa a ter
+  // precedência sobre a IA: nunca é sobrescrita por re-extração (nem por bump
+  // de versão do prompt). O mapa corporal (registros) NÃO é editável por aqui —
+  // ele é regenerado quando o TEXTO da evolução é alterado.
+
+  salvarResumoIa: async (req, res) => {
+    const { id }            = req.params;
+    const { resumoClinico } = req.body;
+    const userId            = req.user.id;
+
+    try {
+      const existente = await prisma.evolucaoClinica.findUnique({ where: { id: Number(id) } });
+      if (!existente || !existente.ativo) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Mesma regra de autoria do atualizar: GESTOR edita qualquer; demais só o próprio
+      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
+      if (!bypassGestor && Number(existente.veterinarioId) !== Number(userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode editar relatórios de evoluções criadas por você.' });
+      }
+
+      const base = (existente.resumoIaData && typeof existente.resumoIaData === 'object')
+        ? existente.resumoIaData
+        : { registros: [], completo: true, avisos: [] };
+
+      const novoResumo = {
+        ...base,
+        resumoClinico:    resumoClinico ?? undefined,
+        editadoPeloVetEm: new Date().toISOString(),
+        editadoPorId:     userId,
+      };
+
+      await prisma.evolucaoClinica.update({
+        where: { id: Number(id) },
+        data: {
+          resumoIaData:   novoResumo,
+          resumoIaVersao: existente.resumoIaVersao ?? RESUMO_IA_VERSAO_ATUAL,
+        },
+      });
+
+      res.json({ sucesso: true });
+    } catch (error) {
+      console.error('Erro ao salvar edição do relatório:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
 
@@ -806,15 +898,19 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      // Evolução imediatamente anterior do animal, INDEPENDENTE da especialidade —
-      // o comparativo é sempre contra o último atendimento registrado, mesmo que
-      // tenha sido de outra especialidade (a tag do relatório informa qual foi).
+      // Evolução anterior do animal DA MESMA ESPECIALIDADE — o comparativo é
+      // sempre especialidade com especialidade (odontologia x odontologia,
+      // fisioterapia x fisioterapia...). Exceção: Fisioterapia e Quiropraxia
+      // formam um grupo comparável entre si.
+      const GRUPOS_COMPARACAO = [['Fisioterapia', 'Quiropraxia']];
+      const comparaveis = GRUPOS_COMPARACAO.find(g => g.includes(atual.especialidade)) ?? [atual.especialidade];
       const anterior = await prisma.evolucaoClinica.findFirst({
         where: {
-          animalId:   atual.animalId,
-          ativo:      true,
-          id:         { not: atual.id },
-          dataInicio: { lt: atual.dataInicio },
+          animalId:      atual.animalId,
+          ativo:         true,
+          id:            { not: atual.id },
+          dataInicio:    { lt: atual.dataInicio },
+          especialidade: { in: comparaveis },
         },
         orderBy: { dataInicio: 'desc' },
         include: INCLUDE_PADRAO,
@@ -825,21 +921,33 @@ const EvolucaoController = {
         anterior ? garantirResumoIa(anterior, userId) : Promise.resolve(null),
       ]);
 
+      // Painter por tipo de atendimento: Ferrageamento → casco.png;
+      // Odontologia → odontologia.png; demais → body-map equino.
+      // Fallback pelo CONTEÚDO: se a extração produziu alvos de casco/dente
+      // (ex.: ditado de ferrageamento salvo com especialidade "Clínico"),
+      // pinta a imagem correspondente mesmo sem a especialidade correta.
       const baseInner = carregarBaseInnerEquino();
-      const svgAtual = pintarLaudoEquino({
-        registros: resumoAtual.registros,
-        baseInner,
-        titulo:    atual.titulo || `Evolução ${formatAtendimentoNum(atual.tipoAtendimento, atual.numero)}`,
-        completo:  resumoAtual.completo,
-      });
-      const svgAnterior = anterior
-        ? pintarLaudoEquino({
-            registros: resumoAnterior.registros,
-            baseInner,
-            titulo:    anterior.titulo || `Evolução ${formatAtendimentoNum(anterior.tipoAtendimento, anterior.numero)}`,
-            completo:  resumoAnterior.completo,
-          })
-        : null;
+      const pintarSessao = (evolucao, resumo) => {
+        const args = {
+          registros: resumo.registros,
+          titulo:    evolucao.titulo || `Evolução ${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}`,
+          completo:  resumo.completo,
+        };
+        const regs     = resumo.registros ?? [];
+        const nCasco   = regs.filter(r => r.alvo?.tipo === 'casco').length;
+        const nDente   = regs.filter(r => r.alvo?.tipo === 'dente').length;
+
+        if (evolucao.especialidade === 'Ferrageamento' || (nCasco > 0 && nCasco >= nDente)) {
+          return pintarLaudoCasco(args) ?? pintarLaudoEquino({ ...args, baseInner });
+        }
+        if (evolucao.especialidade === 'Odontologia' || nDente > 0) {
+          return pintarLaudoDental(args) ?? pintarLaudoEquino({ ...args, baseInner });
+        }
+        return pintarLaudoEquino({ ...args, baseInner });
+      };
+
+      const svgAtual    = pintarSessao(atual, resumoAtual);
+      const svgAnterior = anterior ? pintarSessao(anterior, resumoAnterior) : null;
 
       const logoUrl = await resolverLogoPorAnimal(atual.animalId);
 
@@ -891,6 +999,12 @@ const EvolucaoController = {
  * Nunca lança — extrairResumoAtendimento já degrada graciosamente.
  */
 async function garantirResumoIa(evolucao, userId) {
+  // Relatório editado pelo veterinário tem precedência ABSOLUTA sobre a IA:
+  // nunca re-extrai (nem em bump de versão do prompt). Só um novo texto de
+  // evolução (que limpa o cache em `atualizar`) dispara nova extração.
+  if (evolucao.resumoIaData?.editadoPeloVetEm) {
+    return evolucao.resumoIaData;
+  }
   if (evolucao.resumoIaData && evolucao.resumoIaVersao === RESUMO_IA_VERSAO_ATUAL) {
     return evolucao.resumoIaData;
   }

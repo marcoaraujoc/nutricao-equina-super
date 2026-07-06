@@ -550,8 +550,49 @@ const Atendimento = () => {
   const [openItemId,        setOpenItemId]        = useState<number | null>(null);
   const [editEvolucaoId,    setEditEvolucaoId]    = useState<number | null>(null);
   const [editPrescricaoId,  setEditPrescricaoId]  = useState<number | null>(null);
+  // Itens do atendimento pendentes de abrir em VISUALIZAÇÃO (somente leitura)
+  // em cada aba — setados pelos botões Visualizar/Editar do Histórico de
+  // Evolução Clínica e consumidos quando a aba correspondente é aberta.
+  const [viewPrescricaoId,  setViewPrescricaoId]  = useState<number | null>(null);
+  const [viewExameId,       setViewExameId]       = useState<number | null>(null);
+  const [viewVacinaId,      setViewVacinaId]      = useState<number | null>(null);
 
   const refreshHistorico = () => setHistoricoKey(k => k + 1);
+
+  // Visualizar/Editar do Histórico de Evolução Clínica: carrega cada registro
+  // vinculado ao atendimento na sua página correspondente. A evolução em si é
+  // aberta pelo próprio SubModuloEvolucao (populada em leitura ou edição); aqui
+  // resolvemos prescrição/exame/vacina buscando nas listas de cada módulo pelo
+  // evolucaoId (o histórico unificado filtra por status e esconderia, p.ex.,
+  // prescrição ainda em SALVO). Visualizar → tudo somente leitura; Editar →
+  // prescrição abre no formulário de edição (o que já foi executado permanece
+  // somente leitura pelas regras de status existentes); exame e vacina não têm
+  // formulário de edição — abrem sempre em visualização.
+  const carregarAtendimentoNasPaginas = useCallback(async (evolucaoId: number, modo: 'visualizar' | 'editar') => {
+    if (!effectiveAnimalId) return;
+    type ComEvolucao = { id: number; evolucaoId?: number | null };
+    const [prescRes, exameRes, vacinaRes] = await Promise.allSettled([
+      api.get(`/clinica/prescricoes/grupos/animal/${effectiveAnimalId}?page=1&limit=50`),
+      api.get(`/clinica/exames/animal/${effectiveAnimalId}?page=1&limit=50`),
+      api.get(`/clinica/vacinas/animal/${effectiveAnimalId}`),
+    ]);
+    const dadosDe = (r: PromiseSettledResult<{ data?: { dados?: unknown } }>): ComEvolucao[] =>
+      r.status === 'fulfilled' ? ((r.value.data?.dados ?? []) as ComEvolucao[]) : [];
+
+    const presc  = dadosDe(prescRes).find(g => g.evolucaoId === evolucaoId);
+    const exame  = dadosDe(exameRes).find(e => e.evolucaoId === evolucaoId);
+    const vacina = dadosDe(vacinaRes).find(v => v.evolucaoId === evolucaoId);
+
+    if (modo === 'editar') {
+      setEditPrescricaoId(presc?.id ?? null);
+      setViewPrescricaoId(null);
+    } else {
+      setViewPrescricaoId(presc?.id ?? null);
+      setEditPrescricaoId(null);
+    }
+    setViewExameId(exame?.id ?? null);
+    setViewVacinaId(vacina?.id ?? null);
+  }, [effectiveAnimalId]);
 
   // Botão "Editar" do Histórico do Paciente: carrega para edição TODOS os
   // registros do atendimento que possuem tela de edição (evolução + prescrição —
@@ -611,6 +652,9 @@ const Atendimento = () => {
 
   useEffect(() => {
     setEvolucaoAtiva(null);
+    setViewPrescricaoId(null);
+    setViewExameId(null);
+    setViewVacinaId(null);
     carregarAnimal();
     carregarEvolucaoAtiva();
     api.get('/animais').then(res => setTodosAnimais(res.data?.dados ?? [])).catch(() => {});
@@ -673,6 +717,7 @@ const Atendimento = () => {
             editItemId={editEvolucaoId}
             onEditConsumed={() => setEditEvolucaoId(null)}
             agendamentoId={agendamentoIdFromUrl}
+            onAbrirAtendimento={carregarAtendimentoNasPaginas}
           />
         );
       case 'prescricao':
@@ -684,8 +729,8 @@ const Atendimento = () => {
             evolucaoId={evolucaoAtiva?.id}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
-            openItemId={openItemId}
-            onViewConsumed={() => setOpenItemId(null)}
+            openItemId={openItemId ?? viewPrescricaoId ?? undefined}
+            onViewConsumed={() => { setOpenItemId(null); setViewPrescricaoId(null); }}
             editItemId={editPrescricaoId}
             onEditConsumed={() => setEditPrescricaoId(null)}
           />
@@ -698,8 +743,8 @@ const Atendimento = () => {
             evolucaoId={evolucaoAtiva?.id}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
-            openItemId={openItemId}
-            onViewConsumed={() => setOpenItemId(null)}
+            openItemId={openItemId ?? viewVacinaId ?? undefined}
+            onViewConsumed={() => { setOpenItemId(null); setViewVacinaId(null); }}
           />
         );
       case 'exames':
@@ -710,8 +755,8 @@ const Atendimento = () => {
             evolucaoId={evolucaoAtiva?.id}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
-            openItemId={openItemId}
-            onViewConsumed={() => setOpenItemId(null)}
+            openItemId={openItemId ?? viewExameId ?? undefined}
+            onViewConsumed={() => { setOpenItemId(null); setViewExameId(null); }}
           />
         );
       case 'encaminhamento':

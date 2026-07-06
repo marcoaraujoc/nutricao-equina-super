@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const prisma  = require('../lib/prisma');
+const prisma  = require('../lib/prisma').default;
 
 const CRMV_REGEX = /^(\d{1,6})\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 

@@ -8,7 +8,7 @@
 
 const puppeteer = require('puppeteer');
 const crypto    = require('crypto');
-const prisma    = require('../lib/prisma');
+const prisma    = require('../lib/prisma').default;
 const logger    = require('../lib/logger');
 
 const UFS = [
@@ -205,7 +205,11 @@ async function executarScraping() {
     erroMsg = err.message;
     logger.error(`[CRMV-Scraper] Falha geral: ${err.stack}`);
   } finally {
-    await browser.close();
+    // Windows: o Chrome pode segurar lock no perfil temporário por alguns
+    // instantes (EBUSY em first_party_sets.db) — falha de limpeza não pode
+    // derrubar o cron nem impedir a gravação do log de sincronização.
+    try { await browser.close(); }
+    catch (err) { logger.warn(`[CRMV-Scraper] Falha ao fechar o browser (ignorada): ${err.message}`); }
 
     await prisma.crmvSyncLog.create({
       data: {

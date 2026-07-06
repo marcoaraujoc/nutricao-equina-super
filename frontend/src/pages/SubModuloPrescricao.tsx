@@ -1549,14 +1549,18 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
 
-  // Clique no Histórico do Paciente: sempre abre em modo visualização (somente
-  // leitura), independente do status da prescrição — não reaproveita o modal
-  // de edição (que exige SALVO/GESTOR e não é garantido abrir para todo status).
+  // Clique no Histórico do Paciente / Visualizar atendimento: popula o
+  // formulário da página com a prescrição (somente leitura), independente do
+  // status, e rola até ele para o usuário ver os campos preenchidos.
+  const viewTopRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!openItemId) return;
     api.get(`/clinica/prescricoes/grupos/${openItemId}`)
       .then(res => {
-        if (res.data?.dados) setViewingGrupo(res.data.dados as PrescricaoGrupo);
+        if (res.data?.dados) {
+          setViewingGrupo(res.data.dados as PrescricaoGrupo);
+          setTimeout(() => viewTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        }
       })
       .catch(() => {})
       .finally(() => onViewConsumed?.());
@@ -1566,7 +1570,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // prescrição vinculada ao atendimento direto no formulário de edição.
   const editIdAplicadoRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!editItemId || editIdAplicadoRef.current === editItemId) return;
+    if (!editItemId) { editIdAplicadoRef.current = null; return; }
+    if (editIdAplicadoRef.current === editItemId) return;
     editIdAplicadoRef.current = editItemId;
     api.get(`/clinica/prescricoes/grupos/${editItemId}`)
       .then(res => {
@@ -1646,8 +1651,41 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   return (
     <>
+      <div ref={viewTopRef} />
+
+      {/* Visualização inline (Histórico de Evolução Clínica): campos da
+          prescrição populados no formulário da página, somente leitura */}
+      {viewingGrupo && (
+        <div className="border-b border-gray-100">
+          <div className="flex items-center justify-between px-5 pt-4">
+            <div className="flex items-center gap-1.5">
+              <Eye size={12} className="text-gray-400" />
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Prescrição #{viewingGrupo.numeroFormatado} — somente leitura
+              </p>
+            </div>
+            <button onClick={() => setViewingGrupo(null)}
+              className="p-1 text-gray-400 hover:text-gray-600 transition-colors" title="Fechar visualização">
+              <X size={16} />
+            </button>
+          </div>
+          <GrupoModal
+            key={`view-${viewingGrupo.id}`}
+            animalId={animalId}
+            animal={animal}
+            grupo={viewingGrupo}
+            canEdit={false}
+            canFinalizarCancelar={false}
+            podeImprimir={podeImprimir}
+            onClose={() => setViewingGrupo(null)}
+            onSaved={onSaved}
+            isInline
+          />
+        </div>
+      )}
+
       {/* Formulário inline de criação */}
-      {canEdit && (
+      {!viewingGrupo && canEdit && (
         semEvolucaoAtiva ? (
           <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4 border-b border-gray-100">
             <FileText size={28} className="mb-2 text-gray-200" />
@@ -1851,13 +1889,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           podeImprimir={podeImprimir}
           onClose={fecharModal}
           onSaved={onSaved}
-        />
-      )}
-      {viewingGrupo && (
-        <ViewPrescricaoModal
-          grupo={viewingGrupo}
-          onClose={() => setViewingGrupo(null)}
-          onImprimir={() => imprimirPrescricao(viewingGrupo, animal)}
         />
       )}
       {deletingId !== null && (

@@ -291,14 +291,23 @@ Regras finais:
   // v4: regra REGIÃO INTEIRA assertiva — "cervical"/"dorso"/"garupa" sem vértebra
   //     explícita = SEMPRE a região completa (grupo cervical / parte dorso / parte
   //     garupa), NUNCA vértebras isoladas; exemplo 1 reescrito com ditado real
+  // v5: laudos de FERRAGEAMENTO (alvo tipo:"casco" — partes do casco + membro
+  //     AE/AD/PE/PD, pintado sobre casco.png) e ODONTOLOGIA (alvo tipo:"dente" —
+  //     Triadan d<q>_<pos>, pintado sobre odontologia.png); modalidade
+  //     "procedimento" para intervenções (ferradura, casqueamento, nivelamento...)
   'extrair_resultado_sessao_equino': {
-    version: 'v4',
+    version: 'v5',
     build: (texto) => {
       // Léxico embutido dinamicamente a partir do domínio (fonte única de verdade —
       // nunca hardcodar IDs aqui: se a taxonomia mudar, o prompt acompanha sozinho).
       const { PARTES_EQUINAS } = require('../../models/anatomia-equina/anatomia-equina.taxonomy');
       const { GRUPOS_EQUINOS } = require('../../models/anatomia-equina/anatomia-equina.grupos');
       const { MODALIDADES_TERAPIA } = require('../../models/anatomia-equina/s2vet-clinica.model');
+      const { PARTES_CASCO } = require('../../models/anatomia-casco/casco.model');
+
+      const linhasCasco = Object.values(PARTES_CASCO)
+        .map((p) => `${p.id} — "${p.nome}"`)
+        .join('\n');
 
       const linhasPartes = Object.values(PARTES_EQUINAS)
         .map((p) => `${p.id} — "${p.nome['pt-BR']}" (paridade: ${p.paridade})`)
@@ -393,6 +402,34 @@ edema", "ausência de reatividade") NÃO geram registro de achado_exame — o ma
 só pinta o que FOI encontrado/aplicado. Se for uma conclusão clínica relevante, registre
 em resumoClinico.observacaoFechamento (ex.: "Sem dor à palpação dorsal ou cervical").
 
+# LAUDO DE CASCO / FERRAGEAMENTO
+Quando o texto tratar de casco, ferradura, ferrageamento ou casqueamento, os alvos
+devem ser PARTES DO CASCO (não partes do corpo):
+alvo: { "tipo": "casco", "parteId": "<id abaixo>", "membro": "AE"|"AD"|"PE"|"PD" (opcional) }
+- "membro" = qual casco: AE=anterior esquerdo, AD=anterior direito, PE=posterior
+  esquerdo, PD=posterior direito. Preencha sempre que o texto disser o membro
+  ("casco anterior direito", "mão esquerda", "pé direito"). "mão"=anterior, "pé"=posterior.
+- Intervenções (ferradura aplicada/trocada, casqueamento, ajuste, rebaixamento de
+  talão...) → kind "terapia_aplicada" com modalidade "procedimento".
+- Achados (sensibilidade, laminite, abscesso, hematoma de sola, linha branca
+  comprometida...) → kind "achado_exame" com o achado mais próximo da lista fechada
+  (dor, edema, reatividade_palpacao...).
+PARTES DO CASCO (parteId — nome):
+${linhasCasco}
+
+# LAUDO ODONTOLÓGICO
+Quando o texto tratar de dentes/odontologia, os alvos devem ser DENTES:
+alvo: { "tipo": "dente", "parteId": "d<quadrante>_<posição com 2 dígitos>" }
+- Quadrantes (Triadan): 1=superior direito, 2=superior esquerdo, 3=inferior
+  esquerdo, 4=inferior direito. Posições: 01-03 incisivos, 04 canino, 05 dente de
+  lobo (1º pré-molar), 06-08 pré-molares, 09-11 molares.
+- Numeração Triadan citada diretamente: "208" → d2_08; "411" → d4_11.
+- Descrição por nome: "primeiro molar superior esquerdo" → posição 09, quadrante 2
+  → d2_09; "dente de lobo inferior direito" → d4_05.
+- Procedimentos (nivelamento, desgaste de pontas, extração...) → kind
+  "terapia_aplicada" com modalidade "procedimento"; achados (ponta excessiva de
+  esmalte, gancho, fratura, cárie...) → "achado_exame" com o achado mais próximo.
+
 # REGRA — PLURAL IMPLICA BILATERAL
 Se o veterinário usar o PLURAL de uma parte/grupo de paridade "bilateral" SEM mencionar um
 lado ("joelhos", "boletos", "membros pélvicos") — assuma lateralidade:"bilateral" mesmo sem
@@ -470,6 +507,8 @@ Retorne SOMENTE um JSON válido, sem markdown, sem explicações, no formato:
       "kind": "achado_exame" | "avaliacao_funcional" | "terapia_aplicada",
       "alvo": { "tipo": "parte", "parteId": "...", "lateralidade": "direito|esquerdo|bilateral (opcional)" }
             | { "tipo": "grupo", "grupoId": "...", "lateralidade": "..." (opcional) }
+            | { "tipo": "casco", "parteId": "...", "membro": "AE|AD|PE|PD" (opcional) }
+            | { "tipo": "dente", "parteId": "d<quadrante>_<posição>" }
             | { "tipo": "sistema", "sistemaId": "neurologico|musculoesqueletico|vascular|tegumentar" }
             | { "tipo": "nao_localizado", "descricao": "..." },
       // achado_exame:
