@@ -489,6 +489,11 @@ class AnimalController {
         && req.membroCargo
         && CARGOS_EQUIPE.includes(req.membroCargo);
 
+      // FORNECEDOR que atua como GESTOR no contexto ativo (assinante com empresa
+      // própria): recebe o escopo de equipe normal. Fora desse contexto, mantém
+      // o deny-by-default por designação. req.membroCargo vem do checkPermission.
+      const isFornecedorGestorContexto = userType === 'FORNECEDOR' && req.membroCargo === 'GESTOR';
+
       const isMembroEquipe = !!req.empresaId && !isAdmin;
 
       const vetSolicitacoesWhere = { solicitacoes: { some: { vetUserId: Number(userId), OR: [
@@ -528,13 +533,16 @@ class AnimalController {
             ? { OR: [{ userId: Number(userId) }, ...scopeOR] }
             : { userId: Number(userId) }
           // FORNECEDOR (prestador): NUNCA herda escopo de equipe — só animais com
-          // designação ativa (DesignacaoPrestador) e dentro da validade
+          // designação ativa (DesignacaoPrestador) e dentro da validade.
+          // Exceção: cargo GESTOR no contexto ativo → escopo de equipe (empresa própria).
           : userType === 'FORNECEDOR'
-            ? { designacoes: { some: {
-                prestadorId: Number(userId),
-                ativo:       true,
-                OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
-              } } }
+            ? isFornecedorGestorContexto
+              ? { OR: scopeOR }
+              : { designacoes: { some: {
+                  prestadorId: Number(userId),
+                  ativo:       true,
+                  OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
+                } } }
             : userType === 'VETERINARIO'
               // Vet com empresa: escopo de equipe + pacientes pessoais fora da empresa
               ? isMembroEquipe

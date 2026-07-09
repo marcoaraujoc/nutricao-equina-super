@@ -732,6 +732,8 @@ model Fatura {
   total           Float        @default(0)
   status          String       @default("ABERTA")  // ABERTA | PAGA | CANCELADA
   criadoEm        DateTime     @default(now())
+  qtdCorrecoes    Int          @default(0) @map("qtd_correcoes")      // nº de edições/remoções de itens existentes
+  ultimaCorrecaoEm DateTime?   @map("ultima_correcao_em")
   itens           FaturaItem[]
 
   animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])

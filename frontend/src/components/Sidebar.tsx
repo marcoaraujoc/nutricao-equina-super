@@ -101,6 +101,7 @@ export default function Sidebar() {
   const podeVerFornecedores    = isAdmin || isGestor || podeExecutar('cadastro.fornecedor.ler');
   const podeVerLocalizacoes    = isAdmin || isGestor || podeExecutar('cadastro.localizacao.ler');
   const podeVerEquipe          = isAdmin || isGestor || podeExecutar('equipe.membros.ler');
+  const podeVerRelatorios      = isGestor || podeExecutar('relatorios.gerencial.ler');
 
   // temAcessoClinico: profissionais de saúde OU proprietário com ao menos 1 grant clínico
   const temAcessoClinico =
@@ -294,6 +295,7 @@ export default function Sidebar() {
               {openGeral && (
                 <div className="mt-1 space-y-0.5 pl-4">
                   {podeVerDashboard && navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
+                  {podeVerRelatorios && navLink('/relatorios', <ChartBar size={20} />, 'Relatórios', p.startsWith('/relatorios'))}
                   {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
 
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
@@ -349,7 +351,9 @@ export default function Sidebar() {
           {isNewUser ? (
             <div className="mx-3 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm">
               <strong>Funcionalidades bloqueadas</strong><br />
-              Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.
+              {isProprietario
+                ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
+                : 'Complete seu Cadastro Pessoal para liberar os módulos.'}
             </div>
           ) : temAlgumModulo ? (
             <div>

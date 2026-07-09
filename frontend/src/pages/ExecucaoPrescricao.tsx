@@ -31,6 +31,7 @@ export interface ItemExecucao {
   observacao:      string | null;
   dataInicio:      string;
   diaAtual:        number;
+  executadoEm?:    string | null; // última execução do item (atualizado a cada dia)
 }
 
 export interface GrupoExecucao {
@@ -125,11 +126,19 @@ export function saveExecMap(grupoId: number, map: ExecMap) {
 }
 
 export function markDoneToday(grupoId: number) {
-  localStorage.setItem(doneTodayKey(grupoId), '1');
+  // Guarda o HORÁRIO da execução (exibido no histórico de executadas do dia)
+  const now  = new Date();
+  const hora = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  localStorage.setItem(doneTodayKey(grupoId), hora);
 }
 
 export function isDoneToday(grupoId: number): boolean {
-  return localStorage.getItem(doneTodayKey(grupoId)) === '1';
+  return !!localStorage.getItem(doneTodayKey(grupoId));
+}
+
+export function horaExecucaoHoje(grupoId: number): string | null {
+  const v = localStorage.getItem(doneTodayKey(grupoId));
+  return v && v.includes(':') ? v : null; // registros antigos ('1') ficam sem horário
 }
 
 export function isSlotDone(map: ExecMap, itemId: number, slotIdx: number): boolean {
@@ -351,8 +360,10 @@ export function ModalExecucao({
                   </span>
                 ) : (
                   <button
-                    onClick={() => handleToggle(item, activeIdx)}
-                    disabled={activeIdx < 0 || activeDone}
+                    // Prescrição com UMA única tarefa: executar já finaliza o dia
+                    // automaticamente (sem precisar clicar em "Finalizar Dia").
+                    onClick={() => totalItens === 1 ? handleFinalizar() : handleToggle(item, activeIdx)}
+                    disabled={activeIdx < 0 || activeDone || salvando}
                     className={`flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
                       activeDone
                         ? 'bg-emerald-500 text-white cursor-default'
@@ -360,7 +371,10 @@ export function ModalExecucao({
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                         : 'bg-white border border-gray-300 text-gray-600 hover:border-teal-500 hover:text-teal-600'
                     }`}>
-                    {activeDone ? 'Executado' : activeIdx < 0 ? 'Aguardando' : 'Executar'}
+                    {activeDone ? 'Executado'
+                      : activeIdx < 0 ? 'Aguardando'
+                      : salvando && totalItens === 1 ? 'Executando…'
+                      : 'Executar'}
                   </button>
                 )}
               </div>
@@ -633,6 +647,8 @@ function LinhaGrupo({
   podeExecutarAcao,
   podeImprimir,
   soVisualizacao,
+  executada = false,
+  horaExecucao = null,
 }: {
   g: GrupoExecucao;
   onExecutar: () => void;
@@ -641,6 +657,8 @@ function LinhaGrupo({
   podeExecutarAcao: boolean;
   podeImprimir: boolean;
   soVisualizacao: boolean;
+  executada?: boolean;
+  horaExecucao?: string | null;
 }) {
   const navigate    = useNavigate();
   const { animal }  = g;
@@ -694,7 +712,12 @@ function LinhaGrupo({
       </button>
 
       <div className="flex items-center gap-1.5 flex-shrink-0">
-        {podeExecutarAcao && !soVisualizacao && (
+        {executada && (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
+            <CheckCircle2 size={11} /> Executada{horaExecucao ? ` às ${horaExecucao}` : ''}
+          </span>
+        )}
+        {podeExecutarAcao && !soVisualizacao && !executada && (
           <button
             onClick={onExecutar}
             className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors">
@@ -769,9 +792,8 @@ export default function ExecucaoPrescricao() {
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
-  const filtrados = grupos
-    .filter(g => !isHoje || !isDoneToday(g.id))
-    .filter(busca.trim() ? (g => {
+  const aplicarBusca = (lista: GrupoExecucao[]) =>
+    lista.filter(busca.trim() ? (g => {
         const q = busca.toLowerCase();
         return (
           g.animal.nome.toLowerCase().includes(q) ||
@@ -780,6 +802,33 @@ export default function ExecucaoPrescricao() {
           g.veterinario.fullName.toLowerCase().includes(q)
         );
       }) : () => true);
+
+  // Grupo executado hoje: marcado neste navegador (localStorage) OU sinal do
+  // backend — status EXECUTADO (último dia do tratamento) ou item com
+  // executadoEm de hoje (execução feita em outro dispositivo).
+  const foiExecutadoHoje = (g: GrupoExecucao): boolean =>
+    isDoneToday(g.id) ||
+    g.status === 'EXECUTADO' ||
+    g.itens.some(i => i.executadoEm && String(i.executadoEm).slice(0, 10) === dataSel);
+
+  // Hora da execução para o badge: localStorage (hora exata do clique) com
+  // fallback no executadoEm dos itens vindo do backend.
+  const horaExecucaoDe = (g: GrupoExecucao): string | null => {
+    const local = horaExecucaoHoje(g.id);
+    if (local) return local;
+    const ultima = g.itens
+      .map(i => (i.executadoEm ? new Date(i.executadoEm) : null))
+      .filter((d): d is Date => !!d && !isNaN(d.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    if (!ultima) return null;
+    return `${String(ultima.getHours()).padStart(2, '0')}:${String(ultima.getMinutes()).padStart(2, '0')}`;
+  };
+
+  // Pendentes: mesma regra de sempre — só aparecem no dia da execução.
+  // Executadas (hoje): vão para o HISTÓRICO abaixo, somente leitura.
+  const filtrados = aplicarBusca(grupos.filter(g =>
+    isHoje ? !foiExecutadoHoje(g) : g.status !== 'EXECUTADO'));
+  const executadasHoje = isHoje ? aplicarBusca(grupos.filter(foiExecutadoHoje)) : [];
 
   if (loadingPerm) return (
     <div className="flex items-center justify-center py-20">
@@ -852,11 +901,13 @@ export default function ExecucaoPrescricao() {
                 <Loader2 size={24} className="animate-spin text-emerald-600" />
               </div>
             ) : filtrados.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-24 text-gray-400 gap-3">
+              <div className="flex flex-col items-center justify-center py-12 text-gray-400 gap-3">
                 <CheckCircle2 size={40} />
                 <p className="text-sm">
                   {grupos.length === 0
                     ? `Nenhuma prescrição para ${isHoje ? 'hoje' : formatDataSel(dataSel)}`
+                    : executadasHoje.length > 0
+                    ? 'Todas as prescrições de hoje já foram executadas'
                     : 'Nenhum resultado para a busca'}
                 </p>
               </div>
@@ -877,6 +928,36 @@ export default function ExecucaoPrescricao() {
               </div>
             )}
 
+            {/* ── Histórico — prescrições já executadas hoje ─────────────── */}
+            {!loading && executadasHoje.length > 0 && (
+              <div className="pt-2">
+                <div className="flex items-center justify-between px-1 pb-2">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Histórico — executadas hoje
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {executadasHoje.length} prescrição{executadasHoje.length !== 1 ? 'ões' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2 opacity-90">
+                  {executadasHoje.map(g => (
+                    <LinhaGrupo
+                      key={g.id}
+                      g={g}
+                      onExecutar={() => {}}
+                      onVer={() => setModal(g)}
+                      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+                      podeExecutarAcao={false}
+                      podeImprimir={podeImprimir}
+                      soVisualizacao
+                      executada
+                      horaExecucao={horaExecucaoDe(g)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       </div>
@@ -885,7 +966,7 @@ export default function ExecucaoPrescricao() {
         <ModalExecucao
           grupo={modal}
           onClose={() => { setModal(null); carregar(); }}
-          soVisualizacao={!isHoje}
+          soVisualizacao={!isHoje || foiExecutadoHoje(modal)}
         />
       )}
     </PageContainer>

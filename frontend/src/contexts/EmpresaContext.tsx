@@ -19,13 +19,8 @@ export interface ContextoOpcao {
   /** null = opção no nível da empresa (CNPJ); número = equipe ativa (CPF) */
   equipeId: number | null;
   label: string;
-}
-
-interface EmpresaApi {
-  id: number;
-  nome: string;
-  cnpj: string | null;
-  equipes?: Array<{ id: number; nome: string }>;
+  /** Cargo do usuário nesse contexto (GESTOR, VETERINARIO, FORNECEDOR...) */
+  cargo?: string;
 }
 
 interface EmpresaContextType {
@@ -44,23 +39,6 @@ const EmpresaContext = createContext<EmpresaContextType>({
   loading: true,
 });
 
-function montarOpcoes(empresas: EmpresaApi[]): ContextoOpcao[] {
-  const opcoes: ContextoOpcao[] = [];
-  for (const emp of empresas) {
-    const equipes = emp.equipes ?? [];
-    if (!emp.cnpj && equipes.length > 0) {
-      // CPF: o gestor trabalha por equipe — uma opção por equipe da empresa pessoal
-      for (const eq of equipes) {
-        opcoes.push({ empresaId: emp.id, equipeId: eq.id, label: eq.nome });
-      }
-    } else {
-      // CNPJ (ou empresa pessoal ainda sem equipe): opção no nível da empresa
-      opcoes.push({ empresaId: emp.id, equipeId: null, label: emp.nome });
-    }
-  }
-  return opcoes;
-}
-
 export function EmpresaProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [opcoes, setOpcoes] = useState<ContextoOpcao[]>([]);
@@ -68,9 +46,10 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const userType = (user?.userType ?? '').toUpperCase();
-    const role = (user?.role ?? '').toUpperCase();
-    if (!user || (userType !== 'VETERINARIO' && role !== 'ADMIN')) {
+    // Sem gate por userType: qualquer usuário com vínculos (dono/gestor de empresa
+    // OU membro de equipe — ex: FORNECEDOR que assinou e virou gestor da própria
+    // empresa) recebe suas opções de contexto. Quem não tem vínculo recebe [].
+    if (!user) {
       setOpcoes([]);
       setContextoAtivo(null);
       setLoading(false);
@@ -80,10 +59,10 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
     let cancelado = false;
     (async () => {
       try {
-        const res = await api.get('/equipes/empresas');
+        const res = await api.get('/equipes/meus-contextos');
         if (cancelado) return;
         if (!res.data) { setOpcoes([]); setContextoAtivo(null); return; } // GET 403 → null
-        const lista = montarOpcoes((res.data.dados ?? []) as EmpresaApi[]);
+        const lista = (res.data.dados ?? []) as ContextoOpcao[];
         setOpcoes(lista);
 
         const empresaSalva = Number(localStorage.getItem(EMPRESA_ATIVA_KEY));
@@ -91,7 +70,11 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
         const salva =
           lista.find((o) => o.equipeId !== null && o.equipeId === equipeSalva) ??
           lista.find((o) => o.equipeId === null && o.empresaId === empresaSalva);
-        const ativa = salva ?? lista[0] ?? null;
+        // Sem contexto salvo (login recém-feito): perfil GESTOR tem preferência —
+        // quem é gestor de uma empresa entra nela por padrão, mesmo que também
+        // tenha vínculos como fornecedor/vet em outras equipes
+        const padrao = lista.find((o) => o.cargo === 'GESTOR') ?? lista[0] ?? null;
+        const ativa = salva ?? padrao;
         setContextoAtivo(ativa);
 
         if (ativa) {

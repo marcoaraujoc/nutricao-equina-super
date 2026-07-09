@@ -211,6 +211,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (token: string, refreshToken?: string) => {
     sessionStorage.setItem('token', token);
     if (refreshToken) sessionStorage.setItem('refreshToken', refreshToken);
+    // Limpa o contexto ativo de sessões anteriores — a cada login o EmpresaContext
+    // resolve o padrão (perfil GESTOR tem preferência quando existir)
+    localStorage.removeItem('s2vet_empresa_id');
+    localStorage.removeItem('s2vet_equipe_id');
     const userData = decodeToken(token);
     if (userData) {
       setUser(userData);

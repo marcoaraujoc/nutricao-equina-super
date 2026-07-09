@@ -209,7 +209,8 @@ export async function extrairResultadoSessao(
   const resultado = await tentarExtrairEValidar(prompt, operacaoVers, resultadoSessaoParser, {
     userId,
     animalId,
-    maxTokens: 3000,
+    // Groq on-demand: prompt + maxTokens contam juntos no teto de 12k tokens/min
+    maxTokens: 2500,
   });
 
   if (!resultado.ok) {
@@ -252,7 +253,8 @@ export async function extrairResumoAtendimento(
   const resultado = await tentarExtrairEValidar(prompt, operacaoVers, resumoAtendimentoParser, {
     userId,
     animalId,
-    maxTokens: 3500,
+    // Groq on-demand: prompt + maxTokens contam juntos no teto de 12k tokens/min
+    maxTokens: 2500,
   });
 
   if (!resultado.ok) {

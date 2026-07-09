@@ -57,6 +57,7 @@ import Configuracoes  from './pages/Configuracoes';
 
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
+import Relatorios           from './pages/Relatorios';
 
 // Pages — Agenda / Agendamentos
 import Agendamentos    from './pages/Agendamentos';
@@ -227,6 +228,9 @@ function App() {
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
                           <Route path="/configuracoes"    element={<Configuracoes />} />
+
+                          {/* Relatórios gerenciais */}
+                          <Route path="/relatorios"       element={<Relatorios />} />
 
                           {/* Troca Senha */}
                           {/* Onboarding de convidado — aceitar convite de equipe */}

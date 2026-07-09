@@ -30,6 +30,9 @@ const uploadLogo = multer({
 router.post('/empresas', authenticate, criarEmpresaRules, validate, EquipeController.criarEmpresa);
 router.get ('/empresas', authenticate, EquipeController.listarEmpresas);
 
+// ─── Contextos ativos do usuário (seletor de perfil/empresa do Sidebar) ───────
+router.get('/meus-contextos', authenticate, EquipeController.meusContextos);
+
 // ─── Configurações (logotipo + dia de fechamento de fatura) ──────────────────
 router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
 router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);

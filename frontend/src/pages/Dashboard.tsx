@@ -256,14 +256,15 @@ const Dashboard = () => {
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimais(lista);
 
-      // ADMIN e membros convidados não passam pelo onboarding
-      if (isConvidado || role === 'ADMIN') {
+      // Onboarding ("Vamos cadastrar seu animal") é exclusivo do PROPRIETÁRIO —
+      // demais perfis (vet, fornecedor, gestor, convidado, admin) vão direto ao dashboard
+      if (isConvidado || role === 'ADMIN' || userTypeUpper !== 'PROPRIETARIO') {
         setObPhase(null);
       } else {
         const ob = getOB();
         if (!ob) {
-          // Usuário com animais ou veterinário → onboarding já concluído
-          if (lista.length > 0 || user?.userType === 'VETERINARIO') {
+          // Usuário com animais → onboarding já concluído
+          if (lista.length > 0) {
             setObPhase(null);
           } else {
             try {
@@ -288,7 +289,8 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [isConvidado]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConvidado, role, userTypeUpper]);
 
   useEffect(() => {
     if (isClinica || role === 'ADMIN') {

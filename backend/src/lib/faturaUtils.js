@@ -84,6 +84,20 @@ async function recalcularTotal(client, faturaId) {
   return total;
 }
 
+/**
+ * Registra uma correção na(s) fatura(s): incrementa qtdCorrecoes e marca ultimaCorrecaoEm.
+ * Chamado sempre que um item EXISTENTE é alterado ou removido (lançar item novo não conta).
+ * Aceita tanto o client `prisma` quanto um client de transaction (`tx`).
+ */
+async function registrarCorrecaoFatura(client, faturaIds) {
+  const ids = Array.isArray(faturaIds) ? faturaIds : [faturaIds];
+  if (ids.length === 0) return;
+  await client.fatura.updateMany({
+    where: { id: { in: ids } },
+    data:  { qtdCorrecoes: { increment: 1 }, ultimaCorrecaoEm: new Date() },
+  });
+}
+
 /** Erro lançado quando a sincronização esbarra numa fatura já paga. */
 class FaturaPagaError extends Error {
   constructor(message = 'Não é possível alterar: item já está em uma fatura paga.') {
@@ -119,6 +133,7 @@ async function removerFaturaItensDaOrigem(tx, campo, origemId) {
   await tx.faturaItem.deleteMany({ where: { id: { in: itens.map(i => i.id) } } });
   const faturaIds = [...new Set(itens.map(i => i.faturaId))];
   for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
+  await registrarCorrecaoFatura(tx, faturaIds);
 }
 
 /**
@@ -140,6 +155,7 @@ async function atualizarFaturaItensDaOrigem(tx, campo, origemId, { descricao, va
   await tx.faturaItem.updateMany({ where: { id: { in: itens.map(i => i.id) } }, data });
   const faturaIds = [...new Set(itens.map(i => i.faturaId))];
   for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
+  await registrarCorrecaoFatura(tx, faturaIds);
 }
 
 // ─── Regras de fechamento de fatura (dia fixo | dia útil | último dia do mês) ─────────────
@@ -265,6 +281,7 @@ module.exports = {
   getOrCreateFatura,
   adicionarFaturaItem,
   recalcularTotal,
+  registrarCorrecaoFatura,
   removerFaturaItensDaOrigem,
   atualizarFaturaItensDaOrigem,
   FaturaPagaError,

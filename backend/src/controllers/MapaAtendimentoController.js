@@ -107,9 +107,10 @@ const MapaAtendimentoController = {
         where: {
           animalId: { in: animalIds },
           status:   { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE'] },
+          // Mesma regra do listarParaExecucao: só executa com a evolução FINALIZADA
           OR: [
             { evolucaoId: null },
-            { evolucao: { aprovado: true } },
+            { evolucao: { status: 'FINALIZADA' } },
           ],
           ...vetParamFilter,
         },

@@ -49,17 +49,39 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
 
   // FORNECEDOR (prestador): NUNCA herda o escopo da equipe — acesso somente a
   // animais com designação ativa (DesignacaoPrestador), e dentro da validade.
+  // Exceção: fornecedor que também é GESTOR no contexto ativo (assinante com
+  // empresa própria) opera como gestor — cai nas regras de empresa/equipe abaixo.
   if (userType === 'FORNECEDOR') {
-    const designacao = await prisma.designacaoPrestador.findFirst({
-      where: {
-        animalId:    Number(animalId),
-        prestadorId: Number(userId),
-        ativo:       true,
-        OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
-      },
-      select: { id: true },
-    });
-    return !!designacao;
+    const gestorNoContexto = equipeId
+      ? await prisma.membroEquipe.findFirst({
+          where:  { userId: Number(userId), equipeId: Number(equipeId), cargo: 'GESTOR' },
+          select: { id: true },
+        })
+      : empresaId
+        ? await prisma.membroEquipe.findFirst({
+            where:  { userId: Number(userId), cargo: 'GESTOR', equipe: { empresaId: Number(empresaId) } },
+            select: { id: true },
+          })
+        : null;
+    const donoDaEmpresaAtiva = !gestorNoContexto && empresaId
+      ? await prisma.empresa.findFirst({
+          where:  { id: Number(empresaId), ownerId: Number(userId) },
+          select: { id: true },
+        })
+      : null;
+
+    if (!gestorNoContexto && !donoDaEmpresaAtiva) {
+      const designacao = await prisma.designacaoPrestador.findFirst({
+        where: {
+          animalId:    Number(animalId),
+          prestadorId: Number(userId),
+          ativo:       true,
+          OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
+        },
+        select: { id: true },
+      });
+      return !!designacao;
+    }
   }
 
   if (empresaId && animal.empresaId === Number(empresaId)) {

@@ -295,8 +295,12 @@ Regras finais:
   //     AE/AD/PE/PD, pintado sobre casco.png) e ODONTOLOGIA (alvo tipo:"dente" —
   //     Triadan d<q>_<pos>, pintado sobre odontologia.png); modalidade
   //     "procedimento" para intervenções (ferradura, casqueamento, nivelamento...)
+  // v6: prompt COMPACTADO — o request (prompt + max_tokens) estourava o teto de
+  //     12k tokens/min do Groq on-demand (413 Request too large) e a extração
+  //     falhava SEMPRE. Vértebras viram linhas-padrão, grupos sem expansão de
+  //     partes, exemplo 3 enxuto, ditado limitado a 6k chars.
   'extrair_resultado_sessao_equino': {
-    version: 'v5',
+    version: 'v6',
     build: (texto) => {
       // Léxico embutido dinamicamente a partir do domínio (fonte única de verdade —
       // nunca hardcodar IDs aqui: se a taxonomia mudar, o prompt acompanha sozinho).
@@ -305,16 +309,20 @@ Regras finais:
       const { MODALIDADES_TERAPIA } = require('../../models/anatomia-equina/s2vet-clinica.model');
       const { PARTES_CASCO } = require('../../models/anatomia-casco/casco.model');
 
+      // Compacto: vértebras (41) não são listadas uma a uma — viram o bloco de
+      // padrões em "# PARTES ANATÔMICAS"; grupos não expandem suas partes.
+      const linhasPartesCompacto = Object.values(PARTES_EQUINAS)
+        .filter((p) => p.tipo !== 'vertebra')
+        .map((p) => `${p.id} — "${p.nome['pt-BR']}" (${p.paridade})`)
+        .join('\n');
+      const linhasGruposCompacto = Object.values(GRUPOS_EQUINOS)
+        .map((g) => `${g.id} — "${g.nome['pt-BR']}" (${g.paridade})`)
+        .join('\n');
+
       const linhasCasco = Object.values(PARTES_CASCO)
         .map((p) => `${p.id} — "${p.nome}"`)
         .join('\n');
 
-      const linhasPartes = Object.values(PARTES_EQUINAS)
-        .map((p) => `${p.id} — "${p.nome['pt-BR']}" (paridade: ${p.paridade})`)
-        .join('\n');
-      const linhasGrupos = Object.values(GRUPOS_EQUINOS)
-        .map((g) => `${g.id} — "${g.nome['pt-BR']}" (paridade: ${g.paridade}; partes: ${g.partes.join(', ')})`)
-        .join('\n');
       const linhasModalidades = Object.values(MODALIDADES_TERAPIA)
         .map((m) => `${m.id} (exigeLocal: ${m.exigeLocal})`)
         .join('\n');
@@ -344,10 +352,14 @@ presente no texto, nunca invente para preencher uma seção:
 - "proveniencia.trechoOriginal" deve ser um trecho VERBATIM (copiado) do ditado, nunca parafraseado.
 
 # PARTES ANATÔMICAS (parteId — nome — paridade)
-${linhasPartes}
+${linhasPartesCompacto}
+Vértebras individuais (paridade mediano; use SÓ quando o texto NOMEAR a vértebra):
+ids no padrão vertebra_c1..c7 (cervicais), vertebra_t1..t18 (torácicas),
+vertebra_l1..l6 (lombares), vertebra_s1..s5 (sacrais), vertebra_cd1..cd5 (caudais).
+Ex.: "T14" → vertebra_t14; "C3" → vertebra_c3.
 
-# GRUPOS ANATÔMICOS (grupoId — nome — paridade — partes que expande)
-${linhasGrupos}
+# GRUPOS ANATÔMICOS (grupoId — nome — paridade)
+${linhasGruposCompacto}
 
 # MODALIDADES DE TERAPIA (modalidadeId — exigeLocal)
 ${linhasModalidades}
@@ -381,20 +393,13 @@ ${linhasModalidades}
 - Uma MESMA frase pode aplicar uma modalidade a VÁRIAS regiões ("laser em cervical e
   dorso/garupa") — gere UM registro por região citada, todos com a mesma modalidade.
 
-# REGRA — REGIÃO INTEIRA (NUNCA subdividir nem encolher o alvo)
-Quando o veterinário citar uma REGIÃO sem nomear uma vértebra específica, o alvo é
-SEMPRE a região COMPLETA — esta regra é OBRIGATÓRIA e tem precedência:
-- "cervical" / "pescoço" → { "tipo": "grupo", "grupoId": "cervical" } = TODA a cervical
-  (C1 a C7). É ERRADO responder com vértebras isoladas (vertebra_c2, vertebra_c3...) ou
-  com a parte "regiao_cervical" quando a região foi citada por inteiro.
-- "dorso" / "costas" → { "tipo": "parte", "parteId": "dorso" } = toda a região torácica.
-- "lombar" / "lombo" → parte "lombo" = toda a região lombar.
-- "garupa" → parte "garupa" = toda a região sacro/pelve.
-- "coluna" (inteira) → grupo "coluna"; "nuca" → grupo "nuca".
-Vértebras individuais (vertebra_c3, vertebra_t10...) APENAS quando o texto nomear a
-vértebra explicitamente ("C3", "T10", "entre T12 e T14", "terceira cervical").
-"em cervical e dorso/garupa" numa MESMA frase = TRÊS registros com alvo inteiro
-(grupo "cervical" + parte "dorso" + parte "garupa"), todos com a modalidade da frase.
+# REGRA — REGIÃO INTEIRA (OBRIGATÓRIA; nunca subdividir nem encolher o alvo)
+Região citada sem vértebra específica = alvo é a região COMPLETA:
+"cervical"/"pescoço" → grupo "cervical" (TODA a cervical — é ERRADO usar vértebras
+isoladas ou a parte "regiao_cervical"); "dorso"/"costas" → parte "dorso";
+"lombar"/"lombo" → parte "lombo"; "garupa" → parte "garupa"; "coluna" → grupo "coluna".
+Vértebras individuais SÓ quando o texto nomear a vértebra ("C3", "T10").
+"em cervical e dorso/garupa" numa MESMA frase = TRÊS registros de alvo inteiro.
 
 # REGRA — NEGAÇÃO (achados ausentes NÃO pintam)
 Frases que NEGAM um achado ("sem dor à palpação dorsal ou cervical", "não apresenta
@@ -407,13 +412,18 @@ Quando o texto tratar de casco, ferradura, ferrageamento ou casqueamento, os alv
 devem ser PARTES DO CASCO (não partes do corpo):
 alvo: { "tipo": "casco", "parteId": "<id abaixo>", "membro": "AE"|"AD"|"PE"|"PD" (opcional) }
 - "membro" = qual casco: AE=anterior esquerdo, AD=anterior direito, PE=posterior
-  esquerdo, PD=posterior direito. Preencha sempre que o texto disser o membro
-  ("casco anterior direito", "mão esquerda", "pé direito"). "mão"=anterior, "pé"=posterior.
-- Intervenções (ferradura aplicada/trocada, casqueamento, ajuste, rebaixamento de
-  talão...) → kind "terapia_aplicada" com modalidade "procedimento".
-- Achados (sensibilidade, laminite, abscesso, hematoma de sola, linha branca
-  comprometida...) → kind "achado_exame" com o achado mais próximo da lista fechada
-  (dor, edema, reatividade_palpacao...).
+  esquerdo, PD=posterior direito ("mão"=anterior, "pé"=posterior). Preencha APENAS
+  quando o texto disser o membro — NUNCA invente; sem membro citado, OMITA o campo.
+- Intervenções (ferradura aplicada/trocada, ferrageamento terapêutico, casqueamento,
+  ajuste, rebaixamento de talão...) → kind "terapia_aplicada" com modalidade "procedimento".
+- Achados (sensibilidade, abscesso, hematoma de sola, linha branca comprometida...)
+  → kind "achado_exame" com o achado mais próximo da lista fechada (dor, edema,
+  reatividade_palpacao...). "Laminite" → achado_exame "edema" com alvo casco
+  "pincas" (e "sola", se o texto citar a sola) — ALÉM do procedimento realizado.
+Ex.: "Laminite, ferrageamento terapêutico aliviando a pressão na pinça" (membro NÃO
+citado — repare que os alvos ficam SEM "membro"):
+  { "kind":"achado_exame", "achado":"edema", "alvo":{ "tipo":"casco", "parteId":"pincas" } }
+  { "kind":"terapia_aplicada", "modalidade":"procedimento", "alvo":{ "tipo":"casco", "parteId":"pincas" } }
 PARTES DO CASCO (parteId — nome):
 ${linhasCasco}
 
@@ -603,44 +613,33 @@ Saída:
 (Nota: "PEMF" ficou sem modalidade/alvo utilizáveis antes do corte — não gere um registro
 para ele; apenas registre o aviso de truncamento.)
 
-# EXEMPLO 3 (resumoClinico — sessão de quiropraxia com scores)
+# EXEMPLO 3 (resumoClinico — sessão com scores)
 
-Texto: "Sessão 4 de 6. Claudicação grau 1 (AAEP), era grau 3 na primeira sessão. Dor à
-palpação 2/10. Tensão muscular: cervical 0,8, longuíssimo torácico 1,5, longuíssimo
-lombar 1,0, glúteos direito 0,5. Simetria pélvica: simétrica, antes era assimétrica à
-direita. Flexão lateral esquerda agora alcança o flanco. Báscula pélvica completa, sem
-dor. Liberado: caminhada e trote em linha reta até 40 min/dia. Restrito: círculos acima
-de 15m, só a partir da 2ª semana. Suspenso: tambores e giros curtos até reavaliar T14.
-O Diamante respondeu muito bem ao ajuste lombossacral; ponto de atenção é T14."
+Texto: "Claudicação grau 1 (AAEP). Dor à palpação 2/10. Tensão: longuíssimo lombar 1,0,
+glúteos direito 0,5. Simétrica. Flexão lateral esq. alcança o flanco. Liberado trote em
+linha reta 40 min/dia; suspenso tambores até reavaliar T14."
 
-Saída (resumoClinico apenas — "registros" fica de fora deste exemplo por brevidade):
+Saída (só o resumoClinico — "registros" omitido por brevidade):
 {
   "resumoClinico": {
-    "claudicacao": { "grauAAEP": 1, "observacao": "era grau 3 na primeira sessão" },
+    "claudicacao": { "grauAAEP": 1 },
     "dor": { "valor": 2 },
     "tensaoMuscular": [
-      { "regiao": "Cervical (braquiocefálico)", "valor": 0.8 },
-      { "regiao": "Longuíssimo torácico", "valor": 1.5 },
       { "regiao": "Longuíssimo lombar", "valor": 1.0 },
       { "regiao": "Glúteos (dir.)", "valor": 0.5 }
     ],
     "simetria": "Simétrica",
-    "rom": [
-      { "teste": "Flexão lateral · esq.", "resultado": "alcança o flanco" },
-      { "teste": "Báscula pélvica", "resultado": "completa, sem dor" }
-    ],
+    "rom": [{ "teste": "Flexão lateral · esq.", "resultado": "alcança o flanco" }],
     "treino": [
-      { "status": "liberado", "titulo": "Liberado", "detalhe": "Caminhada e trote em linha reta, terreno plano, até 40 min/dia." },
-      { "status": "restrito", "titulo": "Com restrição", "detalhe": "Círculos acima de 15m de diâmetro, a partir da 2ª semana." },
-      { "status": "suspenso", "titulo": "Suspenso", "detalhe": "Tambores e giros curtos — aguardar reavaliação de T14." }
-    ],
-    "observacaoFechamento": "Respondeu bem ao ajuste lombossacral; ponto de atenção segue sendo T14."
+      { "status": "liberado", "titulo": "Liberado", "detalhe": "Trote em linha reta, até 40 min/dia." },
+      { "status": "suspenso", "titulo": "Suspenso", "detalhe": "Tambores — aguardar reavaliação de T14." }
+    ]
   }
 }
 
 ## DITADO A EXTRAIR:
 
-${texto.slice(0, 12000)}`;
+${texto.slice(0, 6000)}`;
     },
   },
 

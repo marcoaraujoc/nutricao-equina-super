@@ -672,6 +672,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         if (!formEstaVazio() && !validarForm()) return;
         const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
         grupoId = res.data.dados.id;
+        // Registra o grupo criado — se a finalização falhar (ex: alerta de estoque),
+        // a nova tentativa reutiliza este grupo em vez de criar um duplicado
+        setSavedGrupo({ id: res.data.dados.id, numeroFormatado: res.data.dados.numeroFormatado });
       }
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
       setAlertaEstoque(null);
@@ -698,6 +701,22 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     }
     onSaved();
     onClose();
+  };
+
+  // Salvar unificado — o botão Finalizar foi absorvido pelo Salvar:
+  // com permissão de finalizar, salva e finaliza em uma única ação;
+  // sem permissão, mantém o comportamento antigo (salva como SALVO).
+  const handleSalvarUnificado = async () => {
+    if (canFinalizarCancelar) {
+      if (!isCreate && !formEstaVazio()) {
+        const ok = await handleAdicionarMais();
+        if (!ok) return;
+      }
+      await executarFinalizacao(false);
+      return;
+    }
+    if (isCreate) await handleSalvar();
+    else          await handleSalvarEditMode();
   };
 
   if (alertaEstoque) {
@@ -1086,7 +1105,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <CheckCircle2 size={28} className="mb-2 text-emerald-500" />
                 <p className="font-semibold text-sm text-gray-800">Prescrição #{savedGrupo.numeroFormatado} salva</p>
-                <p className="text-xs text-gray-400 mt-1">Finalize para ativar ou crie uma nova prescrição</p>
+                <p className="text-xs text-gray-400 mt-1">Salve para ativar ou crie uma nova prescrição</p>
               </div>
             )}
 
@@ -1190,7 +1209,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     disabled={finalizing}
                     className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                     {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    Finalizar
+                    Salvar
                   </button>
                 )}
               </>
@@ -1231,21 +1250,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </button>
                 )}
 
-                {/* Salvar — create mode ou edit mode SALVO (só GESTOR em edição) */}
-                {canEdit && !isReadOnly && (
-                  <button onClick={isCreate ? handleSalvar : handleSalvarEditMode} disabled={saving || finalizing}
-                    className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
-                    {saving ? <Loader2 size={13} className="animate-spin" /> : null}
-                    Salvar
-                  </button>
-                )}
-
-                {/* Finalizar — desacoplado de canEdit */}
-                {canFinalizarCancelar && !isReadOnly && (
-                  <button onClick={handleFinalizar} disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
+                {/* Salvar — absorveu o Finalizar: salva e finaliza quando o usuário
+                    tem permissão de finalizar (desacoplado de canEdit, como o
+                    Finalizar antigo — FORNECEDOR finaliza o próprio item) */}
+                {(canEdit || canFinalizarCancelar) && !isReadOnly && (
+                  <button onClick={handleSalvarUnificado}
+                    disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
                     className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
-                    {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    Finalizar
+                    {(saving || finalizing) ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                    Salvar
                   </button>
                 )}
               </>
@@ -1629,7 +1642,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     } catch (err: unknown) {
       const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
       if (data?.code === 'EXECUTADO') {
-        toast.error('Esta prescrição já foi executada integralmente e não pode ser cancelada.');
+        toast.error('Esta prescrição já foi executada e não pode ser alterada ou cancelada.');
       } else {
         toast.error(data?.error ?? 'Erro ao cancelar prescrição');
       }

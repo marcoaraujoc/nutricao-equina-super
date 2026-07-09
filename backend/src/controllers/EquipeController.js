@@ -155,6 +155,36 @@ const { USER_TYPES_GERENCIADOS } = PermissaoService;
 
 const NIVEL_ORDER = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
 
+// Anexa a cada membro os perfis do usuário no SISTEMA TODO (todas as equipes +
+// dono de empresa = GESTOR) — exibidos na coluna "Perfis" do ControleAcesso.
+// Ex: fornecedora numa equipe que assinou a aplicação também aparece como Gestor.
+async function anexarPerfisGlobais(membros) {
+  const userIds = [...new Set(membros.map(m => m.user.id))];
+  if (userIds.length === 0) return membros;
+  const [vinculos, donos] = await Promise.all([
+    prisma.membroEquipe.findMany({
+      where:  { userId: { in: userIds } },
+      select: { userId: true, cargo: true, cargos: true },
+    }),
+    prisma.empresa.findMany({
+      where:  { ownerId: { in: userIds } },
+      select: { ownerId: true },
+    }),
+  ]);
+  const perfisPorUser = new Map();
+  const add = (userId, cargo) => {
+    if (!cargo) return;
+    if (!perfisPorUser.has(userId)) perfisPorUser.set(userId, new Set());
+    perfisPorUser.get(userId).add(cargo);
+  };
+  for (const v of vinculos) {
+    add(v.userId, v.cargo);
+    for (const c of (v.cargos ?? [])) add(v.userId, c);
+  }
+  for (const d of donos) add(d.ownerId, 'GESTOR');
+  return membros.map(m => ({ ...m, perfisGlobais: [...(perfisPorUser.get(m.user.id) ?? [])] }));
+}
+
 const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
@@ -205,6 +235,73 @@ const EquipeController = {
       res.json({ sucesso: true, dados: empresas });
     } catch (err) {
       console.error('Erro ao listar empresas:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // GET /equipes/meus-contextos
+  // Opções de contexto ativo do usuário logado — TODOS os vínculos, não só de gestor:
+  // empresas onde é dono + equipes onde tem cargo (GESTOR, VETERINARIO, FORNECEDOR...).
+  // Permite que um usuário multi-perfil (ex: FORNECEDOR numa equipe que assinou a
+  // aplicação e virou GESTOR da própria empresa) alterne entre os perfis no Sidebar.
+  // Empresa CNPJ → opção no nível da empresa; empresa pessoal (CPF) → opção por equipe.
+  meusContextos: async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const CARGO_LABEL = {
+        GESTOR: 'Gestor', VETERINARIO: 'Veterinário', ESTAGIARIO: 'Estagiário',
+        FORNECEDOR: 'Fornecedor', SECRETARIA: 'Secretária', FINANCEIRO: 'Financeiro',
+        ENFERMEIRO: 'Enfermeiro',
+      };
+      const labelCargo = c => CARGO_LABEL[c] ?? (c ? c.charAt(0) + c.slice(1).toLowerCase() : '');
+
+      const [empresasOwned, membros] = await Promise.all([
+        prisma.empresa.findMany({
+          where:   { ownerId: userId },
+          select:  { id: true, nome: true, cnpj: true, equipes: { select: { id: true, nome: true }, orderBy: { id: 'asc' } } },
+          orderBy: { createdAt: 'asc' },
+        }),
+        prisma.membroEquipe.findMany({
+          where:   { userId },
+          select:  { cargo: true, equipe: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true, cnpj: true, ownerId: true } } } } },
+          orderBy: { createdAt: 'asc' },
+        }),
+      ]);
+
+      const opcoes = [];
+      const visto  = new Set();
+      const add = (o) => {
+        const k = `${o.empresaId}:${o.equipeId ?? ''}`;
+        if (visto.has(k)) return;
+        visto.add(k);
+        opcoes.push(o);
+      };
+
+      // Empresas próprias: dono = gestor delas
+      for (const emp of empresasOwned) {
+        if (!emp.cnpj && emp.equipes.length > 0) {
+          for (const eq of emp.equipes) add({ empresaId: emp.id, equipeId: eq.id, label: `${eq.nome} · Gestor`, cargo: 'GESTOR' });
+        } else {
+          add({ empresaId: emp.id, equipeId: null, label: `${emp.nome} · Gestor`, cargo: 'GESTOR' });
+        }
+      }
+
+      // Vínculos de equipe (gestor convidado e cargos não-gestores)
+      for (const m of membros) {
+        const emp = m.equipe?.empresa;
+        if (!emp) continue;
+        if (emp.ownerId === userId) continue; // já coberto acima
+        if (m.cargo === 'GESTOR' && emp.cnpj) {
+          add({ empresaId: emp.id, equipeId: null, label: `${emp.nome} · Gestor`, cargo: 'GESTOR' });
+        } else {
+          add({ empresaId: emp.id, equipeId: m.equipe.id, label: `${m.equipe.nome} · ${labelCargo(m.cargo)}`, cargo: m.cargo });
+        }
+      }
+
+      res.json({ sucesso: true, dados: opcoes });
+    } catch (err) {
+      console.error('Erro ao listar contextos do usuário:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -506,7 +603,7 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          dados:        membros,
+          dados:        await anexarPerfisGlobais(membros),
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -536,7 +633,7 @@ const EquipeController = {
       });
       res.json({
         sucesso: true,
-        dados:        membros,
+        dados:        await anexarPerfisGlobais(membros),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -568,7 +665,7 @@ const EquipeController = {
         include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
         orderBy: { createdAt: 'desc' },
       });
-      res.json({ sucesso: true, dados: membros });
+      res.json({ sucesso: true, dados: await anexarPerfisGlobais(membros) });
     } catch (err) {
       console.error('Erro ao listar membros por equipe:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

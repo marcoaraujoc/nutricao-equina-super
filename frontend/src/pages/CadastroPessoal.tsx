@@ -100,7 +100,7 @@ export default function CadastroPessoal() {
     bairro:            '',
     cidade:            '',
     estado:            '',
-    tipoUsuario:       'PROPRIETARIO',
+    tipoUsuario:       'VETERINARIO',
     crmv:              '',
     especiesAtendidas: [] as number[],
     subespecialidades: [] as string[],
@@ -127,7 +127,7 @@ export default function CadastroPessoal() {
             bairro:            data.bairro            || '',
             cidade:            data.cidade            || '',
             estado:            data.estado            || '',
-            tipoUsuario:       data.userType          || 'PROPRIETARIO',
+            tipoUsuario:       data.userType          || 'VETERINARIO',
             crmv:              data.crmv              || '',
             especiesAtendidas: data.especiesAtendidas || [],
             subespecialidades: data.subespecialidades || [],
@@ -317,7 +317,7 @@ export default function CadastroPessoal() {
 
         if (form.tipoUsuario === 'VETERINARIO') {
           localStorage.setItem('s2vet_ob', 'd');
-          navigate('/clinica');
+          navigate('/mapa-atendimento');
         } else {
           const ob = localStorage.getItem('s2vet_ob');
           if (ob === 'p') {
@@ -623,7 +623,7 @@ export default function CadastroPessoal() {
             type="submit" disabled={saving}
             className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-4 rounded-3xl text-base sm:text-lg font-semibold mt-2 transition-colors"
           >
-            {saving ? 'Salvando...' : 'Salvar e Continuar'}
+            {saving ? 'Salvando...' : 'Salvar'}
           </button>
 
         </form>

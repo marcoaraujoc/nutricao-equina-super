@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail } from 'lucide-react';
+import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail, Pencil } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -385,10 +385,10 @@ export default function ExameCompra() {
   useEffect(() => { if (animalId) carregarAnimalPorId(animalId); }, [animalId]);
   useEffect(() => {
     if (!selectedAnimal?.id) return;
+    // Tela sempre inicia LIMPA (novo exame); os já registrados ficam no
+    // histórico abaixo, com botão Editar para carregar no formulário.
     resetForm();
-    carregarHistoricoCompra(selectedAnimal.id).then(compras => {
-      if (compras.length > 0) handleEditar(compras[0], true);
-    });
+    carregarHistoricoCompra(selectedAnimal.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAnimal?.id]);
 
@@ -583,17 +583,10 @@ export default function ExameCompra() {
         await api.post('/clinica/exames', payload);
       }
       toast.success(isEditing ? 'Exame de Compra atualizado com sucesso' : 'Exame de Compra registrado com sucesso');
-      if (isEditing) {
-        setJustificativa('');
-        if (selectedAnimal?.id) carregarHistoricoCompra(selectedAnimal.id);
-      } else {
-        resetForm();
-        if (selectedAnimal?.id) {
-          carregarHistoricoCompra(selectedAnimal.id).then(compras => {
-            if (compras.length > 0) handleEditar(compras[0], true);
-          });
-        }
-      }
+      // Salvou (novo ou atualização) → limpa os campos da tela; o registro fica
+      // acessível no histórico abaixo (botão Editar recarrega no formulário).
+      resetForm();
+      if (selectedAnimal?.id) carregarHistoricoCompra(selectedAnimal.id);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao registrar exame');
@@ -943,9 +936,7 @@ export default function ExameCompra() {
           </h1>
         </div>
 
-        {selectedAnimal && <AnimalCard animal={selectedAnimal} />}
-
-        {/* Paciente + data */}
+        {/* Paciente + data — seletor logo após o título (padrão da aplicação) */}
         {animais.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -973,6 +964,8 @@ export default function ExameCompra() {
             </div>
           </div>
         )}
+
+        {selectedAnimal && <AnimalCard animal={selectedAnimal} />}
 
         {!loadingAnimais && animais.length === 0 && (
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-10 text-center">
@@ -1051,53 +1044,85 @@ export default function ExameCompra() {
           </>
         )}
 
-        {/* ── Registro atual — ações de impressão/compartilhamento ─────── */}
-        {selectedAnimal && historicoCompra.length > 0 && !loadingHistorico && (() => {
-          const ex = historicoCompra[0];
-          const laudo = parseLaudo(ex.observacao);
-          return (
-            <div className="pb-8">
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-4 py-3 flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Activity size={15} className="text-amber-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                    <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-lg border border-gray-200">
-                      {fmtNumero(ex.numero)}
-                    </span>
-                    <span className="text-xs text-gray-500">{fmtData(ex.dataSolicitacao)}</span>
-                    {ex.veterinario && (
-                      <span className="text-xs text-gray-400">· {ex.veterinario.fullName}</span>
-                    )}
-                    {laudo?.justificativa && (
-                      <span className="text-xs text-amber-600 italic">· Alt: {laudo.justificativa}</span>
-                    )}
-                  </div>
-                  {laudo?.conclusao ? (
-                    <p className="text-xs text-gray-600 line-clamp-2 mt-1 italic">{laudo.conclusao}</p>
-                  ) : (
-                    <p className="text-xs text-gray-300 italic mt-1">Sem conclusão registrada</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <button onClick={() => imprimirLaudo(ex)} title="Imprimir"
-                    className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                    <Printer size={14} />
-                  </button>
-                  <button onClick={() => compartilharWhatsApp(ex)} title="WhatsApp"
-                    className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
-                    <MessageCircle size={14} />
-                  </button>
-                  <button onClick={() => compartilharEmail(ex)} title="E-mail"
-                    className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
-                    <Mail size={14} />
-                  </button>
-                </div>
-              </div>
+        {/* ── Histórico — SEMPRE lista todos os exames de compra do animal ── */}
+        {selectedAnimal && (
+          <div className="pb-8">
+            <div className="flex items-center justify-between px-1 pb-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Exames de Compra</p>
+              <span className="text-xs text-gray-400">
+                {historicoCompra.length} registro{historicoCompra.length !== 1 ? 's' : ''}
+              </span>
             </div>
-          );
-        })()}
+            {loadingHistorico ? (
+              <div className="flex justify-center py-8">
+                <Loader2 size={18} className="animate-spin text-emerald-600" />
+              </div>
+            ) : historicoCompra.length === 0 ? (
+              <p className="text-center text-sm text-gray-300 py-6">Nenhum exame de compra registrado</p>
+            ) : (
+              <div className="space-y-2">
+                {historicoCompra.map(ex => {
+                  const laudo    = parseLaudo(ex.observacao);
+                  const emEdicao = editingId === ex.id;
+                  return (
+                    <div key={ex.id}
+                      className={`bg-white rounded-2xl border shadow-sm px-4 py-3 flex items-start gap-3 ${
+                        emEdicao ? 'border-amber-300 bg-amber-50/40' : 'border-gray-200'
+                      }`}>
+                      <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <Activity size={15} className="text-amber-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                          <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-lg border border-gray-200">
+                            {fmtNumero(ex.numero)}
+                          </span>
+                          <span className="text-xs text-gray-500">{fmtData(ex.dataSolicitacao)}</span>
+                          {ex.veterinario && (
+                            <span className="text-xs text-gray-400">· {ex.veterinario.fullName}</span>
+                          )}
+                          {emEdicao && (
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full uppercase">
+                              Em edição
+                            </span>
+                          )}
+                          {laudo?.justificativa && (
+                            <span className="text-xs text-amber-600 italic">· Alt: {laudo.justificativa}</span>
+                          )}
+                        </div>
+                        {laudo?.conclusao ? (
+                          <p className="text-xs text-gray-600 line-clamp-2 mt-1 italic">{laudo.conclusao}</p>
+                        ) : (
+                          <p className="text-xs text-gray-300 italic mt-1">Sem conclusão registrada</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {podeCriar && !emEdicao && (
+                          <button onClick={() => handleEditar(ex)} title="Editar"
+                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <Pencil size={14} />
+                          </button>
+                        )}
+                        <button onClick={() => imprimirLaudo(ex)} title="Imprimir"
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          <Printer size={14} />
+                        </button>
+                        <button onClick={() => compartilharWhatsApp(ex)} title="WhatsApp"
+                          className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                          <MessageCircle size={14} />
+                        </button>
+                        <button onClick={() => compartilharEmail(ex)} title="E-mail"
+                          className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                          <Mail size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
       </div>
     </PageContainer>

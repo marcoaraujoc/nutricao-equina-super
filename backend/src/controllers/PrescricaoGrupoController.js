@@ -607,8 +607,13 @@ const atualizarItem = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)       return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo) return res.status(400).json({ error: 'Item já foi removido.' });
-    if (item.executadoEm && janelaDoItem(item, hojeLocalStr()).ultimoDia) {
-      return res.status(400).json({ error: 'Item já executado integralmente, não pode ser alterado.' });
+
+    // Regra: prescrição que já teve QUALQUER execução não pode ser alterada.
+    const execucoesNoGrupo = await prisma.prescricao.count({
+      where: { grupoId: item.grupoId, executadoEm: { not: null } },
+    });
+    if (execucoesNoGrupo > 0 || item.grupo?.status === 'EXECUTADO') {
+      return res.status(400).json({ error: 'Prescrição já executada não pode ser alterada.', code: 'EXECUTADO' });
     }
 
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
@@ -656,7 +661,14 @@ const removerItem = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)             return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo)       return res.status(400).json({ error: 'Item já foi removido.' });
-    if (item.executadoEm)  return res.status(400).json({ error: 'Item já executado, não pode ser excluído.' });
+
+    // Regra: prescrição que já teve QUALQUER execução não pode ser excluída.
+    const execucoesNoGrupoRem = await prisma.prescricao.count({
+      where: { grupoId: item.grupoId, executadoEm: { not: null } },
+    });
+    if (execucoesNoGrupoRem > 0 || item.grupo?.status === 'EXECUTADO') {
+      return res.status(400).json({ error: 'Prescrição já executada não pode ser excluída.', code: 'EXECUTADO' });
+    }
 
     const grupoJaFinalizado = item.grupo?.status !== 'SALVO';
 
@@ -768,8 +780,10 @@ const cancelar = async (req, res) => {
       return res.status(403).json({ error: 'Você só pode cancelar prescrições criadas por você.' });
     }
 
-    if (grupo.status === 'EXECUTADO') {
-      return res.status(400).json({ error: 'Prescrição executada integralmente não pode ser cancelada.', code: 'EXECUTADO' });
+    // Regra: prescrição que já teve QUALQUER execução (mesmo parcial, em
+    // tratamento de vários dias) não pode ser cancelada/excluída.
+    if (grupo.status === 'EXECUTADO' || grupo.executadoEm || grupo.itens.some(i => i.executadoEm)) {
+      return res.status(400).json({ error: 'Prescrição já executada não pode ser cancelada.', code: 'EXECUTADO' });
     }
 
     if (!['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
@@ -805,12 +819,16 @@ const executar = async (req, res) => {
       where:   { id: grupoId },
       include: {
         itens:   { where: { ativo: true }, include: { medicamentoCat: true } },
-        evolucao: { select: { id: true, numero: true, tipoAtendimento: true } },
+        evolucao: { select: { id: true, numero: true, tipoAtendimento: true, status: true } },
       },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (!['FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
       return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
+    }
+    // Regra: prescrição só pode ser executada com a evolução do atendimento FINALIZADA
+    if (grupo.evolucao && grupo.evolucao.status !== 'FINALIZADA') {
+      return res.status(400).json({ error: 'A evolução do atendimento precisa estar finalizada para executar a prescrição.' });
     }
 
     const hojeStr = hojeLocalStr();
@@ -933,10 +951,15 @@ const listarParaExecucao = async (req, res) => {
     const { busca, empresaId, animalId, data } = req.query;
 
     const whereGrupo = {
-      status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE'] },
+      // EXECUTADO incluído para o histórico do dia: grupo executado no último
+      // dia do tratamento ainda está dentro da janela e aparece como executado.
+      status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO'] },
+      // Prescrição só vai para execução quando a EVOLUÇÃO do atendimento estiver
+      // FINALIZADA (única condição sobre a evolução). Grupos legados sem
+      // evolução vinculada continuam aparecendo.
       OR: [
         { evolucaoId: null },
-        { evolucao: { aprovado: true } },
+        { evolucao: { status: 'FINALIZADA' } },
       ],
     };
     if (empresaId) whereGrupo.empresaId = Number(empresaId);

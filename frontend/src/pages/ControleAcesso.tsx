@@ -60,6 +60,8 @@ interface Membro {
   id:        number;
   cargo:     string;
   cargos?:   string[];
+  /** Perfis do usuário no sistema todo (todas as equipes + dono de empresa) */
+  perfisGlobais?: string[];
   ativo?:    boolean;
   createdAt: string;
   user: { id: number; fullName: string; email: string; userType: string; ativo?: boolean };
@@ -260,6 +262,35 @@ const badgeCargo = (cargo: string) =>
      FORNECEDOR: 'bg-teal-100 text-teal-700', SECRETARIA: 'bg-amber-100 text-amber-700',
      FINANCEIRO: 'bg-orange-100 text-orange-700', ENFERMEIRO: 'bg-cyan-100 text-cyan-700',
   } as Record<string,string>)[cargo] ?? 'bg-gray-100 text-gray-600';
+
+// Perfis do membro NESTA equipe (cargos locais) + perfis que ele tem em outras
+// equipes/empresas do sistema (perfisGlobais vem do backend — listarMembros)
+function perfisDoMembro(m: Membro) {
+  const locais   = m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo];
+  const externos = (m.perfisGlobais ?? []).filter(p => !locais.includes(p));
+  return { locais, externos };
+}
+
+// Badges com TODOS os perfis do usuário: os desta equipe em cor cheia e os de
+// outras equipes/empresas atenuados (ex: fornecedora aqui que é gestora da própria empresa)
+function BadgesPerfis({ m }: { m: Membro }) {
+  const { locais, externos } = perfisDoMembro(m);
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {locais.map(c => (
+        <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
+          {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
+        </span>
+      ))}
+      {externos.map(c => (
+        <span key={`ext-${c}`} title="Perfil em outra equipe/empresa"
+          className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold opacity-60 ring-1 ring-inset ring-gray-300 ${badgeCargo(c)}`}>
+          {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ─── Utilitário ───────────────────────────────────────────────────────────────
 
@@ -1534,7 +1565,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                   <thead>
                     <tr className="border-b border-gray-100">
                       <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Profissional</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfil Ativo</th>
+                      <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfis</th>
                       <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Status de Acesso</th>
                       <th className="px-5 py-3 text-right text-[11px] font-bold text-gray-400 uppercase tracking-wider">Ações</th>
                     </tr>
@@ -1559,13 +1590,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           </div>
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
-                              <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
-                                {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
-                              </span>
-                            ))}
-                          </div>
+                          <BadgesPerfis m={m} />
                         </td>
                         <td className="px-5 py-3.5">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
@@ -1621,13 +1646,13 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
                           <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
                           <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
-                          {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                        </span>
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0 ${ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
                           {ativo ? 'Ativo' : 'Desativado'}
                         </span>
+                      </div>
+                      <div className="mt-2">
+                        <BadgesPerfis m={m} />
                       </div>
                       {m.user.id !== user?.id && (
                         <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-gray-100">
@@ -2789,7 +2814,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
               <thead>
                 <tr className="border-b border-gray-100">
                   <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Profissional</th>
-                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfil Ativo</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfis</th>
                   <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Status</th>
                   {hasPrestador && <th className="px-5 py-3 text-left text-[11px] font-bold text-teal-500 uppercase tracking-wider">Acesso a Pacientes</th>}
                   <th className="px-5 py-3 text-right text-[11px] font-bold text-gray-400 uppercase tracking-wider">Ações</th>
@@ -2813,13 +2838,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {(m.cargos && m.cargos.length > 0 ? m.cargos : [m.cargo]).map(c => (
-                          <span key={c} className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(c)}`}>
-                            {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
-                          </span>
-                        ))}
-                      </div>
+                      <BadgesPerfis m={m} />
                     </td>
                     <td className="px-5 py-3.5">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${m.user?.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
@@ -2885,13 +2904,13 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
                       <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
                       <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                     </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${badgeCargo(m.cargo)}`}>
-                      {(CARGO_INFO[m.cargo]?.label ?? m.cargo).toUpperCase()}
-                    </span>
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0 ${ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-red-400'}`} />
                       {ativo ? 'Ativo' : 'Desativado'}
                     </span>
+                  </div>
+                  <div className="mt-2">
+                    <BadgesPerfis m={m} />
                   </div>
                   {m.user.id !== user?.id && (
                     <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-gray-100">

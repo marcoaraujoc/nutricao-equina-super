@@ -2,7 +2,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
-const { recalcularTotal: recalcularTotalCompartilhado } = require('../lib/faturaUtils');
+const { recalcularTotal: recalcularTotalCompartilhado, registrarCorrecaoFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 
 const ITEM_INCLUDE = {
@@ -313,6 +313,7 @@ const FaturaController = {
       });
 
       const total = await recalcularTotal(item.faturaId);
+      await registrarCorrecaoFatura(prisma, item.faturaId);
       res.json({ dados: updated, totalFatura: total });
     } catch (err) {
       console.error('Erro ao atualizar item:', err);
@@ -336,6 +337,7 @@ const FaturaController = {
 
       await prisma.faturaItem.delete({ where: { id: Number(itemId) } });
       const total = await recalcularTotal(item.faturaId);
+      await registrarCorrecaoFatura(prisma, item.faturaId);
 
       res.json({ mensagem: 'Item removido', totalFatura: total });
     } catch (err) {

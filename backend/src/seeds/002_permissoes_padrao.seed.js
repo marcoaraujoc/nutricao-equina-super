@@ -12,6 +12,7 @@ const PERMISSOES_PADRAO = {
 
   // Gestor — acesso total irrestrito a todos os módulos (incluindo catálogos admin-only)
   GESTOR: {
+    'relatorios.gerencial.ler': 'FULL',
     'cadastro.proprietario.ler':     'FULL',
     'cadastro.proprietario.criar':   'FULL',
     'cadastro.proprietario.editar':  'FULL',
@@ -160,6 +161,8 @@ const PERMISSOES_PADRAO = {
 
   // Veterinário — acesso completo às operações clínicas e nutricionais
   VETERINARIO: {
+    // Relatórios gerenciais — restrito a GESTOR/FINANCEIRO por padrão
+    'relatorios.gerencial.ler': 'NENHUM',
     // Cadastro
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'PROPRIO',
@@ -330,6 +333,7 @@ const PERMISSOES_PADRAO = {
 
   // Proprietário — leitura por padrão; criar/editar nutrição configuráveis pelo admin/gestor
   PROPRIETARIO: {
+    'relatorios.gerencial.ler': 'NENHUM',
     'cadastro.proprietario.ler':     'NENHUM',
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
@@ -386,6 +390,7 @@ const PERMISSOES_PADRAO = {
 
   // Fornecedor de serviços — acesso configurável pelo gestor; finalizar apenas itens próprios
   FORNECEDOR: {
+    'relatorios.gerencial.ler': 'NENHUM',
     'cadastro.proprietario.ler':     'NENHUM',
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
@@ -535,6 +540,7 @@ const PERMISSOES_PADRAO = {
 
   // Estagiário — por padrão só leitura; gestor pode elevar via painel
   ESTAGIARIO: {
+    'relatorios.gerencial.ler': 'NENHUM',
     // Cadastro
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'NENHUM',
@@ -705,6 +711,7 @@ const PERMISSOES_PADRAO = {
 
   // Secretaria — recepção, agendamentos, cadastros e financeiro básico
   SECRETARIA: {
+    'relatorios.gerencial.ler': 'NENHUM',
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'PROPRIO',
     'cadastro.proprietario.editar':  'PROPRIO',
@@ -853,6 +860,8 @@ const PERMISSOES_PADRAO = {
 
   // Financeiro — acesso ao módulo financeiro e visualização de clientes
   FINANCEIRO: {
+    // Relatórios gerenciais — indicadores financeiros e operacionais da empresa
+    'relatorios.gerencial.ler': 'EQUIPE',
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
@@ -1001,6 +1010,7 @@ const PERMISSOES_PADRAO = {
 
   // Enfermeiro — execução de prescrições, vacinas, evoluções e cuidados diretos
   ENFERMEIRO: {
+    'relatorios.gerencial.ler': 'NENHUM',
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'NENHUM',
     'cadastro.proprietario.editar':  'NENHUM',
@@ -1324,6 +1334,9 @@ const MODULOS_SISTEMA = [
   { slug: 'procedimentos.catalogo.editar',   modulo: 'procedimentos', submodulo: 'catalogo', acao: 'editar',   label: 'Procedimentos — Editar',     ordemExib: 102 },
   { slug: 'procedimentos.catalogo.deletar',  modulo: 'procedimentos', submodulo: 'catalogo', acao: 'deletar',  label: 'Procedimentos — Excluir',    ordemExib: 103 },
   { slug: 'procedimentos.catalogo.imprimir', modulo: 'procedimentos', submodulo: 'catalogo', acao: 'imprimir', label: 'Procedimentos — Imprimir',   ordemExib: 104 },
+
+  // ── Relatórios — Gerencial ──────────────────────────────────────────────────
+  { slug: 'relatorios.gerencial.ler', modulo: 'relatorios', submodulo: 'gerencial', acao: 'ler', label: 'Relatórios — Visualizar', ordemExib: 105 },
 ];
 
 module.exports = { PERMISSOES_PADRAO, MODULOS_SISTEMA };

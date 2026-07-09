@@ -4,15 +4,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { useAuth } from '../contexts/AuthContext';
+import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import {
   X, Loader2,
   FileText, Pill, Syringe, FlaskConical, Share2,
   History, Search, CalendarDays, CircleDot, ChevronDown, Printer, Pencil, Eye,
+  CheckCircle2,
 } from 'lucide-react';
 import AnimalCard  from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import PageContainer from '../components/PageContainer';
+import ConfirmModal from '../components/ConfirmModal';
 import SubModuloEvolucao from './SubModuloEvolucao';
 import SubModuloPrescricao from './SubModuloPrescricao';
 import SubModuloVacina from './SubModuloVacina';
@@ -514,9 +519,15 @@ function tabFromPath(pathname: string): SubModulo {
 
 const Atendimento = () => {
   const { setSelectedAnimal, selectedAnimal } = useSelectedAnimal();
+  const { user }                              = useAuth();
+  const { podeExecutar, isGestor }            = usePermissoes();
   const navigate                              = useNavigate();
   const location                              = useLocation();
   const { animalId: animalIdParam }           = useParams<{ animalId?: string }>();
+
+  const podeFinalizarEvolucao = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
+  // FORNECEDOR: regra de autoria — só finaliza a evolução que ele próprio criou
+  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
 
@@ -556,8 +567,55 @@ const Atendimento = () => {
   const [viewPrescricaoId,  setViewPrescricaoId]  = useState<number | null>(null);
   const [viewExameId,       setViewExameId]       = useState<number | null>(null);
   const [viewVacinaId,      setViewVacinaId]      = useState<number | null>(null);
+  // Finalizar Atendimento (banner) — mesma ação do Finalizar da aba Evolução
+  const [confirmFinalizarAt, setConfirmFinalizarAt] = useState(false);
+  const [finalizandoAt,      setFinalizandoAt]      = useState(false);
+  // Remonta a aba Evolução após finalizar pelo banner (recarrega a lista e limpa o form)
+  const [evolucaoTabKey,     setEvolucaoTabKey]     = useState(0);
 
   const refreshHistorico = () => setHistoricoKey(k => k + 1);
+
+  const handleFinalizarAtendimento = async () => {
+    if (!evolucaoAtiva) return;
+    setConfirmFinalizarAt(false);
+    setFinalizandoAt(true);
+    const evolucaoId = evolucaoAtiva.id;
+    try {
+      const res = await api.get(`/clinica/evolucoes/${evolucaoId}`);
+      const ev = res.data?.dados as { especialidade: string; texto: string | null; veterinarioId: number } | undefined;
+      if (!ev) { toast.error('Não foi possível carregar a evolução do atendimento'); return; }
+      if (isFornecedor && ev.veterinarioId !== (user?.id ?? 0)) {
+        toast.error('Sem permissão para finalizar evolução de outro profissional. Verifique com o responsável da equipe.');
+        return;
+      }
+      if (!ev.texto?.trim()) {
+        toast.error('O texto da evolução é obrigatório. Preencha a evolução antes de finalizar o atendimento.');
+        return;
+      }
+      await api.put(`/clinica/evolucoes/${evolucaoId}`, {
+        especialidade: ev.especialidade,
+        texto:         ev.texto,
+        status:        'FINALIZADA',
+      });
+      toast.success('Atendimento finalizado!');
+      setEvolucaoAtiva(null);
+      refreshHistorico();
+      setEvolucaoTabKey(k => k + 1);
+
+      // Título sugerido pela LLM — mesmo best-effort do Finalizar da aba Evolução
+      api.post('/clinica/evolucoes/interpretar', { texto: ev.texto })
+        .then(llmRes => {
+          const titulo = (llmRes.data?.dados as { titulo?: string } | undefined)?.titulo;
+          if (!titulo) return;
+          return api.patch(`/clinica/evolucoes/${evolucaoId}/titulo`, { titulo })
+            .then(() => refreshHistorico());
+        })
+        .catch(() => { /* não-crítico */ });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      toast.error(msg ?? 'Erro ao finalizar atendimento');
+    } finally { setFinalizandoAt(false); }
+  };
 
   // Visualizar/Editar do Histórico de Evolução Clínica: carrega cada registro
   // vinculado ao atendimento na sua página correspondente. A evolução em si é
@@ -706,6 +764,7 @@ const Atendimento = () => {
       case 'evolucao':
         return (
           <SubModuloEvolucao
+            key={`evtab-${evolucaoTabKey}`}
             animalId={animalIdNum}
             animal={animal}
             faturaId={null}
@@ -789,7 +848,16 @@ const Atendimento = () => {
       {evolucaoAtiva && (
         <div className="flex items-center gap-2 mt-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-sm text-emerald-800 font-medium">
           <CircleDot size={15} className="text-emerald-500 flex-shrink-0 animate-pulse" />
-          Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero}</span> em andamento
+          <span className="flex-1 min-w-0">
+            Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero}</span> em andamento
+          </span>
+          {podeFinalizarEvolucao && (
+            <button onClick={() => setConfirmFinalizarAt(true)} disabled={finalizandoAt}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex-shrink-0">
+              {finalizandoAt ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+              Finalizar Atendimento
+            </button>
+          )}
         </div>
       )}
 
@@ -872,6 +940,16 @@ const Atendimento = () => {
           </>
         )}
       </div>
+
+      <ConfirmModal
+        open={confirmFinalizarAt}
+        titulo="Finalizar atendimento"
+        mensagem={`Finalizar o atendimento ${evolucaoAtiva?.atendimentoNumero ?? ''}? Esta ação não poderá ser revertida.`}
+        labelConfirmar="Finalizar"
+        variante="aviso"
+        onConfirmar={handleFinalizarAtendimento}
+        onCancelar={() => setConfirmFinalizarAt(false)}
+      />
 
     </PageContainer>
   );

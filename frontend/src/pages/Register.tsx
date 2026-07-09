@@ -12,7 +12,7 @@ export default function Register() {
     fullName: googleData.fullName || '',
     email: googleData.email || '',
     phone: '',
-    userType: 'PROPRIETARIO' as 'PROPRIETARIO' | 'VETERINARIO',
+    userType: 'VETERINARIO' as 'PROPRIETARIO' | 'VETERINARIO',
     password: '',
     confirmPassword: '',
   });
@@ -185,8 +185,8 @@ export default function Register() {
               className="w-full px-4 py-3 rounded-3xl border border-gray-300 focus:outline-none focus:border-emerald-500"
               required
             >
-              <option value="PROPRIETARIO">Proprietário</option>
               <option value="VETERINARIO">Veterinário</option>
+              <option value="PROPRIETARIO">Proprietário</option>
             </select>
           </div>
 

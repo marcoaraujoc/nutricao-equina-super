@@ -3,16 +3,30 @@
 // vacinas, exames, prescrições, encaminhamentos) e painel de Agendamentos.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  ArrowLeft, Search, ChevronDown, Loader2, CalendarClock,
-  Clock, User as UserIcon, Plus, X, Check, Trash2, Sparkles,
+  Search, ChevronDown, Loader2, CalendarClock,
+  Clock, User as UserIcon, X, Check, Trash2,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
   Scan, Activity,
 } from 'lucide-react';
+import PageContainer from '../components/PageContainer';
+import BotaoVoltar from '../components/BotaoVoltar';
+
+// Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
+const ESPECIE_EMOJI: Record<string, string> = {
+  'equino': '🐴', 'canino': '🐶', 'felino': '🐱', 'bovino': '🐮',
+  'ovino': '🐑', 'caprino': '🐐', 'suíno': '🐷', 'suino': '🐷',
+  'réptil': '🦎', 'reptil': '🦎', 'ave': '🐦',
+};
+
+function emojiEspecie(nome?: string | null): string {
+  if (!nome) return '🐾';
+  return ESPECIE_EMOJI[nome.trim().toLowerCase()] ?? '🐾';
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -906,7 +920,6 @@ const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
 
 const AnimalDetail = () => {
   const { id }   = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
 
   const podeGerenciarAgenda =
@@ -918,7 +931,6 @@ const AnimalDetail = () => {
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [busca,        setBusca]        = useState('');
-  const [showNovoAg,   setShowNovoAg]   = useState(false);
   const [expandidos,   setExpandidos]   = useState<Set<string>>(new Set());
 
   // Detalhe
@@ -1042,34 +1054,31 @@ const AnimalDetail = () => {
   };
 
   if (loading) return (
-    <div className="flex items-center justify-center py-32">
-      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
-    </div>
+    <PageContainer maxWidth="7xl">
+      <div className="flex items-center justify-center py-32">
+        <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
+      </div>
+    </PageContainer>
   );
 
   if (!animal) return (
-    <div className="text-center py-20 text-red-500">Animal não encontrado</div>
+    <PageContainer maxWidth="7xl">
+      <div className="text-center py-20 text-red-500">Animal não encontrado</div>
+    </PageContainer>
   );
 
   return (
-    <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-4">
+    <PageContainer maxWidth="7xl">
+    <div className="space-y-5">
 
-      <div className="flex items-center justify-between">
-        <button onClick={() => navigate(-1)}
-          className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium">
-          <ArrowLeft size={18} />
-          <span className="text-sm">Voltar</span>
-        </button>
-
-        {podeGerenciarAgenda && (
-          <button
-            onClick={() => navigate(`/agendamentos?auto=1&animalId=${animal.id}`)}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors"
-          >
-            <Sparkles size={15} />
-            Agende com IA
-          </button>
-        )}
+      {/* ── Header — mesmo layout de Meus Pacientes (AnimaisVet) ─────────── */}
+      <BotaoVoltar />
+      <div className="flex items-center justify-between gap-3 mt-2">
+        <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
+          <span className="text-[22px] leading-none">{emojiEspecie(animal.especie?.nome)}</span>
+          Detalhamento do Animal
+        </h1>
+        {/* Tela somente de visualização — criação de agendamento fica na Agenda */}
       </div>
 
       {/* Header — dados do animal */}
@@ -1119,19 +1128,14 @@ const AnimalDetail = () => {
               </div>
               <h2 className="font-bold text-gray-900 text-sm">Agendamentos</h2>
             </div>
-            {podeGerenciarAgenda && (
-              <button onClick={() => setShowNovoAg(true)} title="Novo agendamento"
-                className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                <Plus size={16} />
-              </button>
-            )}
+            {/* Criação de agendamento não é feita por aqui — usar a tela de Agenda */}
           </div>
           <div className="p-3 space-y-2.5 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
             {agendamentos.length === 0 ? (
               <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento futuro</p>
             ) : agendamentos.map(ag => (
               <CardAgendamento key={ag.id} ag={ag}
-                podeGerenciar={podeGerenciarAgenda}
+                podeGerenciar={false}  // tela somente de visualização — gerenciar na Agenda
                 onConcluir={handleConcluirAg}
                 onExcluir={handleExcluirAg} />
             ))}
@@ -1140,14 +1144,6 @@ const AnimalDetail = () => {
       </div>
 
       {/* Modais */}
-      {showNovoAg && animal && (
-        <ModalNovoAgendamento
-          animalId={animal.id}
-          onCriado={() => { setShowNovoAg(false); carregarAgendamentos(); }}
-          onFechar={() => setShowNovoAg(false)}
-        />
-      )}
-
       {detalheEv && (
         <DetalheModal
           ev={detalheEv}
@@ -1157,6 +1153,7 @@ const AnimalDetail = () => {
         />
       )}
     </div>
+    </PageContainer>
   );
 };
 
