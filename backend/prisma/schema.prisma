@@ -402,6 +402,11 @@ model EvolucaoClinica {
   titulo                String?   @db.VarChar(255)
   numero                Int?      // sequencial por animal dentro do tipo (EV-0001 ou herdado do AG)
   tipoAtendimento       String?   @default("EV") @db.VarChar(2) @map("tipo_atendimento") // 'AG' | 'EV'
+  // Tenancy: empresa/equipe do CONTEXTO em que a evolução foi criada (multi-vet:
+  // o mesmo animal pode ter histórico dividido entre clínicas). Sem FK — o registro
+  // clínico sobrevive à exclusão da empresa. null = legado/vet autônomo.
+  empresaId             Int?      @map("empresa_id")
+  equipeId              Int?      @map("equipe_id")
   dataInicio            DateTime  @default(now())
   dataFim               DateTime?
   dataModificacao       DateTime?
@@ -423,6 +428,8 @@ model EvolucaoClinica {
 
   @@index([agendamentoId])
   @@index([animalId, especialidade, dataInicio])
+  @@index([empresaId])
+  @@index([equipeId])
   @@map("tb_evolucoes_clinicas")
   @@schema("schs2vet")
 }
@@ -812,10 +819,21 @@ model AuditLog {
   empresaId Int?     // multi-tenant: sem FK — logs sobrevivem à exclusão da empresa
   timestamp DateTime @default(now())
 
+  // Auditoria estruturada de exclusões/cancelamentos (migration 20260710000003)
+  categoria  String? @db.Text // EXCLUSAO | CANCELAMENTO
+  entidade   String? @db.Text // EVOLUCAO, PRESCRICAO, EXAME_CLINICO, VACINA, ENCAMINHAMENTO, AGENDAMENTO, ESTOQUE_FARMACIA, ...
+  entidadeId Int?
+  animalId   Int?             // sem FK — log sobrevive à exclusão do animal
+  motivo     String? @db.Text // justificativa informada pelo usuário (obrigatória nos endpoints de exclusão/cancelamento)
+  detalhes   String? @db.Text // descrição legível do registro excluído/cancelado
+  ip         String? @db.Text // IP de origem do request (migration 20260710000004)
+
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([empresaId])
+  @@index([categoria])
+  @@index([timestamp])
   @@map("tb_audit_logs")
   @@schema("schs2vet")
 }
@@ -983,6 +1001,7 @@ model EmpresaConfiguracao {
   // null → compat: se diaFechamentoFatura setado, trata como DIA_FIXO; senão ULTIMO_DIA_MES (fallback)
   tipoFechamento      String?
   diaFechamentoFatura Int?     // dia do mês (DIA_FIXO) ou Nº do dia útil (DIA_UTIL)
+  whatsapp            String?  // WhatsApp da empresa (somente dígitos, DDD+número) — envio/recebimento de mensagens
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -1256,6 +1275,8 @@ model EstoqueClinica {
   lote               String?   @db.VarChar(100)
   validade           DateTime?
   qtdEstoque         Float     @default(0)
+  qtdEmbalagens      Int?      @map("qtd_embalagens")      // nº de embalagens da(s) entrada(s)
+  pesoPorEmbalagem   Float?    @map("peso_por_embalagem")  // peso/vol por embalagem (unidade do catálogo)
   estoqueMinimo    Float     @default(0)        // alerta vermelho
   estoqueAlarmante Float     @default(0)        // alerta amarelo
   ativo            Boolean   @default(true)

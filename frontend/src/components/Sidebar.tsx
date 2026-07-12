@@ -13,7 +13,7 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
-  Sparkles, CalendarPlus, CalendarDays, Package, Settings,
+  Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -117,7 +117,8 @@ export default function Sidebar() {
     (temAcessoClinico && podeVerPrescricoes)   ||
     podeVerFarmacia || podeVerEstoqueVacina    ||
     temAcessoNutricional                       ||
-    podeVerFaturas;
+    podeVerFaturas                             ||
+    podeVerRelatorios;
 
   // "Cadastro Pessoal" sempre disponível para profissionais (não-estagiário, não-proprietário).
   // Permite que VETs sem nenhuma outra permissão ainda acessem seu próprio perfil.
@@ -168,6 +169,7 @@ export default function Sidebar() {
     p.startsWith('/composicao-alimentar'),
   );
   const [openCadastro,      setOpenCadastro]      = useState(() => p.startsWith('/cadastro/') || p === '/equipe');
+  const [openRelatorios,    setOpenRelatorios]    = useState(() => p.startsWith('/relatorios'));
   const [openAdministracao, setOpenAdministracao] = useState(() =>
     p.startsWith('/usuarios') ||
     p.startsWith('/equipe-manager') ||
@@ -295,8 +297,8 @@ export default function Sidebar() {
               {openGeral && (
                 <div className="mt-1 space-y-0.5 pl-4">
                   {podeVerDashboard && navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
-                  {podeVerRelatorios && navLink('/relatorios', <ChartBar size={20} />, 'Relatórios', p.startsWith('/relatorios'))}
                   {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
+                  {(isGestor || isAdmin) && navLink('/auditoria-geral', <ScrollText size={20} />, 'Auditoria', p.startsWith('/auditoria-geral'))}
 
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
                   {temAlgumCadastroItem && (
@@ -506,6 +508,26 @@ export default function Sidebar() {
                             }`}>
                             <DollarSign size={16} /> Faturamento
                           </Link>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Relatórios ───────────────────────────────────────── */}
+                  {podeVerRelatorios && (
+                    <div>
+                      <button onClick={() => toggle(setOpenRelatorios)}
+                        className="flex items-center justify-between w-full px-5 py-2.5 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl transition-colors">
+                        <span className="flex items-center gap-3"><ChartBar size={20} /> Relatórios</span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openRelatorios ? 'rotate-180' : ''}`} />
+                      </button>
+                      {openRelatorios && (
+                        <div className="mt-1 space-y-0.5">
+                          {subLink('/relatorios',             <ChartBar size={16} />,      'Gestão',              p === '/relatorios')}
+                          {subLink('/relatorios/financeiro',  <DollarSign size={16} />,    'Financeiro',          p.startsWith('/relatorios/financeiro'))}
+                          {subLink('/relatorios/atendimento', <CalendarClock size={16} />, 'Atendimento',         p.startsWith('/relatorios/atendimento'))}
+                          {subLink('/relatorios/cadastro',    <Users size={16} />,         'Pacientes & Clientes', p.startsWith('/relatorios/cadastro'))}
+                          {subLink('/relatorios/farmacia',    <Package size={16} />,       'Farmácia & Estoque',  p.startsWith('/relatorios/farmacia'))}
                         </div>
                       )}
                     </div>

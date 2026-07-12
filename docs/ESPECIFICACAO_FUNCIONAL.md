@@ -1,6 +1,6 @@
 # S2Vet — Especificação Funcional
 
-> Documento gerado por varredura do código-fonte em 2026-07-09.
+> Documento gerado por varredura do código-fonte em 2026-07-09 (atualizado em 2026-07-10).
 > Descreve fielmente o que está construído — sem propostas, sem melhorias.
 > Fontes: rotas do backend (`backend/src/routes/*`), controllers, seeds de permissão,
 > schema Prisma, páginas e componentes do frontend (`frontend/src/*`) e CLAUDE.md.
@@ -14,10 +14,15 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 
 - **Frontend:** React 18 + TypeScript + Vite, Tailwind CSS, HashRouter (`/#/rota`).
 - **Backend:** Node.js + Express + Prisma, PostgreSQL (schema `schs2vet`), porta 3001.
-- **Autenticação:** JWT + refresh token (rotação), login por e-mail/senha e Google OAuth.
+- **Autenticação:** JWT + refresh token (rotação) em **cookies HttpOnly**, login por
+  e-mail/senha e Google OAuth.
 - **IA:** Groq (LLM) para interpretação de textos clínicos, laudos e voz; Whisper para
   transcrição offline; uso registrado em `AiUsageLog`.
 - Exclusão de registros clínicos é sempre **soft delete** (campo `ativo`).
+- **Modais arrastáveis no desktop:** qualquer modal da aplicação pode ser reposicionado
+  arrastando pelo cabeçalho ou título (hook global `useDraggableModals`, montado no
+  `App.tsx`). Só com mouse e viewport ≥ 768px; o backdrop não se move, o modal não pode
+  sair da tela e fechar/reabrir volta à posição original.
 
 ---
 
@@ -58,16 +63,16 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 
 | Funcionalidade | Comportamento |
 |---|---|
-| Login e-mail/senha | `POST /api/auth/login` → JWT (24h) + refresh token (JWT 30d). Rate limit 20 req/15min em `/auth`. |
-| Login Google | `useGoogleLogin` com `prompt: 'select_account'`; o backend valida o `access_token` no Google antes de emitir o JWT interno. |
-| Refresh automático | Interceptor Axios renova o token em 401 via `POST /api/auth/refresh` sem redirecionar para login. |
+| Login e-mail/senha | `POST /api/auth/login` → JWT (24h) + refresh (JWT 30d) em **cookies HttpOnly** (`s2vet_at`/`s2vet_rt`). Rate limit 20 req/15min em `/auth`. |
+| Login Google | `useGoogleLogin` com `prompt: 'select_account'`; o backend valida o `access_token` no Google antes de emitir o JWT interno (também em cookies HttpOnly). |
+| Refresh automático | Interceptor Axios renova a sessão em 401 via `POST /api/auth/refresh` (refresh vem do cookie; rotaciona e reescreve os cookies) sem redirecionar para login. |
 | Esqueci minha senha | `POST /api/auth/forgot-password` — resposta sempre 200 genérica (não revela se o e-mail existe). Link por e-mail → `/#/reset-password?token=...`. |
 | Reset de senha | `POST /api/auth/reset-password` (mínimo 8 caracteres). |
 | Troca de senha obrigatória | Usuários criados com senha padrão `Inicial_001` têm `mustChangePassword` e são bloqueados na tela `/alterar-senha` até trocar. |
 | Logout por inatividade | 5 minutos sem interação → logout automático (frontend). |
-| Logout | Revoga o refresh token no backend; limpa token, refresh e contexto ativo do storage. |
+| Logout | Revoga o refresh token no backend, **limpa os cookies HttpOnly** e o contexto ativo do storage. |
 | Conta desativada | Qualquer request autenticado de conta com `ativo=false` é rejeitado com 401. |
-| Auditoria de sessão | LOGIN e LOGOUT são gravados em `AuditLog` (`POST /api/audit/log`). |
+| Auditoria de sessão | LOGIN e LOGOUT são gravados em `AuditLog` (`POST /api/audit/log`) com o **IP de origem**. |
 
 ---
 
@@ -139,7 +144,9 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 1. *Matriz de Perfis* (desktop only) — lista de perfis/cargos da equipe à esquerda
    (com badge e contagem de membros; perfis padrão e com membros não podem ser removidos;
    é possível criar perfis customizados); matriz de permissões à direita com colunas
-   VER / CRIAR / ALTERAR / EXCLUIR / FINALIZAR / IMPRIMIR. Checkbox de 3 estados
+   VER / CRIAR / ALTERAR / EXCLUIR / FINALIZAR / IMPRIMIR (módulos com ações próprias
+   têm colunas específicas: Agendamento e Agenda usam CONFIRMAR/REAGENDAR/etc.;
+   Farmácia usa VER / CRIAR / ALTERAR / **AJUSTAR** / EXCLUIR / IMPRIMIR). Checkbox de 3 estados
    (NENHUM → EQUIPE → NEGADO). Itens `locked` aparecem com cadeado. "Aplicar ao perfil"
    propaga aos membros do cargo.
 2. *Profissionais* — busca por nome/e-mail, filtro por perfil. Coluna **Perfis** exibe
@@ -162,12 +169,17 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
   handlers de escrita e ocultação de botões sem permissão.
 - Interceptor Axios: `GET` com 403 resolve como `{ data: null }` (silencioso); mutações
   rejeitam com `isPermissionError: true`.
-- Regras de autoria em registros clínicos:
-  - **Editar:** GESTOR edita qualquer registro da equipe; todos os demais (inclusive VET)
-    só editam o que criaram (`veterinarioId === req.user.id`).
-  - **Finalizar:** GESTOR finaliza qualquer um; FORNECEDOR finaliza apenas o que criou;
-    VET/ESTAGIARIO têm NENHUM por padrão no seed (bloqueados).
-  - FORNECEDOR nunca herda bypass de autoria, mesmo com nível EQUIPE/FULL.
+- Regras de autoria em registros clínicos — **100% dirigidas pelo RBAC** (nenhuma regra
+  de cargo fixa no backend; a única exceção fixa é o bypass de ADMIN):
+  - O controller decide autoria pelo **nível efetivo da matriz** (`req.permissaoNivel`)
+    no slug da ação, via `podeOperarRegistro`: nível `PROPRIO` → só o próprio registro;
+    `EQUIPE`/`FULL` → qualquer registro da equipe.
+  - "Só o gestor finaliza uma evolução" é **configuração** (o seed dá VET/EST `NENHUM`
+    em `*.finalizar`), não código — o gestor pode conceder finalizar a qualquer perfil.
+  - Editar registro FINALIZADO (evolução) exige nível `FULL` em editar; excluir evolução
+    finalizada segue restrito a ADMIN.
+  - Aplicado em evolução, prescrição (item e grupo), exame clínico, encaminhamento e
+    agendamento. O escopo de dados do prestador (designação) permanece deny-by-default.
 
 ---
 
@@ -205,7 +217,9 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
   ativa + pacientes pessoais do vet fora da empresa (vínculo direto). Animal de outra
   equipe da mesma empresa fica fora. PROPRIETARIO vê apenas os seus. FORNECEDOR vê apenas
   animais com **designação ativa** (exceto quando atua como gestor no contexto — §4).
-- Exclusão de animal = soft delete. Criação exige nível EQUIPE em `animais.criar`.
+- Exclusão de animal = soft delete **global** (o animal sai das listagens de todos,
+  inclusive do proprietário; histórico preservado) com **justificativa obrigatória**
+  registrada na Auditoria. Criação exige nível EQUIPE em `animais.criar`.
 
 ### 6.3 Proprietários (`/cadastro/proprietarios`)
 
@@ -216,7 +230,8 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
   e-mail de boas-vindas com a senha efetiva.
 - Escopo segregado por equipe: aparecem proprietários com animal ativo na(s) equipe(s) do
   contexto ou cadastrados diretamente pela equipe. "Remover da empresa" inativa apenas os
-  animais do escopo da equipe ativa.
+  animais do escopo da equipe ativa — exige **justificativa obrigatória** (auditada com a
+  contagem de animais inativados).
 
 ### 6.4 Tratadores (`/cadastro/tratadores`)
 
@@ -316,10 +331,17 @@ histórico abre por botão flutuante.
 - **Salvar** (botão único — absorveu o antigo Finalizar): salva e **finaliza** o
   documento em uma ação, com verificação de estoque; alerta de estoque
   insuficiente/zerado detalha reservas por animal/prescrição e permite "Continuar mesmo
-  assim". Usuário sem permissão de finalizar apenas salva (status SALVO).
-- Finalização reserva estoque (`ReservaEstoque`) e lança os itens na fatura ABERTA do
-  proprietário. Histórico com finalizar direto (legado SALVO), cancelar com motivo
-  (bloqueado se EXECUTADO), imprimir (FINALIZADO/EXECUTADO).
+  assim" (`forcarFinalizacao`). Usuário sem permissão de finalizar apenas salva (status SALVO).
+- **Estoque multi-lote (FEFO):** verificação, reserva e baixa consideram TODAS as
+  entradas do medicamento no estoque da empresa — quando um lote não é suficiente, o
+  restante é reservado/debitado no próximo (validade mais próxima primeiro). A
+  disponibilidade desconta reservas de outras prescrições.
+- Finalização **reserva o curso completo** no estoque (`ReservaEstoque`, distribuído
+  entre os lotes); a execução diária debita em FEFO (um movimento SAÍDA por lote, valor
+  da dose com o preço de cada lote) e abate as reservas do grupo; cancelamento libera as
+  reservas e o último dia de execução libera o remanescente. Histórico com finalizar
+  direto (legado SALVO), cancelar com **motivo obrigatório** (bloqueado se EXECUTADO),
+  imprimir (FINALIZADO/EXECUTADO). Remoção de item também exige motivo.
 - Edição pós-execução parcial: item já em execução só pode ser editado para os **dias
   restantes** (data de início vira hoje, duração = dias restantes); item totalmente
   executado é imutável; item executado não pode ser removido.
@@ -344,6 +366,12 @@ histórico abre por botão flutuante.
 - Ações: criar (vinculado à evolução ativa), editar, **finalizar** (status → CONCLUIDO,
   lança na fatura, regra de autoria), excluir (soft, sincroniza fatura), imprimir
   requisição, compartilhar por e-mail/WhatsApp.
+- **Controle por tipo de exame (RBAC):** além do slug geral `atendimento.exames.*`,
+  criar/editar/excluir exige a permissão do tipo — Laboratorial/Bioquímico →
+  `exames.laboratorial.*`; Imagem → `exames.imagem.*` (Compra usa só o geral). O nível do
+  tipo é resolvido em runtime e combinado com o geral (o mais restritivo vence). Na tela,
+  a aba de um tipo sem permissão de criar nem é exibida. Antes de 2026-07-10 esses slugs
+  eram órfãos (apareciam no Controle de Acesso mas não controlavam nada).
 
 ### 8.5 Encaminhamento
 
@@ -410,12 +438,26 @@ histórico abre por botão flutuante.
 ### 11.1 Farmácia (`/farmacia`)
 
 - Estoque **por clínica/empresa** referenciando o catálogo global de medicamentos.
-- Item: medicamento, quantidade, estoque mínimo e nível alarmante, controlado (sim/não),
-  fornecedor (cadastro de fornecedores tipo Farmácia/Laboratório/Loja), valores.
+- Item: medicamento, quantidade, lote e validade (obrigatórios), nº de embalagens e
+  peso/volume por embalagem, estoque mínimo e nível alarmante, controlado (sim/não),
+  fornecedor (cadastro de fornecedores tipo Farmácia/Laboratório/Loja), valores e nota fiscal.
+- Entrada com mesmo medicamento + lote + validade + valor por embalagem (tolerância 1%)
+  é **consolidada** no item existente (soma quantidades e valores).
 - Indicadores: total, controlados, abaixo do mínimo, abaixo do alarmante; abas de filtro
   (todos/crítico/alarmante/controlados/inativos).
 - **Movimentações** imutáveis (ENTRADA / SAÍDA / AJUSTE) com motivo (entradas por nota
-  fiscal "NF:..."), gráfico de movimentos por dia e ajuste manual de estoque.
+  fiscal "NF:..."), gráfico de movimentos por dia.
+- **Item "em uso"** = item com pelo menos um movimento de **SAÍDA** (uso real). Só o item
+  em uso tem lote, validade, quantidade e embalagens bloqueados na edição; a ENTRADA
+  inicial/adicional criada automaticamente não bloqueia nada. Item em uso abre em
+  modo visualização, com atalho para o Ajuste de Estoque.
+- **Ajuste de Estoque** (botão ao lado de "Entrada de Estoque"): modal com seletor
+  pesquisável de item do estoque (nome, lote, quantidade atual); o campo Quantidade em
+  Estoque vem **pré-preenchido com a quantidade atual** — o usuário informa a contagem
+  real e a diferença (positiva ou negativa) é registrada como movimento AJUSTE com motivo
+  obrigatório. Quantidade igual à atual não gera movimento; zerar o estoque é permitido.
+  Permissão própria: `farmacia.estoque.ajustar` (VET/ENFERMEIRO: PRÓPRIO; demais: NENHUM;
+  GESTOR: bypass) — coluna AJUSTAR na Matriz de Perfis.
 - Baixas automáticas ocorrem pela execução de prescrição; reservas pela finalização.
 
 ### 11.2 Estoque de Vacinas (`/estoque-vacina`)
@@ -522,7 +564,9 @@ histórico abre por botão flutuante.
   automaticamente no fechamento (idempotente).
 - Fatura `FECHADA` ainda aceita edição de itens e lançamentos manuais; `PAGA` é imutável.
 - Qualquer edição/remoção de item existente registra **correção** na fatura
-  (`qtdCorrecoes`, `ultimaCorrecaoEm` — alimenta o relatório gerencial).
+  (`qtdCorrecoes`, `ultimaCorrecaoEm` — alimenta o relatório gerencial); a remoção
+  manual de item também exige **justificativa obrigatória** (auditada como
+  EXCLUSAO/FATURA_ITEM).
 - Ações: imprimir/PDF, exportar CSV, compartilhar (WhatsApp), fechar fatura, mudar
   status. PROPRIETARIO acessa a própria fatura (visualização).
 
@@ -539,6 +583,10 @@ histórico abre por botão flutuante.
   e **regra de fechamento de fatura** (4 opções na UI: último dia do mês, primeiro dia do
   mês, dia específico, dia útil N). Configuração única por empresa (CNPJ) ou por equipe
   (empresa pessoal).
+- **WhatsApp da empresa** — número para envio/recebimento de mensagens. Máscara BR na UI
+  `(11) 98765-4321`; persistido somente com dígitos (`EmpresaConfiguracao.whatsapp`,
+  validação 10–15 dígitos no backend); campo em branco remove o número. O campo apenas
+  armazena o número — a integração de mensageria em si ainda não existe.
 
 ---
 
@@ -635,9 +683,19 @@ Arquitetura: interface `AIProvider` (implementação Groq), prompts versionados
   própria equipe, inclusive senha; gestor não edita gestor), ativar/desativar.
 - **EquipeManager** (`/equipe-manager`, ADMIN): visão de todas as empresas, equipes,
   membros e convites pendentes.
-- **Auditoria** (`/auditoria`): log de ações de usuários (`AuditLog` — login/logout e
-  ações registradas), com `empresaId` para multi-tenant (sem FK — sobrevive à exclusão
-  da empresa).
+- **Auditoria** (`/auditoria`): log de acesso legado (login/logout via `AuthContext`).
+- **Auditoria de exclusões/cancelamentos** (`/auditoria-geral`, Sidebar > Geral,
+  GESTOR/ADMIN): **toda exclusão ou cancelamento na aplicação exige justificativa
+  obrigatória** (evolução, prescrição/itens, exames clínicos e nutricionais, vacinas,
+  encaminhamentos, agendamentos, estoque de farmácia e de vacinas, itens de dieta,
+  catálogos ADMIN de medicamentos/procedimentos e — desde 2026-07-10 — exclusão de
+  animal, remoção manual de item de fatura e remoção de proprietário da empresa).
+  O motivo é coletado pelo modal padrão
+  `ModalJustificativa`, validado no backend (400 sem motivo) e gravado no `AuditLog`
+  estruturado (categoria EXCLUSAO/CANCELAMENTO, entidade, id, animal, motivo, detalhes,
+  usuário, empresa e **IP de origem**). A tela lista os registros com filtros por
+  categoria, tipo de registro, busca textual e período, com paginação (e coluna de IP);
+  GESTOR vê a empresa ativa e ADMIN vê tudo (`GET /api/audit/logs`).
 - **query-adhoc** (`/query-adhoc`): página utilitária de consulta ad-hoc (dev).
 
 ---
@@ -662,29 +720,41 @@ Impressões usam o **logotipo da empresa/equipe** quando configurado (fallback m
 
 ## 22. Segurança (implementado)
 
-- Helmet, CORS com allowlist via `ALLOWED_ORIGINS`, rate limiting (200 req/min geral,
-  20 req/15min em `/auth`), validação de `JWT_SECRET` no startup (≥32 chars).
+- **Sessão por cookies HttpOnly** (2026-07-10): access (`s2vet_at`, JWT 24h) e refresh
+  (`s2vet_rt`, JWT 30d) em cookies `HttpOnly`, `SameSite=Lax`, `Secure` em produção — o
+  token não é legível por JavaScript nem armazenado em storage (defesa contra roubo via
+  XSS). O backend lê o cookie primeiro e aceita `Authorization: Bearer` só como fallback
+  (clientes não-navegador). Login/refresh/Google setam os cookies; logout limpa e revoga
+  o refresh no banco. A identidade do usuário no frontend vem de `/api/users/me`.
+- **`trust proxy`** configurado (`TRUST_PROXY_HOPS`, default 1) — resolve o IP real do
+  cliente atrás do proxy e elimina o erro do rate-limit com `X-Forwarded-For`.
+- Helmet, CORS com allowlist via `ALLOWED_ORIGINS` (com `credentials`), rate limiting
+  (200 req/min geral, 20 req/15min em `/auth`), validação de `JWT_SECRET` no startup (≥32).
 - Uploads: nomes gerados com `crypto.randomBytes` (capability URL), whitelist de
   extensão + mimetype, servidos com `nosniff`, CSP sandbox e `Content-Disposition:
   attachment` para tipos fora da whitelist de mídia.
-- Refresh token é JWT assinado com expiração 30d e verificação antes do lookup.
+- Refresh token é JWT assinado com expiração 30d, rotacionado a cada uso e verificado
+  antes do lookup.
 - `forgot-password` com resposta genérica; registro restrito a
   PROPRIETARIO/VETERINARIO; console suprimido em produção; correlation id
   (`x-request-id`) em todos os requests; logs estruturados (Winston).
 - 403 de GET silencioso no frontend (sem vazamento de erro para o usuário).
+- **Auditoria com IP de origem** em login/logout e exclusões/cancelamentos
+  (`AuditLog.ip`, derivado do request no servidor).
 
 ---
 
 ## 23. Limitações e comportamentos conhecidos (fiéis ao código atual)
 
-1. **Slugs órfãos** `exames.laboratorial.*` e `exames.imagem.*`: existem no seed e
-   aparecem no Controle de Acesso, mas nenhuma rota os usa (o backend usa
-   `atendimento.exames.*`). Configurá-los não tem efeito.
+1. ~~Slugs órfãos `exames.laboratorial.*`/`exames.imagem.*`~~ — **resolvido
+   (2026-07-10)**: agora controlam de fato criar/editar/excluir por tipo de exame
+   (ver §8.4).
 2. **VacinaClinica não tem fluxo de finalização** (sem campo `status`); registro é
    direto. Regras de autoria de edição para vacina dependem de migration futura.
-3. **Fornecedor-gestor e autoria clínica:** mesmo atuando como gestora do próprio
-   contexto, uma conta userType FORNECEDOR não recebe bypass de autoria clínica
-   (não edita/finaliza registros de outros) — regra explícita no código.
+3. **Autoria clínica é 100% RBAC** (2026-07-10): não há mais regra de cargo hardcoded no
+   backend (só o bypass de ADMIN). Um FORNECEDOR com nível `EQUIPE`/`FULL` na matriz
+   passaria a operar registros de outros — é decisão do gestor no Controle de Acesso, não
+   do código. O deny-by-default de dados do prestador (designação) permanece.
 4. **Rastreio de correções de fatura** passou a existir em 2026-07-07; correções
    anteriores não são contabilizadas no relatório gerencial.
 5. **Cadastro via Google** cria conta como PROPRIETARIO fixo.

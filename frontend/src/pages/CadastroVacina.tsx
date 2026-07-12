@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -334,12 +335,12 @@ function CatalogoVacinasTab() {
 
   const handleExcluir = (v: MedVacina) => setConfirmVacina(v);
 
-  const handleExcluirConfirmado = async () => {
+  const handleExcluirConfirmado = async (motivo: string) => {
     if (!confirmVacina) return;
     const v = confirmVacina;
     setConfirmVacina(null);
     try {
-      await api.delete(`/medicamentos/${v.id}`);
+      await api.delete(`/medicamentos/${v.id}`, { data: { motivo } });
       toast.success('Vacina excluída');
       carregar();
     } catch {
@@ -515,13 +516,13 @@ function CatalogoVacinasTab() {
         />
       )}
 
-      <ConfirmModal
-        open={confirmVacina != null}
+      <ModalJustificativa
+        aberto={confirmVacina != null}
         titulo="Excluir vacina"
-        mensagem={`Excluir a vacina "${confirmVacina?.nome}"? Esta ação não pode ser desfeita.`}
-        labelConfirmar="Excluir"
+        descricao={`Excluir a vacina "${confirmVacina?.nome}"? Esta ação não pode ser desfeita.`}
+        acaoLabel="Excluir"
         onConfirmar={handleExcluirConfirmado}
-        onCancelar={() => setConfirmVacina(null)}
+        onFechar={() => setConfirmVacina(null)}
       />
     </>
   );

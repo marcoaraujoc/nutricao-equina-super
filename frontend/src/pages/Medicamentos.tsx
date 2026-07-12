@@ -11,6 +11,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -445,9 +446,9 @@ export default function Medicamentos() {
     } finally { setSaving(false); }
   };
 
-  const handleExcluir = async (id: number) => {
+  const handleExcluir = async (id: number, motivo: string) => {
     try {
-      await api.delete(`/medicamentos/${id}`);
+      await api.delete(`/medicamentos/${id}`, { data: { motivo } });
       toast.success('Medicamento desativado');
       carregar();
     } catch (err: unknown) {
@@ -669,31 +670,14 @@ export default function Medicamentos() {
         <MedicamentoModal editando={editando} saving={saving} onSalvar={handleSalvar} onFechar={fecharModal} />
       )}
 
-      {confirmDelete !== null && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border border-gray-100">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
-                <Trash2 size={18} className="text-red-600" />
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-900">Desativar medicamento</h3>
-                <p className="text-xs text-gray-500">O item será marcado como inativo no catálogo.</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setConfirmDelete(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button onClick={() => handleExcluir(confirmDelete)}
-                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold">
-                Confirmar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalJustificativa
+        aberto={confirmDelete !== null}
+        titulo="Desativar medicamento"
+        descricao="O item será marcado como inativo no catálogo."
+        acaoLabel="Desativar"
+        onConfirmar={(motivo) => { if (confirmDelete !== null) handleExcluir(confirmDelete, motivo); }}
+        onFechar={() => setConfirmDelete(null)}
+      />
 
     </PageContainer>
   );

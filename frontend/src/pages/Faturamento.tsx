@@ -6,6 +6,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import ModalJustificativa from '../components/ModalJustificativa';
 import { usePermissoes } from '../hooks/usePermissoes';
 import {
   DollarSign, Search, Loader2, Trash2,
@@ -317,6 +318,8 @@ function PainelFatura({
   const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
   const [lancando,          setLancando]          = useState(false);
 
+  const [itemParaExcluir, setItemParaExcluir] = useState<number | null>(null);
+
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
@@ -334,16 +337,27 @@ function PainelFatura({
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const handleDeleteItem = async (itemId: number) => {
+  // Remoção exige justificativa (registrada na Auditoria) — abre o modal padrão
+  const handleDeleteItem = (itemId: number) => {
     if (!podeEditar) { semPermissao('remover item da fatura'); return; }
+    setItemParaExcluir(itemId);
+  };
+
+  const confirmarExcluirItem = async (motivo: string) => {
+    if (itemParaExcluir == null) return;
     try {
-      const r = await api.delete(`/clinica/faturas/itens/${itemId}`);
+      const r = await api.delete(`/clinica/faturas/itens/${itemParaExcluir}`, { data: { motivo } });
       setFatura(prev => prev ? {
         ...prev,
         total: r.data.totalFatura,
-        itens: prev.itens.filter(i => i.id !== itemId),
+        itens: prev.itens.filter(i => i.id !== itemParaExcluir),
       } : prev);
-    } catch { toast.error('Erro ao remover item'); }
+      setItemParaExcluir(null);
+      toast.success('Item removido.');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao remover item');
+    }
   };
 
   const handleSaveItem = async (itemId: number, patch: Partial<FaturaItem>) => {
@@ -576,6 +590,19 @@ function PainelFatura({
           </div>
         </div>
       </div>
+
+      {/* Modal — remover item (justificativa obrigatória → Auditoria) */}
+      <ModalJustificativa
+        aberto={itemParaExcluir != null}
+        titulo="Remover item da fatura?"
+        descricao={(() => {
+          const it = fatura?.itens.find(i => i.id === itemParaExcluir);
+          return it ? `${it.descricao} — a remoção fica registrada como correção da fatura.` : undefined;
+        })()}
+        acaoLabel="Remover"
+        onConfirmar={confirmarExcluirItem}
+        onFechar={() => setItemParaExcluir(null)}
+      />
 
       {/* Corpo da fatura */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4 pr-1 pb-4">

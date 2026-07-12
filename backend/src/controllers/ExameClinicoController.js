@@ -3,9 +3,29 @@
 
 const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
+const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 
 const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
+
+// ── Permissão por TIPO de exame (matriz RBAC) ────────────────────────────────
+// Laboratorial/Bioquímico → exames.laboratorial.* ; Imagem → exames.imagem.*
+// Compra não tem módulo próprio (vale apenas atendimento.exames.*).
+// Complementa o checkPermission da rota: o slug do tipo só é conhecido em runtime
+// (vem do body ou do registro), por isso é resolvido aqui via getNivelEfetivo.
+const SLUG_BASE_POR_TIPO = {
+  Laboratorial: 'exames.laboratorial',
+  'Bioquímico': 'exames.laboratorial',
+  Imagem:       'exames.imagem',
+};
+
+async function nivelDoTipo(req, tipo, acao) {
+  const base = SLUG_BASE_POR_TIPO[tipo];
+  if (!base) return null; // tipo sem restrição adicional
+  return getNivelEfetivo(req, `${base}.${acao}`);
+}
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -28,12 +48,13 @@ const ExameClinicoController = {
 
       const [itens, total] = await Promise.all([
         prisma.exameClinico.findMany({
-          where:   { animalId, ativo: true },
+          // Segregação multi-clínica: cada empresa vê só os próprios exames do animal
+          where:   { animalId, ativo: true, AND: [escopoFilhoEvolucaoWhere(req)] },
           include: INCLUDE,
           orderBy: { dataSolicitacao: 'desc' },
           take, skip,
         }),
-        prisma.exameClinico.count({ where: { animalId, ativo: true } }),
+        prisma.exameClinico.count({ where: { animalId, ativo: true, AND: [escopoFilhoEvolucaoWhere(req)] } }),
       ]);
 
       res.json({ dados: itens, meta: { total, page: Number(req.query.page ?? 1), limit: take } });
@@ -73,6 +94,12 @@ const ExameClinicoController = {
           select: { id: true },
         });
         if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
+      }
+
+      // Permissão por tipo (matriz RBAC): exames.laboratorial.criar / exames.imagem.criar
+      const nivelTipoCriar = await nivelDoTipo(req, tipo, 'criar');
+      if (nivelTipoCriar !== null && (NIVEL_ORDINAL[nivelTipoCriar] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+        return res.status(403).json({ error: `Sem permissão para criar exames do tipo ${tipo}.` });
       }
 
       // Campos extras armazenados em observacao como JSON
@@ -154,11 +181,16 @@ const ExameClinicoController = {
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
-      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
-      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestor && Number(item.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode editar exames criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.exames.editar):
+      // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
+      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite editar exames criados por você.' });
+      }
+
+      // Permissão por tipo (exames.laboratorial.editar / exames.imagem.editar)
+      const nivelTipoEditar = await nivelDoTipo(req, item.tipo, 'editar');
+      if (nivelTipoEditar !== null && !podeOperarRegistro(nivelTipoEditar, item.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: `Sem permissão para editar exames do tipo ${item.tipo}.` });
       }
 
       const { descricao, observacao, status, laboratorio, tipoAmostra, indicacaoClinica, dataSolicitacao, qtdAmostra } = req.body;
@@ -227,9 +259,9 @@ const ExameClinicoController = {
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      // Regra: FORNECEDOR só pode finalizar exame que ele próprio criou
-      if (req.user.userType === 'FORNECEDOR' && item.veterinarioId !== req.user.id) {
-        return res.status(403).json({ error: 'Você só pode finalizar exames criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.exames.finalizar)
+      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar exames criados por você.' });
       }
 
       if (item.status === 'CONCLUIDO') {
@@ -279,6 +311,11 @@ const ExameClinicoController = {
   // DELETE /clinica/exames/:id  (soft delete)
   excluir: async (req, res) => {
     try {
+      const { motivo } = req.body ?? {};
+      if (!motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+      }
+
       const item = await prisma.exameClinico.findUnique({ where: { id: Number(req.params.id) } });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
 
@@ -287,10 +324,15 @@ const ExameClinicoController = {
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
-      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestorDel && Number(item.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode excluir exames criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.exames.deletar)
+      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite excluir exames criados por você.' });
+      }
+
+      // Permissão por tipo (exames.laboratorial.deletar / exames.imagem.deletar)
+      const nivelTipoDel = await nivelDoTipo(req, item.tipo, 'deletar');
+      if (nivelTipoDel !== null && !podeOperarRegistro(nivelTipoDel, item.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: `Sem permissão para excluir exames do tipo ${item.tipo}.` });
       }
 
       await prisma.$transaction(async (tx) => {
@@ -300,6 +342,15 @@ const ExameClinicoController = {
           await removerFaturaItensDaOrigem(tx, 'exameClinicoId', item.id);
         }
         await tx.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
+
+        await registrarAuditoria(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'EXAME_CLINICO',
+          entidadeId: item.id,
+          animalId:   item.animalId,
+          motivo,
+          detalhes:   [item.tipo, item.descricao].filter(Boolean).join(' — ') || null,
+        });
       });
 
       res.json({ dados: { id: item.id, excluido: true } });

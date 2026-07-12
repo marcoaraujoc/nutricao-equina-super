@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const https  = require('https');
 
 const prisma = require('../lib/prisma').default;
+const { setAuthCookies } = require('../lib/authCookies');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -96,6 +97,9 @@ const GoogleController = {
         where: { id: user.id },
         data:  { refreshToken },
       });
+
+      // Cookies HttpOnly (consistente com o login por e-mail/senha)
+      setAuthCookies(res, { accessToken: token, refreshToken });
 
       return res.json({
         success: true,

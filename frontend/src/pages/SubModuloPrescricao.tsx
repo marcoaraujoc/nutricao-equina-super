@@ -11,6 +11,7 @@ import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -348,6 +349,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [editingLocalIdx,  setEditingLocalIdx]  = useState<number | null>(null);
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
+  const [removendoItemId,  setRemovendoItemId]  = useState<number | null>(null);
   const [medicamentos,     setMedicamentos]     = useState<MedicamentoCat[]>([]);
   const [allMeds,          setAllMeds]          = useState<MedicamentoCat[]>([]);
   const [saving,           setSaving]           = useState(false);
@@ -624,14 +626,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (editingLocalIdx === idx) { resetForm(); setEditingLocalIdx(null); }
   };
 
-  const handleRemoverServer = async (itemId: number) => {
+  const handleRemoverServer = async (itemId: number, motivo: string) => {
     try {
-      await api.delete(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${itemId}`);
+      await api.delete(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${itemId}`, { data: { motivo } });
       setServerItens(prev => prev.filter(it => it.id !== itemId));
       if (editingServerId === itemId) { resetForm(); setEditingServerId(null); }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(msg ?? 'Erro ao remover item');
+    } finally {
+      setRemovendoItemId(null);
     }
   };
 
@@ -1171,7 +1175,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           canEdit={canEdit && !completo}
                           canRemove={canEdit && !item.executadoEm}
                           onEdit={() => handleEditarServer(item)}
-                          onRemove={() => handleRemoverServer(item.id)}
+                          onRemove={() => setRemovendoItemId(item.id)}
                           isDragging={draggedIdx === idx}
                           isDragOver={dragOverIdx === idx}
                           onDragStart={() => setDraggedIdx(idx)}
@@ -1266,6 +1270,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
           </div>
         </div>
       </div>
+
+      <ModalJustificativa
+        aberto={removendoItemId !== null}
+        titulo="Remover item da prescrição?"
+        descricao={serverItens.find(it => it.id === removendoItemId)?.medicamento ?? undefined}
+        acaoLabel="Remover"
+        onConfirmar={(motivo) => { if (removendoItemId !== null) handleRemoverServer(removendoItemId, motivo); }}
+        onFechar={() => setRemovendoItemId(null)}
+      />
     </div>
   );
 }
@@ -1407,20 +1420,22 @@ function CancelarModal({
           </div>
         </div>
         <div className="mb-4">
-          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Motivo do cancelamento</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Motivo do cancelamento <span className="text-red-500">*</span></label>
           <textarea
             value={motivo}
             onChange={e => setMotivo(e.target.value)}
             rows={3}
-            placeholder="Informe o motivo..."
+            placeholder="Informe o motivo (obrigatório)..."
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-red-300"
           />
+          <p className="text-[10px] text-gray-400 mt-1">A justificativa é obrigatória e fica registrada na auditoria.</p>
         </div>
         <div className="flex gap-3">
           <button onClick={onCancelar} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
             Voltar
           </button>
-          <button onClick={() => onConfirmar(motivo)} className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold">
+          <button onClick={() => onConfirmar(motivo)} disabled={motivo.trim().length < 3}
+            className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
             Confirmar cancelamento
           </button>
         </div>

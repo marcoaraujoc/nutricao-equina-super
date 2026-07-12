@@ -42,6 +42,7 @@ const PERMISSOES_PADRAO = {
     'animais.deletar':     'FULL',
     'animais.imprimir':    'FULL',
     'animais.desvincular': 'FULL',
+    'animais.resenha.editar': 'FULL',
 
     'atendimento.evolucoes.ler':        'FULL',
     'atendimento.evolucoes.criar':      'FULL',
@@ -139,6 +140,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'FULL',
     'farmacia.estoque.criar':    'FULL',
     'farmacia.estoque.editar':   'FULL',
+    'farmacia.estoque.ajustar':  'FULL',
     'farmacia.estoque.deletar':  'FULL',
     'farmacia.estoque.imprimir': 'FULL',
 
@@ -195,6 +197,7 @@ const PERMISSOES_PADRAO = {
     'animais.deletar':     'PROPRIO',
     'animais.imprimir':    'EQUIPE',
     'animais.desvincular': 'PROPRIO',
+    'animais.resenha.editar': 'EQUIPE',
 
     // Prontuário / Evoluções clínicas
     'atendimento.evolucoes.ler':       'EQUIPE',
@@ -308,6 +311,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'EQUIPE',
     'farmacia.estoque.criar':    'PROPRIO',
     'farmacia.estoque.editar':   'PROPRIO',
+    'farmacia.estoque.ajustar':  'PROPRIO',
     'farmacia.estoque.deletar':  'PROPRIO',
     'farmacia.estoque.imprimir': 'EQUIPE',
 
@@ -474,14 +478,16 @@ const PERMISSOES_PADRAO = {
     'enfermagem.prescricao.executar': 'NENHUM',
     'enfermagem.prescricao.imprimir': 'NENHUM',
 
-    'exames.laboratorial.ler':     'NENHUM',
-    'exames.laboratorial.criar':   'NENHUM',
-    'exames.laboratorial.editar':  'NENHUM',
+    // Espelha atendimento.exames.* do FORNECEDOR — o controle por tipo de exame
+    // (exames.laboratorial/imagem) complementa; o gestor pode restringir por tipo.
+    'exames.laboratorial.ler':     'EQUIPE',
+    'exames.laboratorial.criar':   'PROPRIO',
+    'exames.laboratorial.editar':  'PROPRIO',
     'exames.laboratorial.deletar': 'NENHUM',
 
-    'exames.imagem.ler':     'NENHUM',
-    'exames.imagem.criar':   'NENHUM',
-    'exames.imagem.editar':  'NENHUM',
+    'exames.imagem.ler':     'EQUIPE',
+    'exames.imagem.criar':   'PROPRIO',
+    'exames.imagem.editar':  'PROPRIO',
     'exames.imagem.deletar': 'NENHUM',
 
     'nutricao.dietas.ler':          'NENHUM',
@@ -518,6 +524,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'NENHUM',
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
+    'farmacia.estoque.ajustar':  'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -686,6 +693,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'EQUIPE',
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
+    'farmacia.estoque.ajustar':  'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -838,6 +846,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'NENHUM',
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
+    'farmacia.estoque.ajustar':  'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -988,6 +997,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'NENHUM',
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
+    'farmacia.estoque.ajustar':  'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -1137,6 +1147,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.ler':      'EQUIPE',
     'farmacia.estoque.criar':    'PROPRIO',
     'farmacia.estoque.editar':   'PROPRIO',
+    'farmacia.estoque.ajustar':  'PROPRIO',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'EQUIPE',
 
@@ -1200,6 +1211,7 @@ const MODULOS_SISTEMA = [
   { slug: 'animais.deletar',     modulo: 'animais', submodulo: 'animais', acao: 'deletar',     label: 'Animais — Excluir',       ordemExib: 13 },
   { slug: 'animais.imprimir',    modulo: 'animais', submodulo: 'animais', acao: 'imprimir',    label: 'Animais — Imprimir',      ordemExib: 14 },
   { slug: 'animais.desvincular', modulo: 'animais', submodulo: 'animais', acao: 'desvincular', label: 'Animais — Desvincular Vet', ordemExib: 15 },
+  { slug: 'animais.resenha.editar', modulo: 'animais', submodulo: 'resenha', acao: 'editar', label: 'Resenha — Editar', ordemExib: 15.5 },
 
   // ── Prontuário / Evoluções ──────────────────────────────────────────────────
   { slug: 'atendimento.evolucoes.ler',       modulo: 'atendimento', submodulo: 'evolucoes', acao: 'ler',       label: 'Evolução — Visualizar', ordemExib: 20 },
@@ -1313,6 +1325,7 @@ const MODULOS_SISTEMA = [
   { slug: 'farmacia.estoque.ler',      modulo: 'farmacia', submodulo: 'estoque', acao: 'ler',      label: 'Estoque — Visualizar', ordemExib: 85 },
   { slug: 'farmacia.estoque.criar',    modulo: 'farmacia', submodulo: 'estoque', acao: 'criar',    label: 'Estoque — Cadastrar',  ordemExib: 86 },
   { slug: 'farmacia.estoque.editar',   modulo: 'farmacia', submodulo: 'estoque', acao: 'editar',   label: 'Estoque — Editar',     ordemExib: 87 },
+  { slug: 'farmacia.estoque.ajustar',  modulo: 'farmacia', submodulo: 'estoque', acao: 'ajustar',  label: 'Estoque — Ajustar',    ordemExib: 87.5 },
   { slug: 'farmacia.estoque.deletar',  modulo: 'farmacia', submodulo: 'estoque', acao: 'deletar',  label: 'Estoque — Excluir',    ordemExib: 88 },
   { slug: 'farmacia.estoque.imprimir', modulo: 'farmacia', submodulo: 'estoque', acao: 'imprimir', label: 'Estoque — Imprimir',   ordemExib: 89 },
 

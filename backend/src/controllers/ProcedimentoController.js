@@ -1,6 +1,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // ─── Listar ───────────────────────────────────────────────────────────────────
 
@@ -138,9 +139,23 @@ const atualizar = async (req, res) => {
 const excluir = async (req, res) => {
   try {
     const id = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
+
     const existe = await prisma.procedimentoVeterinario.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Procedimento não encontrado.' });
     await prisma.procedimentoVeterinario.update({ where: { id }, data: { ativo: false } });
+
+    await registrarAuditoria(null, req, {
+      categoria:  'EXCLUSAO',
+      entidade:   'PROCEDIMENTO',
+      entidadeId: id,
+      motivo,
+      detalhes:   existe.nome ?? null,
+    });
+
     return res.json({ dados: { message: 'Procedimento inativado.' } });
   } catch (err) {
     console.error('ProcedimentoController.excluir:', err);

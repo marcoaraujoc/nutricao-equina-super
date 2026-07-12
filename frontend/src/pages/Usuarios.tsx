@@ -15,6 +15,14 @@ import { formatDate as formatarDataBR } from '../utils/dateUtils';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
+interface Vinculo {
+  cargos:      string[];
+  equipeNome:  string | null;
+  empresaId:   number | null;
+  empresaNome: string | null;
+  dono:        boolean;
+}
+
 interface Usuario {
   id: number;
   fullName: string;
@@ -25,6 +33,7 @@ interface Usuario {
   cargoEquipe: string | null;
   equipeNome: string | null;
   empresaNome: string | null;
+  vinculos?: Vinculo[];
   ativo: boolean;
   createdAt: string;
   cep: string | null;
@@ -60,8 +69,65 @@ const PERFIL_TO_USERTYPE: Record<string, string> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const labelRole     = (r: string) => ROLES.find(x => x.value === r)?.label     ?? r;
 const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label ?? t;
+
+// Mesmos badges/labels do Controle de Acesso
+const badgeCargo = (cargo: string) =>
+  ({ VETERINARIO: 'bg-emerald-100 text-emerald-700', ESTAGIARIO: 'bg-blue-100 text-blue-700',
+     ADMIN: 'bg-red-100 text-red-700', MEMBRO: 'bg-gray-100 text-gray-600',
+     GESTOR: 'bg-purple-100 text-purple-700', PROPRIETARIO: 'bg-amber-100 text-amber-700',
+     FORNECEDOR: 'bg-teal-100 text-teal-700', SECRETARIA: 'bg-amber-100 text-amber-700',
+     FINANCEIRO: 'bg-orange-100 text-orange-700', ENFERMEIRO: 'bg-cyan-100 text-cyan-700',
+  } as Record<string, string>)[cargo] ?? 'bg-gray-100 text-gray-600';
+
+const CARGO_LABEL: Record<string, string> = {
+  GESTOR: 'Gestor', VETERINARIO: 'Veterinário', ESTAGIARIO: 'Estagiário',
+  FORNECEDOR: 'Fornecedor', PROPRIETARIO: 'Proprietário', SECRETARIA: 'Secretária',
+  FINANCEIRO: 'Financeiro', ENFERMEIRO: 'Enfermeiro(a)', ADMIN: 'Administrador',
+};
+
+function BadgePerfil({ cargo }: { cargo: string }) {
+  return (
+    <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCargo(cargo)}`}>
+      {(CARGO_LABEL[cargo] ?? cargo).toUpperCase()}
+    </span>
+  );
+}
+
+// Todos os perfis do usuário com as respectivas equipes/empresas
+function PerfisEquipes({ u }: { u: Usuario }) {
+  const vinculos = u.vinculos ?? [];
+  const isAdmin  = u.role === 'ADMIN';
+  if (!isAdmin && vinculos.length === 0) {
+    // Sem equipe (ex: proprietário, vet autônomo) — mostra o tipo do usuário
+    return <BadgePerfil cargo={u.userType} />;
+  }
+  return (
+    <div className="space-y-1.5">
+      {isAdmin && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <BadgePerfil cargo="ADMIN" />
+          <span className="text-xs text-gray-400">Plataforma</span>
+        </div>
+      )}
+      {vinculos.map((v, i) => (
+        <div key={i} className="flex items-center gap-1.5 flex-wrap">
+          {v.cargos.map(c => <BadgePerfil key={c} cargo={c} />)}
+          <span className="flex items-center gap-1 text-xs text-gray-500">
+            {v.equipeNome && <><Users2 size={11} className="text-gray-400 flex-shrink-0" />{v.equipeNome}</>}
+            {v.empresaNome && (
+              <>
+                {v.equipeNome && <span className="text-gray-300">·</span>}
+                <Building2 size={11} className="text-indigo-400 flex-shrink-0" />
+                {v.empresaNome}{v.dono ? ' (dono)' : ''}
+              </>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // userType/cargo do usuário → valor do select "Perfil de acesso"
 const perfilDoUsuario = (u: Usuario): string =>
@@ -245,73 +311,63 @@ const Usuarios = () => {
         ) : (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
             <table className="w-full min-w-[960px]">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nome</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">E-mail</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Perfil</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Tipo</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Empresa/Equipe</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Cidade/UF</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Cadastro</th>
-                  <th className="text-center px-6 py-4 text-sm font-medium text-gray-500">Status</th>
-                  <th className="text-right px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Usuário</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Perfis e Equipes</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Cidade/UF</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Cadastro</th>
+                  <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider">Status</th>
+                  <th className="px-5 py-3 text-right text-[11px] font-bold text-gray-400 uppercase tracking-wider">Ações</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-50">
                 {filtrados.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-gray-400">
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-gray-400">
                       Nenhum usuário encontrado.
                     </td>
                   </tr>
                 ) : filtrados.map(u => (
-                  <tr key={u.id} className="border-t hover:bg-gray-50">
-                    <td className="px-6 py-4 font-semibold text-gray-900">{u.fullName}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{u.email}</td>
-                    <td className="px-6 py-4">
-                      <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-                        u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
-                      }`}>{labelRole(u.role)}</span>
+                  <tr key={u.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          {u.fullName?.[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">{u.fullName}</p>
+                          <p className="text-xs text-gray-400">{u.email}</p>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-700">
-                      {u.cargoEquipe === 'GESTOR'
-                        ? <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">Gestor</span>
-                        : labelUserType(u.userType)}
+                    <td className="px-5 py-3.5">
+                      <PerfisEquipes u={u} />
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      {u.cargoEquipe === 'GESTOR' ? (
-                        u.empresaNome
-                          ? <span className="flex items-center gap-1 text-xs text-gray-500"><Building2 size={11} className="text-indigo-500 flex-shrink-0" />{u.empresaNome}</span>
-                          : '—'
-                      ) : u.equipeNome ? (
-                        <span className="flex items-center gap-1 text-xs text-gray-500"><Users2 size={11} className="text-gray-400 flex-shrink-0" />{u.equipeNome}</span>
-                      ) : '—'}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
+                    <td className="px-5 py-3.5 text-xs text-gray-500 whitespace-nowrap">
                       {u.cidade ? `${u.cidade}${u.estado ? `/${u.estado}` : ''}` : '—'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{formatarDataBR(u.createdAt)}</td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-5 py-3.5 text-xs text-gray-500 whitespace-nowrap">{formatarDataBR(u.createdAt)}</td>
+                    <td className="px-5 py-3.5">
                       <button onClick={() => handleToggle(u)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${
                           u.ativo
-                            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            : 'bg-red-50 text-red-600 hover:bg-red-100'
                         }`}>
                         {u.ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                        {u.ativo ? 'Ativo' : 'Inativo'}
+                        {u.ativo ? 'Ativo' : 'Desativado'}
                       </button>
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-end gap-3">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center justify-end gap-1">
                         <button onClick={() => abrirEditar(u)}
-                          className="text-emerald-600 hover:text-emerald-700" title="Editar">
-                          <Pencil size={18} />
+                          className="p-1.5 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Editar">
+                          <Pencil size={14} />
                         </button>
                         <button onClick={() => setParaExcluir(u)}
-                          className="text-red-500 hover:text-red-700" title="Excluir">
-                          <Trash2 size={18} />
+                          className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     </td>

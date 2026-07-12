@@ -7,6 +7,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Pencil, Trash2, Unlink, Search, LayoutDashboard, ArrowLeft } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 interface Animal {
   id:               number;
@@ -178,10 +179,11 @@ const AnimaisVet = () => {
     navigate(`/animais/${animal.id}`);
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (motivo: string) => {
     if (!animalToDelete) return;
     try {
-      await api.delete(`/animais/${animalToDelete.id}`);
+      // Exclusão exige justificativa (registrada na Auditoria)
+      await api.delete(`/animais/${animalToDelete.id}`, { data: { motivo } });
       setAnimalToDelete(null);
       await refreshSelectedAnimal();
       loadAnimais();
@@ -393,30 +395,16 @@ const AnimaisVet = () => {
         </div>
       )}
 
-      {/* Modal — Excluir */}
-      {animalToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
-            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">⚠️</div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir paciente?</h2>
-            <p className="text-gray-500 text-sm mb-6">
-              Isso removerá{' '}
-              <strong className="text-gray-700">{animalToDelete.nome}</strong> das suas listagens.
-              O histórico clínico e nutricional é preservado.
-            </p>
-            <div className="flex gap-3">
-              <button onClick={() => setAnimalToDelete(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button onClick={confirmDelete}
-                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-2xl text-sm font-semibold">
-                Excluir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modal — Excluir (justificativa obrigatória → Auditoria) */}
+      <ModalJustificativa
+        aberto={!!animalToDelete}
+        titulo="Excluir paciente?"
+        descricao={animalToDelete
+          ? `${animalToDelete.nome} será removido das listagens. O histórico clínico e nutricional é preservado.`
+          : undefined}
+        onConfirmar={confirmDelete}
+        onFechar={() => setAnimalToDelete(null)}
+      />
     </PageContainer>
   );
 };

@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // Calcula preço por unidade base (R$/g ou R$/mL) a partir do preço total e
 // da quantidade em sua unidade de medida. Retorna null quando não é possível
@@ -135,6 +136,8 @@ const criar = async (req, res) => {
       lote,
       validade,
       qtdEstoque       = 0,
+      qtdEmbalagens,
+      pesoPorEmbalagem,
       estoqueMinimo    = 0,
       estoqueAlarmante = 0,
       fornecedorId,
@@ -143,6 +146,10 @@ const criar = async (req, res) => {
 
     if (!medicamentoId)
       return res.status(400).json({ error: 'medicamentoId é obrigatório.' });
+
+    // Lote e validade são obrigatórios na entrada de estoque
+    if (!lote?.trim()) return res.status(400).json({ error: 'Lote é obrigatório.' });
+    if (!validade)     return res.status(400).json({ error: 'Validade é obrigatória.' });
 
     if (Number(qtdEstoque) < 0 || Number(estoqueMinimo) < 0 || Number(estoqueAlarmante) < 0)
       return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });
@@ -162,15 +169,17 @@ const criar = async (req, res) => {
       include: INCLUDE,
     });
 
-    // Verifica se existe entrada idêntica (lote+validade+preço)
+    // Verifica se existe entrada idêntica (mesmo lote + mesma validade + mesmo
+    // valor POR EMBALAGEM). Nesse caso a nova entrada é SOMADA ao item existente.
+    const qtdEmbNova   = qtdEmbalagens ? Number(qtdEmbalagens) : null;
+    const valorEmbNovo = qtdEmbNova && qtdEmbNova > 0 ? Number(valor) / qtdEmbNova : Number(valor);
     const existente = candidatos.find(c => {
       if (normLote(c.lote) !== loteNorm) return false;
       if (normValidade(c.validade) !== validadeStr) return false;
-      const cPreco = c.precoUnitarioBase != null ? Number(c.precoUnitarioBase) : null;
-      if (precoNovo === null && cPreco === null) return true;
-      if (precoNovo === null || cPreco === null) return false;
-      const maxP = Math.max(precoNovo, cPreco);
-      return maxP === 0 || Math.abs(precoNovo - cPreco) / maxP < 0.01; // 1% de tolerância
+      const cEmb      = c.qtdEmbalagens && c.qtdEmbalagens > 0 ? c.qtdEmbalagens : null;
+      const cValorEmb = cEmb ? Number(c.valor) / cEmb : Number(c.valor);
+      const maxV = Math.max(valorEmbNovo, cValorEmb);
+      return maxV === 0 || Math.abs(valorEmbNovo - cValorEmb) / maxV < 0.01; // 1% de tolerância
     });
 
     if (existente) {
@@ -184,9 +193,20 @@ const criar = async (req, res) => {
             motivo: nfMotivo ?? 'Entrada adicional',
           },
         });
+        // Soma quantidade, valores totais e embalagens; recalcula o preço unitário base
+        const qtdFinal = Number(existente.qtdEstoque) + Number(qtdEstoque);
+        const vrFinal  = Number(existente.valorRepassado) + Number(valorRepassado);
+        const precoConsolidado = calcPrecoUnitarioBase(vrFinal, qtdFinal, med.unidade);
         return tx.estoqueClinica.update({
           where: { id: existente.id },
-          data: { qtdEstoque: { increment: Number(qtdEstoque) } },
+          data: {
+            qtdEstoque:     { increment: Number(qtdEstoque) },
+            valor:          { increment: Number(valor) },
+            valorRepassado: { increment: Number(valorRepassado) },
+            ...(qtdEmbNova ? { qtdEmbalagens: { increment: qtdEmbNova } } : {}),
+            ...(pesoPorEmbalagem && !existente.pesoPorEmbalagem ? { pesoPorEmbalagem: Number(pesoPorEmbalagem) } : {}),
+            ...(precoConsolidado !== null ? { precoUnitarioBase: precoConsolidado } : {}),
+          },
           include: { ...INCLUDE, _count: { select: { movimentos: { where: { tipo: 'SAIDA' } } } } },
         });
       });
@@ -210,6 +230,8 @@ const criar = async (req, res) => {
           lote:             loteNorm ?? null,
           validade:         validade ? new Date(validade) : null,
           qtdEstoque:       Number(qtdEstoque),
+          qtdEmbalagens:    qtdEmbNova,
+          pesoPorEmbalagem: pesoPorEmbalagem ? Number(pesoPorEmbalagem) : null,
           estoqueMinimo:    Number(estoqueMinimo),
           estoqueAlarmante: Number(estoqueAlarmante),
           fornecedorId:     fornecedorId ? Number(fornecedorId) : null,
@@ -239,11 +261,38 @@ const criar = async (req, res) => {
 const atualizar = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal } = req.body;
+    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal, qtdEstoque, qtdEmbalagens, pesoPorEmbalagem } = req.body;
+
+    // Lote e validade são obrigatórios — não podem ser apagados na edição
+    if (lote     !== undefined && !lote?.trim()) return res.status(400).json({ error: 'Lote é obrigatório.' });
+    if (validade !== undefined && !validade)     return res.status(400).json({ error: 'Validade é obrigatória.' });
 
     const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Item de estoque não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
+    // Nº de movimentos de SAÍDA do item — consultado uma única vez quando necessário.
+    // Só SAIDA conta como "usado" (mesmo critério do flag emUso na listagem) —
+    // a ENTRADA inicial/adicional criada automaticamente não bloqueia a edição.
+    let movimentosCount = null;
+    const contarMovimentos = async () => {
+      if (movimentosCount === null) {
+        const c = await prisma.estoqueClinica.findUnique({
+          where:  { id },
+          select: { _count: { select: { movimentos: { where: { tipo: 'SAIDA' } } } } },
+        });
+        movimentosCount = c?._count?.movimentos ?? 0;
+      }
+      return movimentosCount;
+    };
+
+    // Lote e validade identificam a entrada — só podem ser ALTERADOS enquanto o
+    // item não foi usado (sem movimentos). Valores iguais aos atuais passam.
+    const loteMudou     = lote     !== undefined && normLote(lote) !== normLote(existe.lote);
+    const validadeMudou = validade !== undefined && normValidade(validade) !== normValidade(existe.validade);
+    if ((loteMudou || validadeMudou) && (await contarMovimentos()) > 0) {
+      return res.status(400).json({ error: 'Item já movimentado — lote e validade não podem ser alterados.' });
+    }
 
     if (estoqueMinimo    !== undefined && Number(estoqueMinimo)    < 0) return res.status(400).json({ error: 'Estoque mínimo não pode ser negativo.' });
     if (estoqueAlarmante !== undefined && Number(estoqueAlarmante) < 0) return res.status(400).json({ error: 'Estoque alarmante não pode ser negativo.' });
@@ -259,10 +308,24 @@ const atualizar = async (req, res) => {
     if (fornecedorId     !== undefined) data.fornecedorId     = fornecedorId ? Number(fornecedorId) : null;
     if (notaFiscal       !== undefined) data.notaFiscal       = notaFiscal?.trim() ?? null;
 
-    // Recalcula precoUnitarioBase sempre que o valorRepassado for alterado manualmente
-    if (valorRepassado !== undefined) {
+    // Nº de embalagens / peso por embalagem só podem ser corrigidos enquanto o item
+    // NÃO tem nenhum movimento (não usado). Depois disso, use o Ajuste de Estoque.
+    if (qtdEstoque !== undefined || qtdEmbalagens !== undefined || pesoPorEmbalagem !== undefined) {
+      if (qtdEstoque !== undefined && Number(qtdEstoque) < 0) return res.status(400).json({ error: 'Estoque não pode ser negativo.' });
+      if ((await contarMovimentos()) > 0) {
+        return res.status(400).json({ error: 'Item já movimentado — altere a quantidade pelo Ajuste de Estoque.' });
+      }
+      if (qtdEstoque       !== undefined) data.qtdEstoque       = Number(qtdEstoque);
+      if (qtdEmbalagens    !== undefined) data.qtdEmbalagens    = qtdEmbalagens ? Number(qtdEmbalagens) : null;
+      if (pesoPorEmbalagem !== undefined) data.pesoPorEmbalagem = pesoPorEmbalagem ? Number(pesoPorEmbalagem) : null;
+    }
+
+    // Recalcula precoUnitarioBase quando valorRepassado ou quantidade mudarem
+    if (valorRepassado !== undefined || data.qtdEstoque !== undefined) {
       const med = await prisma.medicamento.findUnique({ where: { id: existe.medicamentoId }, select: { unidade: true } });
-      const novoPreco = calcPrecoUnitarioBase(Number(valorRepassado), existe.qtdEstoque, med?.unidade);
+      const vrFinal  = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
+      const qtdFinal = data.qtdEstoque !== undefined ? data.qtdEstoque : existe.qtdEstoque;
+      const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, med?.unidade);
       if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
     }
 
@@ -279,10 +342,24 @@ const atualizar = async (req, res) => {
 const excluir = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
+
+    const existe = await prisma.estoqueClinica.findUnique({ where: { id }, include: { medicamento: { select: { nome: true } } } });
     if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
     await prisma.estoqueClinica.update({ where: { id }, data: { ativo: false } });
+
+    await registrarAuditoria(null, req, {
+      categoria:  'EXCLUSAO',
+      entidade:   'ESTOQUE_FARMACIA',
+      entidadeId: id,
+      motivo,
+      detalhes:   [existe.medicamento?.nome, existe.lote ? `Lote ${existe.lote}` : null].filter(Boolean).join(' — ') || null,
+    });
+
     return res.json({ dados: { message: 'Item inativado com sucesso.' } });
   } catch (err) {
     console.error('EstoqueController.excluir:', err);
@@ -301,13 +378,19 @@ const ajustarEstoque = async (req, res) => {
       return res.status(400).json({ error: 'tipo deve ser ENTRADA, SAIDA ou AJUSTE.' });
 
     const qty = Number(quantidade);
-    if (!qty || qty <= 0) return res.status(400).json({ error: 'quantidade deve ser maior que zero.' });
+    // AJUSTE aceita delta com sinal (correção para cima ou para baixo) — assim uma
+    // correção negativa não vira SAIDA, que marcaria o item como "em uso" (emUso).
+    if (tipo === 'AJUSTE') {
+      if (!qty) return res.status(400).json({ error: 'quantidade deve ser diferente de zero.' });
+    } else if (!qty || qty <= 0) {
+      return res.status(400).json({ error: 'quantidade deve ser maior que zero.' });
+    }
 
     const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
 
-    const delta      = tipo === 'SAIDA' ? -qty : qty;
+    const delta      = tipo === 'SAIDA' ? -qty : qty; // AJUSTE já vem com sinal
     const novaQtd    = existe.qtdEstoque + delta;
     if (novaQtd < 0) return res.status(400).json({ error: 'Estoque resultante seria negativo.' });
 

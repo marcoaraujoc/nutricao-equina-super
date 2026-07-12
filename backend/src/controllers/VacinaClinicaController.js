@@ -1,6 +1,8 @@
 // VacinaClinicaController.js — registro clínico de vacinas por animal
 const prisma = require('../lib/prisma').default;
+const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -13,7 +15,8 @@ async function listarPorAnimal(req, res) {
     const { animalId } = req.params;
     // Mostra todas as vacinas (ativas, vencidas e inativas) para histórico completo
     const vacinas = await prisma.vacinaClinica.findMany({
-      where: { animalId: Number(animalId) },
+      // Segregação multi-clínica: cada empresa vê só as próprias vacinas do animal
+      where: { animalId: Number(animalId), AND: [escopoFilhoEvolucaoWhere(req)] },
       include: INCLUDE_VACINA,
       orderBy: { dataAplicacao: 'desc' },
     });
@@ -345,6 +348,15 @@ async function excluir(req, res) {
         motivo.trim(),
         Number(id)
       );
+
+      await registrarAuditoria(tx, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'VACINA',
+        entidadeId: vacina.id,
+        animalId:   vacina.animalId,
+        motivo,
+        detalhes:   vacina.nome ?? null,
+      });
     });
 
     res.json({ mensagem: 'Registro inativado com sucesso' });

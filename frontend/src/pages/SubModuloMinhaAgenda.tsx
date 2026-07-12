@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -168,14 +169,15 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   // ── Cancelar ───────────────────────────────────────────────────────────────
 
-  const handleCancelar = async (id: number) => {
+  const handleCancelar = async (id: number, motivo: string) => {
     try {
-      await api.patch(`/clinica/agendamentos/${id}/status`, { status: 'CANCELADO' });
+      await api.patch(`/clinica/agendamentos/${id}/status`, { status: 'CANCELADO', motivo });
       toast.success('Agendamento cancelado');
       setCancelandoId(null);
       setAgendamentos(prev => prev.filter(a => a.id !== id));
-    } catch {
-      toast.error('Erro ao cancelar agendamento');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao cancelar agendamento');
     }
   };
 
@@ -380,23 +382,10 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                         </button>
                       )}
                       {isAgendado && podeEditar && (
-                        cancelandoId === ag.id ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleCancelar(ag.id)}
-                              className="px-2 py-1 bg-red-600 text-white rounded-lg text-[11px] font-semibold hover:bg-red-700 transition-colors">
-                              Confirmar
-                            </button>
-                            <button onClick={() => setCancelandoId(null)}
-                              className="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors">
-                              <X size={12} />
-                            </button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setCancelandoId(ag.id)} title="Cancelar"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Ban size={13} />
-                          </button>
-                        )
+                        <button onClick={() => setCancelandoId(ag.id)} title="Cancelar"
+                          className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                          <Ban size={13} />
+                        </button>
                       )}
                     </div>
                   </td>
@@ -463,23 +452,10 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                         <Users size={11} /> Trocar
                       </button>
                     )}
-                    {cancelandoId === ag.id ? (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => handleCancelar(ag.id)}
-                          className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700">
-                          Confirmar
-                        </button>
-                        <button onClick={() => setCancelandoId(null)}
-                          className="px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50">
-                          Não
-                        </button>
-                      </div>
-                    ) : (
-                      <button onClick={() => setCancelandoId(ag.id)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-red-200 text-red-600 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Ban size={11} /> Cancelar
-                      </button>
-                    )}
+                    <button onClick={() => setCancelandoId(ag.id)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-red-200 text-red-600 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                      <Ban size={11} /> Cancelar
+                    </button>
                     </>}
                   </div>
                 )}
@@ -489,6 +465,19 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
         })}
       </div>
       </>)}
+
+      {/* ── Modal cancelar (justificativa obrigatória) ───────────────────── */}
+      <ModalJustificativa
+        aberto={cancelandoId !== null}
+        titulo="Cancelar agendamento?"
+        descricao={(() => {
+          const ag = agendamentos.find(a => a.id === cancelandoId);
+          return ag ? `${ag.titulo}${ag.animal?.nome ? ` — ${ag.animal.nome}` : ''}` : undefined;
+        })()}
+        acaoLabel="Cancelar agendamento"
+        onConfirmar={(motivo) => { if (cancelandoId !== null) handleCancelar(cancelandoId, motivo); }}
+        onFechar={() => setCancelandoId(null)}
+      />
 
       {/* ── Modal editar ──────────────────────────────────────────────────── */}
       {editando && (

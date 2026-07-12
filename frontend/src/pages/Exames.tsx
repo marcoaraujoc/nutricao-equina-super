@@ -12,7 +12,7 @@ import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
-import ConfirmModal from '../components/ConfirmModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -112,12 +112,12 @@ const Exames = () => {
     setConfirmId(id);
   };
 
-  const handleDeleteConfirmado = async () => {
+  const handleDeleteConfirmado = async (motivo: string) => {
     if (confirmId == null) return;
     const id = confirmId;
     setConfirmId(null);
     try {
-      await api.delete(`/exames/${id}`);
+      await api.delete(`/exames/${id}`, { data: { motivo } });
       setExames(exames.filter(ex => ex.id !== id));
     } catch (error) {
       toast.error('Erro ao excluir o exame');
@@ -355,13 +355,13 @@ const Exames = () => {
           </table>
         </div>
       </div>
-      <ConfirmModal
-        open={confirmId != null}
+      <ModalJustificativa
+        aberto={confirmId != null}
         titulo="Excluir exame"
-        mensagem="Deseja realmente excluir este exame? Esta ação não pode ser desfeita."
-        labelConfirmar="Excluir"
+        descricao="Deseja realmente excluir este exame? Esta ação não pode ser desfeita."
+        acaoLabel="Excluir"
         onConfirmar={handleDeleteConfirmado}
-        onCancelar={() => setConfirmId(null)}
+        onFechar={() => setConfirmId(null)}
       />
     </PageContainer>
   );

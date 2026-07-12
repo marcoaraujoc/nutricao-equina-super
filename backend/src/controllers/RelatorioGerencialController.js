@@ -287,24 +287,34 @@ async function blocoEvolucoesEditadas(empresaId) {
   };
 }
 
+// ── Escopo por empresa ativa ────────────────────────────────────────────────
+// Faturas não têm empresaId — o escopo delas é via proprietários com animal ativo
+// na empresa. Reutilizado por todos os endpoints de relatório.
+async function resolverEscopo(req) {
+  const empresaId   = req.empresaId ?? null;
+  const animalWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
+
+  let propWhere = {};      // filtro para Fatura   (proprietarioId ∈ donos da empresa)
+  let itemPropWhere = {};  // filtro para FaturaItem (via fatura.proprietarioId)
+  if (empresaId) {
+    const donos = await prisma.animal.findMany({
+      where:    { empresaId, ativo: true },
+      select:   { userId: true },
+      distinct: ['userId'],
+    });
+    const ids = donos.map(d => d.userId).filter(Boolean);
+    propWhere     = { proprietarioId: { in: ids } };
+    itemPropWhere = { proprietarioId: { in: ids } };
+  }
+  return { empresaId, animalWhere, propWhere, itemPropWhere };
+}
+
 // ── Endpoint ──────────────────────────────────────────────────────────────────
 
 const gerencial = async (req, res) => {
   try {
-    const empresaId   = req.empresaId ?? null;
-    const mesAtual    = mesReferenciaAtual();
-    const animalWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
-
-    // Faturas não têm empresaId — o escopo é via proprietários com animal ativo na empresa
-    let propWhere = {};
-    if (empresaId) {
-      const donos = await prisma.animal.findMany({
-        where:    { empresaId, ativo: true },
-        select:   { userId: true },
-        distinct: ['userId'],
-      });
-      propWhere = { proprietarioId: { in: donos.map(d => d.userId) } };
-    }
+    const mesAtual = mesReferenciaAtual();
+    const { empresaId, animalWhere, propWhere } = await resolverEscopo(req);
 
     const [
       emergencias,
@@ -342,4 +352,16 @@ const gerencial = async (req, res) => {
   }
 };
 
-module.exports = { gerencial };
+module.exports = {
+  gerencial,
+  // Helpers reutilizados por RelatoriosController e DashboardController
+  resolverEscopo,
+  mesReferenciaAtual,
+  mesesDesde,
+  nomeLocalizacao,
+  somaEmMapa,
+  mapaParaLista,
+  carregarAnimaisComUltimoAtendimento,
+  blocoSemAtendimento,
+  SEM_LOCALIZACAO,
+};

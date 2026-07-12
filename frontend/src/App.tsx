@@ -54,10 +54,15 @@ import CriaExameNutricional from './pages/CriaExameNutricional';
 import Equipe         from './pages/Equipe';
 import ControleAcesso from './pages/ControleAcesso';
 import Configuracoes  from './pages/Configuracoes';
+import AuditoriaGeral from './pages/AuditoriaGeral';
 
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
 import Relatorios           from './pages/Relatorios';
+import RelatoriosFinanceiro  from './pages/RelatoriosFinanceiro';
+import RelatoriosAtendimento from './pages/RelatoriosAtendimento';
+import RelatoriosCadastro    from './pages/RelatoriosCadastro';
+import RelatoriosFarmacia    from './pages/RelatoriosFarmacia';
 
 // Pages — Agenda / Agendamentos
 import Agendamentos    from './pages/Agendamentos';
@@ -87,8 +92,11 @@ import Faturamento from './pages/Faturamento';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
+import { useDraggableModals } from './hooks/useDraggableModals';
 
 function App() {
+  // Modais arrastáveis no desktop (delegação global — vale para toda a aplicação)
+  useDraggableModals();
   return (
     <AuthProvider>
       <EmpresaProvider>
@@ -228,9 +236,14 @@ function App() {
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
                           <Route path="/configuracoes"    element={<Configuracoes />} />
+                          <Route path="/auditoria-geral"  element={<AuditoriaGeral />} />
 
                           {/* Relatórios gerenciais */}
-                          <Route path="/relatorios"       element={<Relatorios />} />
+                          <Route path="/relatorios"             element={<Relatorios />} />
+                          <Route path="/relatorios/financeiro"  element={<RelatoriosFinanceiro />} />
+                          <Route path="/relatorios/atendimento" element={<RelatoriosAtendimento />} />
+                          <Route path="/relatorios/cadastro"    element={<RelatoriosCadastro />} />
+                          <Route path="/relatorios/farmacia"    element={<RelatoriosFarmacia />} />
 
                           {/* Troca Senha */}
                           {/* Onboarding de convidado — aceitar convite de equipe */}

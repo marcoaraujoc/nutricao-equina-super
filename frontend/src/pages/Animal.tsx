@@ -410,7 +410,9 @@ const Animal = () => {
           api.get('/especies'),
           api.get('/racas'),
         ]);
-        const vetRes       = await api.get('/veterinarios').catch(() => ({ data: { dados: [] } }));
+        // escopo=equipe: quem tem contexto de equipe (gestor) vê apenas os
+        // veterinários da própria equipe; proprietário (sem equipe) mantém a lista padrão
+        const vetRes       = await api.get('/veterinarios?escopo=equipe').catch(() => ({ data: { dados: [] } }));
         const todasEspecies: { id: number; nome: string }[] = espRes.data?.dados ?? espRes.data ?? [];
         const racasData    = racRes.data?.dados ?? racRes.data ?? [];
         const vetsData     = vetRes.data?.dados ?? [];
@@ -555,8 +557,16 @@ const Animal = () => {
           // Tem vet mas é da mesma equipe → informa, bloqueia
           setStatusBuscaAnimal('minha_equipe');
         } else {
-          // Tem vet de outra equipe → bloqueia com mensagem original
+          // Tem vet de outra equipe → cadastro segue normalmente como vínculo
+          // ADICIONAL (um animal pode ter mais de um veterinário)
           setStatusBuscaAnimal('com_vet');
+          if (animal.proprietario) {
+            setFormProp({
+              nomeCompleto: animal.proprietario.fullName ?? '',
+              email:        animal.proprietario.email    ?? '',
+              telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
+            });
+          }
         }
       } else {
         setStatusBuscaAnimal('nao_encontrado');
@@ -577,7 +587,7 @@ const Animal = () => {
 
   // ── Busca proprietário por email ───────────────────────────────────────────
   const buscarProprietarioPorEmail = async (email: string) => {
-    if (!isVet || isEditMode || statusBuscaAnimal === 'sem_vet') return;
+    if (!isVet || isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') return;
     const e = email.trim();
     if (!e) return;
     setBuscandoProprietario(true);
@@ -714,8 +724,8 @@ const Animal = () => {
     if (isEditMode && !podeEditar) { semPermissao('alterar animal'); return; }
     if (!isEditMode && !podeCriar) { semPermissao('criar animal'); return; }
 
-    if (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'minha_equipe') {
-      toast.error(`${formData.nome} já está sob cuidados de um veterinário`);
+    if (statusBuscaAnimal === 'minha_equipe') {
+      toast.error(`${formData.nome} já está sob cuidados da sua equipe`);
       return;
     }
 
@@ -770,8 +780,9 @@ const Animal = () => {
         registroPassaporte: formData.registroPassaporte.trim() || null,
         finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         seguradora:         formData.seguradora.trim() || null,
-        // Vet vinculando animal existente sem vet
-        ...(animalEncontrado && statusBuscaAnimal === 'sem_vet' && {
+        // Vet vinculando animal existente (sem vet, ou com vet de outra equipe →
+        // vínculo adicional — um animal pode ter mais de um veterinário)
+        ...(animalEncontrado && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') && {
           animalExistenteId: animalEncontrado.id,
         }),
         // Vet criando animal novo → envia dados do proprietário
@@ -784,7 +795,7 @@ const Animal = () => {
           },
         }),
         // Informa o backend se o proprietário precisa aprovar ou vínculo é imediato
-        ...(isVet && !isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado') && {
+        ...(isVet && !isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado') && {
           pedirAutorizacao,
         }),
       };
@@ -825,7 +836,7 @@ const Animal = () => {
       }
 
       // Mensagem de sucesso contextual
-      const vinculandoParaProprietario = (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado');
+      const vinculandoParaProprietario = (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado');
       const msgSucesso = vinculandoParaProprietario
         ? (pedirAutorizacao
             ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
@@ -979,13 +990,17 @@ const Animal = () => {
                 </div>
               </div>
 
-              {/* Animal com vet de outra equipe — bloqueado */}
+              {/* Animal com vet de outra equipe — cadastro segue como vínculo adicional */}
               {statusBuscaAnimal === 'com_vet' && (
-                <div className="mt-2 flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
+                <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
                     <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário no S2Vet.
-                    O cadastro não pode ser realizado.
+                    O cadastro segue normalmente: você será incluído como <strong>veterinário adicional</strong> —
+                    o vínculo do veterinário atual é mantido.{' '}
+                    {pedirAutorizacao
+                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o seu vínculo.'
+                      : 'Após salvar, o vínculo será estabelecido imediatamente e o proprietário receberá um e-mail informativo.'}
                   </span>
                 </div>
               )}
@@ -1424,8 +1439,8 @@ const Animal = () => {
                           }}
                           onBlur={e => buscarProprietarioPorEmail(e.target.value)}
                           placeholder="email@exemplo.com"
-                          disabled={isEditMode || statusBuscaAnimal === 'sem_vet'}
-                          className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                          disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet'}
+                          className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                         />
                         {buscandoProprietario && (
                           <span className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1448,8 +1463,8 @@ const Animal = () => {
                         value={formProp.nomeCompleto}
                         onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
                         placeholder="Nome do proprietário"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                   </div>
@@ -1462,8 +1477,8 @@ const Animal = () => {
                         value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                     <div>
@@ -1473,13 +1488,13 @@ const Animal = () => {
                         value={formProp.telefone2}
                         onChange={e => setFormProp(p => ({ ...p, telefone2: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                   </div>
                   {/* Checkbox "Pedir Autorização?" — apenas para novos vínculos */}
-                  {!isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'nao_encontrado') && (
+                  {!isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado') && (
                     <div className="border border-gray-200 rounded-2xl p-3 bg-gray-50 space-y-2">
                       <label className="flex items-start gap-2 cursor-pointer select-none">
                         <input
@@ -1556,21 +1571,29 @@ const Animal = () => {
                   </select>
 
                   {formData.veterinarioUserId && !isEditMode && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
                       <span>
-                        Após salvar, uma <strong>solicitação de vínculo</strong> será enviada ao veterinário por e-mail.
-                        O animal ficará vinculado somente após o aceite.
+                        Após salvar, o veterinário selecionado será <strong>vinculado diretamente</strong> ao animal.
                       </span>
                     </div>
                   )}
 
-                  {vetFoiAlterado && (
+                  {vetFoiAlterado && vetOriginalId && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
                       <RefreshCw size={13} className="flex-shrink-0 mt-0.5" />
                       <span>
-                        O veterinário será alterado. Uma nova <strong>solicitação de vínculo</strong> será enviada
-                        por e-mail ao veterinário selecionado. O vínculo atual será cancelado.
+                        O veterinário será <strong>trocado</strong>. Uma solicitação será enviada por e-mail ao
+                        veterinário atual para aprovar a troca. O vínculo atual permanece até o aceite.
+                      </span>
+                    </div>
+                  )}
+
+                  {vetFoiAlterado && !vetOriginalId && (
+                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        Após salvar, o veterinário selecionado será <strong>vinculado diretamente</strong> ao animal.
                       </span>
                     </div>
                   )}
@@ -1596,7 +1619,7 @@ const Animal = () => {
             {/* Submit */}
             <button
               type="submit"
-              disabled={submitting || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'minha_equipe'}
+              disabled={submitting || statusBuscaAnimal === 'minha_equipe'}
               className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors"
             >
               {submitting
@@ -1604,7 +1627,7 @@ const Animal = () => {
                 : statusBuscaAnimal === 'minha_equipe'
                   ? 'Animal já com sua equipe'
                   : statusBuscaAnimal === 'com_vet'
-                    ? 'Cadastro bloqueado — animal com outro vet'
+                    ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Vincular como veterinário adicional')
                     : statusBuscaAnimal === 'sem_vet'
                       ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Vincular diretamente')
                       : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}

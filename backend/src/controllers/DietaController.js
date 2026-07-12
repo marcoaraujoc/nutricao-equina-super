@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // =============================================================================
 // PLANOS DE DIETA
@@ -305,11 +306,28 @@ const DietaItemController = {
 
   excluirItem: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
     try {
-      const existe = await prisma.dieta.findUnique({ where: { id: Number(id) } });
+      const existe = await prisma.dieta.findUnique({
+        where:   { id: Number(id) },
+        include: { alimento: { select: { nome: true } } },
+      });
       if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
 
       await prisma.dieta.delete({ where: { id: Number(id) } });
+
+      await registrarAuditoria(null, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'DIETA_ITEM',
+        entidadeId: Number(id),
+        animalId:   existe.animalId ?? null,
+        motivo,
+        detalhes:   existe.alimento?.nome ?? null,
+      });
+
       res.json({ message: 'Item excluído com sucesso' });
     } catch (error) {
       console.error('Erro ao excluir item da dieta:', error);

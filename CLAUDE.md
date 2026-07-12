@@ -1,6 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-06-24 (RBAC enforcement + regra de finalização por autoria)
+# Atualizado em: 2026-07-10 (Autoria clínica 100% RBAC; controle por tipo de exame; cookies HttpOnly; IP na auditoria + trust proxy)
 
 ---
 
@@ -316,7 +316,9 @@ PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — sub
 EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (empresa pessoal/CPF) —
                     mesmo critério de escopo do EmpresaContext. Campos: logoUrl, tipoFechamento
                     (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|null=compat), diaFechamentoFatura (dia do mês
-                    1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL). unique(empresaId, equipeId).
+                    1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL), whatsapp (migration
+                    20260710000002 — somente dígitos DDD+número, 10-15, p/ envio/recebimento de
+                    mensagens; integração de mensageria ainda não existe). unique(empresaId, equipeId).
                     Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes
 ```
 
@@ -428,6 +430,7 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 | farmacia | estoque | `farmacia.estoque.ler` | ver | EQUIPE | EQUIPE |
 | farmacia | estoque | `farmacia.estoque.criar` | criar | PROPRIO | NENHUM |
 | farmacia | estoque | `farmacia.estoque.editar` | alterar | PROPRIO | NENHUM |
+| farmacia | estoque | `farmacia.estoque.ajustar` | ajustar | PROPRIO | NENHUM |
 | farmacia | estoque | `farmacia.estoque.deletar` | excluir | PROPRIO | NENHUM |
 | farmacia | estoque | `farmacia.estoque.imprimir` | imprimir | EQUIPE | NENHUM |
 | farmacia | movimentacoes | `farmacia.movimentacoes.ler` | ver | EQUIPE | EQUIPE |
@@ -454,7 +457,8 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 - `atendimento.agendamentos` não tem `finalizar`/`imprimir` — agendamentos são gerenciados por status (AGENDADO/CONCLUIDO/CANCELADO)
 - `vacina.estoque` não tem `finalizar` — estoque de vacinas segue o mesmo padrão de farmácia
 - Sidebar usa `podeExecutar('vacina.estoque.ler')` para exibir o módulo Vacina; agenda ainda usa role check (`isVetOuSuperior`) — ver TODO em seção 12
-- ControleAcesso.tsx ACAO_COLS: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. Ações extras (executar, ativar, exportar, compartilhar, whatsapp, fechar, lancar, desvincular) existem no DB mas não aparecem como colunas na UI — pendente implementação de colunas dinâmicas por módulo
+- ControleAcesso.tsx ACAO_COLS: VER, CRIAR, ALTERAR, EXCLUIR, FINALIZAR, IMPRIMIR. `MODULO_ACAO_COLS_OVERRIDE` permite colunas próprias por módulo — usado por `agendamento`, `agenda` e `farmacia` (VER/CRIAR/ALTERAR/**AJUSTAR**/EXCLUIR/IMPRIMIR). Demais ações extras (executar, ativar, exportar, compartilhar, whatsapp, fechar, lancar, desvincular) existem no DB mas não aparecem como colunas na UI
+- `farmacia.estoque.ajustar` (2026-07-10): protege `PATCH /farmacia/estoque/:id/ajuste` (Ajuste de Estoque). Seed: GESTOR FULL, VET/ENFERMEIRO PROPRIO, demais NENHUM. Frontend `podeAjustar` em Farmacia.tsx
 - ControleAcesso exibe `agenda` como módulo virtual (extrai `agendamentos` de `atendimento`) — slugs são os mesmos; alterar em um lugar altera nos dois
 - Sidebar: Alimentos, Nutrientes e Composição Alimentar ficam no accordion **Nutricional** (apenas ADMIN)
 - Sidebar: Cadastro Pessoal, Pacientes/Animais, Proprietários e Tratadores ficam no sub-accordion **Cadastro** dentro de **Geral**
@@ -988,6 +992,78 @@ New-Item -ItemType Junction `
       de `faturaUtils.js`). Itens de origem clínica (exame/vacina/encaminhamento/prescrição) nunca
       caem numa fatura fechada por construção: `getOrCreateFatura` só busca fatura `status: 'ABERTA'` —
       se a do mês já fechou, cria uma nova automaticamente. Não precisou de nenhuma mudança pra isso.
+- [x] **Farmácia — Ajuste de Estoque + regra de item "em uso" (2026-07-10):**
+      Bug corrigido: `EstoqueController.atualizar` bloqueava edição de quantidade/lote/validade
+      contando QUALQUER movimento — mas `criar` gera automaticamente um movimento ENTRADA
+      ("Entrada inicial") quando qtdEstoque > 0, travando o item recém-cadastrado. Agora
+      `contarMovimentos()` conta apenas movimentos **SAIDA** (mesmo critério do flag `emUso`
+      da listagem): item só trava depois de uso real. `ajustarEstoque` aceita **delta com
+      sinal** no tipo AJUSTE (correção para baixo não vira SAIDA — não marca `emUso`).
+      UI (Farmacia.tsx): botão "Ajuste de Estoque" ao lado de "Entrada de Estoque"; modal no
+      mesmo padrão da entrada com seletor pesquisável de item do estoque (nome/lote/qtd);
+      campo "Quantidade em Estoque" **pré-preenchido com a atual** — usuário informa a contagem
+      real e a diferença é registrada como AJUSTE com motivo obrigatório (delta 0 não registra;
+      zerar é permitido). Slug novo `farmacia.estoque.ajustar` na rota + seed + coluna AJUSTAR
+      no ControleAcesso (`MODULO_ACAO_COLS_OVERRIDE.farmacia`). Gráfico de movimentos usa
+      `Math.abs` na barra de ajuste (pode ser negativo).
+- [x] **Modais arrastáveis no desktop (2026-07-10)** — hook global `useDraggableModals`
+      (montado uma vez em App.tsx), delegação de eventos: alça = cabeçalho `.rounded-t-2xl`/
+      `.rounded-t-3xl`/`h2`/`h3`/`[data-drag-handle]`; painel = primeiro ancestral `fixed`
+      OU filho direto de overlay `fixed` de tela cheia (backdrop nunca move). Só mouse e
+      viewport ≥768px; clamp mantém o modal ao alcance; deslocamento vive no nó DOM (reset ao
+      reabrir); suprime o click pós-arraste (evita fechar modais close-on-backdrop quando o
+      mouse solta sobre o overlay). Cursor `move` nas alças via index.css. Nenhum modal
+      precisou ser alterado — modais novos ganham o comportamento automaticamente.
+- [x] **WhatsApp da empresa em Configurações (2026-07-10)** — `EmpresaConfiguracao.whatsapp`
+      (migration `20260710000002_empresa_config_whatsapp`, TEXT nullable, somente dígitos
+      DDD+número). `EquipeController.obterConfiguracao`/`salvarConfiguracao` leem/gravam o campo
+      (normaliza p/ dígitos; valida 10-15; string vazia remove). `Configuracoes.tsx`: campo com
+      máscara BR `(11) 98765-4321` e ícone MessageCircle. Apenas armazenamento — integração de
+      envio/recebimento de mensagens ainda não implementada.
+- [x] **Auditoria de exclusões/cancelamentos com justificativa obrigatória (2026-07-10):**
+      AuditLog estendido (migration `20260710000003_audit_exclusoes`): `categoria`
+      (EXCLUSAO|CANCELAMENTO), `entidade`, `entidadeId`, `animalId`, `motivo`, `detalhes` +
+      índices categoria/timestamp; `ip` adicionado na migration `20260710000004_audit_ip`.
+      Helper `lib/auditoria.js` → `registrarAuditoria(clientOuTx, req, dados)` — INSERT via SQL
+      parametrizado (funciona com client desatualizado), grava `ip` via `ipDoRequest(req)`;
+      passar `tx` quando a operação já roda em transaction (atomicidade). Motivo OBRIGATÓRIO (400 sem
+      ele) + registro central em: Evolucao excluir/cancelar (já exigia justificativa — agora
+      audita estruturado), VacinaClinica.excluir (já exigia motivo), ExameClinico.excluir,
+      ExameController.delete (nutricional), Prescricao.excluir (legado), PrescricaoGrupo
+      removerItem/cancelar, Encaminhamento excluir/atualizarStatus(CANCELADO), Agendamento
+      excluir/atualizarStatus(CANCELADO), EstoqueController.excluir (farmácia),
+      EstoqueVacina.excluir, Medicamento.excluir, Procedimento.excluir, DietaItem.excluirItem,
+      e (2026-07-10, fechamento das exceções da regra) Animal.excluir (entidade ANIMAL —
+      soft delete GLOBAL: o animal some para todos, inclusive proprietário),
+      FaturaController.removerItem (FATURA_ITEM — além do registrarCorrecaoFatura) e
+      ProprietarioController.removerDaEmpresa (PROPRIETARIO — detalhes incluem contagem
+      de animais inativados no escopo). Frontend desses três: MeusAnimais/AnimalView
+      (ModalJustificativa no lugar do modal antigo), Faturamento (remoção de item via
+      modal) e CadastroProprietario (ConfirmModal → ModalJustificativa).
+      Frontend: `components/ModalJustificativa.tsx` (modal padrão de exclusão/cancelamento com
+      textarea obrigatória ≥3 chars, header vermelho) integrado em Farmacia, EstoqueVacina,
+      SubModuloExames, Exames, SubModuloPrescricao (remover item; CancelarModal agora exige
+      motivo), SubModuloEncaminhamento, SubModuloMinhaAgenda, AnimalDetail, Medicamentos,
+      CadastroVacina, Procedimentos e Dieta — Agendamentos.tsx já coletava motivo (dropdown).
+      Tela `/auditoria-geral` (`AuditoriaGeral.tsx`) no Sidebar > Geral (GESTOR/ADMIN):
+      GET `/api/audit/logs` — ADMIN global (?empresaId opcional); GESTOR/dono → empresa ativa;
+      demais 403. Filtros: categoria, entidade, busca, período; paginação (50/pág).
+- [x] **Reserva de estoque multi-lote FEFO em prescrições (2026-07-10):**
+      Bug estrutural: `criarReservas` NUNCA era chamado (reservas só eram liberadas) e todos os
+      helpers de estoque usavam `findFirst` (uma única entrada por medicamento) — segunda
+      entrada do mesmo medicamento era ignorada em verificação e baixa. Agora:
+      `buscarEstoquesFEFO` (todas as entradas ativas; validade mais próxima primeiro, sem
+      validade por último). `finalizar` verifica disponibilidade AGREGADA (soma dos lotes −
+      reservas de outras prescrições; insuficiente → 409 `ESTOQUE_INSUFICIENTE` com alertas,
+      reenvio com `forcarFinalizacao: true` prossegue — frontend AlertaEstoqueModal já suportava)
+      e CRIA reservas distribuídas entre os lotes (restante forçado no último lote quando não há
+      saldo). `debitarEstoqueDia(tx, itens, empresaId, grupoId?)` debita a dose do dia em FEFO
+      através dos lotes (um MovimentoEstoque SAIDA por lote; valor da dose soma o
+      precoUnitarioBase de cada lote debitado) e ABATE as reservas do grupo na mesma proporção.
+      `verificarEstoqueParaDia`/`verificarDisponibilidade` somam todas as entradas. `executar`
+      libera reservas remanescentes no último dia; `removerItem` recalcula as reservas dos itens
+      restantes (remove órfãs do medicamento excluído). `cancelar` já liberava via
+      `liberarReservas`.
 - [ ] Slugs orphans `exames.laboratorial.*` e `exames.imagem.*` — existem no seed e aparecem no ControleAcesso mas não protegem nenhum endpoint real (backends usam `atendimento.exames.*`). Gestores que configurarem esses slugs não controlam nada efetivamente. Decisão pendente: remover do seed ou implementar granularidade real por tipo de exame.
 - [x] Sidebar/páginas de agenda: migrar gate de role check (`isVetOuSuperior`) para `podeExecutar('atendimento.agendamentos.ler')` — Agenda usa permissão real; Minha Agenda mantém `isVetOuSuperior && podeVerAgendamentos` (sub-view específica de vet). Dashboard oculto para VET (non-Gestor) e ESTAGIÁRIO no Sidebar — eles têm "Pacientes" como home; GESTOR (bypass) continua vendo.
 - [ ] UI de gestão de designações no ControleAcesso (aba Equipe → membro PRESTADOR → animais designados)
@@ -1244,7 +1320,8 @@ PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipa
 | `ComposicaoAlimentar.tsx` | `/composicao` — composição nutricional |
 | `Nutrientes.tsx` | `/nutrientes` — banco de nutrientes |
 | `Analise.tsx` | `/analise` — análise NRC |
-| `Auditoria.tsx` | `/auditoria` — log de auditoria |
+| `Auditoria.tsx` | `/auditoria` — log de acesso legado (LOGIN/LOGOUT via AuthContext) |
+| `AuditoriaGeral.tsx` | `/auditoria-geral` — Auditoria (Sidebar > Geral, GESTOR/ADMIN). Exclusões/cancelamentos com justificativa: GET /api/audit/logs, filtros por categoria/entidade/busca/período, tabela desktop + cards mobile, paginação |
 | `Usuarios.tsx` | `/usuarios` — gestão de usuários (admin) |
 | `AiUsageDashboard.tsx` | `/ai-usage` — monitoramento de uso de IA |
 
@@ -1260,6 +1337,7 @@ PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipa
 | `SeletorAnimal.tsx` | Dropdown de seleção de animal (alimenta SelectedAnimalContext) |
 | `PageContainer.tsx` | Wrapper com padding e maxWidth padronizados |
 | `DietaAcoesBar.tsx` | Barra de ações da dieta. Props: `podeImprimir?`, `podeCompartilhar?`, `podeExportar?` (default true). Botões ocultam em modo compacto ou exibem toast quando sem permissão. |
+| `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 
 ### Frontend — Hooks e Contextos
 
@@ -1271,6 +1349,7 @@ PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipa
 | `useProprietarioNotificacoes.ts` | Polling 15s em `/animais/minhas-solicitacoes`. Inicializa mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos para detecção retroativa via updatedAt <10min. Só para PROPRIETARIO |
 | `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE e mudanças CANCELADO. Só para VETERINARIO |
 | `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
+| `useDraggableModals.ts` | Modais arrastáveis no desktop — delegação global de eventos (montado 1x no App.tsx). Alça: `.rounded-t-2xl`/`h2`/`h3`/`[data-drag-handle]`. Só mouse ≥768px; backdrop não move; suprime click pós-arraste |
 | `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Interceptor 403 → GET resolve `{ data: null }` (silencioso); mutations rejeitam com `{ isPermissionError: true }` (sem log). Base URL: `/api` |
 | `hooks/usePermissoes.ts` | `Nivel` inclui `'NEGADO'`. `NIVEL_ORDINAL` inclui `NEGADO: -1`. `podeExecutar` retorna false para NEGADO (ordinal -1 < qualquer mínimo). `loading` deve ser usado para gating de useEffects. |
 | `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
@@ -1439,35 +1518,36 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Sistema B — ExameClinico: rota /api/clinica/exames, controller ExameClinicoController, página
       SubModuloExames.tsx (dentro de Atendimento). Slugs: atendimento.exames.*. Tipos: Laboratorial,
       Bioquímico, Imagem, Compra. Exames pedidos no atendimento clínico.
-    Slugs orphans: exames.laboratorial.* e exames.imagem.* existem no seed e aparecem no ControleAcesso
-    mas NENHUM backend route os usa. Gestor que configurar esses slugs não controla nada efetivamente.
-    Farmácia, vacina.estoque e todos os módulos de cadastro agora têm checkPermission — os slugs do seed
+    exames.laboratorial.* e exames.imagem.* ERAM órfãos (não protegiam rota) até 2026-07-10 — ver #28.
+    Farmácia, vacina.estoque e todos os módulos de cadastro têm checkPermission — os slugs do seed
     estão alinhados com os routes a partir de 2026-06-24.
 
-28. Regra de finalização — GESTOR vs FORNECEDOR vs outros:
-    checkPermission('*.finalizar', 'PROPRIO') no route determina quem chega ao controller:
-    - GESTOR (userType=VETERINARIO com cargo GESTOR) → bypass total em checkPermission → chega sempre
-    - FORNECEDOR → MatrizPerfil PROPRIO ≥ PROPRIO → chega; controller verifica veterinarioId === req.user.id
-    - VET não-GESTOR → MatrizPerfil NENHUM → 403 no checkPermission → nunca chega ao controller
-    - Identificação de autoria: todos os create agora setam veterinarioId = req.user.id (inclusive FORNECEDOR)
-      ExameClinico.criar antes setava null para não-VET — bug corrigido em 2026-06-24.
-    - VacinaClinica não tem route de finalizar (sem status field no schema). Adicionar migration + route
-      futuramente quando workflow draft→aplicada for necessário.
-    - EncaminhamentoController.finalizar (novo) é distinto de atualizarStatus: aplica a regra de autoria
-      e sempre transita para CONCLUIDO. atualizarStatus continua existindo para mudanças de status gerais
-      (usadas por gestores diretamente, que têm bypass em checkPermission).
+28. **Autoria clínica é 100% RBAC (2026-07-10) — NÃO checar cargo/userType em controller.**
+    A ÚNICA regra fixa no backend é o bypass de ADMIN. "Só o gestor finaliza uma evolução" é
+    CONFIGURAÇÃO da matriz (seed dá VET/EST NENHUM em `*.finalizar`), não código. Padrão nos
+    controllers de editar/finalizar/excluir/cancelar (Evolucao, Prescricao, PrescricaoGrupo,
+    ExameClinico, Encaminhamento, Agendamento):
+      `if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) → 403`
+    `podeOperarRegistro` (permissao.middleware.js): EQUIPE/FULL = qualquer registro da equipe;
+    PROPRIO = só os próprios; NENHUM/LEITURA = nada. `req.permissaoNivel` já é setado pelo
+    `checkPermission` da rota (GESTOR/dono → FULL por bypass). NUNCA reintroduzir
+    `req.membroCargo === 'GESTOR'` nem `userType === 'FORNECEDOR'` para decidir autoria de AÇÃO —
+    isso foi removido em 2026-07-10. Editar registro FINALIZADO (evolução) exige nível FULL no
+    editar (regra derivada do nível, não de cargo). Exclusão de evolução FINALIZADA por não-ADMIN
+    segue bloqueada (regra de ADMIN, permitida). VacinaClinica: sem finalizar (modelo sem status).
+    Escopo de DADOS de prestador (quais animais o FORNECEDOR vê via DesignacaoPrestador) e a
+    resolução de contexto (MapaAtendimento isGestor) continuam usando membroCargo/userType — isso
+    é modelo de acesso/tenant, NÃO regra de autorização de ação.
 
-29. Regra de autoria em editar — GESTOR pode editar qualquer item; demais só editam o que criaram:
-    Para `editar`, a barreira do `checkPermission` passa VET/FORNECEDOR (nível PROPRIO), mas o
-    controller verifica autoria via `req.membroCargo`. Diferença entre as duas regras:
-    - Finalizar (implementado):  GESTOR=qualquer, FORNECEDOR=próprio, VET=bloqueado no checkPermission
-    - Editar (implementado):     GESTOR=qualquer, TODOS OS DEMAIS=apenas próprio (VET também limitado)
-    Identificação de GESTOR sem query extra: `req.membroCargo` já é setado como `'GESTOR'` pelo
-    `checkPermission` em todos os bypass paths (cargo GESTOR, dono de empresa sem MembroEquipe,
-    dono da empresa da equipe). No controller: `if (req.membroCargo !== 'GESTOR' && item.veterinarioId !== req.user.id) → 403`.
-    O padrão de FORNECEDOR ownership NÃO é suficiente para essa regra — um VET não-GESTOR também
-    é barrado de editar itens de outros. Aplicado em: EvolucaoController, PrescricaoController,
-    ExameClinicoController, EncaminhamentoController. VacinaClinica pendente de migration `status`.
+29. **Controle por TIPO de exame (2026-07-10)** — `exames.laboratorial.*` (Laboratorial+Bioquímico)
+    e `exames.imagem.*` (Imagem) deixaram de ser órfãos: `ExameClinicoController` resolve o nível do
+    tipo em runtime via `getNivelEfetivo(req, slug)` (permissao.middleware.js — paridade com
+    checkPermission, sem query de cargo) e combina com o slug geral `atendimento.exames.*` (o mais
+    restritivo vence) em criar/editar/excluir. Compra não tem módulo próprio. Frontend
+    (SubModuloExames.tsx): abas Laboratorial/Imagem só aparecem com `exames.<tipo>.criar`; aba padrão
+    respeita a permissão. Seed alinhou os slugs de tipo ao `atendimento.exames.*` de cada perfil.
+    `getNivelEfetivo` é o utilitário a usar SEMPRE que a permissão depender de dado do body/registro
+    (slug só conhecido em runtime) — não recalcular cargo à mão.
 
 30. Sincronização FaturaItem ↔ origem — helpers `removerFaturaItensDaOrigem`/`atualizarFaturaItensDaOrigem`
     (`faturaUtils.js`) recebem `(tx, campo, origemId, ...)` onde `campo` é o nome literal da FK no
@@ -1480,6 +1560,37 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     `PrescricaoGrupoController.atualizarItem`/`removerItem` já impede qualquer alteração em item que
     já tenha `FaturaItem` (que só é criado a partir de `FINALIZADO`/`executar`, ou seja, depois de
     `SALVO`) — `prescricaoId` no `FaturaItem` é só para rastreabilidade, não há novo bloqueio ali.
+
+31. Estoque da farmácia — "em uso" = só movimentos SAIDA. `criar` gera automaticamente um
+    MovimentoEstoque ENTRADA ("Entrada inicial") quando qtdEstoque > 0 — por isso NUNCA usar
+    contagem total de movimentos para decidir se o item pode ser editado (bug corrigido em
+    2026-07-10). `emUso` (listar) e `contarMovimentos` (atualizar) filtram `tipo: 'SAIDA'`.
+    O tipo AJUSTE aceita quantidade NEGATIVA (delta assinado) — correção para baixo não deve
+    ser registrada como SAIDA, senão marca o item como "em uso" indevidamente. O gráfico de
+    movimentações (Farmacia.tsx) usa Math.abs na barra de ajuste por isso. A rota de ajuste
+    tem slug próprio `farmacia.estoque.ajustar` (não reusa `editar`).
+
+32. Modais arrastáveis (useDraggableModals) — o comportamento é global por delegação; NÃO
+    adicionar lógica de drag em modais individuais. Novos modais ganham o recurso de graça se
+    seguirem o padrão (cabeçalho `.rounded-t-2xl` ou título h2/h3 dentro de painel fixed);
+    para alça customizada, usar `data-drag-handle`. O painel é resolvido subindo até o
+    ancestral `fixed`; overlay que cobre a viewport inteira (backdrop) nunca é movido —
+    painéis quase-tela-cheia (ex: `fixed inset-x-4 top-[4vh]`) funcionam porque têm margens.
+
+33. Exclusões/cancelamentos exigem `motivo` no body (400 sem ele) e registram no AuditLog
+    via `lib/auditoria.js` — TODO novo endpoint de exclusão/cancelamento DEVE seguir o padrão
+    (exigir motivo + `registrarAuditoria`; passar `tx` quando houver transaction). No frontend
+    usar `ModalJustificativa` (nunca confirm simples) e enviar via
+    `api.delete(url, { data: { motivo } })` — axios exige `data` na config do DELETE.
+    Evolução usa a chave `justificativa` (legado); todos os demais usam `motivo`.
+
+34. Reservas de estoque de prescrição são MULTI-LOTE (FEFO) — nunca usar `findFirst` de
+    estoqueClinica para verificar/debitar medicamento de prescrição: usar `buscarEstoquesFEFO`
+    e agregar. Reservas: criadas no `finalizar`, abatidas pelo `debitarEstoqueDia` (passar
+    grupoId!), liberadas em cancelar/último dia/remoção total. `verificarDisponibilidade`
+    desconta reservas de OUTRAS prescrições — o alerta 409 `ESTOQUE_INSUFICIENTE` no finalizar
+    aceita `forcarFinalizacao: true` (o restante fica reservado no último lote, podendo
+    exceder o saldo físico — comportamento intencional de finalização forçada).
 ```
 
 ---
@@ -1526,11 +1637,39 @@ Backend recusa iniciar se JWT_SECRET tiver menos de 32 caracteres.
 `${appUrl}/#/equipe/convite/${token}`
 ```
 
+### Autenticação por cookie HttpOnly (2026-07-10)
+```
+Tokens em cookies HttpOnly: s2vet_at (access JWT 24h) + s2vet_rt (refresh JWT 30d).
+Opções: httpOnly, SameSite=Lax, Secure em produção (COOKIE_SECURE força), path=/.
+Helper: lib/authCookies.js (setAuthCookies/clearAuthCookies/getAccessTokenFromCookie/
+getRefreshTokenFromCookie — parser próprio, sem cookie-parser; res.cookie nativo).
+Backend: auth.js lê cookie PRIMEIRO, header Authorization é fallback (clientes não-navegador).
+  Login/register(login)/Google/refresh setam cookies; logout limpa; updateMe renova o access.
+  refreshTokenRules virou opcional (refresh vem do cookie); refreshToken controller lê cookie||body.
+Frontend: api.ts com withCredentials:true, SEM Authorization e SEM token em storage;
+  refresh via POST /auth/refresh {} (cookie). AuthContext: identidade vem de /api/users/me
+  (não decodifica token); login()→/me; logout()→/auth/logout; authFetch usa credentials:'include'.
+  Login/Register/CadastroPessoal: fetch com credentials:'include', chamam login() sem token.
+  /me passou a retornar `role`. NUNCA voltar a ler token em JS nem usar sessionStorage p/ token.
+```
+
+### trust proxy + IP na auditoria (2026-07-10)
+```
+server.ts: app.set('trust proxy', TRUST_PROXY_HOPS ?? 1) — resolve req.ip real atrás do
+proxy (Cloudflare Tunnel/reverse proxy) E elimina o ValidationError do express-rate-limit
+(X-Forwarded-For). NÃO usar `true` (permissivo — flagged pelo rate-limit); usar Nº de hops.
+AuditLog.ip (migration 20260710000004): login/logout (AuditController.registrar via SQL) e
+exclusões/cancelamentos (lib/auditoria.js — ipDoRequest(req), normaliza ::ffff:). IP sempre
+do req (nunca do body). Tela AuditoriaGeral.tsx exibe coluna IP.
+```
+
 ### Pendências de segurança (futuro)
-- [ ] Migrar tokens de localStorage para HttpOnly Cookies
+- [x] Migrar tokens para HttpOnly Cookies (feito 2026-07-10)
+- [ ] Vincular acesso à mídia (uploads) à sessão via cookie (capability URL ainda é o único gate)
 - [ ] UUIDs em vez de IDs sequenciais (dificulta enumeração via URL)
 - [ ] Renovar JWT_SECRET antes de produção
 - [ ] Configurar ALLOWED_ORIGINS com domínio real em produção
+- [ ] Definir COOKIE_SECURE=true e TRUST_PROXY_HOPS conforme a topologia de proxy em produção
 
 ### Varredura de segurança — 2026-06-11 (CORRIGIDA)
 

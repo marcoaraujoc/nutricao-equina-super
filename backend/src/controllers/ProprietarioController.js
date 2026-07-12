@@ -5,6 +5,7 @@ const bcrypt       = require('bcryptjs');
 const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
 const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const SELECT_PROPRIETARIO = {
   id: true, fullName: true, email: true, phone: true, phone2: true,
@@ -280,7 +281,12 @@ const ProprietarioController = {
   // Proprietários NUNCA são excluídos do sistema
   removerDaEmpresa: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
     const isAdmin = req.user?.role === 'ADMIN';
+
+    if (!motivo?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da remoção' });
+    }
 
     if (isAdmin) {
       return res.status(403).json({
@@ -302,13 +308,23 @@ const ProprietarioController = {
       if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Este proprietário não pertence à sua empresa' });
 
       // Inativa os animais do proprietário no escopo (equipe ativa; legados sem equipe inclusos)
-      const resultado = await prisma.animal.updateMany({
-        where: {
-          userId:    Number(id),
-          empresaId: req.empresaId,
-          ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
-        },
-        data: { ativo: false, empresaId: null, equipeId: null },
+      const resultado = await prisma.$transaction(async (tx) => {
+        const upd = await tx.animal.updateMany({
+          where: {
+            userId:    Number(id),
+            empresaId: req.empresaId,
+            ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
+          },
+          data: { ativo: false, empresaId: null, equipeId: null },
+        });
+        await registrarAuditoria(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'PROPRIETARIO',
+          entidadeId: Number(id),
+          motivo,
+          detalhes:   `${existe.fullName ?? 'Proprietário'} removido da empresa — ${upd.count} animal(is) inativado(s) no escopo`,
+        });
+        return upd;
       });
 
       res.json({

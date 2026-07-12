@@ -109,12 +109,10 @@ export default function CadastroPessoal() {
   useEffect(() => {
     if (loadingPerms) return;
     const loadUserData = async () => {
-      const token = sessionStorage.getItem('token');
-      if (!token || !user?.email) { setLoading(false); return; }
+      if (!user?.email) { setLoading(false); return; }
       try {
-        const res = await fetch('/api/users/me', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // Sessão por cookie HttpOnly — o cookie é enviado automaticamente
+        const res = await fetch('/api/users/me', { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           setForm({
@@ -274,13 +272,6 @@ export default function CadastroPessoal() {
 
     setSaving(true);
 
-    const token = sessionStorage.getItem('token');
-    if (!token) {
-      toast.error('Você precisa estar logado para continuar');
-      setSaving(false);
-      return;
-    }
-
     const payload = {
       fullName:    form.nomeCompleto.trim(),
       phone:       form.telefone.trim(),
@@ -300,17 +291,17 @@ export default function CadastroPessoal() {
 
     try {
       const res     = await fetch('/api/users/me', {
-        method:  'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify(payload),
+        method:      'PUT',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify(payload),
       });
       const resData = await res.json();
 
       if (res.ok) {
-        if (resData.token) {
-          sessionStorage.setItem('token', resData.token);
-          await refreshUser();
-        }
+        // O backend renovou o cookie de acesso com o userType atualizado.
+        // Recarrega o perfil (identidade vem de /me).
+        await refreshUser();
         toast.success('Cadastro pessoal salvo com sucesso!');
 
         await refreshSelectedAnimal();

@@ -1,14 +1,17 @@
 import axios from 'axios';
 
+// Autenticação por cookie HttpOnly (s2vet_at / s2vet_rt): o navegador envia os
+// cookies automaticamente com withCredentials — o token nunca é lido/armazenado
+// por JavaScript (defesa contra roubo via XSS). Não há mais Authorization header
+// nem token em storage no fluxo do navegador.
 const api = axios.create({
   baseURL: '/api',
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
-  const token = sessionStorage.getItem('token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  // Contexto ativo do gestor (EmpresaContext) — backend valida o vínculo antes de usar
-  // CNPJ trabalha por empresa (x-empresa-id); CPF trabalha por equipe (x-equipe-id)
+  // Contexto ativo do gestor (EmpresaContext) — backend valida o vínculo antes de usar.
+  // CNPJ trabalha por empresa (x-empresa-id); CPF trabalha por equipe (x-equipe-id).
   const empresaId = localStorage.getItem('s2vet_empresa_id');
   if (empresaId) config.headers['x-empresa-id'] = empresaId;
   const equipeId = localStorage.getItem('s2vet_equipe_id');
@@ -18,27 +21,24 @@ api.interceptors.request.use((config) => {
 
 // Fila para evitar múltiplos refreshes simultâneos
 let isRefreshing = false;
-let refreshQueue: Array<(token: string | null) => void> = [];
+let refreshQueue: Array<(ok: boolean) => void> = [];
 
-function drainQueue(token: string | null) {
-  refreshQueue.forEach(cb => cb(token));
+function drainQueue(ok: boolean) {
+  refreshQueue.forEach(cb => cb(ok));
   refreshQueue = [];
 }
 
-async function tryRefresh(): Promise<string | null> {
-  const refreshToken = sessionStorage.getItem('refreshToken');
-  if (!refreshToken) return null;
-
+// Renova a sessão via cookie de refresh (HttpOnly). Não envia nem recebe token
+// no corpo — o backend rotaciona os cookies. Retorna true se renovou.
+async function tryRefresh(): Promise<boolean> {
   try {
-    const res = await axios.post('/api/auth/refresh', { refreshToken }, { skipRefreshInterceptor: true } as object);
-    const { token, refreshToken: newRefresh } = res.data;
-    sessionStorage.setItem('token', token);
-    sessionStorage.setItem('refreshToken', newRefresh);
-    return token;
+    await axios.post('/api/auth/refresh', {}, {
+      withCredentials: true,
+      skipRefreshInterceptor: true,
+    } as object);
+    return true;
   } catch {
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('refreshToken');
-    return null;
+    return false;
   }
 }
 
@@ -69,28 +69,23 @@ api.interceptors.response.use(
 
     if (isRefreshing) {
       return new Promise((resolve, reject) => {
-        refreshQueue.push((token) => {
-          if (token) {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-            resolve(api(originalRequest));
-          } else {
-            reject(error);
-          }
+        refreshQueue.push((ok) => {
+          if (ok) resolve(api(originalRequest));
+          else    reject(error);
         });
       });
     }
 
     isRefreshing = true;
-    const newToken = await tryRefresh();
+    const ok = await tryRefresh();
     isRefreshing = false;
 
-    if (newToken) {
-      drainQueue(newToken);
-      originalRequest.headers.Authorization = `Bearer ${newToken}`;
-      return api(originalRequest);
+    if (ok) {
+      drainQueue(true);
+      return api(originalRequest); // cookie renovado é enviado automaticamente
     }
 
-    drainQueue(null);
+    drainQueue(false);
     window.location.href = '/login';
     return Promise.reject(error);
   }

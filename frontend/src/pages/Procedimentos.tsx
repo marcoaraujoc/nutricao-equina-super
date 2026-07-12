@@ -11,6 +11,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -300,6 +301,7 @@ export default function Procedimentos() {
   const [page,          setPage]          = useState(1);
   const [limit]                           = useState(20);
   const [showModal,     setShowModal]     = useState(false);
+  const [inativandoId,  setInativandoId]  = useState<number | null>(null);
   const [editingItem,   setEditingItem]   = useState<Procedimento | null>(null);
 
   const totalPaginas = Math.ceil(total / limit);
@@ -326,14 +328,16 @@ export default function Procedimentos() {
   const abrirEdicao = (p: Procedimento) => { setEditingItem(p); setShowModal(true); };
   const fecharModal = () => { setShowModal(false); setEditingItem(null); };
 
-  const handleInativar = async (id: number) => {
+  const handleInativar = async (id: number, motivo: string) => {
     try {
-      await api.delete(`/procedimentos/${id}`);
+      await api.delete(`/procedimentos/${id}`, { data: { motivo } });
       toast.success('Procedimento inativado');
       carregar();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
       toast.error(e?.response?.data?.error ?? 'Erro ao inativar');
+    } finally {
+      setInativandoId(null);
     }
   };
 
@@ -443,7 +447,7 @@ export default function Procedimentos() {
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Pencil size={13} />
                           </button>
-                          <button onClick={() => handleInativar(p.id)}
+                          <button onClick={() => setInativandoId(p.id)}
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                             <Trash2 size={13} />
                           </button>
@@ -475,7 +479,7 @@ export default function Procedimentos() {
                         className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg">
                         <Pencil size={13} />
                       </button>
-                      <button onClick={() => handleInativar(p.id)}
+                      <button onClick={() => setInativandoId(p.id)}
                         className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg">
                         <Trash2 size={13} />
                       </button>
@@ -509,6 +513,15 @@ export default function Procedimentos() {
       {showModal && (
         <ProcedimentoModal item={editingItem} onClose={fecharModal} onSaved={carregar} />
       )}
+
+      <ModalJustificativa
+        aberto={inativandoId !== null}
+        titulo="Inativar procedimento?"
+        descricao={procedimentos.find(p => p.id === inativandoId)?.nome}
+        acaoLabel="Inativar"
+        onConfirmar={(motivo) => { if (inativandoId !== null) handleInativar(inativandoId, motivo); }}
+        onFechar={() => setInativandoId(null)}
+      />
     </PageContainer>
   );
 }

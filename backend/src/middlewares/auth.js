@@ -1,13 +1,15 @@
 const jwt   = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
+const { getAccessTokenFromCookie } = require('../lib/authCookies');
 
 const SECRET = process.env.JWT_SECRET;
 
 const authenticate = async (req, res, next) => {
+  // Cookie HttpOnly tem prioridade (navegador); header Authorization é o fallback
+  // para clientes não-navegador e compatibilidade durante a transição.
   const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
-
-  const token = authHeader.split(' ')[1];
+  const token = getAccessTokenFromCookie(req) || (authHeader ? authHeader.split(' ')[1] : null);
+  if (!token) return res.status(401).json({ error: 'Token não fornecido' });
 
   try {
     const decoded = jwt.verify(token, SECRET);

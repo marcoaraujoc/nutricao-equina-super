@@ -16,6 +16,6 @@ router.get('/estoque/:id',     authenticate, checkPermission('farmacia.estoque.l
 router.post('/estoque',        authenticate, checkPermission('farmacia.estoque.criar',   'PROPRIO'), EstoqueController.criar);
 router.put('/estoque/:id',     authenticate, checkPermission('farmacia.estoque.editar',  'PROPRIO'), EstoqueController.atualizar);
 router.delete('/estoque/:id',  authenticate, checkPermission('farmacia.estoque.deletar', 'PROPRIO'), EstoqueController.excluir);
-router.patch('/estoque/:id/ajuste', authenticate, checkPermission('farmacia.estoque.editar', 'PROPRIO'), EstoqueController.ajustarEstoque);
+router.patch('/estoque/:id/ajuste', authenticate, checkPermission('farmacia.estoque.ajustar', 'PROPRIO'), EstoqueController.ajustarEstoque);
 
 module.exports = router;

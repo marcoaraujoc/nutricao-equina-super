@@ -363,23 +363,64 @@ function checkPermissaoProprietario(funcionalidade) {
 }
 
 /**
- * Helper utilitário para uso dentro dos services:
+ * Helper utilitário para uso dentro dos services/controllers:
  * Verifica se o usuário pode operar sobre um registro de outro usuário.
  *
  * Retorna true se:
  *  - nível é EQUIPE ou FULL (pode operar sobre qualquer registro)
  *  - nível é PROPRIO E o registro pertence ao próprio usuário
+ *
+ * REGRA DE OURO (2026-07-10): controllers NÃO devem checar cargo/userType
+ * (GESTOR, FORNECEDOR, ...) para decidir autoria — a única regra fixa no backend
+ * é o bypass de ADMIN. Use req.permissaoNivel + este helper; a matriz RBAC decide.
  */
 function podeOperarRegistro(nivelPermissao, registroCriadorId, userIdAtual) {
   if (nivelPermissao === 'EQUIPE' || nivelPermissao === 'FULL') return true;
-  if (nivelPermissao === 'PROPRIO') return registroCriadorId === userIdAtual;
+  if (nivelPermissao === 'PROPRIO') return Number(registroCriadorId) === Number(userIdAtual);
   return false;
+}
+
+/**
+ * Resolve o nível efetivo de um usuário para um slug ARBITRÁRIO em runtime,
+ * reutilizando o contexto já resolvido pelo checkPermission da rota
+ * (req.equipeId / req.membroCargo). Usado quando a permissão depende de dados do
+ * body/registro (ex.: tipo do exame → exames.laboratorial.* vs exames.imagem.*).
+ *
+ * Paridade com checkPermission: ADMIN → FULL; GESTOR/dono → FULL; membro → matriz
+ * do cargo (com união de PROPRIETARIO multicargo); PROPRIETARIO puro → matriz
+ * PROPRIETARIO (deny-wins); vet autônomo sem equipe → PROPRIO; senão NENHUM.
+ */
+async function getNivelEfetivo(req, moduloSlug) {
+  if (req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN') return 'FULL';
+  if (req.membroCargo === 'GESTOR') return 'FULL';
+
+  if (req.membroCargo === 'PROPRIETARIO') {
+    return getNivelPermissaoProprietario(req.user.id, moduloSlug);
+  }
+
+  if (req.equipeId && req.membroCargo) {
+    let nivel = await getNivelPermissao(req.user.id, req.equipeId, moduloSlug, req.membroCargo);
+    if (req.user.userType === 'PROPRIETARIO' && nivel !== 'NEGADO') {
+      const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+      if (nivelProp !== 'NEGADO' && (NIVEL_ORDINAL[nivelProp] ?? 0) > (NIVEL_ORDINAL[nivel] ?? 0)) {
+        nivel = nivelProp;
+      }
+    }
+    return nivel;
+  }
+
+  if (req.user?.userType === 'PROPRIETARIO') {
+    return getNivelPermissaoProprietario(req.user.id, moduloSlug);
+  }
+  if (req.user?.userType === 'VETERINARIO') return 'PROPRIO';
+  return 'NENHUM';
 }
 
 module.exports = {
   checkPermission,
   checkPermissaoProprietario,
   podeOperarRegistro,
+  getNivelEfetivo,
   getEquipeIdsDoProprietario,
   NIVEL_ORDINAL,
 };

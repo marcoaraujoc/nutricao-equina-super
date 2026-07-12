@@ -11,7 +11,7 @@ import {
 import PageContainer from '../components/PageContainer';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
-import ConfirmModal from '../components/ConfirmModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 import BotaoVoltar from '../components/BotaoVoltar';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
@@ -601,12 +601,13 @@ export default function CadastroProprietario() {
     setConfirmRemov(p);
   };
 
-  const handleRemoverConfirmado = async () => {
+  const handleRemoverConfirmado = async (motivo: string) => {
     if (!confirmRemov) return;
     const p = confirmRemov;
     setConfirmRemov(null);
     try {
-      await api.delete(`/cadastro/proprietarios/${p.id}`);
+      // Remoção exige justificativa (registrada na Auditoria)
+      await api.delete(`/cadastro/proprietarios/${p.id}`, { data: { motivo } });
       toast.success(`Proprietário removido da empresa`);
       carregar();
     } catch (err: unknown) {
@@ -856,19 +857,16 @@ export default function CadastroProprietario() {
         />
       )}
 
-      <ConfirmModal
-        open={confirmRemov != null}
+      {/* Remoção exige justificativa (registrada na Auditoria) */}
+      <ModalJustificativa
+        aberto={confirmRemov != null}
         titulo="Remover proprietário da empresa"
-        mensagem={
-          <>
-            <p>Remover <strong>{confirmRemov?.fullName}</strong> da empresa?</p>
-            <p className="mt-2">Todos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista.</p>
-            <p className="mt-1 text-gray-400 text-xs">Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.</p>
-          </>
-        }
-        labelConfirmar="Remover"
+        descricao={confirmRemov
+          ? `${confirmRemov.fullName} — todos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista. Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
+          : undefined}
+        acaoLabel="Remover"
         onConfirmar={handleRemoverConfirmado}
-        onCancelar={() => setConfirmRemov(null)}
+        onFechar={() => setConfirmRemov(null)}
       />
     </PageContainer>
   );

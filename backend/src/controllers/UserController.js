@@ -4,6 +4,7 @@
 const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
+const { setAuthCookies } = require('../lib/authCookies');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
 // Ex: "00123/SP" → "123/SP" | "13557/RJ" → "13557/RJ"
@@ -31,6 +32,7 @@ const UserController = {
           fullName:           true,
           email:              true,
           phone:              true,
+          role:               true,
           userType:           true,
           mustChangePassword: true,
           cep:         true,
@@ -44,7 +46,8 @@ const UserController = {
           vetPerfil: {
             select: {
               crmv:    true,
-              especies: { select: { especieId: true } },
+              especies:          { select: { especieId: true } },
+              subespecialidades: { select: { nome: true } },
             },
           },
         },
@@ -85,6 +88,7 @@ const UserController = {
         cargoEquipe: membroEquipe?.cargo ?? null,
         crmv:              vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
+        subespecialidades: vetPerfil?.subespecialidades.map(s => s.nome) ?? [],
         profileComplete:   !!(user.phone && user.fullName && user.fullName.trim()),
         pendingInvite:     convitePendente
           ? { id: convitePendente.id, cargo: convitePendente.cargo, equipeNome: convitePendente.equipe?.nome ?? '' }
@@ -118,6 +122,7 @@ const UserController = {
         userType,
         crmv,
         especiesAtendidas,
+        subespecialidades,
       } = req.body;
 
       // Determina se é usuário convidado (userType foi definido pelo convite)
@@ -130,11 +135,28 @@ const UserController = {
         isConvidado = rows[0]?.isConvidado ?? false;
       } catch { /* coluna ainda não existe no DB legado */ }
 
-      // Convidados não podem alterar o userType atribuído pela equipe.
+      // Convidados não podem alterar o userType atribuído pela equipe — EXCETO
+      // quando assinaram a aplicação (donos de empresa própria): ex. fornecedora
+      // convidada que virou gestora e se declara Médica Veterinária.
       // Cadastros diretos só permitem PROPRIETARIO ou VETERINARIO.
       let effectiveUserType = undefined;
       if (userType) {
+        let podeAlterarTipo = !isConvidado;
         if (isConvidado) {
+          const [donoDeEmpresa, gestorDeEquipe] = await Promise.all([
+            prisma.empresa.findFirst({
+              where:  { ownerId: Number(req.user.id) },
+              select: { id: true },
+            }),
+            prisma.membroEquipe.findFirst({
+              where:  { userId: Number(req.user.id), cargo: 'GESTOR' },
+              select: { id: true },
+            }),
+          ]);
+          podeAlterarTipo = !!donoDeEmpresa || !!gestorDeEquipe;
+        }
+
+        if (!podeAlterarTipo) {
           effectiveUserType = undefined; // mantém o que foi definido pelo convite
         } else {
           const TIPOS_PERMITIDOS = ['PROPRIETARIO', 'VETERINARIO'];
@@ -189,6 +211,22 @@ const UserController = {
             });
           }
         }
+
+        // Recria lista de subespecialidades (delete + insert)
+        if (Array.isArray(subespecialidades)) {
+          await prisma.vetSubespecialidade.deleteMany({
+            where: { vetPerfilId: vetPerfil.id },
+          });
+          if (subespecialidades.length > 0) {
+            await prisma.vetSubespecialidade.createMany({
+              data: subespecialidades.map(nome => ({
+                vetPerfilId: vetPerfil.id,
+                nome:        String(nome).slice(0, 100),
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
       }
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
@@ -202,14 +240,17 @@ const UserController = {
           userType: updatedUser.userType, // ← agora correto
         },
         process.env.JWT_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: '24h' }
       );
+
+      // Atualiza o cookie HttpOnly de acesso com o token que reflete o novo userType
+      setAuthCookies(res, { accessToken: novoToken });
 
       return res.status(200).json({
         success: true,
         message: 'Cadastro pessoal salvo com sucesso!',
         user:    updatedUser,
-        token:   novoToken, // ← novo token com userType atualizado
+        token:   novoToken, // ← novo token com userType atualizado (compat)
       });
 
     } catch (error) {

@@ -5,6 +5,8 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
+const { registrarAuditoria }                      = require('../lib/auditoria');
+const { podeOperarRegistro, NIVEL_ORDINAL }       = require('../middlewares/permissao.middleware');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
@@ -14,15 +16,16 @@ const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'
 // (EvolucaoController.criar/atualizar/cancelar) — CONCLUIDO permanece disponível para o
 // "Concluir" manual (confirmação de comparecimento sem abrir uma evolução).
 const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO'];
-// Proprietário e fornecedor visualizam; quem agenda é a equipe clínica
-const PODE_GERENCIAR = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO'];
-
+// Quem pode agendar/alterar é decidido pela matriz RBAC (checkPermission nas rotas
+// de agenda.js — atendimento.agendamentos.*). Nenhuma checagem de role aqui.
+// Autoria: "próprio" = veterinário responsável OU quem criou o agendamento.
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
 };
 
-function podeGerenciar(user) {
-  return user.role === 'ADMIN' || PODE_GERENCIAR.includes(user.userType);
+function podeOperarAgendamento(req, item) {
+  return podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)
+      || podeOperarRegistro(req.permissaoNivel, item.criadoPorId,   req.user.id);
 }
 
 const INCLUDE_GLOBAL = {
@@ -177,10 +180,6 @@ const AgendamentoController = {
   // body: { animalId, tipo, titulo, dataHora, observacao?, veterinarioId? }
   criar: async (req, res) => {
     try {
-      if (!podeGerenciar(req.user)) {
-        return res.status(403).json({ error: 'Sem permissão para criar agendamentos' });
-      }
-
       const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, veterinarioId } = req.body;
 
       if (!animalId || !titulo?.trim() || !dataHora) {
@@ -299,13 +298,14 @@ const AgendamentoController = {
   // PATCH /clinica/agendamentos/:id/status — body: { status, motivo? }
   atualizarStatus: async (req, res) => {
     try {
-      if (!podeGerenciar(req.user)) {
-        return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
-      }
-
       const { status, motivo } = req.body;
       if (!STATUS_VALIDOS.includes(status)) {
         return res.status(400).json({ error: `status deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
+      }
+
+      // Cancelamento exige justificativa (auditoria)
+      if (status === 'CANCELADO' && !motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo do cancelamento' });
       }
 
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
@@ -313,6 +313,11 @@ const AgendamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
+      if (!podeOperarAgendamento(req, item)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite alterar agendamentos próprios.' });
+      }
 
       const updateData = { status };
       if (status === 'CANCELADO' && motivo?.trim()) {
@@ -325,6 +330,17 @@ const AgendamentoController = {
         include: INCLUDE,
       });
 
+      if (status === 'CANCELADO') {
+        await registrarAuditoria(null, req, {
+          categoria:  'CANCELAMENTO',
+          entidade:   'AGENDAMENTO',
+          entidadeId: item.id,
+          animalId:   item.animalId,
+          motivo,
+          detalhes:   `${item.tipo} — ${item.titulo ?? ''}`.trim(),
+        });
+      }
+
       res.json({ dados: atualizado });
     } catch (err) {
       console.error('Erro ao atualizar agendamento:', err);
@@ -335,15 +351,16 @@ const AgendamentoController = {
   // PATCH /clinica/agendamentos/:id — body: { titulo?, tipo?, dataHora?, observacao? }
   atualizar: async (req, res) => {
     try {
-      if (!podeGerenciar(req.user)) {
-        return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
-      }
-
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
 
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
+      if (!podeOperarAgendamento(req, item)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite alterar agendamentos próprios.' });
+      }
 
       const { titulo, tipo, dataHora, observacao, veterinarioId } = req.body;
       const data = {};
@@ -558,8 +575,9 @@ const AgendamentoController = {
   // DELETE /clinica/agendamentos/:id — soft delete
   excluir: async (req, res) => {
     try {
-      if (!podeGerenciar(req.user)) {
-        return res.status(403).json({ error: 'Sem permissão para excluir agendamentos' });
+      const { motivo } = req.body ?? {};
+      if (!motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
       }
 
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
@@ -568,7 +586,21 @@ const AgendamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
+      // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
+      if (!podeOperarAgendamento(req, item)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite excluir agendamentos próprios.' });
+      }
+
       await prisma.agendamentoClinico.update({ where: { id: item.id }, data: { ativo: false } });
+
+      await registrarAuditoria(null, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'AGENDAMENTO',
+        entidadeId: item.id,
+        animalId:   item.animalId,
+        motivo,
+        detalhes:   `${item.tipo} — ${item.titulo ?? ''}`.trim(),
+      });
 
       res.json({ dados: { id: item.id, excluido: true } });
     } catch (err) {
@@ -580,16 +612,18 @@ const AgendamentoController = {
   // PATCH /clinica/agendamentos/transferir-dia — body: { data, deVetId, paraVetId }
   transferirDia: async (req, res) => {
     try {
-      if (!podeGerenciar(req.user)) {
-        return res.status(403).json({ error: 'Sem permissão para alterar agendamentos' });
-      }
-
       const { data, deVetId, paraVetId } = req.body;
       if (!data || !deVetId || !paraVetId) {
         return res.status(400).json({ error: 'data, deVetId e paraVetId são obrigatórios' });
       }
       if (Number(deVetId) === Number(paraVetId)) {
         return res.status(400).json({ error: 'Profissional de origem e destino devem ser diferentes' });
+      }
+
+      // Autoria via RBAC: PROPRIO transfere apenas a própria agenda;
+      // EQUIPE/FULL transfere a agenda de qualquer profissional da equipe.
+      if ((NIVEL_ORDINAL[req.permissaoNivel] ?? 0) < NIVEL_ORDINAL.EQUIPE && Number(deVetId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite transferir a sua própria agenda.' });
       }
 
       const result = await prisma.agendamentoClinico.updateMany({

@@ -84,7 +84,31 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
     }
   }
 
-  if (empresaId && animal.empresaId === Number(empresaId)) {
+  // Espelho do prestador: VETERINARIO que atua como PRESTADOR no contexto ativo
+  // (cargo FORNECEDOR na equipe ativa) NÃO herda o escopo da equipe — acesso por
+  // designação ativa ou pelos próprios pacientes (vínculo direto, checado abaixo).
+  let vetPrestadorNoContexto = false;
+  if (userType === 'VETERINARIO' && equipeId) {
+    const membroCtx = await prisma.membroEquipe.findFirst({
+      where:  { userId: Number(userId), equipeId: Number(equipeId) },
+      select: { cargo: true },
+    });
+    if (membroCtx?.cargo === 'FORNECEDOR') {
+      vetPrestadorNoContexto = true;
+      const designacaoVet = await prisma.designacaoPrestador.findFirst({
+        where: {
+          animalId:    Number(animalId),
+          prestadorId: Number(userId),
+          ativo:       true,
+          OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
+        },
+        select: { id: true },
+      });
+      if (designacaoVet) return true;
+    }
+  }
+
+  if (!vetPrestadorNoContexto && empresaId && animal.empresaId === Number(empresaId)) {
     // Animal legado sem equipe → escopo da empresa inteira
     if (!animal.equipeId) return true;
 

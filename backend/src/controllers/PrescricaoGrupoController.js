@@ -2,7 +2,10 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
+const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 // ─── Include padrão ───────────────────────────────────────────────────────────
 
@@ -142,21 +145,60 @@ function qtdNaUnidadeEstoque(item, unidadeEstoque) {
   return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
 }
 
-// Cria reservas de estoque em unidade do estoque (não altera qtdEstoque)
+// ─── Multi-lote (FEFO) ───────────────────────────────────────────────────────
+// Um medicamento pode ter VÁRIAS entradas de estoque (lotes). Todas as operações
+// de reserva/baixa/verificação consideram o CONJUNTO das entradas: quando uma
+// entrada não é suficiente, o restante é reservado/debitado nas demais.
+// Ordem FEFO: validade mais próxima primeiro; sem validade por último; empate → id.
+
+async function buscarEstoquesFEFO(client, medicamentoCatId, empresaId, grupoIdExcluir = null) {
+  const estoques = await client.estoqueClinica.findMany({
+    where:   { medicamentoId: medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
+    include: {
+      medicamento: { select: { nome: true, unidade: true } },
+      reservas: {
+        ...(grupoIdExcluir != null ? { where: { prescricaoGrupoId: { not: grupoIdExcluir } } } : {}),
+        include: { animal: { select: { nome: true } }, prescricaoGrupo: { select: { numero: true } } },
+      },
+    },
+  });
+  return estoques.sort((a, b) => {
+    const va = a.validade ? new Date(a.validade).getTime() : Infinity;
+    const vb = b.validade ? new Date(b.validade).getTime() : Infinity;
+    return va !== vb ? va - vb : a.id - b.id;
+  });
+}
+
+// Cria reservas de estoque em unidade do estoque (não altera qtdEstoque).
+// MULTI-LOTE: distribui a quantidade do curso entre as entradas do medicamento
+// (FEFO), respeitando o que já está reservado por OUTRAS prescrições. Se mesmo
+// assim faltar, o restante é reservado na última entrada (finalização forçada).
 async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    const estoque = await tx.estoqueClinica.findFirst({
-      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
-      include: { medicamento: { select: { unidade: true } } },
+    const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId, grupoId);
+    if (estoques.length === 0) continue;
+
+    // Recalcula do zero (re-finalização): limpa reservas anteriores deste grupo p/ este medicamento
+    await tx.reservaEstoque.deleteMany({
+      where: { prescricaoGrupoId: grupoId, estoqueId: { in: estoques.map(e => e.id) } },
     });
-    if (!estoque) continue;
-    const quantidade = qtdNaUnidadeEstoque(item, estoque.medicamento?.unidade);
-    await tx.reservaEstoque.upsert({
-      where:  { prescricaoGrupoId_estoqueId: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } },
-      update: { quantidade },
-      create: { prescricaoGrupoId: grupoId, estoqueId: estoque.id, animalId, quantidade },
-    });
+
+    const unidadeEstoque = estoques[0].medicamento?.unidade;
+    let restante = qtdNaUnidadeEstoque(item, unidadeEstoque);
+
+    for (let i = 0; i < estoques.length && restante > 0.0001; i++) {
+      const e = estoques[i];
+      const reservadoOutros = (e.reservas ?? []).reduce((s, r) => s + r.quantidade, 0);
+      const disponivel      = Math.max(e.qtdEstoque - reservadoOutros, 0);
+      const ultimaEntrada   = i === estoques.length - 1;
+      const quantidade      = ultimaEntrada ? restante : Math.min(disponivel, restante);
+      if (quantidade <= 0.0001) continue;
+      await tx.reservaEstoque.create({
+        data: { prescricaoGrupoId: grupoId, estoqueId: e.id, animalId, quantidade },
+      });
+      restante -= quantidade;
+    }
   }
 }
 
@@ -219,50 +261,74 @@ async function liberarReservas(tx, grupoId) {
 }
 
 // Debita 1 dia de tratamento do estoque e cria MovimentoEstoque.
-// Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura).
-async function debitarEstoqueDia(tx, itens, empresaId) {
+// MULTI-LOTE: a dose do dia é debitada em FEFO através das entradas do
+// medicamento — quando uma entrada não basta, o restante sai da próxima.
+// Se `grupoId` for informado, as reservas DESTE grupo são abatidas na mesma
+// proporção (evita contagem dupla: estoque já baixado + reserva ainda ativa).
+// Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura) —
+// precos contém o VALOR TOTAL da dose do dia (soma dos lotes debitados).
+async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
   const precos   = new Map();
   const unidades = new Map();
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    const estoque = await tx.estoqueClinica.findFirst({
-      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
-      include: { medicamento: { select: { unidade: true } } },
-    });
-    if (!estoque) continue;
-    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
+    const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId);
+    if (estoques.length === 0) continue;
+    const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
     const qtdDia         = calcularQuantidadeDiaria(item);
 
-    let novaQtd;
-    if (mesmoGrupo(item.unidade, unidadeEstoque)) {
-      const estoqueBase   = paraBase(estoque.qtdEstoque, unidadeEstoque);
-      const prescritaBase = paraBase(qtdDia, item.unidade);
-      novaQtd = deBase(Math.max(estoqueBase - prescritaBase, 0), unidadeEstoque);
-    } else {
-      novaQtd = Math.max(estoque.qtdEstoque - qtdDia, 0);
-    }
+    // Quantidade do dia na unidade do estoque
+    let restante = mesmoGrupo(item.unidade, unidadeEstoque)
+      ? deBase(paraBase(qtdDia, item.unidade), unidadeEstoque)
+      : qtdDia;
 
-    const deduzido = estoque.qtdEstoque - novaQtd;
     const desc = item.dosagem
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dia)`
       : `${item.frequencia} (1 dia)`;
-    await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: novaQtd } });
-    await tx.movimentoEstoque.create({
-      data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: deduzido, motivo: `Prescrição executada: ${desc}` },
-    });
-    // Valor da dose = qtdDebitBase × precoUnitarioBase (R$/g ou R$/mL).
-    // precoUnitarioBase é gravado na entrada do estoque e permanece fixo;
-    // itens legados (sem o campo) caem no cálculo dinâmico, que tem o bug
-    // de aumentar o preço conforme o estoque diminui.
-    const precoVenda   = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
-    const qtdDebitBase = paraBase(deduzido, unidadeEstoque);
-    let valorDaDose;
-    if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
-      valorDaDose = qtdDebitBase * estoque.precoUnitarioBase;
-    } else {
-      const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
-      valorDaDose = qtdEstoqueBase > 0 ? (qtdDebitBase * precoVenda) / qtdEstoqueBase : 0;
+
+    let valorDaDose = 0;
+    for (const estoque of estoques) {
+      if (restante <= 0.0001) break;
+      if (estoque.qtdEstoque <= 0) continue;
+
+      const deduzido = Math.min(estoque.qtdEstoque, restante);
+      const novaQtd  = estoque.qtdEstoque - deduzido;
+      await tx.estoqueClinica.update({ where: { id: estoque.id }, data: { qtdEstoque: novaQtd } });
+      await tx.movimentoEstoque.create({
+        data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: deduzido, motivo: `Prescrição executada: ${desc}` },
+      });
+
+      // Abate a reserva deste grupo nesta entrada (na mesma proporção do débito)
+      if (grupoId != null) {
+        const reserva = await tx.reservaEstoque.findUnique({
+          where: { prescricaoGrupoId_estoqueId: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } },
+        });
+        if (reserva) {
+          const novaReserva = reserva.quantidade - deduzido;
+          if (novaReserva > 0.0001) {
+            await tx.reservaEstoque.update({ where: { id: reserva.id }, data: { quantidade: novaReserva } });
+          } else {
+            await tx.reservaEstoque.delete({ where: { id: reserva.id } });
+          }
+        }
+      }
+
+      // Valor da dose = qtdDebitBase × precoUnitarioBase (R$/g ou R$/mL) da ENTRADA
+      // debitada (cada lote pode ter preço próprio). precoUnitarioBase é gravado na
+      // entrada do estoque e permanece fixo; itens legados (sem o campo) caem no
+      // cálculo dinâmico, que tem o bug de aumentar o preço conforme o estoque diminui.
+      const precoVenda   = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+      const qtdDebitBase = paraBase(deduzido, unidadeEstoque);
+      if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
+        valorDaDose += qtdDebitBase * estoque.precoUnitarioBase;
+      } else {
+        const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
+        valorDaDose += qtdEstoqueBase > 0 ? (qtdDebitBase * precoVenda) / qtdEstoqueBase : 0;
+      }
+
+      restante -= deduzido;
     }
+
     precos.set(item.medicamentoCatId, valorDaDose);
     unidades.set(item.medicamentoCatId, unidadeEstoque);
   }
@@ -310,27 +376,27 @@ async function debitarInsumoUnidade(tx, prefixoNome, empresaId, motivo) {
 }
 
 // Verifica estoque para 1 dia de tratamento — retorna lista de alertas.
+// MULTI-LOTE: soma a quantidade de TODAS as entradas do medicamento — uma
+// entrada insuficiente não bloqueia se outra cobre o restante.
 async function verificarEstoqueParaDia(itens, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    const estoque = await prisma.estoqueClinica.findFirst({
-      where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
-      include: { medicamento: { select: { nome: true, unidade: true } } },
-    });
-    if (!estoque) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
-    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
-    const disponBase     = paraBase(estoque.qtdEstoque ?? 0, unidadeEstoque);
+    const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId);
+    if (estoques.length === 0) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
+    const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
+    const totalEstoque   = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
+    const disponBase     = paraBase(totalEstoque, unidadeEstoque);
     const necessarioBase = paraBase(calcularQuantidadeDiaria(item), item.unidade);
     const comparavel     = mesmoGrupo(item.unidade, unidadeEstoque);
-    const insuficiente   = comparavel ? disponBase < necessarioBase : estoque.qtdEstoque < calcularQuantidadeDiaria(item);
+    const insuficiente   = comparavel ? disponBase < necessarioBase : totalEstoque < calcularQuantidadeDiaria(item);
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
         unidade:       unidadeEstoque,
         qtdNecessaria: qtdDiariaEstoque(item, unidadeEstoque),
-        qtdDisponivel: estoque.qtdEstoque ?? 0,
+        qtdDisponivel: totalEstoque,
       });
     }
   }
@@ -368,26 +434,21 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
 
 // Verifica disponibilidade antes de reservar — retorna lista de alertas.
 // Compara em unidade base (g/mL) para suportar kg vs g, L vs mL, etc.
+// MULTI-LOTE: agrega TODAS as entradas do medicamento (estoque, reservas de
+// outras prescrições e disponível são somados entre os lotes).
 // tipo 'INSUFICIENTE': disponível < necessário
 // tipo 'ZERADO':       ficará zerado após esta reserva
 async function verificarDisponibilidade(itens, grupoId, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    const estoque = await prisma.estoqueClinica.findFirst({
-      where: { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
-      include: {
-        medicamento: { select: { nome: true, unidade: true } },
-        reservas: {
-          where: { prescricaoGrupoId: { not: grupoId } },
-          include: { animal: { select: { nome: true } }, prescricaoGrupo: { select: { numero: true } } },
-        },
-      },
-    });
-    if (!estoque) continue;
-    const unidadeEstoque = estoque.medicamento?.unidade ?? item.unidade;
-    const qtdReservada   = estoque.reservas.reduce((s, r) => s + r.quantidade, 0); // em unidadeEstoque
-    const disponivel     = estoque.qtdEstoque - qtdReservada;                      // em unidadeEstoque
+    const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId, grupoId);
+    if (estoques.length === 0) continue;
+    const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
+    const qtdEstoqueTotal = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
+    const todasReservas   = estoques.flatMap(e => e.reservas ?? []);
+    const qtdReservada    = todasReservas.reduce((s, r) => s + r.quantidade, 0); // em unidadeEstoque
+    const disponivel      = qtdEstoqueTotal - qtdReservada;                      // em unidadeEstoque
 
     // Compara em unidade base
     const dispBase  = paraBase(disponivel, unidadeEstoque);
@@ -395,7 +456,7 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
     const comparavel = mesmoGrupo(item.unidade, unidadeEstoque);
     const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // em unidadeEstoque para exibição
 
-    const reservasInfo = estoque.reservas.map(r => ({
+    const reservasInfo = todasReservas.map(r => ({
       animalNome:       r.animal.nome,
       prescricaoNumero: String(r.prescricaoGrupo.numero).padStart(3, '0'),
       quantidade:       r.quantidade,
@@ -411,7 +472,7 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
         unidade:       unidadeEstoque,
         qtdNecessaria: necessario,
         qtdDisponivel: Math.max(disponivel, 0),
-        qtdEstoque:    estoque.qtdEstoque,
+        qtdEstoque:    qtdEstoqueTotal,
         qtdReservada,
         reservas:      reservasInfo,
       });
@@ -422,7 +483,7 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
         unidade:       unidadeEstoque,
         qtdNecessaria: necessario,
         qtdDisponivel: disponivel,
-        qtdEstoque:    estoque.qtdEstoque,
+        qtdEstoque:    qtdEstoqueTotal,
         qtdReservada,
         reservas:      reservasInfo,
       });
@@ -440,6 +501,8 @@ const listarPorAnimal = async (req, res) => {
 
     const where = { animalId: Number(animalId) };
     if (status) where.status = status;
+    // Segregação multi-clínica: cada empresa vê só as próprias prescrições do animal
+    where.AND = [escopoPrescricaoGrupoWhere(req)];
 
     const [grupos, total] = await Promise.all([
       prisma.prescricaoGrupo.findMany({
@@ -452,7 +515,7 @@ const listarPorAnimal = async (req, res) => {
       prisma.prescricaoGrupo.count({ where }),
     ]);
 
-    const salvos = await prisma.prescricaoGrupo.count({ where: { animalId: Number(animalId), status: 'SALVO' } });
+    const salvos = await prisma.prescricaoGrupo.count({ where: { animalId: Number(animalId), status: 'SALVO', AND: [escopoPrescricaoGrupoWhere(req)] } });
 
     return res.json({
       dados:   grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
@@ -656,7 +719,12 @@ const atualizarItem = async (req, res) => {
 
 const removerItem = async (req, res) => {
   try {
-    const itemId = Number(req.params.itemId);
+    const itemId     = Number(req.params.itemId);
+    const { motivo } = req.body ?? {};
+
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
 
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)             return res.status(404).json({ error: 'Item não encontrado.' });
@@ -692,6 +760,27 @@ const removerItem = async (req, res) => {
           statusGrupo = 'CANCELADO';
         } else {
           statusGrupo = 'CANCELADO_PARCIALMENTE';
+
+          // Recalcula as reservas do grupo com os itens restantes (multi-lote) —
+          // sem isso, a reserva do item removido ficaria órfã, bloqueando o
+          // estoque para outras prescrições.
+          const itensRestantes = await tx.prescricao.findMany({
+            where: { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
+          });
+          const empresaIdEfetivo = item.grupo?.empresaId ?? null;
+          if (item.medicamentoCatId && !itensRestantes.some(i => i.medicamentoCatId === item.medicamentoCatId)) {
+            // Nenhum item restante usa o medicamento do item removido → limpa as reservas dele
+            const estoquesDoMed = await tx.estoqueClinica.findMany({
+              where:  { medicamentoId: item.medicamentoCatId, ...(empresaIdEfetivo != null ? { empresaId: empresaIdEfetivo } : {}), ativo: true },
+              select: { id: true },
+            });
+            if (estoquesDoMed.length > 0) {
+              await tx.reservaEstoque.deleteMany({
+                where: { prescricaoGrupoId: item.grupoId, estoqueId: { in: estoquesDoMed.map(e => e.id) } },
+              });
+            }
+          }
+          await criarReservas(tx, item.grupoId, item.animalId, itensRestantes, empresaIdEfetivo);
         }
       }
 
@@ -699,6 +788,15 @@ const removerItem = async (req, res) => {
       await tx.prescricaoGrupo.update({
         where: { id: item.grupoId },
         data:  { veterinarioId: req.user.id, ...(statusGrupo ? { status: statusGrupo } : {}) },
+      });
+
+      await registrarAuditoria(tx, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'PRESCRICAO_ITEM',
+        entidadeId: itemId,
+        animalId:   item.animalId,
+        motivo,
+        detalhes:   item.medicamento || null,
       });
     });
 
@@ -728,10 +826,23 @@ const finalizar = async (req, res) => {
     if (!grupo)                   return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível finalizar prescrições com status SALVO.' });
 
-    if (req.user.userType === 'FORNECEDOR' && grupo.veterinarioId !== veterinarioId) {
-      return res.status(403).json({ error: 'Você só pode finalizar prescrições criadas por você.' });
+    // Autoria via RBAC (nível efetivo em atendimento.prescricoes.finalizar):
+    // PROPRIO → só as próprias; EQUIPE/FULL → qualquer da equipe.
+    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar prescrições criadas por você.' });
     }
     if (grupo.itens.length === 0) return res.status(400).json({ error: 'A prescrição não possui itens ativos.' });
+
+    const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
+
+    // Disponibilidade MULTI-LOTE (soma das entradas − reservas de outras prescrições).
+    // Insuficiente → 409 com alertas; o usuário pode reenviar com forcarFinalizacao.
+    if (!req.body?.forcarFinalizacao) {
+      const alertas = await verificarDisponibilidade(grupo.itens, grupoId, empresaIdEfetivo);
+      if (alertas.length > 0) {
+        return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas });
+      }
+    }
 
     const agora = new Date();
 
@@ -750,6 +861,10 @@ const finalizar = async (req, res) => {
           finalizadoEm:    agora,
         },
       });
+
+      // Reserva o curso completo no estoque (multi-lote FEFO) — liberado ao
+      // cancelar e abatido conforme a execução diária debita o estoque.
+      await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -769,15 +884,19 @@ const cancelar = async (req, res) => {
     const userId  = req.user.id;
     const motivo  = req.body?.motivo?.trim() ?? null;
 
+    if (!motivo) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo do cancelamento' });
+    }
+
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
       include: { itens: { where: { ativo: true } } },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
 
-    // Regra: FORNECEDOR só pode cancelar prescrição que ele próprio criou
-    if (req.user.userType === 'FORNECEDOR' && grupo.veterinarioId !== userId) {
-      return res.status(403).json({ error: 'Você só pode cancelar prescrições criadas por você.' });
+    // Autoria via RBAC (nível efetivo em atendimento.prescricoes.deletar)
+    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
     }
 
     // Regra: prescrição que já teve QUALQUER execução (mesmo parcial, em
@@ -796,6 +915,15 @@ const cancelar = async (req, res) => {
       await tx.prescricaoGrupo.update({
         where: { id: grupoId },
         data:  { status: 'CANCELADO', motivoCancelamento: motivo },
+      });
+
+      await registrarAuditoria(tx, req, {
+        categoria:  'CANCELAMENTO',
+        entidade:   'PRESCRICAO',
+        entidadeId: grupoId,
+        animalId:   grupo.animalId,
+        motivo,
+        detalhes:   `status anterior: ${grupo.status} — ${grupo.itens.length} item(ns)`,
       });
     });
 
@@ -861,8 +989,9 @@ const executar = async (req, res) => {
     const agora = new Date();
 
     await prisma.$transaction(async (tx) => {
-      // Debita dose do dia e retorna preços/unidades por medicamento
-      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo);
+      // Debita dose do dia (multi-lote FEFO) e retorna preços/unidades por medicamento.
+      // Passa o grupoId para abater as reservas deste grupo junto com a baixa.
+      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId);
 
       // Lança na fatura ABERTA do proprietário (quantidade do dia)
       const fatura = await getOrCreateFatura(tx, proprietarioId);
@@ -931,6 +1060,8 @@ const executar = async (req, res) => {
             executadoEm:    agora,
           },
         });
+        // Curso concluído: libera eventuais reservas remanescentes do grupo
+        await liberarReservas(tx, grupoId);
       }
     });
 

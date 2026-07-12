@@ -45,7 +45,51 @@ const VeterinarioController = {
   // ── GET /api/veterinarios ─────────────────────────────────────────────────
   listar: async (req, res) => {
     try {
-      const { especieId } = req.query;
+      const { especieId, escopo } = req.query;
+
+      // escopo=equipe: apenas os veterinários da equipe/empresa ATIVA do solicitante
+      // (usado no cadastro de animal pelo gestor — não lista todos os vets do S2Vet).
+      // Sem contexto de equipe (ex: proprietário), cai no comportamento padrão abaixo.
+      if (escopo === 'equipe' && (req.equipeId || req.empresaId)) {
+        const membros = await prisma.membroEquipe.findMany({
+          where: {
+            ...(req.equipeId
+              ? { equipeId: Number(req.equipeId) }
+              : { equipe: { empresaId: Number(req.empresaId) } }),
+            // Só cargos clínicos responsáveis — prestador (cargo FORNECEDOR) da
+            // equipe não é vet responsável dela, mesmo com userType VETERINARIO
+            cargo: { in: ['GESTOR', 'VETERINARIO'] },
+            user:  { userType: 'VETERINARIO', ativo: true },
+          },
+          include: { user: { select: { id: true, fullName: true, email: true, phone: true } } },
+        });
+
+        const usuarios = [...new Map(membros.map(m => [m.user.id, m.user])).values()];
+        const perfis = usuarios.length > 0
+          ? await prisma.vetPerfil.findMany({
+              where:   { userId: { in: usuarios.map(u => u.id) } },
+              include: { especies: { include: { especie: { select: { id: true, nome: true } } } } },
+            })
+          : [];
+        const perfilPorUser = new Map(perfis.map(p => [p.userId, p]));
+
+        const dados = usuarios
+          .map(u => {
+            const p = perfilPorUser.get(u.id);
+            return {
+              vetUserId: u.id,
+              crmv:      p?.crmv ?? null,
+              bio:       p?.bio  ?? null,
+              nome:      u.fullName,
+              email:     u.email,
+              telefone:  u.phone,
+              especies:  (p?.especies ?? []).map(ve => ({ id: ve.especie.id, nome: ve.especie.nome })),
+            };
+          })
+          .sort((a, b) => a.nome.localeCompare(b.nome));
+
+        return res.json({ sucesso: true, dados });
+      }
 
       // Apenas vets sem vínculo de equipe (standalone) ou que sejam gestores da equipe.
       // Vets convidados (membros com cargo != GESTOR) não aparecem para proprietários.

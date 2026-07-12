@@ -53,9 +53,12 @@ const resetPasswordRules = [
     .isLength({ min: 8, max: 128 }).withMessage('Nova senha deve ter entre 8 e 128 caracteres'),
 ];
 
+// O refresh token vem do cookie HttpOnly (s2vet_rt); o corpo é apenas fallback
+// para clientes não-navegador. Por isso é opcional aqui — o controller valida
+// a presença (cookie OU corpo) e responde 401 quando nenhum está presente.
 const refreshTokenRules = [
   body('refreshToken')
-    .notEmpty().withMessage('Refresh token é obrigatório')
+    .optional()
     .isString().withMessage('Refresh token inválido'),
 ];
 

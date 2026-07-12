@@ -5,6 +5,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { escopoEvolucaoWhere, escopoFilhoEvolucaoWhere, escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { resumirHistorico } = require('../services/clinicaLLMService');
 const { formatAtendimentoNum } = require('../lib/faturaUtils');
 
@@ -38,29 +39,34 @@ const HistoricoController = {
 
       const whereAtivo = { animalId, ativo: true };
 
+      // Segregação multi-clínica: cada empresa/equipe vê só os próprios registros
+      const escopoEvo    = escopoEvolucaoWhere(req);
+      const escopoFilho  = escopoFilhoEvolucaoWhere(req);
+      const escopoPresc  = escopoPrescricaoGrupoWhere(req);
+
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] } },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo] },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, dataFim: true, numero: true, tipoAtendimento: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
         prisma.vacinaClinica.findMany({
-          where: whereAtivo,
+          where: { ...whereAtivo, AND: [escopoFilho] },
           select: { id: true, nome: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] } },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho] },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO' },
+          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho] },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, evolucaoId: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] } },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc] },
           select: {
             id: true, numero: true, status: true, createdAt: true, evolucaoId: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },
@@ -176,29 +182,34 @@ const HistoricoController = {
 
       const whereAtivo = { animalId, ativo: true };
 
+      // Mesma segregação multi-clínica do histórico completo
+      const escopoEvo    = escopoEvolucaoWhere(req);
+      const escopoFilho  = escopoFilhoEvolucaoWhere(req);
+      const escopoPresc  = escopoPrescricaoGrupoWhere(req);
+
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] } },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo] },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
         prisma.vacinaClinica.findMany({
-          where: whereAtivo,
+          where: { ...whereAtivo, AND: [escopoFilho] },
           select: { id: true, nome: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] } },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho] },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO' },
+          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho] },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] } },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc] },
           select: {
             id: true, numero: true, status: true, createdAt: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },

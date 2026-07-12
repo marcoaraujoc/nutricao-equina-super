@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -400,6 +401,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
   const [loading,          setLoading]         = useState(true);
   const [formKey,          setFormKey]         = useState(0);
+  const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -421,10 +423,12 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const handleStatus = async (id: number, status: StatusEnc) => {
+  const handleStatus = async (id: number, status: StatusEnc, motivo?: string) => {
     if (!podeEditar) { semPermissao('alterar encaminhamentos'); return; }
+    // Cancelamento exige justificativa — abre o modal e retorna aqui com o motivo
+    if (status === 'CANCELADO' && !motivo) { setCancelandoId(id); return; }
     try {
-      await api.patch(`/clinica/encaminhamentos/${id}/status`, { status });
+      await api.patch(`/clinica/encaminhamentos/${id}/status`, { status, ...(motivo ? { motivo } : {}) });
       const enc = encaminhamentos.find(e => e.id === id);
       if (status === 'CONCLUIDO') {
         toast.success(enc?.prestador
@@ -437,8 +441,10 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
       }
       carregar();
     } catch (err) {
-      const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao atualizar encaminhamento');
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao atualizar encaminhamento');
+    } finally {
+      setCancelandoId(null);
     }
   };
 
@@ -517,6 +523,19 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
         </div>
       )}
 
+      <ModalJustificativa
+        aberto={cancelandoId !== null}
+        titulo="Cancelar encaminhamento?"
+        descricao={(() => {
+          const enc = encaminhamentos.find(e => e.id === cancelandoId);
+          if (!enc) return undefined;
+          const destino = enc.prestador?.fullName ?? enc.veterinarioDestino ?? enc.clinicaDestino ?? 'externo';
+          return `${enc.especialidade ?? 'Encaminhamento'} — ${destino}${enc.prestador ? ' (o acesso do prestador será encerrado)' : ''}`;
+        })()}
+        acaoLabel="Cancelar encaminhamento"
+        onConfirmar={(motivo) => { if (cancelandoId !== null) handleStatus(cancelandoId, 'CANCELADO', motivo); }}
+        onFechar={() => setCancelandoId(null)}
+      />
     </div>
   );
 }

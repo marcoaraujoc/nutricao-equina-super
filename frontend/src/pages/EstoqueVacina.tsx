@@ -7,6 +7,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import ModalJustificativa from '../components/ModalJustificativa';
 import {
   AlertTriangle, Plus, Pencil, Trash2,
   Search, RefreshCw, X, Syringe, Calendar,
@@ -353,15 +354,18 @@ export default function EstoqueVacina() {
     } finally { setSalvando(false); }
   };
 
-  const confirmarExcluir = async () => {
+  const confirmarExcluir = async (motivo: string) => {
     if (!confirmExcluir) return;
     if (!podeDeletar) { semPermissao('inativar lote de vacina'); return; }
     try {
-      await api.delete(`/vacinas/estoque/${confirmExcluir.id}`);
+      await api.delete(`/vacinas/estoque/${confirmExcluir.id}`, { data: { motivo } });
       toast.success('Lote inativado.');
       setConfirmExcluir(null);
       carregarLotes();
-    } catch { toast.error('Erro ao inativar.'); }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao inativar.');
+    }
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -933,21 +937,16 @@ export default function EstoqueVacina() {
       )}
 
       {/* ── Modal: confirmar inativação ──────────────────────────────────── */}
-      {confirmExcluir && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="font-bold text-gray-900 mb-2">Inativar lote?</h3>
-            <p className="text-xs text-gray-500 mb-1">{confirmExcluir.medicamentoCat?.nome ?? confirmExcluir.vacina?.nome ?? '—'}</p>
-            <p className="text-xs text-gray-400 mb-5">Lote: {confirmExcluir.lote} · {confirmExcluir.qtdDisponivel} doses disponíveis</p>
-            <div className="flex gap-2">
-              <button onClick={confirmarExcluir}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl text-sm font-semibold">Inativar</button>
-              <button onClick={() => setConfirmExcluir(null)}
-                className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalJustificativa
+        aberto={!!confirmExcluir}
+        titulo="Inativar lote?"
+        descricao={confirmExcluir
+          ? `${confirmExcluir.medicamentoCat?.nome ?? confirmExcluir.vacina?.nome ?? '—'} — Lote ${confirmExcluir.lote} · ${confirmExcluir.qtdDisponivel} doses disponíveis`
+          : undefined}
+        acaoLabel="Inativar"
+        onConfirmar={confirmarExcluir}
+        onFechar={() => setConfirmExcluir(null)}
+      />
     </PageContainer>
   );
 }

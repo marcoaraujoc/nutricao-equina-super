@@ -251,6 +251,14 @@ const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: str
     { acao: 'trocar_profissional', label: 'TROCAR PROF.'  },
     { acao: 'deletar',            label: 'CANCELAR'       },
   ],
+  farmacia: [
+    { acao: 'ler',      label: 'VER'      },
+    { acao: 'criar',    label: 'CRIAR'    },
+    { acao: 'editar',   label: 'ALTERAR'  },
+    { acao: 'ajustar',  label: 'AJUSTAR'  },
+    { acao: 'deletar',  label: 'EXCLUIR'  },
+    { acao: 'imprimir', label: 'IMPRIMIR' },
+  ],
 };
 
 const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';
@@ -283,7 +291,7 @@ function BadgesPerfis({ m }: { m: Membro }) {
         </span>
       ))}
       {externos.map(c => (
-        <span key={`ext-${c}`} title="Perfil em outra equipe/empresa"
+        <span key={`ext-${c}`} title="Perfil em outra equipe desta empresa"
           className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold opacity-60 ring-1 ring-inset ring-gray-300 ${badgeCargo(c)}`}>
           {(CARGO_INFO[c]?.label ?? c).toUpperCase()}
         </span>

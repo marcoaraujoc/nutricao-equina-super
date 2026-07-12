@@ -14,3 +14,23 @@
     @apply bg-gray-50 text-gray-900 font-sans;
   }
 }
+
+/* Modais arrastáveis no desktop (useDraggableModals): cursor de mover nas
+   alças de arraste — cabeçalhos e títulos dentro de painéis fixed. */
+@media (min-width: 768px) and (pointer: fine) {
+  .fixed .rounded-t-2xl,
+  .fixed .rounded-t-3xl,
+  .fixed h2,
+  .fixed h3,
+  [data-drag-handle] {
+    cursor: move;
+  }
+  /* Botões dentro das alças mantêm o cursor de clique */
+  .fixed .rounded-t-2xl button,
+  .fixed .rounded-t-3xl button,
+  .fixed h2 button,
+  .fixed h3 button,
+  [data-drag-handle] button {
+    cursor: pointer;
+  }
+}

@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const INCLUDE = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
@@ -318,10 +319,24 @@ const atualizar = async (req, res) => {
 const excluir = async (req, res) => {
   try {
     const id = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
+
     const existe = await prisma.medicamento.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Medicamento não encontrado.' });
 
     await prisma.medicamento.update({ where: { id }, data: { ativo: false } });
+
+    await registrarAuditoria(null, req, {
+      categoria:  'EXCLUSAO',
+      entidade:   'MEDICAMENTO',
+      entidadeId: id,
+      motivo,
+      detalhes:   existe.nome ?? null,
+    });
+
     return res.json({ data: { message: 'Medicamento inativado com sucesso.' } });
   } catch (err) {
     console.error('MedicamentoController.excluir:', err);

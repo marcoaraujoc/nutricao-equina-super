@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Camera, Loader2 } from 'lucide-react';
+import { Camera, Loader2, MessageCircle } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -51,6 +51,15 @@ type TipoSelecao = 'DIA_ESPECIFICO' | 'PRIMEIRO_DIA_MES' | 'ULTIMO_DIA_MES' | 'D
 
 const ORDINAIS = ['1º', '2º', '3º', '4º', '5º', '6º', '7º', '8º', '9º', '10º'];
 
+// Máscara BR: (11) 98765-4321 — armazena/envia somente dígitos
+const maskWhatsapp = (v: string) => {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2)  return d;
+  if (d.length <= 6)  return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+};
+
 export default function Configuracoes() {
   const { isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -63,6 +72,7 @@ export default function Configuracoes() {
   const [tipoSelecao,    setTipoSelecao]    = useState<TipoSelecao>('ULTIMO_DIA_MES');
   const [diaEspecifico,  setDiaEspecifico]  = useState('5');
   const [nDiaUtil,       setNDiaUtil]       = useState('5');
+  const [whatsapp,       setWhatsapp]       = useState('');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -72,6 +82,7 @@ export default function Configuracoes() {
       const dados = res.data?.dados;
       if (dados) {
         setLogoPreview(dados.logoUrl ?? null);
+        setWhatsapp(maskWhatsapp(dados.whatsapp ?? ''));
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -157,11 +168,18 @@ export default function Configuracoes() {
       diaFechamentoFatura = n;
     }
 
+    const whatsappDigitos = whatsapp.replace(/\D/g, '');
+    if (whatsappDigitos !== '' && whatsappDigitos.length < 10) {
+      toast.error('WhatsApp incompleto — informe DDD + número.');
+      return;
+    }
+
     setSalvando(true);
     try {
       const fd = new FormData();
       fd.append('tipoFechamento', tipoFechamento);
       if (diaFechamentoFatura != null) fd.append('diaFechamentoFatura', String(diaFechamentoFatura));
+      fd.append('whatsapp', whatsappDigitos); // vazio = remove o número
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -276,6 +294,27 @@ export default function Configuracoes() {
               {tipoSelecao === 'DIA_UTIL'
                 ? 'Dia útil considera fins de semana e feriados nacionais.'
                 : 'Se o dia escolhido não existir no mês (ex: dia 31 em fevereiro), a fatura fecha no último dia do mês.'}
+            </p>
+          </div>
+
+          {/* WhatsApp da empresa */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              WhatsApp da empresa
+            </label>
+            <div className="relative">
+              <MessageCircle size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+              <input
+                type="tel"
+                inputMode="numeric"
+                value={whatsapp}
+                onChange={e => setWhatsapp(maskWhatsapp(e.target.value))}
+                placeholder="(11) 98765-4321"
+                className="w-full border border-gray-300 rounded-2xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              Número usado para enviar e receber mensagens de WhatsApp. Deixe em branco para remover.
             </p>
           </div>
 

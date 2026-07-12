@@ -53,6 +53,15 @@ console.error = (...a: unknown[]) => logger.error(
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
+// ===================== TRUST PROXY =====================
+// A app roda atrás de proxy (Cloudflare Tunnel em dev; proxy reverso em prod).
+// Sem isto, req.ip retorna o IP do proxy e o express-rate-limit emite
+// ValidationError ao ver o header X-Forwarded-For. O valor é o Nº de hops de
+// proxy confiáveis (TRUST_PROXY_HOPS, default 1) — evita spoofing do IP do
+// cliente (não usar `true`, que confia em qualquer X-Forwarded-For).
+const TRUST_PROXY_HOPS = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+app.set('trust proxy', TRUST_PROXY_HOPS);
+
 // ===================== MIDDLEWARES =====================
 app.use(requestIdMiddleware);
 app.use(helmet());

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
 const ESPECIE_EMOJI: Record<string, string> = {
@@ -935,6 +936,7 @@ const AnimalDetail = () => {
 
   // Detalhe
   const [detalheEv,      setDetalheEv]      = useState<EventoHistorico | null>(null);
+  const [cancelandoAgId, setCancelandoAgId] = useState<number | null>(null);
   const [detalheRecord,  setDetalheRecord]  = useState<DetalheRecord | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
 
@@ -972,10 +974,13 @@ const AnimalDetail = () => {
     }
   };
 
-  const handleExcluirAg = async (agId: number) => {
+  const handleExcluirAg = async (agId: number, motivo?: string) => {
+    // Cancelamento exige justificativa — abre o modal e retorna aqui com o motivo
+    if (!motivo) { setCancelandoAgId(agId); return; }
     try {
-      await api.patch(`/clinica/agendamentos/${agId}/status`, { status: 'CANCELADO' });
+      await api.patch(`/clinica/agendamentos/${agId}/status`, { status: 'CANCELADO', motivo });
       toast.success('Agendamento cancelado');
+      setCancelandoAgId(null);
       carregarAgendamentos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
@@ -1152,6 +1157,14 @@ const AnimalDetail = () => {
           onFechar={fecharDetalhe}
         />
       )}
+
+      <ModalJustificativa
+        aberto={cancelandoAgId !== null}
+        titulo="Cancelar agendamento?"
+        acaoLabel="Cancelar agendamento"
+        onConfirmar={(motivo) => { if (cancelandoAgId !== null) handleExcluirAg(cancelandoAgId, motivo); }}
+        onFechar={() => setCancelandoAgId(null)}
+      />
     </div>
     </PageContainer>
   );

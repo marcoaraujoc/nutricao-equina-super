@@ -2,6 +2,11 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const {
+  resolverEscopo,
+  carregarAnimaisComUltimoAtendimento,
+  blocoSemAtendimento,
+} = require('./RelatorioGerencialController');
 
 const stats = async (req, res) => {
   try {
@@ -66,6 +71,27 @@ const stats = async (req, res) => {
       (i) => i.qtdEstoque <= i.estoqueMinimo
     ).length;
 
+    // ── Alertas + animais sem atendimento (+3 dias) ────────────────────────
+    const em30dias = new Date(hoje.getTime() + 30 * 86400000);
+    const { propWhere } = await resolverEscopo(req);
+
+    const [vacinasVencidas, produtosVencendo, faturasVencidas, animaisUltimo] = await Promise.all([
+      prisma.loteVacina.count({
+        where: { ativo: true, validade: { lt: hoje }, ...(empresaId ? { empresaId } : {}) },
+      }),
+      prisma.estoqueClinica.count({
+        where: { ativo: true, validade: { gte: hoje, lte: em30dias }, ...(empresaId ? { empresaId } : {}) },
+      }),
+      prisma.fatura.findMany({
+        where:  { status: { in: ['ABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...propWhere },
+        select: { total: true },
+      }),
+      carregarAnimaisComUltimoAtendimento(animalWhere),
+    ]);
+
+    const contasReceberVencidas = faturasVencidas.reduce((s, f) => s + (f.total ?? 0), 0);
+    const semAtendimento = blocoSemAtendimento(animaisUltimo);
+
     // Atendimentos por dia (últimos 30 dias) — raw SQL para DATE_TRUNC
     let atendimentosPorDia = [];
     if (empresaId) {
@@ -110,6 +136,15 @@ const stats = async (req, res) => {
           nome:  r.medicamento,
           total: r._count.medicamento,
         })),
+        alertas: {
+          vacinasVencidas,
+          produtosVencendo,
+          contasReceberVencidas,
+        },
+        semAtendimento: {
+          total:   semAtendimento.totais.mais3dias,
+          animais: semAtendimento.animais.slice(0, 15),
+        },
       },
     });
   } catch (err) {

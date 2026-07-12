@@ -93,13 +93,13 @@ export default function Register() {
         alert('✅ Cadastro realizado com sucesso!');
         if (googleData.fromGoogle) {
           const loginRes = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method:      'POST',
+            credentials: 'include',
+            headers:     { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: emailLower, password: form.password }),
           });
-          const loginData = await loginRes.json();
           if (loginRes.ok) {
-            login(loginData.token);
+            await login();
             navigate('/');
           } else {
             navigate('/login');

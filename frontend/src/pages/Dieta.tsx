@@ -15,6 +15,7 @@ import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
+import ModalJustificativa from '../components/ModalJustificativa';
 import DietaAcoesBar from '../components/DietaAcoesBar';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -774,11 +775,11 @@ const Dieta = () => {
     } catch { /* silencioso */ }
   };
 
-  const handleExcluirItem = async () => {
+  const handleExcluirItem = async (motivo: string) => {
     if (!podeEditar) { semPermissao('excluir item da dieta'); return; }
     if (!itemParaExcluir || !planoSelecionado) return;
     try {
-      await api.delete(`/dietas/${itemParaExcluir.id}`);
+      await api.delete(`/dietas/${itemParaExcluir.id}`, { data: { motivo } });
       const grupo  = getGrupo(itemParaExcluir.periodicidade);
       const irmaos = itens.filter(i =>
         i.id !== itemParaExcluir.id &&
@@ -1162,21 +1163,15 @@ const Dieta = () => {
         </div>
       )}
 
-      {/* Modal de exclusão */}
-      {itemParaExcluir && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
-            <h3 className="font-semibold text-lg text-gray-900 mb-1">Excluir alimento?</h3>
-            <p className="text-sm text-gray-500 mb-6">{itemParaExcluir.alimento?.nome}</p>
-            <div className="flex gap-3">
-              <button onClick={() => setItemParaExcluir(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">Cancelar</button>
-              <button onClick={handleExcluirItem}
-                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-colors">Excluir</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modal de exclusão (justificativa obrigatória) */}
+      <ModalJustificativa
+        aberto={!!itemParaExcluir}
+        titulo="Excluir alimento?"
+        descricao={itemParaExcluir?.alimento?.nome}
+        acaoLabel="Excluir"
+        onConfirmar={handleExcluirItem}
+        onFechar={() => setItemParaExcluir(null)}
+      />
     </PageContainer>
   );
 };

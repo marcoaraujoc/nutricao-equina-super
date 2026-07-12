@@ -5,7 +5,10 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
+const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -61,6 +64,8 @@ const EncaminhamentoController = {
 
       const where = { animalId: Number(animalId), ativo: true };
       if (status && status !== 'TODOS') where.status = status;
+      // Segregação multi-clínica: cada empresa vê só os próprios encaminhamentos
+      where.AND = [escopoFilhoEvolucaoWhere(req)];
 
       const [items, total] = await Promise.all([
         prisma.encaminhamentoClinico.findMany({
@@ -320,11 +325,16 @@ const EncaminhamentoController = {
   // voltar a PENDENTE reativa.
   atualizarStatus: async (req, res) => {
     try {
-      const { id }     = req.params;
-      const { status } = req.body;
+      const { id }             = req.params;
+      const { status, motivo } = req.body;
 
       if (!STATUS_VALIDOS.includes(status)) {
         return res.status(400).json({ error: `status deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
+      }
+
+      // Cancelamento exige justificativa (auditoria)
+      if (status === 'CANCELADO' && !motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo do cancelamento' });
       }
 
       const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
@@ -347,6 +357,17 @@ const EncaminhamentoController = {
             data:  encerrado
               ? { ativo: false, dataFim: new Date() }
               : { ativo: true,  dataFim: null },
+          });
+        }
+
+        if (status === 'CANCELADO') {
+          await registrarAuditoria(tx, req, {
+            categoria:  'CANCELAMENTO',
+            entidade:   'ENCAMINHAMENTO',
+            entidadeId: enc.id,
+            animalId:   enc.animalId,
+            motivo,
+            detalhes:   [enc.especialidade, enc.motivo].filter(Boolean).join(' — ') || null,
           });
         }
 
@@ -382,11 +403,10 @@ const EncaminhamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
-      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
-      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestor && Number(enc.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode editar encaminhamentos criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.editar):
+      // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
+      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite editar encaminhamentos criados por você.' });
       }
 
       const atualizado = await prisma.$transaction(async (tx) => {
@@ -446,9 +466,9 @@ const EncaminhamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra: FORNECEDOR só pode finalizar encaminhamento que ele próprio criou
-      if (req.user.userType === 'FORNECEDOR' && enc.veterinarioId !== req.user.id) {
-        return res.status(403).json({ error: 'Você só pode finalizar encaminhamentos criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.finalizar)
+      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar encaminhamentos criados por você.' });
       }
 
       if (enc.status === 'CONCLUIDO') {
@@ -480,7 +500,12 @@ const EncaminhamentoController = {
   // DELETE /clinica/encaminhamentos/:id — soft delete + inativa designação vinculada
   excluir: async (req, res) => {
     try {
-      const { id } = req.params;
+      const { id }     = req.params;
+      const { motivo } = req.body ?? {};
+
+      if (!motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+      }
 
       const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
       if (!enc || !enc.ativo) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
@@ -488,10 +513,9 @@ const EncaminhamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
-      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestorDel && Number(enc.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode excluir encaminhamentos criados por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.deletar)
+      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite excluir encaminhamentos criados por você.' });
       }
 
       await prisma.$transaction(async (tx) => {
@@ -502,6 +526,15 @@ const EncaminhamentoController = {
         await tx.designacaoPrestador.updateMany({
           where: { encaminhamentoId: enc.id, ativo: true },
           data:  { ativo: false, dataFim: new Date() },
+        });
+
+        await registrarAuditoria(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'ENCAMINHAMENTO',
+          entidadeId: enc.id,
+          animalId:   enc.animalId,
+          motivo,
+          detalhes:   [enc.especialidade, enc.motivo].filter(Boolean).join(' — ') || null,
         });
       });
 

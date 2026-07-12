@@ -3,6 +3,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const INCLUDE_LOTE = {
   vacina:         { select: { id: true, nome: true, fabricante: true, via: true, ativo: true } },
@@ -458,10 +459,24 @@ const atualizar = async (req, res) => {
 const excluir = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existe = await prisma.loteVacina.findUnique({ where: { id } });
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    }
+
+    const existe = await prisma.loteVacina.findUnique({ where: { id }, include: { vacina: { select: { nome: true } } } });
     if (!existe) return res.status(404).json({ error: 'Lote não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
     await prisma.loteVacina.update({ where: { id }, data: { ativo: false } });
+
+    await registrarAuditoria(null, req, {
+      categoria:  'EXCLUSAO',
+      entidade:   'ESTOQUE_VACINA',
+      entidadeId: id,
+      motivo,
+      detalhes:   [existe.vacina?.nome, existe.lote ? `Lote ${existe.lote}` : null].filter(Boolean).join(' — ') || null,
+    });
+
     return res.json({ dados: { message: 'Lote inativado com sucesso.' } });
   } catch (err) {
     console.error('EstoqueVacinaController.excluir:', err);

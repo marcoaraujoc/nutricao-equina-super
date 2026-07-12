@@ -2,6 +2,7 @@
 const prisma = require('../lib/prisma').default;
 const { processarExame } = require('../services/exameParserService');
 const { storage }        = require('../storage');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // Helper seguro para converter valor (aceita número ou string com vírgula)
 const safeParseFloat = (val) => {
@@ -164,10 +165,24 @@ exports.bulkCreateNutrientes = async (req, res) => {
 
 exports.delete = async (req, res) => {
   const { id } = req.params;
+  const { motivo } = req.body ?? {};
+  if (!motivo?.trim()) {
+    return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+  }
   try {
     const exame = await prisma.exameNutricional.delete({
       where: { id: Number(id) }
     });
+
+    await registrarAuditoria(null, req, {
+      categoria:  'EXCLUSAO',
+      entidade:   'EXAME_NUTRICIONAL',
+      entidadeId: Number(id),
+      animalId:   exame.animalId ?? null,
+      motivo,
+      detalhes:   exame.observacao || null,
+    });
+
     res.json({ message: 'Exame excluído com sucesso', exame });
   } catch (error) {
     console.error(error);

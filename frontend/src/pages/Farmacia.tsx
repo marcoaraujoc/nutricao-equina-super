@@ -7,10 +7,11 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import ModalJustificativa from '../components/ModalJustificativa';
 import {
   AlertTriangle, Lock, Plus, Pencil, Trash2,
   Search, RefreshCw, X, BarChart2, Package,
-  ChevronDown, Eye,
+  ChevronDown, Eye, ArrowUpDown,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
 
@@ -40,6 +41,8 @@ interface EstoqueItem {
   lote: string | null;
   validade: string | null;
   qtdEstoque: number;
+  qtdEmbalagens: number | null;
+  pesoPorEmbalagem: number | null;
   estoqueMinimo: number;
   estoqueAlarmante: number;
   ativo: boolean;
@@ -78,7 +81,8 @@ function ChartMovimentos({ movimentos }: { movimentos: MovimentoEstoque[] }) {
     if (!porDia[d]) porDia[d] = { entrada: 0, saida: 0, ajuste: 0 };
     if (m.tipo === 'ENTRADA')    porDia[d].entrada += m.quantidade;
     else if (m.tipo === 'SAIDA') porDia[d].saida   += m.quantidade;
-    else                         porDia[d].ajuste  += m.quantidade;
+    // AJUSTE pode ser negativo (correção para baixo) — a barra mostra a magnitude
+    else                         porDia[d].ajuste  += Math.abs(m.quantidade);
   });
   const dias   = Object.entries(porDia);
   const maxVal = Math.max(...dias.flatMap(([, v]) => [v.entrada, v.saida, v.ajuste]), 1);
@@ -130,6 +134,7 @@ export default function Farmacia() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
   const podeCriar   = isGestor || podeExecutar('farmacia.estoque.criar');
   const podeEditar  = isGestor || podeExecutar('farmacia.estoque.editar');
+  const podeAjustar = isGestor || podeExecutar('farmacia.estoque.ajustar');
   const podeDeletar = isGestor || podeExecutar('farmacia.estoque.deletar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -144,6 +149,8 @@ export default function Farmacia() {
 
   const [form,         setForm]         = useState({ ...FORM_VAZIO });
   const [editandoId,   setEditandoId]   = useState<number | null>(null);
+  // Item em edição já teve movimentação? (bloqueia edição de embalagens/peso)
+  const [editandoEmUso, setEditandoEmUso] = useState(false);
   const [salvando,     setSalvando]     = useState(false);
   const [modalFormAberto, setModalFormAberto] = useState(false);
 
@@ -153,6 +160,16 @@ export default function Farmacia() {
 
   const [itemView,       setItemView]       = useState<EstoqueItem | null>(null);
   const [confirmExcluir, setConfirmExcluir] = useState<EstoqueItem | null>(null);
+
+  // Modal Ajuste de Estoque (correção manual de quantidade — cria MovimentoEstoque AJUSTE)
+  const [modalAjusteAberto,     setModalAjusteAberto]     = useState(false);
+  const [ajusteItemId,          setAjusteItemId]          = useState<number | null>(null);
+  const [buscaAjuste,           setBuscaAjuste]           = useState('');
+  const [dropdownAjusteAberto,  setDropdownAjusteAberto]  = useState(false);
+  // Quantidade FINAL em estoque (pré-preenchida com a atual) — o delta é calculado
+  const [ajusteQtd,      setAjusteQtd]      = useState<number | ''>('');
+  const [ajusteMotivo,   setAjusteMotivo]   = useState('');
+  const [ajustando,      setAjustando]      = useState(false);
   const [valorStr,             setValorStr]             = useState('');
   const [valorRepassadoStr,    setValorRepassadoStr]    = useState('');
   const [repassadoEditado,     setRepassadoEditado]     = useState(false);
@@ -233,10 +250,14 @@ export default function Farmacia() {
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
   useEffect(() => {
+    // Só reseta a calculadora na CRIAÇÃO (troca de medicamento no combobox).
+    // Na edição, preencherEdicao já populou frascos/peso com o que foi cadastrado
+    // — este efeito dispara logo em seguida e não pode apagar os valores.
+    if (editandoId) return;
     setFrascos('');
     const med = medicamentos.find(m => m.id === form.medicamentoId) ?? null;
     setPesoPorEmbalagem(med ? (extrairVolume(med) ?? '') : '');
-  }, [form.medicamentoId, medicamentos]);
+  }, [form.medicamentoId, medicamentos, editandoId]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -315,14 +336,18 @@ export default function Farmacia() {
   // ── Form handlers ─────────────────────────────────────────────────────────
 
   const preencherEdicao = (item: EstoqueItem) => {
+    // Mínimo/alarmante são armazenados na unidade maior do catálogo (L, kg...);
+    // o formulário exibe/edita na subunidade (mL, g...) — converte na ida e na volta
+    const medDoItem = medicamentos.find(m => m.id === item.medicamentoId) ?? null;
+    const fator     = fatorSubUnidade(medDoItem?.unidade ?? '');
     setForm({
       medicamentoId:    item.medicamentoId,
       valor:            item.valor,
       lote:             item.lote ?? '',
       validade:         item.validade ? item.validade.split('T')[0] : '',
       qtdEstoque:       item.qtdEstoque,
-      estoqueMinimo:    item.estoqueMinimo,
-      estoqueAlarmante: item.estoqueAlarmante,
+      estoqueMinimo:    item.estoqueMinimo * fator,
+      estoqueAlarmante: item.estoqueAlarmante * fator,
       ativo:            item.ativo,
       valorRepassado:   item.valorRepassado ?? 0,
       fornecedorId:     item.fornecedorId ?? 0,
@@ -332,6 +357,11 @@ export default function Farmacia() {
     setValorRepassadoStr(formatarValor(item.valorRepassado ?? 0));
     setRepassadoEditado(item.valorRepassado !== item.valor);
     setEditandoId(item.id);
+    // Medicamento ainda não movimentado → embalagens/peso podem ser corrigidos na edição
+    setEditandoEmUso(!!item.emUso);
+    // Pré-preenche a calculadora com o que foi informado na entrada
+    setFrascos(item.qtdEmbalagens ?? '');
+    setPesoPorEmbalagem(item.pesoPorEmbalagem ?? '');
     setModalFormAberto(true);
   };
 
@@ -341,6 +371,7 @@ export default function Farmacia() {
     setValorRepassadoStr('');
     setRepassadoEditado(false);
     setEditandoId(null);
+    setEditandoEmUso(false);
     setModalFormAberto(false);
     setFrascos('');
     setPesoPorEmbalagem('');
@@ -352,7 +383,9 @@ export default function Farmacia() {
     if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de estoque'); return; }
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
-    if (form.validade && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
+    if (!form.lote.trim())   return toast.error('Lote é obrigatório.');
+    if (!form.validade)      return toast.error('Validade é obrigatória.');
+    if (form.validade && form.validade < hoje && !editandoId) return toast.error('Validade não pode ser anterior à data de hoje.');
 
     if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return toast.error('Quantidades não podem ser negativas.');
     if (!editandoId && form.qtdEstoque < 0) return toast.error('Estoque não pode ser negativo.');
@@ -370,12 +403,20 @@ export default function Farmacia() {
         valorRepassado:   form.valorRepassado * nPacotes,
         lote:             form.lote || null,
         validade:         form.validade || null,
-        estoqueMinimo:    form.estoqueMinimo / (editandoId ? 1 : fatorSubUnidade(medSelecionado?.unidade ?? '')),
-        estoqueAlarmante: form.estoqueAlarmante / (editandoId ? 1 : fatorSubUnidade(medSelecionado?.unidade ?? '')),
+        // Formulário trabalha na subunidade — converte para a unidade maior ao salvar
+        estoqueMinimo:    form.estoqueMinimo / fatorSubUnidade(medSelecionado?.unidade ?? ''),
+        estoqueAlarmante: form.estoqueAlarmante / fatorSubUnidade(medSelecionado?.unidade ?? ''),
         ativo:            form.ativo,
         fornecedorId:     form.fornecedorId || null,
         notaFiscal:       form.notaFiscal.trim() || null,
-        ...(!editandoId && { qtdEstoque: form.qtdEstoque }),
+        // Criação: sempre envia. Edição: só quando o item ainda não foi movimentado
+        // e o usuário reinformou as embalagens (recalcula o total)
+        ...((!editandoId || (!editandoEmUso && frascos !== '')) && { qtdEstoque: form.qtdEstoque }),
+        // Persiste a calculadora de embalagens (pré-preenchimento na edição)
+        ...((!editandoId || !editandoEmUso) && {
+          qtdEmbalagens:    frascos          !== '' ? Number(frascos)          : null,
+          pesoPorEmbalagem: pesoPorEmbalagem !== '' ? Number(pesoPorEmbalagem) : null,
+        }),
       };
 
       if (editandoId) {
@@ -395,18 +436,65 @@ export default function Farmacia() {
     } finally { setSalvando(false); }
   };
 
-  const confirmarExcluir = async () => {
+  const confirmarExcluir = async (motivo: string) => {
     if (!confirmExcluir) return;
     if (!podeDeletar) { semPermissao('inativar item do estoque'); return; }
     try {
-      await api.delete(`/farmacia/estoque/${confirmExcluir.id}`);
+      await api.delete(`/farmacia/estoque/${confirmExcluir.id}`, { data: { motivo } });
       toast.success('Item inativado.');
       setConfirmExcluir(null);
       carregarEstoque();
-    } catch { toast.error('Erro ao inativar.'); }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao inativar.');
+    }
   };
 
 
+
+  // Item selecionado no modal de ajuste (resolvido a partir da lista carregada)
+  const itemAjuste = ajusteItemId != null ? (itens.find((i) => i.id === ajusteItemId) ?? null) : null;
+
+  const abrirAjuste = (item?: EstoqueItem) => {
+    if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
+    setAjusteItemId(item?.id ?? null);
+    setAjusteQtd(item ? item.qtdEstoque : '');
+    setAjusteMotivo('');
+    setBuscaAjuste('');
+    setDropdownAjusteAberto(false);
+    setModalAjusteAberto(true);
+  };
+
+  const fecharAjuste = () => {
+    setModalAjusteAberto(false);
+    setAjusteItemId(null);
+  };
+
+  const confirmarAjuste = async () => {
+    if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
+    if (!itemAjuste)             return toast.error('Selecione um medicamento do estoque.');
+    if (ajusteQtd === '')        return toast.error('Informe a quantidade em estoque.');
+    const qtd = Number(ajusteQtd);
+    if (qtd < 0)                 return toast.error('Quantidade não pode ser negativa.');
+    if (!ajusteMotivo.trim())    return toast.error('Informe o motivo do ajuste.');
+    const delta = qtd - itemAjuste.qtdEstoque;
+    if (delta === 0)             return toast.error('A quantidade informada é igual ao estoque atual.');
+
+    setAjustando(true);
+    try {
+      await api.patch(`/farmacia/estoque/${itemAjuste.id}/ajuste`, {
+        tipo: 'AJUSTE',
+        quantidade: delta,
+        motivo: ajusteMotivo.trim(),
+      });
+      toast.success('Estoque ajustado.');
+      fecharAjuste();
+      carregarEstoque();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao ajustar estoque.');
+    } finally { setAjustando(false); }
+  };
 
   const abrirHistorico = async (item: EstoqueItem) => {
     setModalHistorico(item);
@@ -482,6 +570,13 @@ export default function Farmacia() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors">
                 Entrada de Estoque
               </button>
+              {podeAjustar && (
+                <button onClick={() => abrirAjuste()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-600 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-xl transition-colors">
+                  <ArrowUpDown size={13} />
+                  Ajuste de Estoque
+                </button>
+              )}
               <button onClick={carregarEstoque} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               </button>
@@ -762,20 +857,24 @@ export default function Farmacia() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Lote</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Lote <span className="text-red-500">*</span></label>
                   <input type="text" value={form.lote}
+                    disabled={!!editandoId && editandoEmUso}
+                    title={editandoId && editandoEmUso ? 'Item já movimentado — lote não pode ser alterado' : undefined}
                     onChange={(e) => setForm((f) => ({ ...f, lote: e.target.value }))}
                     placeholder="Ex: LOT2024"
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Validade</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Validade <span className="text-red-500">*</span></label>
                   <input
                     type="date"
                     value={form.validade}
-                    min={hoje}
+                    min={editandoId ? undefined : hoje}
+                    disabled={!!editandoId && editandoEmUso}
+                    title={editandoId && editandoEmUso ? 'Item já movimentado — validade não pode ser alterada' : undefined}
                     onChange={(e) => setForm((f) => ({ ...f, validade: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
                   />
                 </div>
               </div>
@@ -788,7 +887,7 @@ export default function Farmacia() {
                   </label>
                   <input
                     type="number" min={0}
-                    disabled={!!editandoId}
+                    disabled={!!editandoId && editandoEmUso}
                     value={frascos === '' ? '' : frascos}
                     onChange={e => {
                       const n = e.target.value === '' ? '' : Number(e.target.value);
@@ -802,7 +901,8 @@ export default function Farmacia() {
                     placeholder="Qtd de embalagens"
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
                   />
-                  {editandoId && <p className="text-[10px] text-gray-400 mt-1">Use "Ajuste de Estoque" para alterar.</p>}
+                  {editandoId && editandoEmUso && <p className="text-[10px] text-gray-400 mt-1">Use "Ajuste de Estoque" para alterar.</p>}
+                  {editandoId && !editandoEmUso && <p className="text-[10px] text-emerald-600 mt-1">Medicamento ainda não utilizado — edição liberada.</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -810,7 +910,7 @@ export default function Farmacia() {
                   </label>
                   <input
                     type="number" min={0}
-                    disabled={!!editandoId}
+                    disabled={!!editandoId && editandoEmUso}
                     value={pesoPorEmbalagem === '' ? '' : pesoPorEmbalagem}
                     onChange={e => {
                       const p = e.target.value === '' ? '' : Number(e.target.value);
@@ -841,8 +941,8 @@ export default function Farmacia() {
                 </p>
               )}
 
-              {/* Mínimo + Alarmante */}
-              {!editandoId && (
+              {/* Mínimo + Alarmante — editáveis também na edição */}
+              {(
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
@@ -912,6 +1012,7 @@ export default function Farmacia() {
             <div className="p-5 space-y-4 overflow-y-auto">
               <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 text-xs text-emerald-800">
                 <span className="font-semibold">Item em uso</span> — alterações não são permitidas enquanto houver saídas registradas.
+                Para corrigir a quantidade, use o Ajuste de Estoque.
               </div>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="col-span-2">
@@ -971,9 +1072,15 @@ export default function Farmacia() {
                 </div>
               </div>
             </div>
-            <div className="p-4 border-t border-gray-100 flex-shrink-0">
+            <div className="p-4 border-t border-gray-100 flex gap-2 flex-shrink-0">
+              {podeAjustar && itemView.ativo && (
+                <button onClick={() => { const item = itemView; setItemView(null); abrirAjuste(item); }}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5">
+                  <ArrowUpDown size={14} /> Ajuste de Estoque
+                </button>
+              )}
               <button onClick={() => setItemView(null)}
-                className="w-full py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50">
+                className="flex-1 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50">
                 Fechar
               </button>
             </div>
@@ -1040,21 +1147,183 @@ export default function Farmacia() {
         </div>
       )}
 
-      {/* ── Modal: confirmar exclusão ────────────────────────────────────── */}
-      {confirmExcluir && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="font-bold text-gray-900 mb-2">Inativar item?</h3>
-            <p className="text-xs text-gray-500 mb-5">{confirmExcluir.medicamento.nome}</p>
-            <div className="flex gap-2">
-              <button onClick={confirmarExcluir}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl text-sm font-semibold">Inativar</button>
-              <button onClick={() => setConfirmExcluir(null)}
-                className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">Cancelar</button>
+      {/* ── Modal: Ajuste de Estoque ─────────────────────────────────────── */}
+      {modalAjusteAberto && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-40" onClick={fecharAjuste} />
+          <div className="fixed inset-x-4 top-[4vh] z-50 bg-white rounded-2xl shadow-2xl max-w-lg mx-auto flex flex-col max-h-[92vh] overflow-hidden">
+            <div className="bg-emerald-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <ArrowUpDown size={15} className="text-white/80" />
+                <p className="font-bold text-sm text-white">Ajuste de Estoque</p>
+              </div>
+              <button onClick={fecharAjuste} className="text-white/60 hover:text-white"><X size={18} /></button>
+            </div>
+
+            <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+
+              {/* Seletor de Medicamento — mesmo padrão da Entrada de Estoque */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Medicamento <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  {!dropdownAjusteAberto ? (
+                    <button
+                      type="button"
+                      onClick={() => { setDropdownAjusteAberto(true); setBuscaAjuste(''); }}
+                      className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                      <span className={itemAjuste ? 'text-gray-900 truncate' : 'text-gray-400'}>
+                        {itemAjuste
+                          ? `${itemAjuste.medicamento.nome}${itemAjuste.lote ? ` · Lote ${itemAjuste.lote}` : ''}`
+                          : 'Selecione o medicamento...'}
+                      </span>
+                      {itemAjuste ? (
+                        <X size={14} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
+                          onClick={(e) => { e.stopPropagation(); setAjusteItemId(null); setAjusteQtd(''); }} />
+                      ) : (
+                        <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ) : (
+                    <div className="relative">
+                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Buscar medicamento no estoque..."
+                        value={buscaAjuste}
+                        onChange={(e) => setBuscaAjuste(e.target.value)}
+                        onBlur={() => setTimeout(() => { setDropdownAjusteAberto(false); setBuscaAjuste(''); }, 150)}
+                        className="w-full pl-8 pr-3 border border-gray-300 rounded-xl py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                        <ul className="max-h-44 overflow-y-auto">
+                          {(() => {
+                            const disponiveis = itens.filter((i) => i.ativo);
+                            const filtrados = buscaAjuste.trim() === '' ? disponiveis : disponiveis.filter((i) =>
+                              i.medicamento.nome.toLowerCase().includes(buscaAjuste.toLowerCase()) ||
+                              i.medicamento.formaFarmaceutica.toLowerCase().includes(buscaAjuste.toLowerCase()) ||
+                              (i.lote ?? '').toLowerCase().includes(buscaAjuste.toLowerCase())
+                            );
+                            return filtrados.length === 0 ? (
+                              <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum item de estoque encontrado.</li>
+                            ) : (
+                              filtrados.map((i) => (
+                                <li key={i.id}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={() => {
+                                      setAjusteItemId(i.id);
+                                      setAjusteQtd(i.qtdEstoque);
+                                      setDropdownAjusteAberto(false);
+                                      setBuscaAjuste('');
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 transition-colors ${
+                                      ajusteItemId === i.id ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-800'
+                                    }`}>
+                                    <span className="block truncate">{i.medicamento.nome}</span>
+                                    <span className="text-[11px] text-gray-400">
+                                      {fmtQtd(i.qtdEstoque)} {i.medicamento.unidade}
+                                      {i.lote && ` · Lote ${i.lote}`}
+                                      {i.medicamento.formaFarmaceutica && ` · ${i.medicamento.formaFarmaceutica}`}
+                                    </span>
+                                  </button>
+                                </li>
+                              ))
+                            );
+                          })()}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Dados do item selecionado — mesmo padrão do bloco "Do Catálogo" */}
+              {itemAjuste && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-2.5 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-indigo-700 text-[11px] uppercase tracking-wider mb-1">Item Selecionado</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <p><span className="text-gray-400">Estoque atual:</span>{' '}
+                      <b className="text-emerald-700">{fmtQtd(itemAjuste.qtdEstoque)} {itemAjuste.medicamento.unidade}</b></p>
+                    <p><span className="text-gray-400">Lote:</span> {itemAjuste.lote ?? '—'}</p>
+                    <p><span className="text-gray-400">Forma:</span> {itemAjuste.medicamento.formaFarmaceutica}</p>
+                    <p><span className="text-gray-400">Validade:</span> {itemAjuste.validade ? formatDate(itemAjuste.validade) : '—'}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Quantidade final em estoque — pré-preenchida com a atual */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Quantidade em Estoque{itemAjuste && <span className="text-gray-400 font-normal ml-1">({itemAjuste.medicamento.unidade})</span>} <span className="text-red-500">*</span>
+                </label>
+                <input type="number" min={0} value={ajusteQtd === '' ? '' : ajusteQtd}
+                  onChange={(e) => setAjusteQtd(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="0"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                {itemAjuste && (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Informe a quantidade real em estoque — a diferença será registrada como ajuste.
+                  </p>
+                )}
+              </div>
+
+              {/* Motivo */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Motivo <span className="text-red-500">*</span>
+                </label>
+                <input type="text" value={ajusteMotivo}
+                  onChange={(e) => setAjusteMotivo(e.target.value)}
+                  placeholder="Ex: correção de inventário, perda, quebra..."
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+
+              {/* Preview da diferença */}
+              {itemAjuste && ajusteQtd !== '' && (() => {
+                const novaQtd = Number(ajusteQtd);
+                if (novaQtd < 0) return <p className="text-xs text-red-600 font-semibold">Quantidade não pode ser negativa.</p>;
+                const delta = novaQtd - itemAjuste.qtdEstoque;
+                if (delta === 0) return (
+                  <p className="text-xs text-gray-500">Quantidade igual ao estoque atual — nenhum ajuste será registrado.</p>
+                );
+                return (
+                  <p className="text-xs text-gray-600">
+                    Diferença a registrar:{' '}
+                    <b className={delta > 0 ? 'text-emerald-700' : 'text-red-600'}>
+                      {delta > 0 ? '+' : '−'}{fmtQtd(Math.abs(delta))} {itemAjuste.medicamento.unidade}
+                    </b>
+                    {' '}({fmtQtd(itemAjuste.qtdEstoque)} → {fmtQtd(novaQtd)})
+                  </p>
+                );
+              })()}
+
+              <div className="flex gap-2">
+                <button onClick={confirmarAjuste} disabled={ajustando || !itemAjuste}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
+                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
+                </button>
+                <button onClick={fecharAjuste}
+                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  Cancelar
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
+
+      {/* ── Modal: confirmar exclusão (justificativa obrigatória) ────────── */}
+      <ModalJustificativa
+        aberto={!!confirmExcluir}
+        titulo="Inativar item do estoque?"
+        descricao={confirmExcluir ? `${confirmExcluir.medicamento.nome}${confirmExcluir.lote ? ` · Lote ${confirmExcluir.lote}` : ''}` : undefined}
+        acaoLabel="Inativar"
+        onConfirmar={confirmarExcluir}
+        onFechar={() => setConfirmExcluir(null)}
+      />
     </PageContainer>
   );
 }

@@ -2,6 +2,8 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { registrarAuditoria } = require('../lib/auditoria');
+const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -157,11 +159,10 @@ const PrescricaoController = {
       if (acessoUpd === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoUpd)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
-      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
-      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestor && Number(prescricaoParaCheck.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode editar prescrições criadas por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.prescricoes.editar):
+      // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
+      if (!podeOperarRegistro(req.permissaoNivel, prescricaoParaCheck.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite editar prescrições criadas por você.' });
       }
 
       const inicio   = dataInicio ? new Date(dataInicio) : undefined;
@@ -203,9 +204,14 @@ const PrescricaoController = {
   // DELETE /clinica/prescricoes/:id
   excluir: async (req, res) => {
     try {
+      const { motivo } = req.body ?? {};
+      if (!motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+      }
+
       const prescricaoParaDel = await prisma.prescricao.findFirst({
         where:  { id: Number(req.params.id), ativo: true },
-        select: { animalId: true, veterinarioId: true },
+        select: { animalId: true, veterinarioId: true, medicamento: true },
       });
       if (!prescricaoParaDel) return res.status(404).json({ error: 'Prescrição não encontrada' });
 
@@ -213,16 +219,25 @@ const PrescricaoController = {
       if (acessoDel === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoDel)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
-      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestorDel && Number(prescricaoParaDel.veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode excluir prescrições criadas por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.prescricoes.deletar)
+      if (!podeOperarRegistro(req.permissaoNivel, prescricaoParaDel.veterinarioId, req.user.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite excluir prescrições criadas por você.' });
       }
 
       await prisma.prescricao.update({
         where: { id: Number(req.params.id) },
         data:  { ativo: false },
       });
+
+      await registrarAuditoria(null, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'PRESCRICAO_ITEM',
+        entidadeId: Number(req.params.id),
+        animalId:   prescricaoParaDel.animalId,
+        motivo,
+        detalhes:   prescricaoParaDel.medicamento || null,
+      });
+
       res.json({ sucesso: true });
     } catch (err) {
       console.error('Erro ao excluir prescrição:', err);
@@ -246,9 +261,9 @@ const PrescricaoController = {
       if (acessoFin1 === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin1)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // Regra: FORNECEDOR só pode finalizar prescrição que ele próprio criou
-      if (vet.userType === 'FORNECEDOR' && prescricao.veterinarioId !== vet.id) {
-        return res.status(403).json({ error: 'Você só pode finalizar prescrições criadas por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.prescricoes.finalizar)
+      if (!podeOperarRegistro(req.permissaoNivel, prescricao.veterinarioId, vet.id)) {
+        return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar prescrições criadas por você.' });
       }
 
       if (prescricao.status !== 'RASCUNHO') {
@@ -307,9 +322,10 @@ const PrescricaoController = {
       if (acessoFin === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acessoFin)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      // FORNECEDOR só finaliza rascunhos que ele próprio criou
+      // Autoria via RBAC: nível PROPRIO finaliza apenas os próprios rascunhos;
+      // EQUIPE/FULL finaliza os de toda a equipe.
       const whereRascunho = { animalId: Number(animalId), ativo: true, status: 'RASCUNHO' };
-      if (vet.userType === 'FORNECEDOR') whereRascunho.veterinarioId = vet.id;
+      if (req.permissaoNivel === 'PROPRIO') whereRascunho.veterinarioId = vet.id;
 
       const rascunhos = await prisma.prescricao.findMany({
         where: whereRascunho,

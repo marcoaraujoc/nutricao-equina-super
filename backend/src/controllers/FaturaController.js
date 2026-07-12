@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { recalcularTotal: recalcularTotalCompartilhado, registrarCorrecaoFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -324,18 +325,33 @@ const FaturaController = {
   // DELETE /itens/:itemId
   removerItem: async (req, res) => {
     const { itemId } = req.params;
+    const { motivo } = req.body ?? {};
 
     try {
+      if (!motivo?.trim()) {
+        return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+      }
+
       const item = await prisma.faturaItem.findUnique({
         where:   { id: Number(itemId) },
-        include: { fatura: { select: { status: true } } },
+        include: { fatura: { select: { status: true, mesReferencia: true } } },
       });
       if (!item) return res.status(404).json({ error: 'Item não encontrado' });
       if (item.fatura.status === 'PAGA') {
         return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
       }
 
-      await prisma.faturaItem.delete({ where: { id: Number(itemId) } });
+      await prisma.$transaction(async (tx) => {
+        await tx.faturaItem.delete({ where: { id: Number(itemId) } });
+        await registrarAuditoria(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'FATURA_ITEM',
+          entidadeId: Number(itemId),
+          animalId:   item.animalId ?? null,
+          motivo,
+          detalhes:   `${item.descricao ?? 'Item de fatura'} (fatura #${item.faturaId}${item.fatura.mesReferencia ? ` · ${item.fatura.mesReferencia}` : ''})`,
+        });
+      });
       const total = await recalcularTotal(item.faturaId);
       await registrarCorrecaoFatura(prisma, item.faturaId);
 

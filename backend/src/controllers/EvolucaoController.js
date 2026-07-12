@@ -5,6 +5,7 @@ const { Prisma } = require('@prisma/client');
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 const { formatAtendimentoNum }  = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
@@ -42,6 +43,12 @@ async function registrarAuditoria(userId, userName, email, action) {
     console.error('Erro ao registrar auditoria:', err);
   }
 }
+
+// Auditoria central estruturada (exclusões/cancelamentos) — lib/auditoria.js
+const { registrarAuditoria: auditoriaCentral } = require('../lib/auditoria');
+// Autoria via RBAC (req.permissaoNivel): PROPRIO = só registros próprios;
+// EQUIPE/FULL = qualquer registro da equipe. Nenhuma checagem de cargo/userType aqui.
+const { podeOperarRegistro, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTROLLER
@@ -90,6 +97,9 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
+      // Segregação multi-clínica: cada empresa vê só as próprias evoluções do animal
+      where.AND = [escopoEvolucaoWhere(req)];
+
       const [evolucoes, total] = await Promise.all([
         prisma.evolucaoClinica.findMany({
           where,
@@ -125,12 +135,13 @@ const EvolucaoController = {
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
       const evolucoes = await prisma.evolucaoClinica.findMany({
-        where:    { animalId: Number(animalId), ativo: true },
+        where:    { animalId: Number(animalId), ativo: true, AND: [escopoEvolucaoWhere(req)] },
         select:   { veterinario: { select: { id: true, fullName: true } } },
         distinct: ['veterinarioId'],
       });
 
-      const responsaveis = evolucoes.map(e => e.veterinario);
+      // filter(Boolean): evolução com autor removido tem veterinario null
+      const responsaveis = evolucoes.map(e => e.veterinario).filter(Boolean);
       res.json({ sucesso: true, dados: responsaveis });
     } catch (error) {
       console.error('Erro ao listar responsáveis:', error);
@@ -160,6 +171,17 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Segregação multi-clínica: evolução de outra empresa/equipe não é visível
+      const escopo = escopoEvolucaoWhere(req);
+      if (Object.keys(escopo).length > 0) {
+        const visivel =
+          (req.empresaId && evolucao.empresaId === Number(req.empresaId)) ||
+          evolucao.veterinarioId === Number(req.user.id);
+        if (!visivel) {
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este registro' });
+        }
+      }
 
       res.json({ sucesso: true, dados: evolucao });
     } catch (error) {
@@ -259,6 +281,10 @@ const EvolucaoController = {
             numero,
             tipoAtendimento,
             agendamentoId:   agendamentoIdFinal,
+            // Tenancy: contexto ativo do autor — segrega o histórico entre as
+            // clínicas/equipes que atendem o mesmo animal (multi-vet)
+            empresaId:       req.empresaId ?? null,
+            equipeId:        req.equipeId  ?? null,
           },
           include: INCLUDE_PADRAO,
         });
@@ -313,20 +339,19 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode editar qualquer registro, mas FORNECEDOR nunca tem
-      // bypass de gestor mesmo que req.membroCargo === 'GESTOR' (via bypass de dono de empresa).
-      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestor && Number(existente.veterinarioId) !== Number(userId)) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode editar evoluções criadas por você.' });
+      // Autoria dirigida pela matriz RBAC (nível efetivo em atendimento.evolucoes.editar):
+      // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer registro da equipe.
+      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar evoluções criadas por você.' });
       }
 
-      if (existente.status === 'FINALIZADA') {
-        if (!bypassGestor) {
-          return res.status(403).json({
-            sucesso:  false,
-            mensagem: 'Evoluções finalizadas só podem ser editadas por gestores',
-          });
-        }
+      // Editar registro FINALIZADO exige nível FULL no editar (gestor tem FULL por
+      // bypass; a matriz pode conceder FULL a outros perfis).
+      if (existente.status === 'FINALIZADA' && (NIVEL_ORDINAL[req.permissaoNivel] ?? 0) < NIVEL_ORDINAL.FULL) {
+        return res.status(403).json({
+          sucesso:  false,
+          mensagem: 'Editar evoluções finalizadas exige nível FULL na permissão de alterar evoluções.',
+        });
       }
 
       if (existente.status === 'CANCELADA') {
@@ -415,12 +440,12 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      // Regra de autoria: GESTOR pode excluir qualquer registro, FORNECEDOR só o próprio
-      const bypassGestorDel = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestorDel && Number(existente.veterinarioId) !== Number(userId)) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode excluir evoluções criadas por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.evolucoes.deletar)
+      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite excluir evoluções criadas por você.' });
       }
 
+      // Regra de ADMIN (única regra fixa permitida no backend)
       if (existente.status === 'FINALIZADA' && req.user.userType !== 'ADMIN') {
         return res.status(403).json({
           sucesso:  false,
@@ -446,14 +471,16 @@ const EvolucaoController = {
             data:  { status: 'AGENDADO' },
           });
         }
-      });
 
-      await registrarAuditoria(
-        userId,
-        req.user.fullName,
-        req.user.email,
-        `EVOLUCAO_EXCLUIDA | id=${id} | animal=${existente.animalId} | justificativa="${justificativa.trim()}"`
-      );
+        await auditoriaCentral(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'EVOLUCAO',
+          entidadeId: Number(id),
+          animalId:   existente.animalId,
+          motivo:     justificativa,
+          detalhes:   existente.titulo || null,
+        });
+      });
 
       res.json({ sucesso: true, mensagem: 'Evolução removida com sucesso' });
     } catch (error) {
@@ -515,15 +542,17 @@ const EvolucaoController = {
           });
         }
 
+        await auditoriaCentral(tx, req, {
+          categoria:  'CANCELAMENTO',
+          entidade:   'EVOLUCAO',
+          entidadeId: Number(id),
+          animalId:   existente.animalId,
+          motivo:     justificativa,
+          detalhes:   `status anterior: ${existente.status}${existente.titulo ? ` — ${existente.titulo}` : ''}`,
+        });
+
         return upd;
       });
-
-      await registrarAuditoria(
-        userId,
-        req.user.fullName,
-        req.user.email,
-        `EVOLUCAO_CANCELADA | id=${id} | animal=${existente.animalId} | statusAnterior=${existente.status} | justificativa="${justificativa.trim()}"`
-      );
 
       res.json({ sucesso: true, dados: cancelada });
     } catch (error) {
@@ -552,9 +581,10 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      // Regra: FORNECEDOR só pode finalizar evolução que ele próprio criou
-      if (req.user.userType === 'FORNECEDOR' && existente.veterinarioId !== userId) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode finalizar evoluções criadas por você.' });
+      // Autoria via RBAC (nível efetivo em atendimento.evolucoes.finalizar):
+      // PROPRIO → só finaliza o que criou; EQUIPE/FULL → qualquer da equipe.
+      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite finalizar evoluções criadas por você.' });
       }
 
       if (existente.aprovado) {
@@ -834,10 +864,9 @@ const EvolucaoController = {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      // Mesma regra de autoria do atualizar: GESTOR edita qualquer; demais só o próprio
-      const bypassGestor = req.membroCargo === 'GESTOR' && req.user.userType !== 'FORNECEDOR';
-      if (!bypassGestor && Number(existente.veterinarioId) !== Number(userId)) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Você só pode editar relatórios de evoluções criadas por você.' });
+      // Mesma regra de autoria do atualizar — dirigida pela matriz RBAC
+      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar relatórios de evoluções criadas por você.' });
       }
 
       const base = (existente.resumoIaData && typeof existente.resumoIaData === 'object')

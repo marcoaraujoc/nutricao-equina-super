@@ -155,19 +155,27 @@ const { USER_TYPES_GERENCIADOS } = PermissaoService;
 
 const NIVEL_ORDER = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
 
-// Anexa a cada membro os perfis do usuário no SISTEMA TODO (todas as equipes +
-// dono de empresa = GESTOR) — exibidos na coluna "Perfis" do ControleAcesso.
-// Ex: fornecedora numa equipe que assinou a aplicação também aparece como Gestor.
-async function anexarPerfisGlobais(membros) {
+// Anexa a cada membro os perfis do usuário — exibidos na coluna "Perfis" do
+// ControleAcesso. PRIVACIDADE: os perfis são exclusivos de cada empresa — o que
+// o usuário é em OUTRA empresa (gestor da própria, estagiário de terceiros etc.)
+// não aparece para ninguém fora dela. Por padrão o escopo é a empresa da equipe
+// listada ({ empresaId }); apenas o ADMIN da plataforma vê tudo ({ todos: true }).
+async function anexarPerfisGlobais(membros, { empresaId = null, todos = false } = {}) {
   const userIds = [...new Set(membros.map(m => m.user.id))];
   if (userIds.length === 0) return membros;
   const [vinculos, donos] = await Promise.all([
     prisma.membroEquipe.findMany({
-      where:  { userId: { in: userIds } },
+      where: {
+        userId: { in: userIds },
+        ...(todos ? {} : { equipe: { empresaId: empresaId ? Number(empresaId) : -1 } }),
+      },
       select: { userId: true, cargo: true, cargos: true },
     }),
     prisma.empresa.findMany({
-      where:  { ownerId: { in: userIds } },
+      where: {
+        ownerId: { in: userIds },
+        ...(todos ? {} : { id: empresaId ? Number(empresaId) : -1 }),
+      },
       select: { ownerId: true },
     }),
   ]);
@@ -332,6 +340,7 @@ const EquipeController = {
           logoUrl:             config?.logoUrl             ?? null,
           tipoFechamento:      tipoFechamentoEfetivo,
           diaFechamentoFatura: config?.diaFechamentoFatura  ?? null,
+          whatsapp:            config?.whatsapp             ?? null,
         },
       });
     } catch (err) {
@@ -345,7 +354,21 @@ const EquipeController = {
       const escopo = await resolverEscopoConfiguracao(req);
       if (!escopo) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
 
-      const { tipoFechamento, diaFechamentoFatura, removerLogo } = req.body;
+      const { tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp } = req.body;
+
+      // WhatsApp da empresa — normaliza para somente dígitos (DDD+número, DDI opcional).
+      // undefined = não altera; string vazia = remove o número.
+      let whatsappFinal;
+      if (whatsapp !== undefined) {
+        const digitos = String(whatsapp).replace(/\D/g, '');
+        if (digitos === '') {
+          whatsappFinal = null;
+        } else if (digitos.length < 10 || digitos.length > 15) {
+          return res.status(400).json({ sucesso: false, mensagem: 'WhatsApp inválido — informe DDD + número (10 a 15 dígitos).' });
+        } else {
+          whatsappFinal = digitos;
+        }
+      }
 
       let tipoFinal;
       let diaFinal;
@@ -389,8 +412,9 @@ const EquipeController = {
       const config = await prisma.empresaConfiguracao.upsert({
         where:  { empresaId_equipeId: escopo },
         update: {
-          ...(tipoFinal    !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
-          ...(logoUrlFinal !== undefined && { logoUrl: logoUrlFinal }),
+          ...(tipoFinal     !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
+          ...(logoUrlFinal  !== undefined && { logoUrl: logoUrlFinal }),
+          ...(whatsappFinal !== undefined && { whatsapp: whatsappFinal }),
         },
         create: {
           empresaId:           escopo.empresaId,
@@ -398,6 +422,7 @@ const EquipeController = {
           tipoFechamento:      tipoFinal ?? null,
           diaFechamentoFatura: diaFinal  ?? null,
           logoUrl:             logoUrlFinal ?? null,
+          whatsapp:            whatsappFinal ?? null,
         },
       });
 
@@ -407,6 +432,7 @@ const EquipeController = {
           logoUrl:             config.logoUrl,
           tipoFechamento:      config.tipoFechamento ?? (config.diaFechamentoFatura != null ? 'DIA_FIXO' : 'ULTIMO_DIA_MES'),
           diaFechamentoFatura: config.diaFechamentoFatura,
+          whatsapp:            config.whatsapp,
         },
       });
     } catch (err) {
@@ -603,7 +629,7 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          dados:        await anexarPerfisGlobais(membros),
+          dados:        await anexarPerfisGlobais(membros, { todos: true }), // ADMIN da plataforma vê tudo
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -633,7 +659,8 @@ const EquipeController = {
       });
       res.json({
         sucesso: true,
-        dados:        await anexarPerfisGlobais(membros),
+        // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
+        dados:        await anexarPerfisGlobais(membros, { empresaId: empresa.id }),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -648,12 +675,14 @@ const EquipeController = {
     try {
       const { equipeId } = req.params;
       const equipeIdN = Number(equipeId);
+      const isAdminReq = req.user.role === 'ADMIN' || req.user.userType === 'ADMIN';
+
+      const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
 
       // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
-      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
+      if (!isAdminReq) {
         const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
         if (empresa) {
-          const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
           if (!equipe || equipe.empresaId !== empresa.id) {
             return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a esta equipe.' });
           }
@@ -665,7 +694,12 @@ const EquipeController = {
         include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
         orderBy: { createdAt: 'desc' },
       });
-      res.json({ sucesso: true, dados: await anexarPerfisGlobais(membros) });
+      // Perfis restritos à empresa desta equipe (ADMIN da plataforma vê tudo)
+      const dados = await anexarPerfisGlobais(
+        membros,
+        isAdminReq ? { todos: true } : { empresaId: equipe?.empresaId ?? null },
+      );
+      res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('Erro ao listar membros por equipe:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

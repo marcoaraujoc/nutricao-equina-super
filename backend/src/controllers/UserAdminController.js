@@ -25,21 +25,53 @@ const UserAdminController = {
           ...SELECT_SEGURO,
           membrosEquipe: {
             select: {
-              cargo: true,
-              equipe: { select: { nome: true, empresa: { select: { nome: true } } } },
+              cargo:  true,
+              cargos: true,
+              equipe: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true } } } },
             },
-            take: 1,
             orderBy: { createdAt: 'asc' },
           },
         },
       });
-      const dados = usuarios.map(u => ({
-        ...u,
-        cargoEquipe:   u.membrosEquipe[0]?.cargo                    ?? null,
-        equipeNome:    u.membrosEquipe[0]?.equipe?.nome              ?? null,
-        empresaNome:   u.membrosEquipe[0]?.equipe?.empresa?.nome     ?? null,
-        membrosEquipe: undefined,
-      }));
+
+      // Empresas onde o usuário é DONO (gestor mesmo sem MembroEquipe)
+      const donos = await prisma.empresa.findMany({
+        where:  { ownerId: { in: usuarios.map(u => u.id) } },
+        select: { id: true, nome: true, ownerId: true },
+      });
+      const empresasPorDono = new Map();
+      for (const e of donos) {
+        if (!empresasPorDono.has(e.ownerId)) empresasPorDono.set(e.ownerId, []);
+        empresasPorDono.get(e.ownerId).push(e);
+      }
+
+      const dados = usuarios.map(u => {
+        // Todos os vínculos do usuário: um por equipe (com todos os cargos)
+        const vinculos = u.membrosEquipe.map(m => ({
+          cargos:      (m.cargos && m.cargos.length > 0) ? m.cargos : [m.cargo],
+          equipeNome:  m.equipe?.nome ?? null,
+          empresaId:   m.equipe?.empresa?.id ?? null,
+          empresaNome: m.equipe?.empresa?.nome ?? null,
+          dono:        false,
+        }));
+        // Dono de empresa sem vínculo GESTOR registrado nela → entra como GESTOR (dono)
+        for (const emp of (empresasPorDono.get(u.id) ?? [])) {
+          const jaGestorNaEmpresa = vinculos.some(v => v.empresaId === emp.id && v.cargos.includes('GESTOR'));
+          if (!jaGestorNaEmpresa) {
+            vinculos.push({ cargos: ['GESTOR'], equipeNome: null, empresaId: emp.id, empresaNome: emp.nome, dono: true });
+          } else {
+            vinculos.forEach(v => { if (v.empresaId === emp.id && v.cargos.includes('GESTOR')) v.dono = true; });
+          }
+        }
+        return {
+          ...u,
+          cargoEquipe:   u.membrosEquipe[0]?.cargo                    ?? null,
+          equipeNome:    u.membrosEquipe[0]?.equipe?.nome              ?? null,
+          empresaNome:   u.membrosEquipe[0]?.equipe?.empresa?.nome     ?? null,
+          vinculos,
+          membrosEquipe: undefined,
+        };
+      });
       res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('Erro ao listar usuários:', err);

@@ -11,6 +11,7 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { Card, EmptyState, Tabela, BigNumber, formatBRL, formatMesRef, formatData } from '../components/relatorios/RelatorioUI';
 
 // ─── Types (espelho do payload do backend) ────────────────────────────────────
 
@@ -98,23 +99,6 @@ interface DadosRelatorios {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-
-function formatBRL(v: number) {
-  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
-function formatMesRef(ref: string | null) {
-  if (!ref) return '—';
-  const [ano, mes] = ref.split('-');
-  return `${MESES[Number(mes) - 1]}/${ano}`;
-}
-
-function formatData(d: string | null) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-
 const FAIXA_LABEL: Record<FaixaSemAtendimento, string> = {
   '3':  '+3 dias',
   '7':  '+7 dias',
@@ -128,60 +112,6 @@ const FAIXA_CLS: Record<FaixaSemAtendimento, string> = {
   '15': 'bg-red-100 text-red-700',
   '30': 'bg-red-200 text-red-800',
 };
-
-// ─── Building blocks ──────────────────────────────────────────────────────────
-
-function Card({ icon, titulo, subtitulo, children }: {
-  icon:      React.ReactNode;
-  titulo:    string;
-  subtitulo?: string;
-  children:  React.ReactNode;
-}) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
-      <div className="flex items-start gap-2.5 px-5 py-4 border-b border-gray-100">
-        <span className="text-emerald-600 mt-0.5">{icon}</span>
-        <div>
-          <h2 className="font-bold text-gray-900 text-sm">{titulo}</h2>
-          {subtitulo && <p className="text-[11px] text-gray-400 mt-0.5">{subtitulo}</p>}
-        </div>
-      </div>
-      <div className="flex-1">{children}</div>
-    </div>
-  );
-}
-
-function EmptyState({ texto }: { texto: string }) {
-  return <p className="text-center text-xs text-gray-400 py-8">{texto}</p>;
-}
-
-function Tabela({ colunas, children }: { colunas: string[]; children: React.ReactNode }) {
-  return (
-    <div className="overflow-x-auto max-h-80 overflow-y-auto">
-      <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-gray-50">
-          <tr className="border-b border-gray-100">
-            {colunas.map((c, i) => (
-              <th key={c + i} className={`px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap ${i === 0 ? 'text-left' : 'text-right'}`}>
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-50">{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-function BigNumber({ valor, label }: { valor: number | string; label: string }) {
-  return (
-    <div className="px-5 py-4 flex items-baseline gap-2 border-b border-gray-50">
-      <span className="text-3xl font-bold text-gray-900">{valor}</span>
-      <span className="text-xs text-gray-400">{label}</span>
-    </div>
-  );
-}
 
 // ─── Página ───────────────────────────────────────────────────────────────────
 
@@ -225,8 +155,8 @@ export default function Relatorios() {
           <BarChart3 size={20} className="text-emerald-700" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Relatórios</h1>
-          <p className="text-xs text-gray-400">Indicadores gerenciais da empresa ativa</p>
+          <h1 className="text-xl font-bold text-gray-900">Relatórios · Gestão</h1>
+          <p className="text-xs text-gray-400">Indicadores de governança da empresa ativa</p>
         </div>
       </div>
 

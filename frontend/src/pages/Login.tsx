@@ -40,13 +40,15 @@ export default function Login() {
     setError('');
     try {
       const res  = await fetch('/api/auth/login', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email, password }),
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify({ email, password }),
       });
       const data = await res.json();
       if (res.ok) {
-        login(data.token, data.refreshToken);
+        // Backend já setou os cookies HttpOnly — carrega a identidade via /me
+        await login();
         localStorage.removeItem('s2vet_ob');
         redirecionarAposLogin();
       } else {
@@ -63,13 +65,14 @@ export default function Login() {
     onSuccess: async (tokenResponse) => {
       try {
         const res  = await fetch('/api/auth/google', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method:      'POST',
+          credentials: 'include',
+          headers:     { 'Content-Type': 'application/json' },
           body: JSON.stringify({ access_token: tokenResponse.access_token }),
         });
         const data = await res.json();
         if (res.ok && data.token) {
-          login(data.token, data.refreshToken);
+          await login();
           localStorage.removeItem('s2vet_ob');
           redirecionarAposLogin();
         } else {

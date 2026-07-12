@@ -8,6 +8,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Pencil, Trash2, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 interface Solicitacao {
   id:               number;
@@ -154,15 +155,18 @@ const MeusAnimais = () => {
     navigate(`/animais/${animal.id}`);
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (motivo: string) => {
     if (!animalToDelete) return;
     try {
-      await api.delete(`/animais/${animalToDelete.id}`);
+      // Exclusão exige justificativa (registrada na Auditoria)
+      await api.delete(`/animais/${animalToDelete.id}`, { data: { motivo } });
       setAnimalToDelete(null);
       await refreshSelectedAnimal();
       loadAnimais();
+      toast.success('Animal excluído.');
     } catch (error) {
       console.error(error);
+      toast.error('Erro ao excluir animal.');
     }
   };
 
@@ -425,57 +429,16 @@ const MeusAnimais = () => {
         )}
       </div>
 
-      {/* Modal — Excluir */}
-      {animalToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
-            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">
-              ⚠️
-            </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Excluir animal?</h2>
-            <p className="text-gray-500 text-sm mb-6">
-              Isso removerá{' '}
-              <strong className="text-gray-700">{animalToDelete.nome}</strong> das suas listagens.
-              O histórico clínico e nutricional é preservado.
-            </p>
-
-            {/* Preview do animal */}
-            <div className="flex gap-3 items-center bg-gray-50 rounded-2xl p-3 mb-6 text-left">
-              <div className="w-12 h-12 rounded-xl overflow-hidden bg-gray-200 flex-shrink-0">
-                {animalToDelete.photoUrl ? (
-                  <img src={animalToDelete.photoUrl} alt={animalToDelete.nome} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-2xl">🐴</div>
-                )}
-              </div>
-              <div className="min-w-0">
-                <p className="font-semibold text-gray-900 truncate">{animalToDelete.nome}</p>
-                <p className="text-xs text-gray-500 truncate">{animalToDelete.raca?.nome || ''}</p>
-                {animalToDelete.local && (
-                  <p className="flex items-center gap-1 text-xs text-gray-400 mt-0.5 truncate">
-                    <MapPin size={10} /> {animalToDelete.local}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setAnimalToDelete(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-2xl text-sm font-semibold"
-              >
-                Excluir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modal — Excluir (justificativa obrigatória → Auditoria) */}
+      <ModalJustificativa
+        aberto={!!animalToDelete}
+        titulo="Excluir animal?"
+        descricao={animalToDelete
+          ? `${animalToDelete.nome}${animalToDelete.raca?.nome ? ` (${animalToDelete.raca.nome})` : ''} será removido das listagens. O histórico clínico e nutricional é preservado.`
+          : undefined}
+        onConfirmar={confirmDelete}
+        onFechar={() => setAnimalToDelete(null)}
+      />
 
       {/* Modal — Cancelar solicitação */}
       {cancelSolicitacaoAnimal && (() => {

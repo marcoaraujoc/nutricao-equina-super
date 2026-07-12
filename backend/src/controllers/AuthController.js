@@ -4,6 +4,7 @@ const crypto   = require('crypto');
 const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
+const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require('../lib/authCookies');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -162,7 +163,9 @@ const AuthController = {
 
   // ==================== REFRESH TOKEN ====================
   refreshToken: async (req, res) => {
-    const { refreshToken } = req.body;
+    // Cookie HttpOnly tem prioridade; corpo é fallback (compat/clientes não-navegador)
+    const refreshToken = getRefreshTokenFromCookie(req) || req.body?.refreshToken;
+    if (!refreshToken) return res.status(401).json({ error: 'Refresh token não fornecido' });
 
     try {
       // Valida assinatura + expiração antes de tocar o banco. Tokens antigos (formato
@@ -203,6 +206,9 @@ const AuthController = {
         data:  { refreshToken: newRefreshToken },
       });
 
+      // Renova os cookies HttpOnly (access + refresh rotacionado)
+      setAuthCookies(res, { accessToken: newAccessToken, refreshToken: newRefreshToken });
+
       res.json({
         token:        newAccessToken,
         refreshToken: newRefreshToken,
@@ -222,13 +228,14 @@ const AuthController = {
 
   // ==================== LOGOUT ====================
   logout: async (req, res) => {
-    const { refreshToken } = req.body;
+    const refreshToken = getRefreshTokenFromCookie(req) || req.body?.refreshToken;
     if (refreshToken) {
       await prisma.user.updateMany({
         where: { refreshToken },
         data:  { refreshToken: null },
       }).catch(() => { /* silencioso — logout é best-effort */ });
     }
+    clearAuthCookies(res);
     res.json({ success: true, message: 'Sessão encerrada' });
   },
 };

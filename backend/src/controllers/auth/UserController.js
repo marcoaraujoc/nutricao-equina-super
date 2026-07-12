@@ -5,6 +5,7 @@ const jwt     = require('jsonwebtoken');
 const crypto  = require('crypto');
 
 const prisma = require('../../lib/prisma').default;
+const { setAuthCookies } = require('../../lib/authCookies');
 const SECRET          = process.env.JWT_SECRET;
 const REFRESH_SECRET  = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -91,6 +92,10 @@ class UserController {
         where: { id: user.id },
         data:  { refreshToken },
       });
+
+      // Tokens em cookies HttpOnly (não legíveis por JS). O corpo mantém os tokens
+      // por compatibilidade com clientes não-navegador; o frontend não os usa mais.
+      setAuthCookies(res, { accessToken: token, refreshToken });
 
       console.log('✅ Login bem-sucedido!');
       res.json({

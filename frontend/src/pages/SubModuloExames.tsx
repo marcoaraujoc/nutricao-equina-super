@@ -9,7 +9,7 @@ import {
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
-import ConfirmModal from '../components/ConfirmModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 
@@ -472,6 +472,11 @@ export default function SubModuloExames({
 
   const podeCriar   = isGestor || podeExecutar('atendimento.exames.criar');
   const podeDeletar = isGestor || podeExecutar('atendimento.exames.deletar');
+  // Controle por TIPO de exame (espelha o enforcement do backend):
+  // aba Laboratorial → exames.laboratorial.criar ; aba Imagem → exames.imagem.criar.
+  // Exige o slug geral (atendimento.exames.criar) E o do tipo específico.
+  const podeCriarLab = podeCriar && (isGestor || podeExecutar('exames.laboratorial.criar'));
+  const podeCriarImg = podeCriar && (isGestor || podeExecutar('exames.imagem.criar'));
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável.`);
@@ -558,6 +563,15 @@ export default function SubModuloExames({
     restaurarRascunho();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Aba padrão respeita a permissão por tipo: se não pode criar Laboratorial mas
+  // pode Imagem, começa em Imagem (e vice-versa).
+  useEffect(() => {
+    if (loadingPerms) return;
+    if (mainTab === 'laboratorial' && !podeCriarLab && podeCriarImg) setMainTab('imagem');
+    else if (mainTab === 'imagem' && !podeCriarImg && podeCriarLab)  setMainTab('laboratorial');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingPerms, podeCriarLab, podeCriarImg]);
 
   // Carrega grupos de exames de imagem quando a aba imagem é ativada
   useEffect(() => {
@@ -825,7 +839,9 @@ export default function SubModuloExames({
     resetCurrentForm();
   };
 
-  const handleFinalizar = async () => {
+  // Salvar — cria o pedido com o grupo do formulário + grupos inseridos
+  // (mesmo padrão da Prescrição: apenas Inserir e Salvar, sem botão Finalizar)
+  const handleSalvar = async () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
     if (!evolucaoId) { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
 
@@ -834,7 +850,7 @@ export default function SubModuloExames({
       if (!validateCurrentForm()) return;
       rawGroups = [...rawGroups, buildCurrentGroup()];
     }
-    if (rawGroups.length === 0) { toast.error('Selecione ao menos um exame para finalizar'); return; }
+    if (rawGroups.length === 0) { toast.error('Selecione ao menos um exame para salvar'); return; }
 
     // Um único registro com todos os grupos.
     // Cada grupo inclui tipo + laboratório para que a impressão gere
@@ -892,7 +908,7 @@ export default function SubModuloExames({
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao finalizar exames');
+      toast.error(msg ?? 'Erro ao salvar exames');
     } finally { setSaving(false); }
   };
 
@@ -901,12 +917,12 @@ export default function SubModuloExames({
     setConfirmId(id);
   };
 
-  const handleExcluirConfirmado = async () => {
+  const handleExcluirConfirmado = async (motivo: string) => {
     if (confirmId == null) return;
     const id = confirmId;
     setConfirmId(null);
     try {
-      await api.delete(`/clinica/exames/${id}`);
+      await api.delete(`/clinica/exames/${id}`, { data: { motivo } });
       toast.success('Registro removido');
       carregarHistorico(page);
     } catch (err: unknown) {
@@ -1004,24 +1020,28 @@ export default function SubModuloExames({
           ) : (
             <fieldset disabled={!!exameVisualizando} className="p-4 space-y-4 border-0 m-0 min-w-0">
 
-                {/* Main tabs */}
+                {/* Main tabs — cada tipo é exibido conforme a permissão do tipo */}
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => setMainTab('laboratorial')}
-                    className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
-                      mainTab === 'laboratorial'
-                        ? 'bg-emerald-700 text-white border-emerald-700'
-                        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                    }`}>
-                    <FlaskConical size={12} /> Laboratorial
-                  </button>
-                  <button type="button" onClick={() => setMainTab('imagem')}
-                    className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
-                      mainTab === 'imagem'
-                        ? 'bg-emerald-700 text-white border-emerald-700'
-                        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                    }`}>
-                    <Scan size={12} /> Imagem / Complementar
-                  </button>
+                  {podeCriarLab && (
+                    <button type="button" onClick={() => setMainTab('laboratorial')}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
+                        mainTab === 'laboratorial'
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}>
+                      <FlaskConical size={12} /> Laboratorial
+                    </button>
+                  )}
+                  {podeCriarImg && (
+                    <button type="button" onClick={() => setMainTab('imagem')}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-colors ${
+                        mainTab === 'imagem'
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}>
+                      <Scan size={12} /> Imagem / Complementar
+                    </button>
+                  )}
                 </div>
 
                 {/* ── Laboratorial / Imagem ───────────────────────────── */}
@@ -1590,7 +1610,7 @@ export default function SubModuloExames({
                       />
                     </div>
 
-                    {/* Botões Inserir / Finalizar */}
+                    {/* Botões Inserir / Salvar — mesmo padrão da Prescrição */}
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={handleInserir}
@@ -1600,12 +1620,12 @@ export default function SubModuloExames({
                         Inserir
                       </button>
                       <button
-                        onClick={handleFinalizar}
+                        onClick={handleSalvar}
                         disabled={saving || (pendingGroups.length === 0 && !canSave)}
                         className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5"
                       >
                         {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                        {pendingGroups.length > 0 ? `Finalizar (${pendingGroups.length})` : 'Finalizar'}
+                        Salvar
                       </button>
                     </div>
                   </div>
@@ -1622,7 +1642,7 @@ export default function SubModuloExames({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
-                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} aguardando finalização
+                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} inserido{pendingGroups.length !== 1 ? 's' : ''} — clique em Salvar para concluir
               </span>
             </div>
             <button
@@ -1641,15 +1661,6 @@ export default function SubModuloExames({
               />
             ))}
           </div>
-          <button
-            onClick={handleFinalizar}
-            disabled={saving}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 bg-blue-700 hover:bg-blue-800 disabled:bg-gray-300 text-white font-semibold text-sm rounded-xl transition-colors"
-          >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <CheckCircle2 size={14} />
-            {saving ? 'Salvando…' : `Finalizar ${pendingGroups.length} grupo${pendingGroups.length !== 1 ? 's' : ''}`}
-          </button>
         </div>
       )}
 
@@ -1865,13 +1876,13 @@ export default function SubModuloExames({
 
       {viewingEx && <ViewModal ex={viewingEx} onFechar={() => setViewingEx(null)} />}
 
-      <ConfirmModal
-        open={confirmId != null}
+      <ModalJustificativa
+        aberto={confirmId != null}
         titulo="Remover requisição de exame"
-        mensagem="Esta ação não pode ser desfeita. Deseja continuar?"
-        labelConfirmar="Remover"
+        descricao="Esta ação não pode ser desfeita. Informe o motivo da exclusão."
+        acaoLabel="Remover"
         onConfirmar={handleExcluirConfirmado}
-        onCancelar={() => setConfirmId(null)}
+        onFechar={() => setConfirmId(null)}
       />
     </>
   );

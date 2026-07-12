@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { jwtDecode } from 'jwt-decode';
 
 export interface PendingInvite {
   id:                number;
@@ -31,7 +30,7 @@ interface AuditLog {
 
 interface AuthContextType {
   user: User | null;
-  login: (token: string, refreshToken?: string) => void;
+  login: () => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   loading: boolean;
@@ -40,83 +39,55 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-function decodeToken(token: string): User | null {
-  try {
-    const decoded: any = jwtDecode(token);
-    return {
-      id:       Number(decoded.sub) || Number(decoded.id) || 0,
-      email:    decoded.email,
-      fullName: decoded.fullName || decoded.name || '',
-      role:     decoded.role || 'USER',
-    };
-  } catch (e) {
-    console.error('❌ Erro ao decodificar token:', e);
-    return null;
-  }
-}
+// ── Sessão por cookie HttpOnly ──────────────────────────────────────────────
+// O token vive em cookies HttpOnly (s2vet_at/s2vet_rt) que o JS não consegue ler.
+// A identidade do usuário vem sempre de /api/users/me (o cookie é enviado
+// automaticamente com credentials: 'include'). Não há token em storage.
 
-async function enriquecerComPerfil(userData: User): Promise<User> {
+async function fetchMe(): Promise<User | null> {
   try {
-    const token = sessionStorage.getItem('token');
-    const res   = await fetch('/api/users/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return userData;
+    const res = await fetch('/api/users/me', { credentials: 'include' });
+    if (!res.ok) return null;
     const perfil = await res.json();
     return {
-      ...userData,
-      fullName:           perfil.fullName || userData.fullName,
-      userType:           perfil.userType ?? userData.role,
+      id:                 perfil.id,
+      email:              perfil.email,
+      fullName:           perfil.fullName ?? '',
+      role:               perfil.role ?? perfil.userType ?? 'USER',
+      userType:           perfil.userType,
       mustChangePassword: perfil.mustChangePassword ?? false,
       profileComplete:    perfil.profileComplete    ?? false,
       isConvidado:        perfil.isConvidado        ?? false,
       pendingInvite:      perfil.pendingInvite       ?? null,
-      role: perfil.userType === 'VETERINARIO' ? 'VETERINARIO' : userData.role,
     };
-  } catch {
-    return userData;
-  }
-}
-
-// ── Token refresh silencioso ────────────────────────────────────────────────
-async function tryRefreshToken(): Promise<string | null> {
-  const refreshToken = sessionStorage.getItem('refreshToken');
-  if (!refreshToken) return null;
-  try {
-    const res = await fetch('/api/auth/refresh', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ refreshToken }),
-    });
-    if (!res.ok) {
-      sessionStorage.removeItem('refreshToken');
-      return null;
-    }
-    const data = await res.json();
-    sessionStorage.setItem('token', data.token);
-    sessionStorage.setItem('refreshToken', data.refreshToken);
-    return data.token;
   } catch {
     return null;
   }
 }
 
-// ── Fetch autenticado com refresh automático em 401 ─────────────────────────
-export async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const token = sessionStorage.getItem('token');
-  const headers = new Headers(init?.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-
-  let res = await fetch(input, { ...init, headers });
-
-  if (res.status === 401) {
-    const newToken = await tryRefreshToken();
-    if (newToken) {
-      headers.set('Authorization', `Bearer ${newToken}`);
-      res = await fetch(input, { ...init, headers });
-    }
+// Renova a sessão via cookie de refresh (HttpOnly) — sem token no corpo.
+async function tryRefreshSession(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        '{}',
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
+}
 
+// ── Fetch autenticado com refresh automático em 401 ─────────────────────────
+// Mantido para os poucos call sites que ainda usam fetch cru. Envia o cookie.
+export async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  let res = await fetch(input, { ...init, credentials: 'include' });
+  if (res.status === 401) {
+    const ok = await tryRefreshSession();
+    if (ok) res = await fetch(input, { ...init, credentials: 'include' });
+  }
   return res;
 }
 
@@ -127,24 +98,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      let token = sessionStorage.getItem('token');
-      if (token) {
-        const userData = decodeToken(token);
-        if (userData) {
-          const enriquecido = await enriquecerComPerfil(userData);
-          setUser(enriquecido);
-        }
-      } else {
-        // sem token de acesso — tenta renovar via refresh token
-        token = await tryRefreshToken();
-        if (token) {
-          const userData = decodeToken(token);
-          if (userData) {
-            const enriquecido = await enriquecerComPerfil(userData);
-            setUser(enriquecido);
-          }
-        }
+      let me = await fetchMe();
+      if (!me) {
+        // Sem cookie de acesso válido — tenta renovar via refresh token (cookie)
+        const renovou = await tryRefreshSession();
+        if (renovou) me = await fetchMe();
       }
+      if (me) setUser(me);
       const savedLogs = localStorage.getItem('auditLogs');
       if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
       setLoading(false);
@@ -175,24 +135,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const registrarAuditoria = async (action: 'LOGIN' | 'LOGOUT') => {
-    if (!user) return;
+  const registrarAuditoria = async (action: 'LOGIN' | 'LOGOUT', u: User | null) => {
+    if (!u) return;
     try {
-      const res = await fetch('/api/audit/log', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId:   user.id,
-          userName: user.fullName,
-          email:    user.email,
-          action,
-        }),
+      await fetch('/api/audit/log', {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: u.id, userName: u.fullName, email: u.email, action }),
       });
-      if (res.ok) {
-        console.log(`✅ Auditoria registrada: ${action}`);
-      } else {
-        console.warn(`⚠️ Auditoria não gravada (${action}) - Status:`, res.status);
-      }
     } catch (err) {
       console.warn(`⚠️ Falha ao registrar auditoria (${action}):`, err);
     }
@@ -200,41 +151,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Recarrega perfil do usuário logado sem fazer logout ────────────────────
   const refreshUser = async (): Promise<void> => {
-    const token = sessionStorage.getItem('token');
-    if (!token) return;
-    const base = decodeToken(token);
-    if (!base) return;
-    const enriquecido = await enriquecerComPerfil(base);
-    setUser(enriquecido);
+    const me = await fetchMe();
+    if (me) setUser(me);
   };
 
-  const login = async (token: string, refreshToken?: string) => {
-    sessionStorage.setItem('token', token);
-    if (refreshToken) sessionStorage.setItem('refreshToken', refreshToken);
-    // Limpa o contexto ativo de sessões anteriores — a cada login o EmpresaContext
-    // resolve o padrão (perfil GESTOR tem preferência quando existir)
+  // O backend já autenticou e setou os cookies HttpOnly na resposta de login.
+  // Aqui apenas carregamos a identidade a partir de /me e limpamos o contexto ativo.
+  const login = async () => {
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
-    const userData = decodeToken(token);
-    if (userData) {
-      setUser(userData);
-      enriquecerComPerfil(userData).then(enriquecido => setUser(enriquecido));
-      registrarAuditoria('LOGIN');
+    const me = await fetchMe();
+    if (me) {
+      setUser(me);
+      registrarAuditoria('LOGIN', me);
     }
   };
 
   const logout = () => {
-    registrarAuditoria('LOGOUT');
-    const refreshToken = sessionStorage.getItem('refreshToken');
-    if (refreshToken) {
-      fetch('/api/auth/logout', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ refreshToken }),
-      }).catch(() => { /* best-effort */ });
-    }
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('refreshToken');
+    const atual = user;
+    registrarAuditoria('LOGOUT', atual);
+    // Encerra a sessão no backend (revoga refresh token + limpa cookies HttpOnly)
+    fetch('/api/auth/logout', {
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        '{}',
+    }).catch(() => { /* best-effort */ });
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
     setUser(null);

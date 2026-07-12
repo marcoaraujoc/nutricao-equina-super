@@ -10,21 +10,16 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
 const { authenticate } = require('../middlewares/auth');
+const { checkPermission } = require('../middlewares/permissao.middleware');
 
 const ResenhaGraficaController = require('../controllers/ResenhaGraficaController');
 
-// VETERINARIO/GESTOR podem salvar resenha; PROPRIETARIO e ESTAGIARIO só lêem
-const podeEscrever = (req, res, next) => {
-  const tipo = req.user?.userType;
-  if (tipo !== 'ADMIN' && tipo !== 'VETERINARIO') {
-    return res.status(403).json({ error: 'Somente veterinários podem salvar a resenha gráfica.' });
-  }
-  next();
-};
-
+// Escrita controlada pela matriz RBAC (animais.resenha.editar — seed: GESTOR FULL,
+// VETERINARIO EQUIPE, demais NENHUM). Nenhuma checagem de userType aqui; ADMIN
+// tem bypass no próprio checkPermission.
 // IMPORTANTE: /marcacoes deve vir ANTES de /:vista para não ser capturado como parâmetro
 router.get('/marcacoes', authenticate, ResenhaGraficaController.listarMarcacoes);
 router.get('/:vista',    authenticate, ResenhaGraficaController.buscarPorVista);
-router.put('/:vista',    authenticate, podeEscrever, ResenhaGraficaController.salvarPorVista);
+router.put('/:vista',    authenticate, checkPermission('animais.resenha.editar', 'PROPRIO'), ResenhaGraficaController.salvarPorVista);
 
 module.exports = router;

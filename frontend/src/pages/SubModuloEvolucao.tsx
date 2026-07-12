@@ -86,7 +86,8 @@ interface EvolucaoItem {
   id:               number;
   animalId:         number;
   veterinarioId:    number;
-  veterinario:      Vet;
+  /** null quando o autor foi removido do sistema */
+  veterinario:      Vet | null;
   modificadoPorId?: number | null;
   modificadoPor?:   Vet | null;
   especialidade:    string;
@@ -249,7 +250,7 @@ function ViewEvolucaoModal({ ev, animal, onClose, onImprimir }: {
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
               <span className="text-[11px] text-gray-400">
-                <span className="font-medium text-gray-600">{ev.veterinario.fullName}</span>
+                <span className="font-medium text-gray-600">{ev.veterinario?.fullName ?? '—'}</span>
               </span>
               <span className="text-[11px] text-gray-400">
                 Início: <span className="text-gray-600">{formatarData(ev.dataInicio)}</span>
@@ -1152,6 +1153,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       fecharModal();
       setSavingEv(false);
       carregarEvolucoes();
+      onSalvo?.(); // atualiza o Histórico do Paciente no shell
 
       setInterpretando(true);
       try {
@@ -1160,7 +1162,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
         if (titulo && evolucaoId) {
           api.patch(`/clinica/evolucoes/${evolucaoId}/titulo`, { titulo })
-            .then(() => carregarEvolucoes())
+            .then(() => { carregarEvolucoes(); onSalvo?.(); })
             .catch(() => {});
         }
 
@@ -1192,6 +1194,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       setDeletingEv(null);
       toast.success('Evolução removida');
       carregarEvolucoes();
+      onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch { toast.error('Erro ao remover evolução'); }
     finally { setSavingExclusao(false); }
   };
@@ -1206,6 +1209,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       toast.success('Evolução cancelada');
       if (eraAtiva) onEvolucaoChange?.(null);
       carregarEvolucoes();
+      onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       toast.error(msg ?? 'Erro ao cancelar evolução');
@@ -1231,6 +1235,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       toast.success('Evolução finalizada');
       if (ev.status === 'EM_ANDAMENTO') onEvolucaoChange?.(null);
       carregarEvolucoes();
+      onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       toast.error(msg ?? 'Erro ao finalizar evolução');
@@ -1380,7 +1385,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             onChange={e => { setFiltroResponsavel(e.target.value); setPage(1); }}
             className="text-sm text-gray-700 bg-transparent focus:outline-none max-w-[140px]">
             <option value="">Responsável</option>
-            {responsaveis.map(r => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+            {responsaveis.filter(Boolean).map(r => <option key={r.id} value={r.id}>{r.fullName}</option>)}
           </select>
         </div>
 
@@ -1510,7 +1515,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                       </span>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <p className="text-xs font-medium text-gray-800">{ev.veterinario.fullName}</p>
+                      <p className="text-xs font-medium text-gray-800">{ev.veterinario?.fullName ?? '—'}</p>
                       {ev.modificadoPor && ev.modificadoPor.id !== ev.veterinarioId && (
                         <p className="text-[10px] text-gray-400 mt-0.5">editado por {ev.modificadoPor.fullName}</p>
                       )}

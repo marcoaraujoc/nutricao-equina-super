@@ -36,6 +36,18 @@ interface DashboardStats {
   atendimentosPorDia: { dia: string; total: number }[];
   topMedicamentos:    { nome: string; total: number }[];
   topProcedimentos:   { nome: string; total: number }[];
+  alertas?: {
+    vacinasVencidas:        number;
+    produtosVencendo:       number;
+    contasReceberVencidas:  number;
+  };
+  semAtendimento?: {
+    total:   number;
+    animais: {
+      id: number; nome: string; localizacao: string; proprietario: string;
+      ultimoAtendimento: string | null; diasSemAtendimento: number | null;
+    }[];
+  };
 }
 
 interface AnimalResumido {
@@ -507,6 +519,53 @@ export default function VetDashboard() {
                 }`}>{stats.estoqueCritico}</p>
                 <p className="text-xs text-gray-500 mt-0.5">Estoque Crítico</p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Alertas ──────────────────────────────────────────────────────── */}
+        {stats?.alertas && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { label: 'Vacinas vencidas',          valor: String(stats.alertas.vacinasVencidas),  ativo: stats.alertas.vacinasVencidas > 0 },
+              { label: 'Produtos vencendo (30 dias)', valor: String(stats.alertas.produtosVencendo), ativo: stats.alertas.produtosVencendo > 0 },
+              { label: 'Contas a receber vencidas', valor: stats.alertas.contasReceberVencidas.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), ativo: stats.alertas.contasReceberVencidas > 0 },
+            ].map(a => (
+              <div key={a.label} className={`bg-white rounded-2xl border shadow-sm p-4 flex items-center gap-3 ${a.ativo ? 'border-red-200' : 'border-gray-100'}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${a.ativo ? 'bg-red-50' : 'bg-gray-50'}`}>
+                  <AlertTriangle size={18} className={a.ativo ? 'text-red-500' : 'text-gray-300'} />
+                </div>
+                <div className="min-w-0">
+                  <p className={`text-xl font-bold leading-none ${a.ativo ? 'text-red-600' : 'text-gray-900'}`}>{a.valor}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">🔴 {a.label}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Animais sem atendimento (+3 dias) ───────────────────────────────── */}
+        {stats?.semAtendimento && stats.semAtendimento.total > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+              <Clock size={16} className="text-amber-500" />
+              <h2 className="text-sm font-semibold text-gray-700">Animais sem atendimento há +3 dias</h2>
+              <span className="ml-auto text-xs font-bold bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">{stats.semAtendimento.total}</span>
+            </div>
+            <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+              {stats.semAtendimento.animais.map(a => (
+                <button key={a.id} onClick={() => navigate(`/animal/${a.id}`)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition-colors">
+                  <PawPrint size={14} className="text-gray-300 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800 truncate">{a.nome}</p>
+                    <p className="text-[11px] text-gray-400 truncate">{a.proprietario} · {a.localizacao}</p>
+                  </div>
+                  <span className="text-xs font-semibold text-amber-600 whitespace-nowrap">
+                    {a.diasSemAtendimento === null ? 'nunca atendido' : `${a.diasSemAtendimento}d`}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
         )}
