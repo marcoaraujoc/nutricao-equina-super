@@ -259,6 +259,14 @@ const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: str
     { acao: 'deletar',  label: 'EXCLUIR'  },
     { acao: 'imprimir', label: 'IMPRIMIR' },
   ],
+  vacina: [
+    { acao: 'ler',      label: 'VER'      },
+    { acao: 'criar',    label: 'CRIAR'    },
+    { acao: 'editar',   label: 'ALTERAR'  },
+    { acao: 'ajustar',  label: 'AJUSTAR'  },
+    { acao: 'deletar',  label: 'EXCLUIR'  },
+    { acao: 'imprimir', label: 'IMPRIMIR' },
+  ],
 };
 
 const NIVEL_DEFAULT_ATIVO: Nivel = 'EQUIPE';

@@ -652,6 +652,9 @@ model AgendamentoClinico {
   ativo         Boolean  @default(true)
   numero        Int?     // sequencial por animal (AG-0001)
   criadoPorId   Int?     @map("criado_por_id")
+  // Controle de idempotência dos lembretes por WhatsApp (D-1 e 2h antes)
+  lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")
+  lembreteWa2hEnviadoEm   DateTime? @map("lembrete_wa_2h_em")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt      @map("updated_at")
 
@@ -1002,6 +1005,12 @@ model EmpresaConfiguracao {
   tipoFechamento      String?
   diaFechamentoFatura Int?     // dia do mês (DIA_FIXO) ou Nº do dia útil (DIA_UTIL)
   whatsapp            String?  // WhatsApp da empresa (somente dígitos, DDD+número) — envio/recebimento de mensagens
+  // Expediente de atendimento — usado para liberar horários no Agendamento.
+  // diasAtendimento: CSV de dias da semana (0=Dom … 6=Sáb), ex: "1,2,3,4,5". null = todos os dias.
+  // horaInicio/horaFim: "HH:MM" (ex: "08:00" / "20:00"). null = sem restrição (00:00–24:00).
+  diasAtendimento       String?  @map("dias_atendimento")
+  horaInicioAtendimento String?  @db.VarChar(5) @map("hora_inicio_atendimento")
+  horaFimAtendimento    String?  @db.VarChar(5) @map("hora_fim_atendimento")
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -1010,6 +1019,71 @@ model EmpresaConfiguracao {
 
   @@unique([empresaId, equipeId])
   @@map("tb_empresa_configuracoes")
+  @@schema("schs2vet")
+}
+
+// Configuração global dos alertas das tarefas agendadas (cron) — lida pelo cron.
+// Linha única (a app usa/atualiza a primeira; cria se não existir).
+model CronAlertaConfig {
+  id               Int      @id @default(autoincrement())
+  emails           String?  // destinatários dos alertas (CSV). Vazio → ADMINs do sistema
+  notificarSucesso Boolean  @default(true)   // false = só envia e-mail em erros
+  ativo            Boolean  @default(true)   // liga/desliga o envio de e-mail dos alertas
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("tb_cron_alerta_config")
+  @@schema("schs2vet")
+}
+
+// Histórico de execuções das tarefas agendadas (para a tela de Monitoração).
+// Registra eventos relevantes: erros e execuções que fizeram trabalho.
+model CronExecucao {
+  id          Int      @id @default(autoincrement())
+  nome        String   // nome legível da tarefa
+  ok          Boolean  // true = sucesso, false = erro
+  resumo      String?  @db.Text
+  erro        String?  @db.Text
+  notificado  Boolean  @default(false) // e-mail de alerta foi enviado?
+  executadoEm DateTime @default(now())
+
+  @@index([executadoEm])
+  @@index([nome, executadoEm])
+  @@map("tb_cron_execucoes")
+  @@schema("schs2vet")
+}
+
+// Agenda (horário) de cada tarefa agendada — editável pelo ADMIN e aplicada ao
+// vivo (reagendamento dinâmico do node-cron). `chave` identifica o job no código.
+model CronAgenda {
+  id        Int      @id @default(autoincrement())
+  chave     String   @unique
+  nome      String
+  cronExpr  String   // expressão cron de 5 campos (min hora dia mês diaSemana)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tb_cron_agenda")
+  @@schema("schs2vet")
+}
+
+// Catálogo de "itens frequentes" da fatura, reutilizáveis em novas faturas.
+// Escopado por empresa (empresaId null = global/legado). Sem FK (igual AuditLog)
+// para não acoplar a exclusão da empresa.
+model FaturaItemCatalogo {
+  id          Int      @id @default(autoincrement())
+  empresaId   Int?     @map("empresa_id")
+  tipo        String   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
+  descricao   String
+  valor       Float    @default(0)
+  ativo       Boolean  @default(true)
+  criadoPorId Int?     @map("criado_por_id")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([empresaId])
+  @@map("tb_fatura_item_catalogo")
   @@schema("schs2vet")
 }
 

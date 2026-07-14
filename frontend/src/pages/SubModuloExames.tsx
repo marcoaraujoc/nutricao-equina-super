@@ -12,6 +12,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 
 // ─── Types catálogo ───────────────────────────────────────────────────────────
 
@@ -467,7 +468,7 @@ export default function SubModuloExames({
   const [pendingGroups, setPendingGroups] = useState<PendingExamGroup[]>([]);
 
   const [page,      setPage]    = useState(1);
-  const limit                   = 8;
+  const limit                   = 10;
   const totalPags               = Math.ceil(total / limit);
 
   const podeCriar   = isGestor || podeExecutar('atendimento.exames.criar');
@@ -947,7 +948,7 @@ export default function SubModuloExames({
       ...examList.map(e => `• ${e}`),
       extra.obs ? `\n${extra.obs}` : '',
     ].filter(Boolean).join('\n');
-    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
+    abrirWhatsApp(texto);
   };
 
   const compartilharEmail = (ex: ExameClinico) => {
@@ -966,7 +967,7 @@ export default function SubModuloExames({
       `\nExames Solicitados (${examList.length}):`,
       ...examList.map(e => `• ${e}`),
     ].filter(Boolean).join('\n');
-    window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo)}`;
+    abrirEmail(assunto, corpo);
   };
 
   // ── Guard ──────────────────────────────────────────────────────────────────
@@ -1690,61 +1691,62 @@ export default function SubModuloExames({
                 ? [...new Set(extra.grupos.map(g => g.tipo))]
                 : [ex.tipo];
               return (
-                <div key={ex.id} className="flex items-start gap-3 px-4 py-3">
-                  <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
-                    {tiposUnicos.includes('Imagem') ? <Scan size={14} className="text-emerald-700" /> : <FlaskConical size={14} className="text-blue-700" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                      {tiposUnicos.map(tipo => (
-                        <span key={tipo} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPOS_META[tipo]?.badge ?? ''}`}>
-                          {tipo}
-                        </span>
-                      ))}
-                      <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200">
-                        {fmtNumero(ex.numero)}
+                <div key={ex.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0">
+                      {fmtNumero(ex.numero)}
+                    </span>
+                    {ex.status && (STATUS_EXAME[ex.status] ? (
+                      <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
+                        {STATUS_EXAME[ex.status].label}
                       </span>
-                      {examCount > 1 && (
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full border border-blue-200">
-                          {examCount} exames
-                        </span>
-                      )}
-                      {ex.status && (STATUS_EXAME[ex.status] ? (
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
-                          {STATUS_EXAME[ex.status].label}
-                        </span>
-                      ) : (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
-                          {ex.status}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900 line-clamp-2">{ex.descricao}</p>
-                    {extra.laboratorio && <p className="text-xs text-gray-400">{extra.laboratorio}</p>}
-                    <p className="text-xs text-gray-400">{formatDate(ex.dataSolicitacao)}</p>
-                    {ex.veterinario && <p className="text-[11px] text-gray-400">Por: {ex.veterinario.fullName}</p>}
+                    ) : (
+                      <span className="inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+                        {ex.status}
+                      </span>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
-                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
-                      <Eye size={14} />
+
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    {tiposUnicos.map(tipo => (
+                      <span key={tipo} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPOS_META[tipo]?.badge ?? ''}`}>
+                        {tipo}
+                      </span>
+                    ))}
+                    {examCount > 1 && (
+                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full border border-blue-200">
+                        {examCount} exames
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-sm font-semibold text-gray-900 line-clamp-2 mt-1">{ex.descricao}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {extra.laboratorio && <>{extra.laboratorio} · </>}{formatDate(ex.dataSolicitacao)}
+                  </p>
+                  {ex.veterinario && <p className="text-[11px] text-gray-400 mt-0.5">Por: {ex.veterinario.fullName}</p>}
+
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button onClick={() => setViewingEx(ex)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      <Eye size={11} /> Ver
                     </button>
-                    <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
-                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
-                      <Printer size={14} />
+                    <button onClick={() => imprimirExame(ex)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      <Printer size={11} /> Imprimir
                     </button>
-                    <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
-                      className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg">
-                      <MessageCircle size={14} />
+                    <button onClick={() => compartilharWhatsApp(ex)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                      <MessageCircle size={11} /> WhatsApp
                     </button>
-                    <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
-                      className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg">
-                      <Mail size={14} />
+                    <button onClick={() => compartilharEmail(ex)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                      <Mail size={11} /> E-mail
                     </button>
                     {podeDeletar && (
-                      <button onClick={() => handleExcluirSolicitado(ex.id)} title="Remover"
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={14} />
+                      <button onClick={() => handleExcluirSolicitado(ex.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                        <Trash2 size={11} /> Remover
                       </button>
                     )}
                   </div>

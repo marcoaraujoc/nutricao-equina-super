@@ -281,9 +281,9 @@ function agruparEventos(eventos: EventoHistorico[]): GrupoHistorico[] {
 
 // ─── Header — dados do animal ─────────────────────────────────────────────────
 
-function CampoHeader({ label, valor }: { label: string; valor: string }) {
+function CampoHeader({ label, valor, className = '' }: { label: string; valor: string; className?: string }) {
   return (
-    <div className="min-w-0">
+    <div className={`min-w-0 ${className}`}>
       <span className="block text-[10px] uppercase text-gray-400 tracking-widest">{label}</span>
       <span className="block text-sm text-gray-900 truncate mt-0.5" title={valor}>{valor}</span>
     </div>
@@ -303,19 +303,32 @@ function HeaderAnimal({ animal }: { animal: AnimalData }) {
             : <div className="w-full h-full flex items-center justify-center text-2xl text-gray-300">🐾</div>}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pb-3 border-b border-gray-50">
-            <CampoHeader label="Nome"    valor={animal.nome} />
-            <CampoHeader label="Espécie" valor={animal.especie?.nome ?? '—'} />
-            <CampoHeader label="Raça"    valor={animal.raca?.nome ?? '—'} />
-            <CampoHeader label="Idade"   valor={calcularIdade(animal.dataNascimento, animal.idadeAnos)} />
-            <CampoHeader label="Peso"    valor={animal.peso ? `${animal.peso} kg` : '—'} />
+          {/* Mobile (< md): nome completo na 1ª linha; Idade, Peso e Baia na 2ª */}
+          <div className="md:hidden space-y-3">
+            <CampoHeader label="Nome" valor={animal.nome} />
+            <div className="grid grid-cols-3 gap-x-4 gap-y-3">
+              <CampoHeader label="Idade" valor={calcularIdade(animal.dataNascimento, animal.idadeAnos)} />
+              <CampoHeader label="Peso"  valor={animal.peso ? `${animal.peso} kg` : '—'} />
+              <CampoHeader label="Baia"  valor={animal.baia ?? '—'} />
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pt-3">
-            <CampoHeader label="Baia"             valor={animal.baia ?? '—'} />
-            <CampoHeader label="Local"            valor={animal.local ?? '—'} />
-            <CampoHeader label="Tipo de Trabalho" valor={animal.tipoExercicio ?? '—'} />
-            <CampoHeader label="Proprietário"     valor={animal.user?.fullName ?? '—'} />
-            <CampoHeader label="Vet. Responsável" valor={vetNome} />
+
+          {/* Desktop (>= md): completo em 2 linhas */}
+          <div className="hidden md:block">
+            <div className="grid grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pb-3 border-b border-gray-50">
+              <CampoHeader label="Nome"    valor={animal.nome} />
+              <CampoHeader label="Espécie" valor={animal.especie?.nome ?? '—'} />
+              <CampoHeader label="Raça"    valor={animal.raca?.nome ?? '—'} />
+              <CampoHeader label="Idade"   valor={calcularIdade(animal.dataNascimento, animal.idadeAnos)} />
+              <CampoHeader label="Peso"    valor={animal.peso ? `${animal.peso} kg` : '—'} />
+            </div>
+            <div className="grid grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3 pt-3">
+              <CampoHeader label="Baia"             valor={animal.baia ?? '—'} />
+              <CampoHeader label="Local"            valor={animal.local ?? '—'} />
+              <CampoHeader label="Tipo de Trabalho" valor={animal.tipoExercicio ?? '—'} />
+              <CampoHeader label="Proprietário"     valor={animal.user?.fullName ?? '—'} />
+              <CampoHeader label="Vet. Responsável" valor={vetNome} />
+            </div>
           </div>
         </div>
       </div>

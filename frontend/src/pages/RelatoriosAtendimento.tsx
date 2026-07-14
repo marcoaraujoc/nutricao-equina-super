@@ -7,16 +7,18 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
+import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { StatTiles, CarregandoRelatorio, ErroRelatorio } from '../components/relatorios/RelatorioUI';
 
 interface Atendimento {
-  hoje: { agendadas: number; realizadas: number };
-  mes:  { atendimentos: number; canceladas: number; procedimentos: number; exames: number };
+  periodo: { agendadas: number; realizadas: number; atendimentos: number; canceladas: number; procedimentos: number; exames: number };
 }
 
 export default function RelatoriosAtendimento() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeVer = isGestor || podeExecutar('relatorios.gerencial.ler');
+  const { granularidade, data: dataRef } = usePeriodo();
 
   const [dados, setDados] = useState<Atendimento | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -25,11 +27,11 @@ export default function RelatoriosAtendimento() {
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
-    api.get('/relatorios/atendimento')
+    api.get('/relatorios/atendimento', { params: periodoParams(granularidade, dataRef) })
       .then(res => { if (!res.data) return; setDados(res.data.dados as Atendimento); })
       .catch(() => setErro(true))
       .finally(() => setCarregando(false));
-  }, [loadingPerms, podeVer]);
+  }, [loadingPerms, podeVer, granularidade, dataRef]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -55,20 +57,18 @@ export default function RelatoriosAtendimento() {
         </div>
       </div>
 
+      <PeriodoSelector />
+
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
-          <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Hoje</p>
-          <StatTiles cols={2} tiles={[
-            { label: 'Consultas agendadas hoje', valor: dados.hoje.agendadas },
-            { label: 'Consultas realizadas hoje', valor: dados.hoje.realizadas, tom: 'emerald' },
-          ]} />
-
-          <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-2">No mês</p>
+          <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">No período</p>
           <StatTiles tiles={[
-            { label: 'Atendimentos no mês',     valor: dados.mes.atendimentos },
-            { label: 'Consultas canceladas',    valor: dados.mes.canceladas, tom: dados.mes.canceladas > 0 ? 'red' : 'gray' },
-            { label: 'Procedimentos realizados', valor: dados.mes.procedimentos },
-            { label: 'Exames solicitados',       valor: dados.mes.exames },
+            { label: 'Consultas agendadas',     valor: dados.periodo.agendadas },
+            { label: 'Consultas realizadas',    valor: dados.periodo.realizadas, tom: 'emerald' },
+            { label: 'Atendimentos',            valor: dados.periodo.atendimentos },
+            { label: 'Consultas canceladas',    valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray' },
+            { label: 'Procedimentos realizados', valor: dados.periodo.procedimentos },
+            { label: 'Exames solicitados',       valor: dados.periodo.exames },
           ]} />
         </div>
       )}

@@ -67,6 +67,8 @@ import RelatoriosFarmacia    from './pages/RelatoriosFarmacia';
 // Pages — Agenda / Agendamentos
 import Agendamentos    from './pages/Agendamentos';
 import MapaAtendimento from './pages/MapaAtendimento';
+import ConfiguracaoAlerta from './pages/ConfiguracaoAlerta';
+import Monitoracao from './pages/Monitoracao';
 
 // Pages — Módulo Clínico
 import Atendimento  from './pages/Atendimento';
@@ -92,7 +94,30 @@ import Faturamento from './pages/Faturamento';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
+import { PeriodoProvider } from './contexts/PeriodoContext';
+import { MobileMenuProvider, useMobileMenu } from './contexts/MobileMenuContext';
 import { useDraggableModals } from './hooks/useDraggableModals';
+import { Menu } from 'lucide-react';
+
+// Barra superior do mobile: gatilho do menu numa barra `sticky` DENTRO do <main>
+// (o container que rola). Evita `position: fixed`, que no iOS Safari se desloca/atola
+// na barra do navegador dentro do shell com scroll interno. Respeita a safe-area.
+function MobileTopBar() {
+  const { setOpen } = useMobileMenu();
+  return (
+    <div
+      className="md:hidden sticky top-0 z-30 bg-gray-50/95 backdrop-blur-sm border-b border-gray-100 px-4 pb-2"
+      style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.5rem)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Abrir menu"
+        className="p-2.5 bg-white rounded-2xl shadow-sm border border-gray-200 text-gray-700 active:bg-gray-100">
+        <Menu size={24} />
+      </button>
+    </div>
+  );
+}
 
 function App() {
   // Modais arrastáveis no desktop (delegação global — vale para toda a aplicação)
@@ -100,6 +125,7 @@ function App() {
   return (
     <AuthProvider>
       <EmpresaProvider>
+      <PeriodoProvider>
       <SelectedAnimalProvider>
         <Router>
           <Toaster
@@ -130,6 +156,7 @@ function App() {
                       - h-full overflow-hidden → trava na viewport, sem scroll externo
                       - bg-gray-50            → fundo padrão da aplicação
                     */}
+                    <MobileMenuProvider>
                     <div className="flex h-full overflow-hidden bg-gray-50">
 
                       <Sidebar />
@@ -137,11 +164,19 @@ function App() {
                       {/*
                         Área de conteúdo:
                         - flex-1 min-w-0     → ocupa o espaço restante sem overflow horizontal
-                        - overflow-y-auto    → scroll apenas aqui, não na página inteira
+                        - overflow-y-scroll  → barra vertical SEMPRE presente (reserva espaço em
+                          navegadores com barra clássica, ex: Windows). `scrollbar-gutter:stable`
+                          reforça isso onde houver suporte.
+                        - overflow-x-hidden  → impede rolagem/overflow horizontal da página. É o que
+                          resolve o "dançar lateral" em qualquer navegador/SO (inclusive Safari, que
+                          usa barra overlay e por isso o problema lá é overflow horizontal, não a
+                          barra vertical). Conteúdos largos (tabelas) rolam no próprio card
+                          (overflow-x-auto interno), então nada é cortado.
                         - pt-16 md:pt-0      → espaço para o botão hamburguer fixo no mobile
                         As páginas usam <PageContainer> para centralizar e adicionar padding interno.
                       */}
-                      <main className="flex-1 min-w-0 overflow-y-auto bg-gray-50 pt-16 md:pt-0">
+                      <main className="flex-1 min-w-0 overflow-y-scroll overflow-x-hidden [scrollbar-gutter:stable] bg-gray-50">
+                        <MobileTopBar />
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/mapa-atendimento" element={<MapaAtendimento />} />
@@ -236,6 +271,8 @@ function App() {
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
                           <Route path="/configuracoes"    element={<Configuracoes />} />
+                          <Route path="/configuracao-alertas" element={<ConfiguracaoAlerta />} />
+                          <Route path="/monitoracao"          element={<Monitoracao />} />
                           <Route path="/auditoria-geral"  element={<AuditoriaGeral />} />
 
                           {/* Relatórios gerenciais */}
@@ -259,6 +296,7 @@ function App() {
                       </main>
 
                     </div>
+                    </MobileMenuProvider>
                   </ErrorBoundary>
                 </ProtectedRoute>
               }
@@ -266,6 +304,7 @@ function App() {
           </Routes>
         </Router>
       </SelectedAnimalProvider>
+      </PeriodoProvider>
       </EmpresaProvider>
     </AuthProvider>
   );

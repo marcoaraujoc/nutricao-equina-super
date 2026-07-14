@@ -11,7 +11,7 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import {
   AlertTriangle, Plus, Pencil, Trash2,
   Search, RefreshCw, X, Syringe, Calendar,
-  ChevronDown, FlaskConical, Eye,
+  ChevronDown, FlaskConical, Eye, ArrowUpDown,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 
@@ -80,6 +80,7 @@ export default function EstoqueVacina() {
   const podeCriar   = isGestor || podeExecutar('vacina.estoque.criar');
   const podeEditar  = isGestor || podeExecutar('vacina.estoque.editar');
   const podeDeletar = isGestor || podeExecutar('vacina.estoque.deletar');
+  const podeAjustar = isGestor || podeExecutar('vacina.estoque.ajustar');
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -99,6 +100,15 @@ export default function EstoqueVacina() {
   const [confirmExcluir,    setConfirmExcluir]    = useState<LoteVacina | null>(null);
   const [repassadoEditado,  setRepassadoEditado]  = useState(false);
   const [loteView,          setLoteView]          = useState<LoteVacina | null>(null);
+
+  // Ajuste de estoque (correção manual das doses disponíveis)
+  const [modalAjusteAberto,    setModalAjusteAberto]    = useState(false);
+  const [ajusteLoteId,         setAjusteLoteId]         = useState<number | null>(null);
+  const [buscaAjuste,          setBuscaAjuste]          = useState('');
+  const [dropdownAjusteAberto, setDropdownAjusteAberto] = useState(false);
+  const [ajusteQtd,            setAjusteQtd]            = useState<number | ''>('');
+  const [ajusteMotivo,         setAjusteMotivo]         = useState('');
+  const [ajustando,            setAjustando]            = useState(false);
 
   // Combobox vacina
   const [buscaVac,          setBuscaVac]          = useState('');
@@ -368,6 +378,49 @@ export default function EstoqueVacina() {
     }
   };
 
+  // ── Ajuste de estoque (doses disponíveis) ──────────────────────────────────
+  const loteAjuste = ajusteLoteId != null ? (lotes.find(l => l.id === ajusteLoteId) ?? null) : null;
+  const nomeLote = (l: LoteVacina) => l.medicamentoCat?.nome ?? l.vacina?.nome ?? '—';
+
+  const abrirAjuste = (lote?: LoteVacina) => {
+    if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
+    setAjusteLoteId(lote?.id ?? null);
+    setAjusteQtd(lote ? lote.qtdDisponivel : '');
+    setAjusteMotivo('');
+    setBuscaAjuste('');
+    setDropdownAjusteAberto(false);
+    setModalAjusteAberto(true);
+  };
+
+  const fecharAjuste = () => {
+    setModalAjusteAberto(false);
+    setAjusteLoteId(null);
+  };
+
+  const confirmarAjuste = async () => {
+    if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
+    if (!loteAjuste)          return toast.error('Selecione um lote de vacina.');
+    if (ajusteQtd === '')     return toast.error('Informe a quantidade de doses.');
+    const qtd = Number(ajusteQtd);
+    if (qtd < 0)              return toast.error('Quantidade não pode ser negativa.');
+    if (!ajusteMotivo.trim()) return toast.error('Informe o motivo do ajuste.');
+    if (qtd === loteAjuste.qtdDisponivel) return toast.error('A quantidade informada é igual ao estoque atual.');
+
+    setAjustando(true);
+    try {
+      await api.patch(`/vacinas/estoque/${loteAjuste.id}/ajuste`, {
+        quantidade: qtd,
+        motivo:     ajusteMotivo.trim(),
+      });
+      toast.success('Estoque ajustado.');
+      fecharAjuste();
+      carregarLotes();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(msg ?? 'Erro ao ajustar estoque.');
+    } finally { setAjustando(false); }
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (loadingPerm) return (
@@ -427,6 +480,13 @@ export default function EstoqueVacina() {
                   Entrada de Vacina
                 </button>
               )}
+              {podeAjustar && (
+                <button onClick={() => abrirAjuste()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-teal-600 text-teal-700 hover:bg-teal-50 text-xs font-semibold rounded-xl transition-colors">
+                  <ArrowUpDown size={13} />
+                  Ajuste de Estoque
+                </button>
+              )}
               <button onClick={carregarLotes} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               </button>
@@ -470,110 +530,124 @@ export default function EstoqueVacina() {
           ) : lotesFiltrados.length === 0 ? (
             <p className="text-center py-12 text-gray-400 text-sm">Nenhum lote encontrado.</p>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr max-content', rowGap: '6px' }}>
-              {lotesFiltrados.map((lote) => {
-                const nivel = nivelLote(lote);
-                const borderCls = !lote.ativo
-                  ? 'border-l-[4px] border-l-gray-300 border-gray-100'
-                  : nivel === 'vencido'
-                  ? 'border-l-[4px] border-l-red-500 border-red-100'
-                  : nivel === 'vencendo'
-                  ? 'border-l-[4px] border-l-amber-400 border-amber-50'
-                  : nivel === 'zerado'
-                  ? 'border-l-[4px] border-l-gray-400 border-gray-100'
-                  : 'border-gray-200';
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Doses</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {lotesFiltrados.map((lote) => {
+                      const nivel = nivelLote(lote);
+                      const statusLabel = !lote.ativo ? 'INATIVO' : nivel === 'vencido' ? 'VENCIDO' : 'ATIVO';
+                      const statusClass = !lote.ativo ? 'bg-gray-100 text-gray-500'
+                        : nivel === 'vencido' ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-700';
+                      const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
+                      return (
+                        <tr key={lote.id} className={`hover:bg-gray-50 transition-colors ${!lote.ativo ? 'opacity-60' : ''}`}>
+                          <td className="px-4 py-3">
+                            <span className="font-semibold text-teal-700 text-sm flex items-center gap-1">
+                              <Syringe size={12} className="text-teal-500 flex-shrink-0" />
+                              {lote.medicamentoCat?.nome ?? lote.vacina?.nome ?? '—'}
+                            </span>
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              {(lote.medicamentoCat?.fabricante ?? lote.vacina?.fabricante) && `${lote.medicamentoCat?.fabricante ?? lote.vacina?.fabricante} · `}
+                              Lote {lote.lote} · {lote.qtdFrascos} fr. × {lote.dosesPorFrasco}
+                              {lote.dataRecebimento && ` · Receb. ${formatDate(lote.dataRecebimento)}`}
+                              <span className="ml-1">· {statusValidade(lote.validade)}</span>
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap">
+                            <span className="text-xs">
+                              <span className={`font-bold ${lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700'}`}>{lote.qtdDisponivel}</span>
+                              <span className="text-gray-400">/{lote.qtdTotal}</span>
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${statusClass}`}>{statusLabel}</span>
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1">
+                              {jaUsado ? (
+                                <button onClick={() => setLoteView(lote)} title="Visualizar lote (já utilizado — não pode ser alterado)"
+                                  className="p-1.5 rounded-lg border border-teal-200 text-teal-500 hover:bg-teal-50">
+                                  <Eye size={13} />
+                                </button>
+                              ) : podeEditar ? (
+                                <button onClick={() => preencherEdicao(lote)} title="Editar"
+                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  <Pencil size={13} />
+                                </button>
+                              ) : null}
+                              {podeDeletar && (
+                                <button onClick={() => setConfirmExcluir(lote)} title="Inativar"
+                                  className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                const statusLabel = !lote.ativo ? 'INATIVO'
-                  : nivel === 'vencido' ? 'VENCIDO'
-                  : 'ATIVO';
-                const statusClass = !lote.ativo ? 'bg-gray-100 text-gray-500'
-                  : nivel === 'vencido' ? 'bg-red-100 text-red-600'
-                  : 'bg-teal-100 text-teal-700';
-
-                return (
-                  <div key={lote.id} style={{ display: 'contents' }}>
-                    {/* Célula 1 — info */}
-                    <div className={`flex items-center gap-2 bg-white px-4 py-2.5 border-y border-l rounded-l-xl ${borderCls} ${!lote.ativo ? 'opacity-60' : ''}`}>
-                      <Syringe size={12} className="text-teal-500 flex-shrink-0" />
-                      <span className="font-semibold text-teal-700 text-sm whitespace-nowrap">
-                        {lote.medicamentoCat?.nome ?? lote.vacina?.nome ?? '—'}
-                      </span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${statusClass}`}>
-                        {statusLabel}
-                      </span>
-                      {(lote.medicamentoCat?.fabricante ?? lote.vacina?.fabricante) && (
-                        <span className="hidden sm:inline text-xs text-gray-400 flex-shrink-0 ml-1">
-                          {lote.medicamentoCat?.fabricante ?? lote.vacina?.fabricante}
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-gray-50">
+                {lotesFiltrados.map((lote) => {
+                  const nivel = nivelLote(lote);
+                  const statusLabel = !lote.ativo ? 'INATIVO' : nivel === 'vencido' ? 'VENCIDO' : 'ATIVO';
+                  const statusClass = !lote.ativo ? 'bg-gray-100 text-gray-500'
+                    : nivel === 'vencido' ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-700';
+                  const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
+                  return (
+                    <div key={lote.id} className={`px-4 py-3 ${!lote.ativo ? 'opacity-60' : ''}`}>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-semibold text-teal-700 text-sm flex items-center gap-1 min-w-0">
+                          <Syringe size={12} className="text-teal-500 flex-shrink-0" />
+                          <span className="truncate">{lote.medicamentoCat?.nome ?? lote.vacina?.nome ?? '—'}</span>
                         </span>
-                      )}
-                      <span className="hidden sm:inline text-xs text-gray-400 flex-shrink-0">
-                        · Lote: {lote.lote}
-                      </span>
-                      {lote.dataRecebimento && (
-                        <span className="hidden lg:inline text-xs text-gray-400 flex-shrink-0">
-                          · Recebido: {formatDate(lote.dataRecebimento)}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Célula 2 — doses + validade */}
-                    <div className={`flex flex-col justify-center gap-0.5 bg-white px-6 py-2.5 border-y ${borderCls.replace('border-l-[4px] border-l-red-500 ', '').replace('border-l-[4px] border-l-amber-400 ', '').replace('border-l-[4px] border-l-gray-400 ', '')}`}>
-                      <div className="flex items-center justify-center gap-3 flex-wrap">
-                        <span className="text-xs text-gray-600">
-                          <span className={`font-bold ${lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700'}`}>
-                            {lote.qtdDisponivel}
-                          </span>
+                        <span className="text-xs flex-shrink-0">
+                          <span className={`font-bold ${lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700'}`}>{lote.qtdDisponivel}</span>
                           <span className="text-gray-400">/{lote.qtdTotal} doses</span>
                         </span>
-                        <span className="text-xs text-gray-400">
-                          {lote.qtdFrascos} fr. × {lote.dosesPorFrasco} doses
-                        </span>
-                        <span className="text-xs flex items-center gap-0.5">
-                          <Calendar size={10} className="text-gray-400" />
-                          {statusValidade(lote.validade)}
-                        </span>
-                        {lote.valorUnitario != null && (
-                          <span className="hidden lg:inline text-xs text-gray-400">
-                            R$ {lote.valorUnitario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/fr.
-                          </span>
+                      </div>
+                      <p className="text-[11px] text-gray-400">
+                        Lote {lote.lote} · {statusValidade(lote.validade)}
+                        <span className={`ml-1.5 inline-flex px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusClass}`}>{statusLabel}</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {jaUsado ? (
+                          <button onClick={() => setLoteView(lote)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-teal-600 rounded-lg text-xs hover:bg-teal-50 transition-colors">
+                            <Eye size={11} /> Ver
+                          </button>
+                        ) : podeEditar ? (
+                          <button onClick={() => preencherEdicao(lote)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-teal-600 rounded-lg text-xs hover:bg-teal-50 transition-colors">
+                            <Pencil size={11} /> Editar
+                          </button>
+                        ) : null}
+                        {podeDeletar && (
+                          <button onClick={() => setConfirmExcluir(lote)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                            <Trash2 size={11} /> Inativar
+                          </button>
                         )}
                       </div>
                     </div>
-
-                    {/* Célula 3 — ações */}
-                    <div className={`flex items-center gap-1 bg-white px-4 py-2.5 border-y border-r rounded-r-xl ${borderCls.replace('border-l-[4px] border-l-red-500 ', '').replace('border-l-[4px] border-l-amber-400 ', '').replace('border-l-[4px] border-l-gray-400 ', '')}`}>
-                      {(() => {
-                        const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
-                        if (jaUsado) {
-                          return (
-                            <button
-                              onClick={() => setLoteView(lote)}
-                              title="Visualizar lote (já utilizado — não pode ser alterado)"
-                              className="p-1.5 rounded-lg border border-teal-200 text-teal-500 hover:bg-teal-50">
-                              <Eye size={13} />
-                            </button>
-                          );
-                        }
-                        return podeEditar ? (
-                          <button
-                            onClick={() => preencherEdicao(lote)}
-                            title="Editar"
-                            className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                            <Pencil size={13} />
-                          </button>
-                        ) : null;
-                      })()}
-                      {podeDeletar && (
-                        <button onClick={() => setConfirmExcluir(lote)} title="Inativar"
-                          className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -934,6 +1008,161 @@ export default function EstoqueVacina() {
           onClick={() => { limparForm(); setModalFormAberto(true); }}>
           <Plus size={24} />
         </button>
+      )}
+
+      {/* ── Modal: Ajuste de Estoque ─────────────────────────────────────── */}
+      {modalAjusteAberto && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-40" onClick={fecharAjuste} />
+          <div className="fixed inset-x-4 top-[4vh] z-50 bg-white rounded-2xl shadow-2xl max-w-lg mx-auto flex flex-col max-h-[92vh] overflow-hidden">
+            <div className="bg-teal-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <ArrowUpDown size={15} className="text-white/80" />
+                <p className="font-bold text-sm text-white">Ajuste de Estoque</p>
+              </div>
+              <button onClick={fecharAjuste} className="text-white/60 hover:text-white"><X size={18} /></button>
+            </div>
+
+            <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+
+              {/* Seletor de lote */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Lote de vacina <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  {!dropdownAjusteAberto ? (
+                    <button type="button"
+                      onClick={() => { setDropdownAjusteAberto(true); setBuscaAjuste(''); }}
+                      className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+                      <span className={loteAjuste ? 'text-gray-900 truncate' : 'text-gray-400'}>
+                        {loteAjuste ? `${nomeLote(loteAjuste)}${loteAjuste.lote ? ` · Lote ${loteAjuste.lote}` : ''}` : 'Selecione o lote...'}
+                      </span>
+                      {loteAjuste ? (
+                        <X size={14} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
+                          onClick={(e) => { e.stopPropagation(); setAjusteLoteId(null); setAjusteQtd(''); }} />
+                      ) : (
+                        <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ) : (
+                    <div className="relative">
+                      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input autoFocus type="text" placeholder="Buscar lote no estoque..."
+                        value={buscaAjuste}
+                        onChange={(e) => setBuscaAjuste(e.target.value)}
+                        onBlur={() => setTimeout(() => { setDropdownAjusteAberto(false); setBuscaAjuste(''); }, 150)}
+                        className="w-full pl-8 pr-3 border border-gray-300 rounded-xl py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                      <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                        <ul className="max-h-44 overflow-y-auto">
+                          {(() => {
+                            const disponiveis = lotes.filter((l) => l.ativo);
+                            const filtrados = buscaAjuste.trim() === '' ? disponiveis : disponiveis.filter((l) =>
+                              nomeLote(l).toLowerCase().includes(buscaAjuste.toLowerCase()) ||
+                              (l.lote ?? '').toLowerCase().includes(buscaAjuste.toLowerCase())
+                            );
+                            return filtrados.length === 0 ? (
+                              <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum lote encontrado.</li>
+                            ) : (
+                              filtrados.map((l) => (
+                                <li key={l.id}>
+                                  <button type="button"
+                                    onMouseDown={() => {
+                                      setAjusteLoteId(l.id);
+                                      setAjusteQtd(l.qtdDisponivel);
+                                      setDropdownAjusteAberto(false);
+                                      setBuscaAjuste('');
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-sm hover:bg-teal-50 transition-colors ${
+                                      ajusteLoteId === l.id ? 'bg-teal-50 text-teal-700 font-semibold' : 'text-gray-800'
+                                    }`}>
+                                    <span className="block truncate">{nomeLote(l)}</span>
+                                    <span className="text-[11px] text-gray-400">
+                                      {l.qtdDisponivel}/{l.qtdTotal} doses
+                                      {l.lote && ` · Lote ${l.lote}`}
+                                    </span>
+                                  </button>
+                                </li>
+                              ))
+                            );
+                          })()}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Dados do lote selecionado */}
+              {loteAjuste && (
+                <div className="bg-teal-50 border border-teal-100 rounded-xl p-2.5 text-xs text-gray-600">
+                  <p className="font-semibold text-teal-700 text-[11px] uppercase tracking-wider mb-1">Lote Selecionado</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <p><span className="text-gray-400">Doses atuais:</span>{' '}
+                      <b className="text-teal-700">{loteAjuste.qtdDisponivel}/{loteAjuste.qtdTotal}</b></p>
+                    <p><span className="text-gray-400">Lote:</span> {loteAjuste.lote || '—'}</p>
+                    <p><span className="text-gray-400">Validade:</span> {loteAjuste.validade ? formatDate(loteAjuste.validade) : '—'}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Quantidade final de doses — pré-preenchida com a atual */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Doses disponíveis <span className="text-red-500">*</span>
+                </label>
+                <input type="number" min={0} value={ajusteQtd === '' ? '' : ajusteQtd}
+                  onChange={(e) => setAjusteQtd(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="0"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                {loteAjuste && (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Informe a contagem real de doses — a diferença será registrada como ajuste.
+                  </p>
+                )}
+              </div>
+
+              {/* Motivo */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Motivo <span className="text-red-500">*</span>
+                </label>
+                <input type="text" value={ajusteMotivo}
+                  onChange={(e) => setAjusteMotivo(e.target.value)}
+                  placeholder="Ex: correção de inventário, perda, quebra..."
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+              </div>
+
+              {/* Preview da diferença */}
+              {loteAjuste && ajusteQtd !== '' && (() => {
+                const nova = Number(ajusteQtd);
+                if (nova < 0) return <p className="text-xs text-red-600 font-semibold">Quantidade não pode ser negativa.</p>;
+                const delta = nova - loteAjuste.qtdDisponivel;
+                if (delta === 0) return <p className="text-xs text-gray-500">Quantidade igual ao estoque atual — nenhum ajuste será registrado.</p>;
+                return (
+                  <p className="text-xs text-gray-600">
+                    Diferença a registrar:{' '}
+                    <b className={delta > 0 ? 'text-teal-700' : 'text-red-600'}>
+                      {delta > 0 ? '+' : '−'}{Math.abs(delta)} doses
+                    </b>
+                    {' '}({loteAjuste.qtdDisponivel} → {nova})
+                  </p>
+                );
+              })()}
+
+              <div className="flex gap-2">
+                <button onClick={confirmarAjuste} disabled={ajustando || !loteAjuste}
+                  className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
+                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
+                </button>
+                <button onClick={fecharAjuste}
+                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* ── Modal: confirmar inativação ──────────────────────────────────── */}

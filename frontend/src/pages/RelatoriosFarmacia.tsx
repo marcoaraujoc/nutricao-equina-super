@@ -7,6 +7,8 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
+import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import {
   Card, Tabela, StatTiles, RankBars, EmptyState,
   CarregandoRelatorio, ErroRelatorio, formatBRL, formatNum, formatData,
@@ -35,6 +37,7 @@ interface Farmacia {
 export default function RelatoriosFarmacia() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeVer = isGestor || podeExecutar('relatorios.gerencial.ler');
+  const { granularidade, data: dataRef } = usePeriodo();
 
   const [dados, setDados] = useState<Farmacia | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -43,11 +46,11 @@ export default function RelatoriosFarmacia() {
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
-    api.get('/relatorios/farmacia')
+    api.get('/relatorios/farmacia', { params: periodoParams(granularidade, dataRef) })
       .then(res => { if (!res.data) return; setDados(res.data.dados as Farmacia); })
       .catch(() => setErro(true))
       .finally(() => setCarregando(false));
-  }, [loadingPerms, podeVer]);
+  }, [loadingPerms, podeVer, granularidade, dataRef]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -75,6 +78,8 @@ export default function RelatoriosFarmacia() {
           <p className="text-xs text-gray-400">Posição de estoque, alertas e consumo da empresa ativa</p>
         </div>
       </div>
+
+      <PeriodoSelector />
 
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
@@ -104,7 +109,7 @@ export default function RelatoriosFarmacia() {
 
             {/* Sem movimentação */}
             <Card icon={<Ban size={16} />} titulo="Produtos sem movimentação"
-              subtitulo="Sem saídas nos últimos 90 dias">
+              subtitulo="Sem saídas no período selecionado">
               {dados.semMovimentacao.length === 0 ? <EmptyState texto="Todos os produtos tiveram saída recente" /> : (
                 <Tabela colunas={['Produto', 'Lote', 'Em estoque']}>
                   {dados.semMovimentacao.map((i, k) => (
@@ -132,7 +137,7 @@ export default function RelatoriosFarmacia() {
           {/* Consumo */}
           <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-2">Consumo</p>
           <StatTiles cols={2} tiles={[
-            { label: 'Giro de estoque (90 dias, estimado)', valor: `${dados.consumo.giroEstoque.toFixed(2)}×`, hint: 'saídas ÷ valor em estoque' },
+            { label: 'Giro de estoque (no período, estimado)', valor: `${dados.consumo.giroEstoque.toFixed(2)}×`, hint: 'saídas ÷ valor atual em estoque' },
           ]} />
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
             <Card icon={<Pill size={16} />} titulo="Medicamentos mais vendidos">

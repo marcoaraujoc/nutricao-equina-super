@@ -31,7 +31,13 @@ const HistoricoController = {
   listarPorAnimal: async (req, res) => {
     try {
       const animalId = Number(req.params.animalId);
-      const limit    = Math.min(Number(req.query.limit) || 100, 300);
+      const busca    = (req.query.busca || '').toString().trim();
+      const buscando = busca.length > 0;
+      // Sem busca: retorna os N mais recentes (padrão 100; o painel pede 10).
+      // Com busca: filtra por palavra em TODO o histórico (server-side, contains
+      // insensitive), com teto amplo por origem para não sobrecarregar.
+      const limit    = buscando ? 500 : Math.min(Number(req.query.limit) || 100, 300);
+      const like     = { contains: busca, mode: 'insensitive' };
 
       const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
@@ -46,27 +52,27 @@ const HistoricoController = {
 
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo] },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo], ...(buscando ? { OR: [{ titulo: like }, { especialidade: like }, { texto: like }] } : {}) },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, dataFim: true, numero: true, tipoAtendimento: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
         prisma.vacinaClinica.findMany({
-          where: { ...whereAtivo, AND: [escopoFilho] },
+          where: { ...whereAtivo, AND: [escopoFilho], ...(buscando ? { OR: [{ nome: like }, { fabricante: like }, { lote: like }, { observacao: like }] } : {}) },
           select: { id: true, nome: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho] },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho], ...(buscando ? { OR: [{ descricao: like }, { resultado: like }, { tipo: like }, { observacao: like }] } : {}) },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho] },
+          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho], ...(buscando ? { OR: [{ especialidade: like }, { motivo: like }] } : {}) },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, evolucaoId: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc] },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc], ...(buscando ? { OR: [{ itens: { some: { ativo: true, medicamento: like } } }] } : {}) },
           select: {
             id: true, numero: true, status: true, createdAt: true, evolucaoId: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },

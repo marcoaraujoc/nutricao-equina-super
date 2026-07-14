@@ -141,6 +141,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'FULL',
     'farmacia.estoque.editar':   'FULL',
     'farmacia.estoque.ajustar':  'FULL',
+    'vacina.estoque.ajustar':    'FULL',
     'farmacia.estoque.deletar':  'FULL',
     'farmacia.estoque.imprimir': 'FULL',
 
@@ -312,6 +313,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'PROPRIO',
     'farmacia.estoque.editar':   'PROPRIO',
     'farmacia.estoque.ajustar':  'PROPRIO',
+    'vacina.estoque.ajustar':    'PROPRIO',
     'farmacia.estoque.deletar':  'PROPRIO',
     'farmacia.estoque.imprimir': 'EQUIPE',
 
@@ -525,6 +527,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
     'farmacia.estoque.ajustar':  'NENHUM',
+    'vacina.estoque.ajustar':    'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -694,6 +697,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
     'farmacia.estoque.ajustar':  'NENHUM',
+    'vacina.estoque.ajustar':    'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -847,6 +851,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
     'farmacia.estoque.ajustar':  'NENHUM',
+    'vacina.estoque.ajustar':    'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -998,6 +1003,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'NENHUM',
     'farmacia.estoque.editar':   'NENHUM',
     'farmacia.estoque.ajustar':  'NENHUM',
+    'vacina.estoque.ajustar':    'NENHUM',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'NENHUM',
 
@@ -1148,6 +1154,7 @@ const PERMISSOES_PADRAO = {
     'farmacia.estoque.criar':    'PROPRIO',
     'farmacia.estoque.editar':   'PROPRIO',
     'farmacia.estoque.ajustar':  'PROPRIO',
+    'vacina.estoque.ajustar':    'PROPRIO',
     'farmacia.estoque.deletar':  'NENHUM',
     'farmacia.estoque.imprimir': 'EQUIPE',
 
@@ -1320,6 +1327,7 @@ const MODULOS_SISTEMA = [
   { slug: 'vacina.estoque.editar',   modulo: 'vacina', submodulo: 'estoque', acao: 'editar',   label: 'Vacina Estoque — Editar',     ordemExib: 83.5 },
   { slug: 'vacina.estoque.deletar',  modulo: 'vacina', submodulo: 'estoque', acao: 'deletar',  label: 'Vacina Estoque — Excluir',    ordemExib: 84 },
   { slug: 'vacina.estoque.imprimir', modulo: 'vacina', submodulo: 'estoque', acao: 'imprimir', label: 'Vacina Estoque — Imprimir',   ordemExib: 84.5 },
+  { slug: 'vacina.estoque.ajustar',  modulo: 'vacina', submodulo: 'estoque', acao: 'ajustar',  label: 'Vacina Estoque — Ajustar',    ordemExib: 84.7 },
 
   // ── Farmácia — Estoque ──────────────────────────────────────────────────────
   { slug: 'farmacia.estoque.ler',      modulo: 'farmacia', submodulo: 'estoque', acao: 'ler',      label: 'Estoque — Visualizar', ordemExib: 85 },

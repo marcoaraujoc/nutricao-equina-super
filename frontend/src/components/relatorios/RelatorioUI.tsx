@@ -2,7 +2,7 @@
 // Blocos de UI reutilizados pelas páginas de Relatórios (Gestão, Financeiro,
 // Atendimento, Cadastro, Farmácia). Extraídos da Relatorios.tsx original.
 
-import type { ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
 
 // ─── Formatação ────────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ export function Card({ icon, titulo, subtitulo, children }: {
   children:   ReactNode;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+    <div className="min-w-0 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
       <div className="flex items-start gap-2.5 px-5 py-4 border-b border-gray-100">
         <span className="text-emerald-600 mt-0.5">{icon}</span>
         <div>
@@ -53,10 +53,26 @@ export function EmptyState({ texto }: { texto: string }) {
   return <p className="text-center text-xs text-gray-400 py-8">{texto}</p>;
 }
 
+// Tabela responsiva: no desktop é tabela; no mobile vira cards empilhados
+// (rótulo da coluna via `data-label`, estilizado em index.css → `table.rel-table`).
+// Cada <td> recebe o rótulo da coluna correspondente automaticamente (sem alterar
+// os call sites) clonando as linhas/células.
 export function Tabela({ colunas, children }: { colunas: string[]; children: ReactNode }) {
+  const linhas = Children.map(children, (linha) => {
+    if (!isValidElement(linha)) return linha;
+    const tr = linha as ReactElement<{ children?: ReactNode }>;
+    const celulas = Children.toArray(tr.props.children).map((cel, i) => {
+      if (!isValidElement(cel)) return cel;
+      const td = cel as ReactElement<{ colSpan?: number }>;
+      const label = td.props.colSpan ? '' : (colunas[i] ?? '');
+      return cloneElement(td as ReactElement<Record<string, unknown>>, { 'data-label': label });
+    });
+    return cloneElement(tr, {}, celulas);
+  });
+
   return (
     <div className="overflow-x-auto max-h-80 overflow-y-auto">
-      <table className="w-full text-sm">
+      <table className="rel-table w-full text-sm">
         <thead className="sticky top-0 bg-gray-50">
           <tr className="border-b border-gray-100">
             {colunas.map((c, i) => (
@@ -66,7 +82,7 @@ export function Tabela({ colunas, children }: { colunas: string[]; children: Rea
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-50">{children}</tbody>
+        <tbody className="divide-y divide-gray-50">{linhas}</tbody>
       </table>
     </div>
   );

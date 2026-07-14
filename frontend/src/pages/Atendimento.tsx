@@ -222,18 +222,29 @@ function HistoricoResumidoPanel({
   const [itens,             setItens]             = useState<ResumoHistoricoItem[]>([]);
   const [carregando,        setCarregando]        = useState(false);
   const [expandidos,        setExpandidos]        = useState<Set<string>>(new Set());
+  const [busca,             setBusca]             = useState('');
   const [previewAtendimento, setPreviewAtendimento] = useState<PrintAtendimento | null>(null);
 
   useEffect(() => {
     if (!animalId) return;
+    const termo = busca.trim();
     setCarregando(true);
-    api.get(`/clinica/historico/animal/${animalId}`, { params: { limit: 30 } })
-      .then(res => { if (res.data) setItens(res.data.dados ?? []); })
-      .catch(() => {})
-      .finally(() => setCarregando(false));
-  }, [animalId, refreshKey]);
+    // Busca server-side: com termo, o backend filtra por palavra em TODO o
+    // histórico; sem termo, retorna apenas os 10 registros mais recentes.
+    const t = setTimeout(() => {
+      const params = termo ? { busca: termo } : { limit: 10 };
+      api.get(`/clinica/historico/animal/${animalId}`, { params })
+        .then(res => { if (res.data) setItens(res.data.dados ?? []); })
+        .catch(() => {})
+        .finally(() => setCarregando(false));
+    }, termo ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [animalId, refreshKey, busca]);
 
   const grupos = agruparHistoricoResumido(itens);
+  // A filtragem é feita no backend (params.busca). `termo` aqui só controla a UI:
+  // expandir os grupos durante a busca e a mensagem de "sem resultado".
+  const termo = busca.trim();
   const clicar = (item: ResumoHistoricoItem) => {
     const tab = ORIGEM_TO_TAB[item.origem];
     if (tab) onItemClick(tab, parseInt(item.id.split('-')[1]));
@@ -305,13 +316,28 @@ function HistoricoResumidoPanel({
         <span className="font-semibold text-sm text-gray-900">Histórico do Paciente</span>
       </div>
 
+      <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Buscar no histórico..."
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors"
+          />
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto py-2">
         {carregando ? (
           <div className="flex justify-center py-10">
             <Loader2 size={20} className="animate-spin text-emerald-600" />
           </div>
         ) : itens.length === 0 ? (
-          <p className="text-center text-gray-300 text-xs py-10">Nenhum registro encontrado</p>
+          <p className="text-center text-gray-300 text-xs py-10">
+            {termo ? `Nenhum resultado para “${termo}”` : 'Nenhum registro encontrado'}
+          </p>
         ) : (
           <div className="px-3 space-y-2">
             {grupos.map(grupo => {
@@ -322,7 +348,7 @@ function HistoricoResumidoPanel({
               }
               const ev          = grupo.evolucao;
               const emAndamento = ev.status === 'EM_ANDAMENTO';
-              const expandido   = expandidos.has(grupo.key);
+              const expandido   = expandidos.has(grupo.key) || !!termo;
               const totalItens  = (emAndamento ? 0 : 1) + grupo.subitems.length; // evolução (se finalizada) + filhos
               return (
                 <div key={grupo.key}>

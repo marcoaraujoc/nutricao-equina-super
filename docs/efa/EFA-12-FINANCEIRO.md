@@ -1,6 +1,11 @@
 # EFA-12 — Financeiro (Faturamento e Fechamento)
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
+>
+> **Atualização 2026-07-14:** o lançamento manual de item de fatura permite **vincular um
+> animal** (para atribuição por cavalo/localização no relatório emergencial). O horário do
+> cron de fechamento (e demais) é **editável em runtime** pela tela de Configuração de tarefas
+> (EFA-03/§20.1) — reagendamento dinâmico do node-cron.
 > Recebe lançamentos de Prescrição/Execução (EFA-07), Vacinas/Exames/Encaminhamentos
 > (EFA-08) e usa as configurações de fechamento (EFA-03).
 

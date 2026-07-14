@@ -1,7 +1,8 @@
 // frontend/src/pages/SubModuloVacina.tsx — registro clínico de vacinas
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer } from 'lucide-react';
+import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail } from 'lucide-react';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
@@ -140,6 +141,24 @@ function imprimirVacina(v: VacinaClinica) {
 
 const hoje = () => new Date().toISOString().slice(0, 10);
 const formatDate = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
+
+function montarTextoVacina(v: VacinaClinica): string {
+  const vcNum = formatVcNum(v.numero, v.tipoAtendimento);
+  return [
+    '*Vacina*',
+    vcNum ? `Nº: ${vcNum}` : '',
+    `Vacina: ${v.nome}`,
+    v.fabricante ? `Fabricante: ${v.fabricante}` : '',
+    v.lote ? `Lote: ${v.lote}` : '',
+    v.dose ? `Dose: ${v.dose}` : '',
+    v.quantidade != null && v.quantidade > 1 ? `Qtd doses: ${v.quantidade}` : '',
+    v.via ? `Via: ${v.via}` : '',
+    `Aplicação: ${formatDate(v.dataAplicacao)}`,
+    v.dataReforco ? `Reforço: ${formatDate(v.dataReforco)}` : '',
+    v.veterinario ? `Executor: ${v.veterinario.fullName}` : '',
+    v.observacao ? `\nObs: ${v.observacao}` : '',
+  ].filter(Boolean).join('\n');
+}
 const formatVcNum = (num: number | null, tipo: string | null) =>
   num != null ? `${tipo ?? 'VC'}-${String(num).padStart(4, '0')}` : null;
 
@@ -445,7 +464,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('todos');
 
   const [page, setPage] = useState(1);
-  const limit = 8;
+  const limit = 10;
   const [confirmandoDuplicata, setConfirmandoDuplicata] = useState(false);
 
   const historicoFiltrado = historico.filter(v => {
@@ -930,50 +949,57 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
               const vcNum  = formatVcNum(v.numero, v.tipoAtendimento);
               const status = getStatus(v);
               return (
-                <div key={v.id} className={`flex items-start gap-3 px-4 py-3 ${!v.ativo ? 'opacity-60' : ''}`}>
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                    status === 'INATIVA' ? 'bg-gray-100' : status === 'VENCIDA' ? 'bg-red-100' : 'bg-teal-100'
-                  }`}>
-                    <Syringe size={14} className={
-                      status === 'INATIVA' ? 'text-gray-400' : status === 'VENCIDA' ? 'text-red-500' : 'text-teal-700'
-                    } />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
+                <div key={v.id} className={`px-4 py-3 ${!v.ativo ? 'opacity-60' : ''}`}>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
                       {vcNum && (
-                        <span className="text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded flex-shrink-0">
                           {vcNum}
                         </span>
                       )}
-                      <p className="text-sm font-semibold text-gray-900 truncate">{v.nome}</p>
-                      {v.cliente && (
-                        <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">CLIENTE</span>
-                      )}
-                      <StatusBadge status={status} />
+                      <span className="text-sm font-semibold text-gray-900 truncate">{v.nome}</span>
                     </div>
-                    <p className="text-xs text-gray-400">
-                      {v.dose && <span>{v.dose} · </span>}
-                      {v.quantidade != null && v.quantidade > 1 && <span>{v.quantidade} doses · </span>}
-                      {formatDate(v.dataAplicacao)}
-                    </p>
-                    {v.lote && <p className="text-xs text-gray-400">Lote: {v.lote}</p>}
-                    {v.dataReforco && (
-                      <p className={`text-xs ${status === 'VENCIDA' ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
-                        Reforço: {formatDate(v.dataReforco)} {status === 'VENCIDA' && '⚠'}
-                      </p>
-                    )}
-                    {v.veterinario && <p className="text-[11px] text-gray-400">Por: {v.veterinario.fullName}</p>}
+                    <StatusBadge status={status} />
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => setViewingV(v)} title="Visualizar"
-                      className="p-1.5 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg"><Eye size={14} /></button>
+
+                  <p className="text-xs text-gray-500">
+                    {v.cliente && <span className="text-amber-700 font-medium">Cliente · </span>}
+                    {v.dose && <>{v.dose} · </>}
+                    {v.quantidade != null && v.quantidade > 1 && <>{v.quantidade} doses · </>}
+                    {formatDate(v.dataAplicacao)}
+                  </p>
+                  {v.lote && <p className="text-[11px] text-gray-400 mt-0.5">Lote: {v.lote}</p>}
+                  {v.dataReforco && (
+                    <p className={`text-[11px] mt-0.5 ${status === 'VENCIDA' ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                      Reforço: {formatDate(v.dataReforco)} {status === 'VENCIDA' && '⚠'}
+                    </p>
+                  )}
+                  {v.veterinario && <p className="text-[11px] text-gray-400 mt-0.5">Por: {v.veterinario.fullName}</p>}
+
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button onClick={() => setViewingV(v)}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      <Eye size={11} /> Ver
+                    </button>
+                    <button onClick={() => abrirWhatsApp(montarTextoVacina(v))}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                      <MessageCircle size={11} /> WhatsApp
+                    </button>
+                    <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                      <Mail size={11} /> E-mail
+                    </button>
                     {podeImprimir && (
-                      <button onClick={() => imprimirVacina(v)} title="Imprimir"
-                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg"><Printer size={14} /></button>
+                      <button onClick={() => imprimirVacina(v)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                        <Printer size={11} /> Imprimir
+                      </button>
                     )}
                     {podeDeletar && v.ativo && (
-                      <button onClick={() => handleExcluirSolicitado(v.id)} title="Inativar"
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                      <button onClick={() => handleExcluirSolicitado(v.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                        <Trash2 size={11} /> Inativar
+                      </button>
                     )}
                   </div>
                 </div>

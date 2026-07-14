@@ -614,84 +614,126 @@ export default function Farmacia() {
           ) : itensFiltrados.length === 0 ? (
             <p className="text-center py-12 text-gray-400 text-sm">Nenhum item encontrado.</p>
           ) : (
-            <div style={{ display:'grid', gridTemplateColumns:'max-content 1fr max-content', rowGap:'6px' }}>
-              {itensFiltrados.map((item) => {
-                const nivel     = nivelEstoque(item);
-                const borderCls = nivel === 'critico'  ? 'border-l-[4px] border-l-red-500 border-red-100'
-                  : nivel === 'alarmante' ? 'border-l-[4px] border-l-amber-400 border-amber-50'
-                  : 'border-gray-200';
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Medicamento</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Estoque</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {itensFiltrados.map((item) => {
+                      const nivel = nivelEstoque(item);
+                      const qtdCls = nivel === 'critico' ? 'bg-red-100 text-red-700'
+                        : nivel === 'alarmante' ? 'bg-amber-100 text-amber-700'
+                        : 'bg-emerald-50 text-emerald-700';
+                      return (
+                        <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3">
+                            <button onClick={() => abrirHistorico(item)}
+                              className="font-semibold text-emerald-700 hover:text-emerald-900 hover:underline text-sm flex items-center gap-1">
+                              <BarChart2 size={12} className="text-emerald-500 flex-shrink-0" />
+                              {item.medicamento.nome}
+                              {item.medicamento.controlado && <Lock size={10} className="text-purple-600 flex-shrink-0" />}
+                            </button>
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              {item.medicamento.formaFarmaceutica} · {item.medicamento.apresentacao}
+                              {item.lote && ` · Lote ${item.lote}`}
+                              {item.fornecedor && ` · ${item.fornecedor.nome}`}
+                              {item.validade && <span className="ml-1">· {formatValidade(item.validade)}</span>}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${qtdCls}`}>
+                              {nivel !== 'ok' && <AlertTriangle size={10} className={nivel === 'critico' ? 'text-red-500' : 'text-amber-500'} />}
+                              {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
+                            </span>
+                            <p className="text-[10px] text-gray-400 mt-0.5">mín {fmtQtd(item.estoqueMinimo)}</p>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${item.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                              {item.ativo ? 'ATIVO' : 'INATIVO'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1">
+                              {item.emUso ? (
+                                <button onClick={() => setItemView(item)} title="Visualizar (já utilizado — não pode ser alterado)"
+                                  className="p-1.5 rounded-lg border border-emerald-200 text-emerald-500 hover:bg-emerald-50">
+                                  <Eye size={13} />
+                                </button>
+                              ) : podeEditar ? (
+                                <button onClick={() => preencherEdicao(item)} title="Editar"
+                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  <Pencil size={13} />
+                                </button>
+                              ) : null}
+                              <button onClick={() => setConfirmExcluir(item)} title="Inativar"
+                                className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                return (
-                  <div key={item.id} style={{ display:'contents' }}>
-                    {/* Célula 1 — info */}
-                    <div className={`flex items-center gap-2 bg-white px-4 py-2.5 border-y border-l rounded-l-xl ${borderCls}`}>
-                      <span role="button" tabIndex={0}
-                        onClick={() => abrirHistorico(item)}
-                        onKeyDown={(e) => e.key==='Enter' && abrirHistorico(item)}
-                        className="font-semibold text-emerald-700 text-sm whitespace-nowrap hover:underline flex items-center gap-1 cursor-pointer">
-                        <BarChart2 size={12} className="text-emerald-500 flex-shrink-0" />
-                        {item.medicamento.nome}
-                      </span>
-                      {item.medicamento.controlado && <Lock size={10} className="text-purple-600 flex-shrink-0" />}
-                      {/* Quantidade atual com unidade */}
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
-                        nivelEstoque(item) === 'critico'   ? 'bg-red-100 text-red-700' :
-                        nivelEstoque(item) === 'alarmante' ? 'bg-amber-100 text-amber-700' :
-                                                              'bg-emerald-50 text-emerald-700'
-                      }`}>
-                        {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
-                      </span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${item.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {item.ativo ? 'ATIVO' : 'INATIVO'}
-                      </span>
-                      <span className="hidden sm:inline text-xs text-gray-400 flex-shrink-0 ml-1">
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-gray-50">
+                {itensFiltrados.map((item) => {
+                  const nivel = nivelEstoque(item);
+                  const qtdCls = nivel === 'critico' ? 'bg-red-100 text-red-700'
+                    : nivel === 'alarmante' ? 'bg-amber-100 text-amber-700'
+                    : 'bg-emerald-50 text-emerald-700';
+                  return (
+                    <div key={item.id} className="px-4 py-3">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <button onClick={() => abrirHistorico(item)}
+                          className="font-semibold text-emerald-700 hover:underline text-sm flex items-center gap-1 min-w-0">
+                          <BarChart2 size={12} className="text-emerald-500 flex-shrink-0" />
+                          <span className="truncate">{item.medicamento.nome}</span>
+                          {item.medicamento.controlado && <Lock size={10} className="text-purple-600 flex-shrink-0" />}
+                        </button>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold flex-shrink-0 ${qtdCls}`}>
+                          {nivel !== 'ok' && <AlertTriangle size={10} className={nivel === 'critico' ? 'text-red-500' : 'text-amber-500'} />}
+                          {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-400">
                         {item.medicamento.formaFarmaceutica} · {item.medicamento.apresentacao}
-                        {item.lote && ` · Lote: ${item.lote}`}
-                        {item.fornecedor && ` · ${item.fornecedor.nome}`}
-                      </span>
-                      {item.validade && (
-                        <span className="hidden lg:inline text-xs ml-1 flex-shrink-0">
-                          {formatValidade(item.validade)}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Célula 2 — barra */}
-                    <div className={`flex flex-col justify-center gap-0.5 bg-white px-6 py-2.5 border-y ${borderCls.replace('border-l-[4px] border-l-red-500 ','').replace('border-l-[4px] border-l-amber-400 ','')}`}>
-                      <div className="flex items-center justify-center gap-1">
-                        <span className={`text-[10px] font-bold ${nivel==='critico' ? 'text-red-600' : nivel==='alarmante' ? 'text-amber-600' : 'text-gray-500'}`}>
-                          {fmtQtd(item.qtdEstoque)} / mín {fmtQtd(item.estoqueMinimo)} {item.medicamento.unidade}
-                        </span>
-                        {nivel !== 'ok' && <AlertTriangle size={10} className={nivel==='critico' ? 'text-red-500' : 'text-amber-500'} />}
-                      </div>
-                      <div className="bg-gray-100 rounded-full h-1.5">
-                        <div className={`h-1.5 rounded-full transition-all ${barColor(item)}`} style={{ width: barWidth(item) }} />
-                      </div>
-                    </div>
-
-                    {/* Célula 3 — ações */}
-                    <div className={`flex items-center gap-1 bg-white px-4 py-2.5 border-y border-r rounded-r-xl ${borderCls.replace('border-l-[4px] border-l-red-500 ','').replace('border-l-[4px] border-l-amber-400 ','')}`}>
-                      {item.emUso ? (
-                        <button onClick={() => setItemView(item)} title="Visualizar (já utilizado — não pode ser alterado)"
-                          className="p-1.5 rounded-lg border border-emerald-200 text-emerald-500 hover:bg-emerald-50">
-                          <Eye size={13} />
+                        {item.lote && ` · Lote ${item.lote}`}
+                        {' · '}{item.ativo ? 'Ativo' : 'Inativo'}
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {item.emUso ? (
+                          <button onClick={() => setItemView(item)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                            <Eye size={11} /> Ver
+                          </button>
+                        ) : podeEditar ? (
+                          <button onClick={() => preencherEdicao(item)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                            <Pencil size={11} /> Editar
+                          </button>
+                        ) : null}
+                        <button onClick={() => setConfirmExcluir(item)}
+                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                          <Trash2 size={11} /> Inativar
                         </button>
-                      ) : podeEditar ? (
-                        <button onClick={() => preencherEdicao(item)} title="Editar"
-                          className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                          <Pencil size={13} />
-                        </button>
-                      ) : null}
-
-                      <button onClick={() => setConfirmExcluir(item)} title="Inativar"
-                        className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
-                        <Trash2 size={13} />
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
       </div>

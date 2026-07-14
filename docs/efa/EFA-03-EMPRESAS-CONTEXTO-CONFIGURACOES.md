@@ -1,6 +1,11 @@
 # EFA-03 — Empresas, Contexto Ativo e Configurações da Empresa
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
+>
+> **Atualização 2026-07-14:** Configurações da empresa ganhou o **expediente de atendimento**
+> (dias da semana + faixa de horário) usado pela Agenda (EFA-09). Novas telas ADMIN/GESTOR de
+> **Configuração de alertas de cron** (`/configuracao-alertas`, com agenda dinâmica dos crons)
+> e **Monitoração** (`/monitoracao`) — ver §15.3 e §20.1 do ESPECIFICACAO_FUNCIONAL.md.
 
 ## 1. Identificação
 

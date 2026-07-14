@@ -1,28 +1,21 @@
 // backend/src/controllers/RelatoriosController.js
 // Relatórios por categoria (Financeiro, Atendimento, Cadastro, Farmácia).
-// Escopo por empresa ativa via resolverEscopo (mesmo padrão do RelatorioGerencialController).
+// Escopo por empresa ativa via resolverEscopo + janela de tempo via resolverPeriodo
+// (mesmo contrato do RelatorioGerencialController: query params granularidade + data).
 // Todas as rotas exigem relatorios.gerencial.ler (nível gestor).
+//
+// Princípio: métricas de JANELA (faturamento, atendimentos, novos cadastros, consumo,
+// giro) agregam por [inicio, fim] do período. Métricas de ESTADO ATUAL (base ativa,
+// posição de estoque, alertas de validade) são snapshot "as-of" refDate.
 'use strict';
 
 const prisma = require('../lib/prisma').default;
 const {
   resolverEscopo,
-  mesReferenciaAtual,
+  resolverPeriodo,
   somaEmMapa,
   mapaParaLista,
 } = require('./RelatorioGerencialController');
-
-// ── Datas ───────────────────────────────────────────────────────────────────
-function janelas() {
-  const agora = new Date();
-  const y = agora.getFullYear();
-  const m = agora.getMonth();
-  const inicioDia = new Date(y, m, agora.getDate(), 0, 0, 0, 0);
-  const fimDia    = new Date(y, m, agora.getDate(), 23, 59, 59, 999);
-  const inicioMes = new Date(y, m, 1, 0, 0, 0, 0);
-  const inicioAno = new Date(y, 0, 1, 0, 0, 0, 0);
-  return { agora, inicioDia, fimDia, inicioMes, inicioAno };
-}
 
 const receitaDoItem = (i) => (i.valor ?? 0) * (i.quantidade ?? 1);
 
@@ -85,18 +78,21 @@ function categoriaDoItem(i) {
 const financeiro = async (req, res) => {
   try {
     const { empresaId, propWhere } = await resolverEscopo(req);
-    const { inicioDia, fimDia, inicioMes, inicioAno } = janelas();
-    const mesAtual = mesReferenciaAtual();
+    const { inicio, fim, refDate, mesRef, granularidade } = resolverPeriodo(req);
+    const anoInicio = new Date(refDate.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const anoFim    = new Date(refDate.getFullYear(), 11, 31, 23, 59, 59, 999);
     const faturaAtiva = { status: { not: 'CANCELADA' }, ...propWhere };
 
-    // Itens do ano (faturamento dia/mês/ano) + itens do mês com origem (especialidade/categoria)
-    const [itensAno, itensMes, evolucoesMes, faturasReceber] = await Promise.all([
+    // Itens do ano (para o acumulado do ano + faturamento no período) e itens da
+    // janela com origem (especialidade/categoria). A janela está sempre dentro do
+    // ano do refDate, então itensAno é superconjunto e evita uma query extra.
+    const [itensAno, itensPeriodo, evolucoesPeriodo, faturasReceber] = await Promise.all([
       prisma.faturaItem.findMany({
-        where:  { criadoEm: { gte: inicioAno }, fatura: faturaAtiva },
+        where:  { criadoEm: { gte: anoInicio, lte: anoFim }, fatura: faturaAtiva },
         select: { valor: true, quantidade: true, criadoEm: true },
       }),
       prisma.faturaItem.findMany({
-        where:  { criadoEm: { gte: inicioMes }, fatura: faturaAtiva },
+        where:  { criadoEm: { gte: inicio, lte: fim }, fatura: faturaAtiva },
         select: {
           id: true, valor: true, quantidade: true, tipo: true,
           exameClinicoId: true, prescricaoId: true, vacinaClinicaId: true, encaminhamentoClinicoId: true,
@@ -104,7 +100,7 @@ const financeiro = async (req, res) => {
         },
       }),
       prisma.evolucaoClinica.count({
-        where: { ativo: true, status: 'FINALIZADA', dataFim: { gte: inicioMes }, ...(empresaId ? { animal: { empresaId } } : {}) },
+        where: { ativo: true, status: 'FINALIZADA', dataFim: { gte: inicio, lte: fim }, ...(empresaId ? { animal: { empresaId } } : {}) },
       }),
       prisma.fatura.findMany({
         where:  { status: { in: ['ABERTA', 'FECHADA'] }, ...propWhere },
@@ -112,40 +108,40 @@ const financeiro = async (req, res) => {
       }),
     ]);
 
-    // Faturamento por janela
-    let faturamentoDia = 0, faturamentoMes = 0, faturamentoAno = 0;
+    // Faturamento no período + acumulado do ano do refDate
+    let faturamentoPeriodo = 0, faturamentoAno = 0;
+    const iniMs = inicio.getTime(), fimMs = fim.getTime();
     for (const i of itensAno) {
       const v = receitaDoItem(i);
       faturamentoAno += v;
       const t = new Date(i.criadoEm).getTime();
-      if (t >= inicioMes.getTime()) faturamentoMes += v;
-      if (t >= inicioDia.getTime() && t <= fimDia.getTime()) faturamentoDia += v;
+      if (t >= iniMs && t <= fimMs) faturamentoPeriodo += v;
     }
 
-    // Ticket médio (mês)
-    const clientesDoMes = new Set(itensMes.map(i => i.fatura?.proprietarioId).filter(Boolean));
-    const ticketPorAtendimento = evolucoesMes > 0 ? faturamentoMes / evolucoesMes : 0;
-    const ticketPorCliente     = clientesDoMes.size > 0 ? faturamentoMes / clientesDoMes.size : 0;
+    // Ticket médio (janela)
+    const clientesDoPeriodo = new Set(itensPeriodo.map(i => i.fatura?.proprietarioId).filter(Boolean));
+    const ticketPorAtendimento = evolucoesPeriodo > 0 ? faturamentoPeriodo / evolucoesPeriodo : 0;
+    const ticketPorCliente     = clientesDoPeriodo.size > 0 ? faturamentoPeriodo / clientesDoPeriodo.size : 0;
 
-    // Receita por especialidade (mês) + por categoria (mês)
-    const espMap = await especialidadePorItem(itensMes);
+    // Receita por especialidade (janela) + por categoria (janela)
+    const espMap = await especialidadePorItem(itensPeriodo);
     const porEspecialidade = new Map();
     const porCategoria     = new Map();
-    for (const i of itensMes) {
+    for (const i of itensPeriodo) {
       const v = receitaDoItem(i);
       somaEmMapa(porEspecialidade, espMap.get(i.id) ?? 'Sem especialidade', v);
       somaEmMapa(porCategoria,     categoriaDoItem(i), v);
     }
 
-    // Contas a receber / vencidas / inadimplência
+    // Contas a receber / vencidas — vencidas relativas ao mês de referência do período
     let contasReceber = 0, contasVencidas = 0;
     for (const f of faturasReceber) {
       contasReceber += f.total ?? 0;
-      if (f.mesReferencia && f.mesReferencia < mesAtual) contasVencidas += f.total ?? 0;
+      if (f.mesReferencia && f.mesReferencia < mesRef) contasVencidas += f.total ?? 0;
     }
     const inadimplencia = contasReceber > 0 ? (contasVencidas / contasReceber) * 100 : 0;
 
-    // Fluxo de caixa projetado — média dos últimos 3 meses recebidos (faturas PAGA)
+    // Fluxo de caixa projetado — média dos últimos 3 meses recebidos, relativo ao refDate
     const pagas = await prisma.fatura.groupBy({
       by:    ['mesReferencia'],
       where: { status: 'PAGA', mesReferencia: { not: null }, ...propWhere },
@@ -153,46 +149,45 @@ const financeiro = async (req, res) => {
     });
     const recebidoPorMes = new Map(pagas.map(p => [p.mesReferencia, p._sum.total ?? 0]));
     const ultimos3 = [];
-    const base = new Date();
     for (let k = 1; k <= 3; k++) {
-      const d = new Date(base.getFullYear(), base.getMonth() - k, 1);
+      const d = new Date(refDate.getFullYear(), refDate.getMonth() - k, 1);
       const ref = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       ultimos3.push({ mes: ref, valor: recebidoPorMes.get(ref) ?? 0, tipo: 'realizado' });
     }
     const mediaMensal = ultimos3.reduce((s, r) => s + r.valor, 0) / 3;
     const projecao = [];
     for (let k = 1; k <= 3; k++) {
-      const d = new Date(base.getFullYear(), base.getMonth() + k, 1);
+      const d = new Date(refDate.getFullYear(), refDate.getMonth() + k, 1);
       const ref = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       projecao.push({ mes: ref, valor: mediaMensal, tipo: 'projetado' });
     }
 
-    // Lucro bruto estimado (mês) = receita − custo dos produtos consumidos
-    const [saidas, vacinasMes] = await Promise.all([
+    // Lucro bruto estimado (janela) = receita − custo dos produtos consumidos
+    const [saidas, vacinasPeriodo] = await Promise.all([
       prisma.movimentoEstoque.findMany({
-        where:  { tipo: 'SAIDA', createdAt: { gte: inicioMes }, ...(empresaId ? { estoque: { empresaId } } : {}) },
+        where:  { tipo: 'SAIDA', createdAt: { gte: inicio, lte: fim }, ...(empresaId ? { estoque: { empresaId } } : {}) },
         select: { quantidade: true, estoque: { select: { precoUnitarioBase: true } } },
       }),
       prisma.vacinaClinica.findMany({
-        where:  { ativo: true, cliente: false, dataAplicacao: { gte: inicioMes }, loteId: { not: null }, ...(empresaId ? { animal: { empresaId } } : {}) },
+        where:  { ativo: true, cliente: false, dataAplicacao: { gte: inicio, lte: fim }, loteId: { not: null }, ...(empresaId ? { animal: { empresaId } } : {}) },
         select: { quantidade: true, loteVacina: { select: { valorUnitario: true } } },
       }),
     ]);
     let custoProdutos = 0;
     for (const s of saidas) custoProdutos += (s.quantidade ?? 0) * (s.estoque?.precoUnitarioBase ?? 0);
-    for (const v of vacinasMes) custoProdutos += (v.quantidade ?? 1) * (v.loteVacina?.valorUnitario ?? 0);
-    const lucroBruto = faturamentoMes - custoProdutos;
-    const margemPct  = faturamentoMes > 0 ? (lucroBruto / faturamentoMes) * 100 : 0;
+    for (const v of vacinasPeriodo) custoProdutos += (v.quantidade ?? 1) * (v.loteVacina?.valorUnitario ?? 0);
+    const lucroBruto = faturamentoPeriodo - custoProdutos;
+    const margemPct  = faturamentoPeriodo > 0 ? (lucroBruto / faturamentoPeriodo) * 100 : 0;
 
     return res.json({
       dados: {
-        faturamento: { dia: faturamentoDia, mes: faturamentoMes, ano: faturamentoAno },
-        ticketMedio: { porAtendimento: ticketPorAtendimento, porCliente: ticketPorCliente, atendimentosMes: evolucoesMes, clientesMes: clientesDoMes.size },
+        faturamento: { periodo: faturamentoPeriodo, ano: faturamentoAno, granularidade },
+        ticketMedio: { porAtendimento: ticketPorAtendimento, porCliente: ticketPorCliente, atendimentosPeriodo: evolucoesPeriodo, clientesPeriodo: clientesDoPeriodo.size },
         porEspecialidade: mapaParaLista(porEspecialidade, 'especialidade', 'receita'),
         porCategoria:     mapaParaLista(porCategoria,     'categoria',     'receita'),
         contasReceber, contasVencidas, inadimplencia,
         fluxoCaixa: { mediaMensal, historico: ultimos3.reverse(), projecao },
-        lucroBruto: { receita: faturamentoMes, custoProdutos, lucro: lucroBruto, margemPct },
+        lucroBruto: { receita: faturamentoPeriodo, custoProdutos, lucro: lucroBruto, margemPct },
       },
     });
   } catch (err) {
@@ -206,25 +201,21 @@ const financeiro = async (req, res) => {
 const atendimento = async (req, res) => {
   try {
     const { empresaId } = await resolverEscopo(req);
-    const { inicioDia, fimDia, inicioMes } = janelas();
+    const { inicio, fim } = resolverPeriodo(req);
     const escopoAnimal = empresaId ? { animal: { empresaId } } : {};
 
-    const [
-      agendadasHoje, realizadasHoje, canceladasMes,
-      atendimentosMes, procedimentosMes, examesMes,
-    ] = await Promise.all([
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'AGENDADO', dataHora: { gte: inicioDia, lte: fimDia }, ...escopoAnimal } }),
-      prisma.evolucaoClinica.count({ where: { ativo: true, status: 'FINALIZADA', dataFim: { gte: inicioDia, lte: fimDia }, ...escopoAnimal } }),
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'CANCELADO', dataHora: { gte: inicioMes }, ...escopoAnimal } }),
-      prisma.evolucaoClinica.count({ where: { ativo: true, dataInicio: { gte: inicioMes }, ...escopoAnimal } }),
-      prisma.prescricao.count({ where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm: { gte: inicioMes }, ...escopoAnimal } }),
-      prisma.exameClinico.count({ where: { ativo: true, dataSolicitacao: { gte: inicioMes }, ...escopoAnimal } }),
+    const [agendadas, realizadas, canceladas, atendimentos, procedimentos, exames] = await Promise.all([
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'AGENDADO',   dataHora:        { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.evolucaoClinica.count({    where: { ativo: true, status: 'FINALIZADA', dataFim:         { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'CANCELADO',  dataHora:        { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.evolucaoClinica.count({    where: { ativo: true, dataInicio:      { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.prescricao.count({         where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm:     { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.exameClinico.count({       where: { ativo: true, dataSolicitacao: { gte: inicio, lte: fim }, ...escopoAnimal } }),
     ]);
 
     return res.json({
       dados: {
-        hoje: { agendadas: agendadasHoje, realizadas: realizadasHoje },
-        mes:  { atendimentos: atendimentosMes, canceladas: canceladasMes, procedimentos: procedimentosMes, exames: examesMes },
+        periodo: { agendadas, realizadas, atendimentos, canceladas, procedimentos, exames },
       },
     });
   } catch (err) {
@@ -238,28 +229,27 @@ const atendimento = async (req, res) => {
 const cadastro = async (req, res) => {
   try {
     const { empresaId, animalWhere } = await resolverEscopo(req);
-    const { inicioMes } = janelas();
+    const { inicio, fim, refDate } = resolverPeriodo(req);
     const clienteBase = { userType: 'PROPRIETARIO', ativo: true, ...(empresaId ? { animais: { some: { empresaId, ativo: true } } } : {}) };
 
-    // Série de novos por mês (últimos 6 meses)
-    const seisMesesAtras = new Date();
-    seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 5);
-    seisMesesAtras.setDate(1); seisMesesAtras.setHours(0, 0, 0, 0);
+    // Série de novos por mês — 6 meses terminando no mês do refDate
+    const seisMesesAtras = new Date(refDate.getFullYear(), refDate.getMonth() - 5, 1, 0, 0, 0, 0);
+    const fimSerie       = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    const [pacientesAtivos, pacientesNovosMes, clientesAtivos, clientesNovosMes, animaisRecentes, clientesRecentes] = await Promise.all([
+    // Animal usa `dataCadastro` como timestamp de criação; User usa `createdAt`.
+    const [pacientesAtivos, pacientesNovos, clientesAtivos, clientesNovos, animaisRecentes, clientesRecentes] = await Promise.all([
       prisma.animal.count({ where: animalWhere }),
-      prisma.animal.count({ where: { ...animalWhere, createdAt: { gte: inicioMes } } }),
+      prisma.animal.count({ where: { ...animalWhere, dataCadastro: { gte: inicio, lte: fim } } }),
       prisma.user.count({ where: clienteBase }),
-      prisma.user.count({ where: { ...clienteBase, createdAt: { gte: inicioMes } } }),
-      prisma.animal.findMany({ where: { ...animalWhere, createdAt: { gte: seisMesesAtras } }, select: { createdAt: true } }),
-      prisma.user.findMany({ where: { ...clienteBase, createdAt: { gte: seisMesesAtras } }, select: { createdAt: true } }),
+      prisma.user.count({ where: { ...clienteBase, createdAt: { gte: inicio, lte: fim } } }),
+      prisma.animal.findMany({ where: { ...animalWhere, dataCadastro: { gte: seisMesesAtras, lte: fimSerie } }, select: { dataCadastro: true } }),
+      prisma.user.findMany({ where: { ...clienteBase, createdAt: { gte: seisMesesAtras, lte: fimSerie } }, select: { createdAt: true } }),
     ]);
 
     const bucketMeses = (registros) => {
       const mapa = new Map();
       for (let k = 5; k >= 0; k--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - k);
+        const d = new Date(refDate.getFullYear(), refDate.getMonth() - k, 1);
         mapa.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, 0);
       }
       for (const r of registros) {
@@ -272,8 +262,8 @@ const cadastro = async (req, res) => {
 
     return res.json({
       dados: {
-        pacientes: { ativos: pacientesAtivos, novosMes: pacientesNovosMes, novosPorMes: bucketMeses(animaisRecentes) },
-        clientes:  { ativos: clientesAtivos,  novosMes: clientesNovosMes,  novosPorMes: bucketMeses(clientesRecentes) },
+        pacientes: { ativos: pacientesAtivos, novos: pacientesNovos, novosPorMes: bucketMeses(animaisRecentes.map(r => ({ createdAt: r.dataCadastro }))) },
+        clientes:  { ativos: clientesAtivos,  novos: clientesNovos,  novosPorMes: bucketMeses(clientesRecentes) },
       },
     });
   } catch (err) {
@@ -290,12 +280,14 @@ const valorItemEstoque = (i) =>
 const farmacia = async (req, res) => {
   try {
     const { empresaId, propWhere } = await resolverEscopo(req);
-    const agora = new Date();
-    const em30dias = new Date(agora.getTime() + 30 * 86400000);
-    const inicio90 = new Date(agora.getTime() - 90 * 86400000);
+    const { inicio, fim, refDate } = resolverPeriodo(req);
+    // Posição de estoque e validade são snapshot "as-of" refDate.
+    const agora = refDate;
+    const em30dias = new Date(refDate.getTime() + 30 * 86400000);
     const estoqueEmpresa = empresaId ? { empresaId } : {};
+    const faturaAtiva = { status: { not: 'CANCELADA' }, ...propWhere };
 
-    const [estoque, saidas90, medTop, procTop, vacinasTop, lotesVacina] = await Promise.all([
+    const [estoque, saidasPeriodo, medTop, procTop, vacinasTop, lotesVacina] = await Promise.all([
       prisma.estoqueClinica.findMany({
         where:  { ativo: true, ...estoqueEmpresa },
         select: {
@@ -304,19 +296,19 @@ const farmacia = async (req, res) => {
         },
       }),
       prisma.movimentoEstoque.findMany({
-        where:  { tipo: 'SAIDA', createdAt: { gte: inicio90 }, ...(empresaId ? { estoque: { empresaId } } : {}) },
+        where:  { tipo: 'SAIDA', createdAt: { gte: inicio, lte: fim }, ...(empresaId ? { estoque: { empresaId } } : {}) },
         select: { estoqueId: true, quantidade: true, estoque: { select: { precoUnitarioBase: true } } },
       }),
       prisma.faturaItem.groupBy({
-        by: ['descricao'], where: { tipo: 'MEDICAMENTO', fatura: { status: { not: 'CANCELADA' }, ...propWhere } },
+        by: ['descricao'], where: { tipo: 'MEDICAMENTO', criadoEm: { gte: inicio, lte: fim }, fatura: faturaAtiva },
         _sum: { quantidade: true }, orderBy: { _sum: { quantidade: 'desc' } }, take: 10,
       }),
       prisma.faturaItem.groupBy({
-        by: ['descricao'], where: { tipo: 'PROCEDIMENTO', fatura: { status: { not: 'CANCELADA' }, ...propWhere } },
+        by: ['descricao'], where: { tipo: 'PROCEDIMENTO', criadoEm: { gte: inicio, lte: fim }, fatura: faturaAtiva },
         _sum: { quantidade: true }, orderBy: { _sum: { quantidade: 'desc' } }, take: 10,
       }),
       prisma.vacinaClinica.groupBy({
-        by: ['nome'], where: { ativo: true, ...(empresaId ? { animal: { empresaId } } : {}) },
+        by: ['nome'], where: { ativo: true, dataAplicacao: { gte: inicio, lte: fim }, ...(empresaId ? { animal: { empresaId } } : {}) },
         _count: { _all: true }, orderBy: { _count: { nome: 'desc' } }, take: 10,
       }),
       prisma.loteVacina.findMany({
@@ -351,17 +343,17 @@ const farmacia = async (req, res) => {
     vencidos.sort(ordValidade); vencendo.sort(ordValidade);
     abaixoMinimo.sort((a, b) => (a.qtd ?? 0) - (b.qtd ?? 0));
 
-    // Produtos sem movimentação (sem SAIDA nos últimos 90 dias)
-    const comSaida = new Set(saidas90.map(s => s.estoqueId));
+    // Produtos sem movimentação (sem SAIDA no período)
+    const comSaida = new Set(saidasPeriodo.map(s => s.estoqueId));
     const semMovimentacao = estoque
       .filter(i => !comSaida.has(i.id))
       .map(i => ({ nome: i.medicamento?.nome ?? '—', qtd: i.qtdEstoque, lote: i.lote, validade: i.validade }))
       .sort((a, b) => (b.qtd ?? 0) - (a.qtd ?? 0));
 
-    // Giro de estoque (estimado) = valor de saídas (90d) ÷ valor atual em estoque
-    let valorSaidas90 = 0;
-    for (const s of saidas90) valorSaidas90 += (s.quantidade ?? 0) * (s.estoque?.precoUnitarioBase ?? 0);
-    const giro = valorTotalEstoque > 0 ? valorSaidas90 / valorTotalEstoque : 0;
+    // Giro de estoque (no período) = valor de saídas ÷ valor atual em estoque
+    let valorSaidas = 0;
+    for (const s of saidasPeriodo) valorSaidas += (s.quantidade ?? 0) * (s.estoque?.precoUnitarioBase ?? 0);
+    const giro = valorTotalEstoque > 0 ? valorSaidas / valorTotalEstoque : 0;
 
     return res.json({
       dados: {

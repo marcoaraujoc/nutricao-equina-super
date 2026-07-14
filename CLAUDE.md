@@ -1,6 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
-# Atualizado em: 2026-07-10 (Autoria clínica 100% RBAC; controle por tipo de exame; cookies HttpOnly; IP na auditoria + trust proxy)
+# Atualizado em: 2026-07-14 (Relatórios com período + Tabela responsiva; expediente de atendimento; autosave de evolução; lembretes WhatsApp; alertas/Monitoração de cron com agenda dinâmica; cookie-dica de sessão)
 
 ---
 
@@ -319,7 +319,19 @@ EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (
                     1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL), whatsapp (migration
                     20260710000002 — somente dígitos DDD+número, 10-15, p/ envio/recebimento de
                     mensagens; integração de mensageria ainda não existe). unique(empresaId, equipeId).
-                    Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes
+                    Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes.
+                    Expediente de atendimento (migration 20260713020000): diasAtendimento (CSV 0-6,
+                    null=todos), horaInicioAtendimento/horaFimAtendimento (HH:MM, null=sem restrição) —
+                    usados por Agendamentos p/ liberar horários; leitura por qualquer membro via
+                    GET /api/equipes/horario-atendimento.
+AgendamentoClinico → (+ migration 20260713010000) lembreteWa1DiaEnviadoEm / lembreteWa2hEnviadoEm
+                    (DateTime?) — idempotência dos lembretes de WhatsApp (D-1 e 2h antes).
+CronAlertaConfig  → config global dos alertas de cron (linha única): emails (CSV, null=ADMINs),
+                    notificarSucesso (Bool), ativo (Bool). Lida ao vivo por lib/cronAlert.js. ADMIN.
+CronExecucao      → histórico de execuções relevantes das tarefas (nome, ok, resumo, erro,
+                    notificado, executadoEm) p/ a tela de Monitoração. Migration 20260714000000.
+CronAgenda        → agenda (horário) editável de cada tarefa: chave (unique), nome, cronExpr, ativo.
+                    Reagendamento dinâmico do node-cron (lib/cronManager.js). Migration 20260714010000.
 ```
 
 ### Catálogo de Módulos do Sistema (ModuloSistema)
@@ -815,6 +827,21 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-07-14 — Relatórios/UX, expediente, mensageria e agendador
+- [x] **Relatórios por período (Dia/Semana/Mês/Ano)** — `PeriodoContext` (localStorage `s2vet_rel_gran`/`s2vet_rel_data`, sem reload) + `PeriodoSelector` (Dia|Semana|Mês|Ano + ◀▶ + data + Hoje) no topo dos 5 submódulos (Gestão/Financeiro/Atendimento/Cadastro/Farmácia). Backend `resolverPeriodo(req)` (query `granularidade`+`data`) em `RelatorioGerencialController` (exportado) → janela `[inicio,fim]`+`mesRef`+`refDate`; `RelatoriosController` usa a janela (métricas de janela filtram por `[inicio,fim]`; snapshots as-of `refDate`). Semana = domingo a sábado. **Bug do original corrigido**: Animal usa `dataCadastro` (não `createdAt`) no relatório de cadastro.
+- [x] **Atribuição de animal no lançamento manual de fatura** — `Faturamento.tsx` `handleLancar` agora envia `animalId` (seletor no form); antes o "Atd. Emergencial" caía em "Sem animal/localização" no relatório emergencial. `FaturaController.adicionarItem` já aceitava `animalId`.
+- [x] **Tabela de relatório responsiva** — `RelatorioUI.Tabela` clona as linhas injetando `data-label` por coluna + CSS `table.rel-table` (index.css) → no mobile vira cards empilhados (rótulo:valor). `Card` ganhou `min-w-0` (evita overflow do grid 2-col). `<main>` (App.tsx): `overflow-y-scroll overflow-x-hidden [scrollbar-gutter:stable]` — elimina o "dançar lateral" (Safari: barra overlay → causa era overflow horizontal).
+- [x] **Layout do histórico de prescrição** replicado (tabela desktop + cards mobile) em: Farmácia, Estoque de Vacinas, Exames (resultado), e Agendamentos "Expediente Ativo" (mobile: contagem de livres + popover ao toque).
+- [x] **Expediente de atendimento (dias + horário)** — `EmpresaConfiguracao.diasAtendimento` (CSV 0-6), `horaInicioAtendimento`/`horaFimAtendimento` (HH:MM) [migration `20260713020000`]. Config em `Configuracoes.tsx` (toggles de dias + horas). `Agendamentos.tsx` libera horários só nos dias/faixa (via `GET /equipes/horario-atendimento` — legível por QUALQUER membro, não só gestor; `resolverEscopoConfiguracaoMembro` em EquipeController). Ao salvar Configurações → redireciona p/ `/mapa-atendimento`.
+- [x] **Ajuste de Estoque de Vacinas** (igual medicamentos) — `PATCH /vacinas/estoque/:id/ajuste` (`EstoqueVacinaController.ajustar`: ajusta `qtdDisponivel`, eleva `qtdTotal` se recontagem maior, motivo obrigatório → AuditLog categoria `AJUSTE`). Slug novo `vacina.estoque.ajustar` (seed + coluna AJUSTAR no ControleAcesso). `lib/auditoria.js` CATEGORIAS += `AJUSTE`.
+- [x] **Autosave da evolução no celular** — `SubModuloEvolucao` grava rascunho da evolução NOVA em localStorage (`s2vet_ev_draft_<animalId>`) a cada alteração (inclui ditado); restaura no refresh (sem toast); limpa ao salvar/finalizar.
+- [x] **Lembretes de agendamento por WhatsApp (D-1 e 2h antes)** — base pronta: `messaging/whatsappProvider.js` (abstração + `NoopWhatsAppProvider` que só loga; env `WHATSAPP_PROVIDER`), `services/lembreteAgendamentoService.js` (FEFO de tiers, idempotência via `AgendamentoClinico.lembreteWa1DiaEnviadoEm`/`lembreteWa2hEnviadoEm` — migration `20260713010000`). Envio real pluga no provider quando houver credenciais.
+- [x] **Alertas + Monitoração das tarefas agendadas (cron)** — `lib/cronAlert.js` (`reportarCron`: e-mail ao ADMIN + registro em `CronExecucao`; erro sempre, sucesso só quando há trabalho); `emailService.enviarAlertaCron`. Config em `CronAlertaConfig` (destinatários/`notificarSucesso`/`ativo`), lida ao vivo. Tela **Monitoração** (`/monitoracao`, ADMIN): dia/semana/mês. Tela **Configuração** (`/configuracao-alertas`, ADMIN): alertas + agenda. Controller `MonitoracaoController` + rotas `/api/monitoracao/{config,execucoes,agendas}`. Migration `20260714000000`.
+- [x] **Reagendamento dinâmico do node-cron a partir do banco** — `lib/cronManager.js` (`registrarJob`/`iniciarJobs`/`reagendar`/`listarJobs`): cada job tem `chave`+expr padrão; `CronAgenda` (migration `20260714010000`) guarda a expressão/`ativo` editável; `PUT /api/monitoracao/agendas/:chave` para/recria o task do node-cron AO VIVO (sem restart). server.ts registra os 6 jobs (`crmv_sync`, `auto_aceite`, `vinculos_provisorios`, `lembrete_d1_email`, `lembrete_whatsapp`, `fechamento_faturas`) e chama `iniciarJobs()` no listen. **Não usar `cron.schedule` direto** — sempre via `registrarJob`.
+- [x] **Cookie-dica de sessão** — `authCookies.js` seta `s2vet_auth=1` (NÃO-HttpOnly, sem token) no login/refresh e limpa no logout; `AuthContext` só sonda `/me`+`/refresh` se a dica existir → some o 401 no console da tela de login. Sessões antigas precisam de 1 novo login para ganhar a dica.
+- [ ] Lembretes WhatsApp: implementar um provider real (Cloud API/Twilio/Z-API) e credenciais.
+- [ ] Configuração do ADMIN: se quiser digest diário dos alertas em vez de e-mail por evento.
 
 - [x] Migrar `backend/src/server.js` → TypeScript (`src/server.ts`)
 - [x] Mover `prismaClient.ts` → `src/lib/prisma.ts` (singleton, injetável)

@@ -12,7 +12,7 @@
 
 const prisma = require('./prisma').default;
 
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO'];
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`

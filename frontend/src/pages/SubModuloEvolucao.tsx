@@ -8,9 +8,10 @@ import {
   Pencil, Trash2, Printer, Mic, MicOff, Square,
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
   Share2, FileText, CheckCircle2, Loader2, WifiOff,
-  Calendar, User, Filter, Search, Eye, Ban, Paperclip,
-  Image, Film, Volume2, Lock, CheckSquare,
+  Calendar, User, Filter, Eye, Ban, Paperclip,
+  Image, Film, Volume2, Lock, CheckSquare, MessageCircle, Mail,
 } from 'lucide-react';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../utils/RelatorioAtendimento';
 import RelatorioAtendimentoModal from '../components/RelatorioAtendimentoModal';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -103,6 +104,19 @@ interface EvolucaoItem {
   ativo:            boolean;
   aprovado:         boolean;
   midias:           EvolucaoMidia[];
+}
+
+function montarTextoEvolucao(ev: EvolucaoItem): string {
+  const titulo = ev.titulo?.trim() || 'Evolução clínica';
+  return [
+    '*Evolução Clínica*',
+    ev.atendimentoNumero ? `Atendimento: ${ev.atendimentoNumero}` : '',
+    `Título: ${titulo}`,
+    `Especialidade: ${ev.especialidade}`,
+    `Data: ${formatarDataHora(ev.dataInicio)}`,
+    ev.veterinario ? `Responsável: ${ev.veterinario.fullName}` : '',
+    ev.texto ? `\n${ev.texto}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 interface FormEvolucao {
@@ -657,20 +671,25 @@ function NovaEvolucaoModal({
                   <button onClick={() => onFormChange('texto', '')}
                     className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
-                {!showRecordAgain && !transcrevendo && !gravacaoAtiva && (
+                {!showRecordAgain && !transcrevendo && (
                   mobile ? (
                     <button
-                      onTouchStart={e => { e.preventDefault(); iniciarGravacao(); }}
-                      onTouchEnd={e => { e.preventDefault(); if (gravacaoAtiva) pararGravacao(); }}
+                      onClick={() => (gravacaoAtiva ? pararGravacao() : iniciarGravacao())}
                       onContextMenu={e => e.preventDefault()}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium select-none transition-all bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
-                      <Mic size={11} /> Segurar para gravar
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium select-none transition-all ${
+                        gravacaoAtiva ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                      }`}>
+                      {gravacaoAtiva
+                        ? <><MicOff size={11} /> Encerrar Evolução</>
+                        : <><Mic size={11} /> Iniciar Evolução</>}
                     </button>
                   ) : (
-                    <button onClick={iniciarGravacao}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
-                      <Mic size={11} /> Iniciar fala
-                    </button>
+                    !gravacaoAtiva && (
+                      <button onClick={iniciarGravacao}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
+                        <Mic size={11} /> Iniciar fala
+                      </button>
+                    )
                   )
                 )}
                 {transcrevendo && (
@@ -684,7 +703,7 @@ function NovaEvolucaoModal({
             <textarea value={form.texto} onChange={e => onFormChange('texto', e.target.value)}
               placeholder={
                 gravacaoAtiva && !mobile  ? '🎤 Ouvindo… fale normalmente'
-                : gravacaoAtiva && mobile ? '🔴 Gravando… solte o botão para encerrar'
+                : gravacaoAtiva && mobile ? '🔴 Gravando… toque em "Encerrar Evolução" para finalizar'
                 : transcrevendo           ? '⏳ Transcrevendo…'
                 : 'Descreva a evolução clínica do paciente…'
               }
@@ -697,7 +716,7 @@ function NovaEvolucaoModal({
               <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0" />
                 <span className="text-xs text-red-700 font-medium flex-1">
-                  {mobile ? 'Gravando… solte o botão quando terminar.' : 'Gravando… clique novamente para encerrar.'}
+                  {mobile ? 'Gravando… toque em "Encerrar Evolução" para finalizar.' : 'Gravando… clique novamente para encerrar.'}
                 </span>
                 {!mobile && (
                   <button onClick={pararGravacao}
@@ -709,11 +728,10 @@ function NovaEvolucaoModal({
             )}
 
             {showRecordAgain && !gravacaoAtiva && !transcrevendo && (
-              <div className="mt-2 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
-                <p className="text-xs font-semibold text-emerald-800 mb-2">Deseja continuar Gravando?</p>
+              <div className="flex items-center justify-end mt-2">
                 <button onClick={() => { setShowRecordAgain(false); iniciarGravacao(); }}
-                  className="w-full flex items-center justify-center gap-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
-                  <Mic size={12} /> Sim, continuar gravando
+                  className="flex items-center justify-center gap-1 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
+                  <Mic size={12} /> Continuar Gravando
                 </button>
               </div>
             )}
@@ -874,7 +892,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [limit,          setLimit]          = useState(10);
 
   const [filterStatus,      setFilterStatus]      = useState('');
-  const [busca,             setBusca]             = useState('');
   const [filtroDataInicio,  setFiltroDataInicio]  = useState('');
   const [filtroDataFim,     setFiltroDataFim]     = useState('');
   const [filtroResponsavel, setFiltroResponsavel] = useState('');
@@ -913,7 +930,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const totalPaginas       = Math.ceil(total / limit);
   const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
-  const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel || filterStatus || busca);
+  const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel || filterStatus);
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -925,7 +942,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       if (filtroDataInicio)  params.set('dataInicio',    filtroDataInicio);
       if (filtroDataFim)     params.set('dataFim',       filtroDataFim);
       if (filtroResponsavel) params.set('responsavelId', filtroResponsavel);
-      if (busca.trim())      params.set('busca',         busca.trim());
       const res = await api.get(`/clinica/evolucoes/animal/${animalId}?${params}`);
       const dados: EvolucaoItem[] = res.data.dados ?? [];
       setEvolucoes(dados);
@@ -940,7 +956,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       } : null);
     } catch { toast.error('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, busca, onEvolucaoChange]);
+  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, onEvolucaoChange]);
 
   useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
@@ -979,6 +995,50 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       })
       .catch(() => {});
   }, [loading, agendamentoIdProp, animalId, temEvolucaoAberta]);
+
+  // ── Rascunho automático (mobile-safe) ────────────────────────────────────────
+  // Preserva o texto não salvo de uma NOVA evolução em localStorage a cada
+  // alteração (inclui ditado por voz). Sobrevive ao refresh da página no celular;
+  // só se perde no logout. Escopo: modo de criação (não edição/visualização).
+  const rascunhoKey = `s2vet_ev_draft_${animalId}`;
+  const rascunhoRestauradoAnimal = useRef<number | null>(null);
+
+  // Restaura o rascunho ao montar / trocar de animal (antes de liberar o autosave).
+  useEffect(() => {
+    if (loadingPerms) return;
+    if (rascunhoRestauradoAnimal.current === animalId) return;
+    // Fluxo de editar/visualizar via prop tem prioridade — não restaura, mas
+    // libera o autosave para as próximas evoluções novas deste animal.
+    if (!editItemId && !openItemId) {
+      const raw = localStorage.getItem(rascunhoKey);
+      if (raw) {
+        try {
+          const d = JSON.parse(raw) as { especialidade?: string; texto?: string; agendamentoId?: number | null };
+          if (d.texto && d.texto.trim()) {
+            setForm({ especialidade: d.especialidade || 'Clínico', texto: d.texto, status: 'EM_ANDAMENTO' });
+            if (d.agendamentoId) setAgendamentoSelecionadoId(d.agendamentoId);
+            setShowModal(true);
+          }
+        } catch { /* rascunho corrompido — ignora */ }
+      }
+    }
+    rascunhoRestauradoAnimal.current = animalId;
+  }, [loadingPerms, animalId, editItemId, openItemId, rascunhoKey]);
+
+  // Persiste o rascunho a cada alteração — só após a restauração ter rodado.
+  useEffect(() => {
+    if (rascunhoRestauradoAnimal.current !== animalId) return;
+    if (editingEv || formLeitura) return; // só rascunho de nova evolução
+    if (form.texto.trim()) {
+      localStorage.setItem(rascunhoKey, JSON.stringify({
+        especialidade: form.especialidade,
+        texto:         form.texto,
+        agendamentoId: agendamentoSelecionadoId,
+      }));
+    } else {
+      localStorage.removeItem(rascunhoKey);
+    }
+  }, [form, editingEv, formLeitura, agendamentoSelecionadoId, animalId, rascunhoKey]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -1100,6 +1160,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           atendimentoNumero: criada.atendimentoNumero ?? null,
         });
         localStorage.removeItem(`s2vet_ag_${animalId}`);
+        localStorage.removeItem(rascunhoKey);
         toast.success('Evolução registrada');
       }
       if (arquivosModal.length > 0) await uploadMidias(evolucaoId, arquivosModal);
@@ -1144,6 +1205,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         });
         evolucaoId = createRes.data.dados?.id as number | undefined;
         localStorage.removeItem(`s2vet_ag_${animalId}`);
+        localStorage.removeItem(rascunhoKey);
         onEvolucaoChange?.(null);
       }
 
@@ -1343,21 +1405,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         )}
 
         <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
-          className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500 flex-shrink-0">
+          className="hidden md:block border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500 flex-shrink-0">
           {LIMIT_OPTIONS.map(l => <option key={l} value={l}>{l} por página</option>)}
         </select>
 
-        <div className="relative flex-1 max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Buscar nas evoluções..."
-            value={busca}
-            onChange={e => { setBusca(e.target.value); setPage(1); }}
-            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white transition-colors" />
-        </div>
-
-        <div className="flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
+        <div className="hidden md:flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
           <div className="flex flex-col px-2 py-1 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Inicial</span>
             <input
@@ -1379,7 +1431,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
+        <div className="hidden md:flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
           <User size={14} className="text-gray-400 flex-shrink-0" />
           <select value={filtroResponsavel}
             onChange={e => { setFiltroResponsavel(e.target.value); setPage(1); }}
@@ -1389,7 +1441,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           </select>
         </div>
 
-        <div className="flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
+        <div className="hidden md:flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
           <Filter size={14} className="text-gray-400 flex-shrink-0" />
           <select value={filterStatus}
             onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
@@ -1401,8 +1453,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
         {filtrosAtivos && (
           <button
-            onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); setFiltroResponsavel(''); setFilterStatus(''); setBusca(''); setPage(1); }}
-            className="px-3 py-2 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-xl bg-white transition-colors flex-shrink-0">
+            onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); setFiltroResponsavel(''); setFilterStatus(''); setPage(1); }}
+            className="hidden md:block px-3 py-2 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-xl bg-white transition-colors flex-shrink-0">
             Limpar ×
           </button>
         )}
@@ -1445,7 +1497,114 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           <p className="text-sm text-gray-400">Nenhuma evolução encontrada</p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
+          {/* Mobile — cards no padrão do histórico de prescrição (cabe na tela, sem rolagem lateral) */}
+          <div className="md:hidden divide-y divide-gray-50">
+            {evolucoes.map(ev => {
+              const emAndamento = ev.status === 'EM_ANDAMENTO';
+              const eProprioAutor = ev.veterinarioId === userId;
+              const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
+              const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
+              const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
+              const podeEditarEsta  = isFornecedor
+                ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
+                : (nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' || (nivelEditar  === 'PROPRIO' && eProprioAutor));
+              const podeExcluir    = emAndamento && (isFornecedor
+                ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
+                : (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' || (nivelDeletar === 'PROPRIO' && eProprioAutor)));
+              const podeFinalizarEsta = emAndamento && (isFornecedor
+                ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
+                : (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' || (nivelFinalizar === 'PROPRIO' && eProprioAutor)));
+              const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
+              const podeAlterar    = (emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
+              const podeCancelarFinalizada = ev.status === 'FINALIZADA' && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId));
+              const tituloDisplay = ev.titulo
+                ? ev.titulo
+                : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
+              const temMidia = (ev.midias ?? []).length > 0;
+
+              return (
+                <div key={ev.id} className={`px-4 py-3 ${!ev.aprovado ? 'bg-amber-50/40' : ''}`}>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <button onClick={() => setViewingEv(ev)}
+                      className="flex items-center gap-1.5 min-w-0 text-sm font-semibold text-emerald-700 hover:underline text-left">
+                      <span className="truncate">{tituloDisplay}</span>
+                      {temMidia && <Paperclip size={11} className="text-gray-400 flex-shrink-0" />}
+                    </button>
+                    <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_CONFIG[ev.status]?.cls ?? 'bg-gray-100 text-gray-600'}`}>
+                      {STATUS_CONFIG[ev.status]?.label ?? ev.status}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-gray-500">
+                    {ev.veterinario?.fullName ?? '—'}
+                    <span className="text-gray-300"> · </span>
+                    <span className="text-[11px] text-gray-400">{ev.especialidade}</span>
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    {formatarDataHora(ev.dataInicio)}{ev.dataFim ? ` — ${formatarData(ev.dataFim)}` : ''}
+                  </p>
+                  {!ev.aprovado && (
+                    <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium mt-1">
+                      <AlertTriangle size={9} /> Pendente
+                    </span>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {podeAprovar && (
+                      <button onClick={() => handleAprovar(ev.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-amber-600 rounded-lg text-xs hover:bg-amber-50 transition-colors">
+                        <CheckCircle2 size={11} /> Aprovar
+                      </button>
+                    )}
+                    <button onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      <Eye size={11} /> Ver
+                    </button>
+                    <button onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                      <MessageCircle size={11} /> WhatsApp
+                    </button>
+                    <button onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                      <Mail size={11} /> E-mail
+                    </button>
+                    {podeAlterar && (
+                      <button onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                        <Pencil size={11} /> Alterar
+                      </button>
+                    )}
+                    {podeFinalizarEsta && (
+                      <button onClick={() => handleFinalizarDireto(ev)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                        <CheckSquare size={11} /> Finalizar
+                      </button>
+                    )}
+                    {podeExcluir && (
+                      <button onClick={() => setDeletingEv(ev)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                        <Trash2 size={11} /> Apagar
+                      </button>
+                    )}
+                    {podeCancelarFinalizada && (
+                      <button onClick={() => setCancelandoEv(ev)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                        <Ban size={11} /> Cancelar
+                      </button>
+                    )}
+                    <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors disabled:opacity-50">
+                      {imprimindoId === ev.id ? <Loader2 size={11} className="animate-spin" /> : <Printer size={11} />} Imprimir
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop — tabela */}
+          <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
@@ -1593,6 +1752,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               })}
             </tbody>
           </table>
+          </div>
 
           {totalPaginas > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
@@ -1610,7 +1770,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Modais */}

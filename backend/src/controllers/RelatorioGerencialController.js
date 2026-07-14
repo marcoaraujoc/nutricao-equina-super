@@ -29,6 +29,47 @@ function mesReferenciaAtual() {
   return new Date().toISOString().slice(0, 7); // "2026-07"
 }
 
+// ── Período (Dia/Mês/Ano) ──────────────────────────────────────────────────────
+// Lê os query params `granularidade` (dia|mes|ano, default 'mes') e `data`
+// (YYYY-MM-DD, default hoje) e deriva a janela [inicio, fim] que todos os
+// relatórios respeitam. `refDate` é usado como "agora" em cálculos de idade;
+// `mesRef` (YYYY-MM) é usado por métricas que operam em mês de referência.
+function resolverPeriodo(req) {
+  const granRaw = String(req.query?.granularidade ?? 'mes').toLowerCase();
+  const granularidade = ['dia', 'semana', 'mes', 'ano'].includes(granRaw) ? granRaw : 'mes';
+
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(req.query?.data ?? ''));
+  const refDate = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date();
+  const y = refDate.getFullYear(), mo = refDate.getMonth(), d = refDate.getDate();
+
+  let inicio, fim;
+  if (granularidade === 'dia') {
+    inicio = new Date(y, mo, d, 0, 0, 0, 0);
+    fim    = new Date(y, mo, d, 23, 59, 59, 999);
+  } else if (granularidade === 'semana') {
+    // Semana de domingo a sábado (padrão do calendário BR)
+    const diaSemana = refDate.getDay(); // 0=Dom … 6=Sáb
+    inicio = new Date(y, mo, d - diaSemana, 0, 0, 0, 0);
+    fim    = new Date(y, mo, d - diaSemana + 6, 23, 59, 59, 999);
+  } else if (granularidade === 'ano') {
+    inicio = new Date(y, 0, 1, 0, 0, 0, 0);
+    fim    = new Date(y, 11, 31, 23, 59, 59, 999);
+  } else { // mes
+    inicio = new Date(y, mo, 1, 0, 0, 0, 0);
+    fim    = new Date(y, mo + 1, 0, 23, 59, 59, 999);
+  }
+  const mesRef = `${y}-${String(mo + 1).padStart(2, '0')}`;
+  return { granularidade, inicio, fim, mesRef, refDate };
+}
+
+/** Filtro Prisma para o campo `mesReferencia` de Fatura conforme o período. */
+function mesRefWhereDoPeriodo(periodo) {
+  if (periodo.granularidade === 'ano') return { startsWith: `${periodo.mesRef.slice(0, 4)}-` };
+  return periodo.mesRef; // 'mes' | 'dia' → mês exato
+}
+
 /** Distância em meses entre "YYYY-MM" e o mês atual (ex: 2026-05 → 2026-07 = 2). */
 function mesesDesde(mesRef, mesAtual) {
   if (!mesRef) return 0;
@@ -49,10 +90,11 @@ function mapaParaLista(mapa, chaveNome, valorNome) {
 
 // ── Blocos ────────────────────────────────────────────────────────────────────
 
-async function blocoEmergencias(propWhere) {
+async function blocoEmergencias(propWhere, periodo) {
   const itens = await prisma.faturaItem.findMany({
     where: {
       descricao: { contains: 'emergen', mode: 'insensitive' },
+      criadoEm:  { gte: periodo.inicio, lte: periodo.fim },
       fatura:    { status: { not: 'CANCELADA' }, ...propWhere },
     },
     select: {
@@ -77,9 +119,12 @@ async function blocoEmergencias(propWhere) {
   };
 }
 
-async function blocoReceitaPorLocalidade(propWhere) {
+async function blocoReceitaPorLocalidade(propWhere, periodo) {
   const itens = await prisma.faturaItem.findMany({
-    where:  { fatura: { status: { in: ['ABERTA', 'FECHADA', 'PAGA'] }, ...propWhere } },
+    where:  {
+      criadoEm: { gte: periodo.inicio, lte: periodo.fim },
+      fatura:   { status: { in: ['ABERTA', 'FECHADA', 'PAGA'] }, ...propWhere },
+    },
     select: {
       valor: true, quantidade: true,
       fatura: { select: { status: true } },
@@ -138,10 +183,10 @@ async function blocoDevedores(propWhere, mesAtual) {
     .sort((a, b) => b.mesesEmAtraso - a.mesesEmAtraso || b.totalDevido - a.totalDevido);
 }
 
-async function blocoMelhoresPagadores(propWhere, devedores) {
+async function blocoMelhoresPagadores(propWhere, devedores, periodo) {
   const grupos = await prisma.fatura.groupBy({
     by:      ['proprietarioId'],
-    where:   { status: 'PAGA', proprietarioId: { not: null }, ...propWhere },
+    where:   { status: 'PAGA', proprietarioId: { not: null }, mesReferencia: mesRefWhereDoPeriodo(periodo), ...propWhere },
     _sum:    { total: true },
     _count:  { _all: true },
     orderBy: { _sum: { total: 'desc' } },
@@ -183,8 +228,8 @@ async function carregarAnimaisComUltimoAtendimento(animalWhere) {
   });
 }
 
-function blocoSemAtendimento(animais) {
-  const agora = Date.now();
+function blocoSemAtendimento(animais, refDate) {
+  const agora = (refDate instanceof Date ? refDate : new Date()).getTime();
   const lista = [];
   for (const a of animais) {
     const ultimo = a.evolucoes[0]?.dataInicio ?? null;
@@ -219,8 +264,12 @@ function blocoAnimaisPorLocalizacao(animais) {
   return mapaParaLista(porLocal, 'localizacao', 'quantidade');
 }
 
-async function blocoFaturasCorrigidas(propWhere) {
-  const where = { qtdCorrecoes: { gt: 0 }, ...propWhere };
+async function blocoFaturasCorrigidas(propWhere, periodo) {
+  const where = {
+    qtdCorrecoes:     { gt: 0 },
+    ultimaCorrecaoEm: { gte: periodo.inicio, lte: periodo.fim },
+    ...propWhere,
+  };
   const [total, faturas] = await Promise.all([
     prisma.fatura.count({ where }),
     prisma.fatura.findMany({
@@ -248,13 +297,13 @@ async function blocoFaturasCorrigidas(propWhere) {
   };
 }
 
-async function blocoEvolucoesEditadas(empresaId) {
+async function blocoEvolucoesEditadas(empresaId, periodo) {
   const evolucoes = await prisma.evolucaoClinica.findMany({
     where: {
       ativo:           true,
       status:          'FINALIZADA',
       dataFim:         { not: null },
-      dataModificacao: { not: null },
+      dataModificacao: { gte: periodo.inicio, lte: periodo.fim },
       ...(empresaId ? { animal: { empresaId } } : {}),
     },
     select: {
@@ -313,7 +362,7 @@ async function resolverEscopo(req) {
 
 const gerencial = async (req, res) => {
   try {
-    const mesAtual = mesReferenciaAtual();
+    const periodo = resolverPeriodo(req);
     const { empresaId, animalWhere, propWhere } = await resolverEscopo(req);
 
     const [
@@ -324,15 +373,15 @@ const gerencial = async (req, res) => {
       faturasCorrigidas,
       evolucoesEditadas,
     ] = await Promise.all([
-      blocoEmergencias(propWhere),
-      blocoReceitaPorLocalidade(propWhere),
-      blocoDevedores(propWhere, mesAtual),
+      blocoEmergencias(propWhere, periodo),
+      blocoReceitaPorLocalidade(propWhere, periodo),
+      blocoDevedores(propWhere, periodo.mesRef),
       carregarAnimaisComUltimoAtendimento(animalWhere),
-      blocoFaturasCorrigidas(propWhere),
-      blocoEvolucoesEditadas(empresaId),
+      blocoFaturasCorrigidas(propWhere, periodo),
+      blocoEvolucoesEditadas(empresaId, periodo),
     ]);
 
-    const melhoresPagadores = await blocoMelhoresPagadores(propWhere, devedores);
+    const melhoresPagadores = await blocoMelhoresPagadores(propWhere, devedores, periodo);
 
     return res.json({
       dados: {
@@ -340,7 +389,7 @@ const gerencial = async (req, res) => {
         receitaPorLocalidade,
         devedores,
         melhoresPagadores,
-        semAtendimento:        blocoSemAtendimento(animais),
+        semAtendimento:        blocoSemAtendimento(animais, periodo.refDate),
         animaisPorLocalizacao: blocoAnimaisPorLocalizacao(animais),
         faturasCorrigidas,
         evolucoesEditadas,
@@ -356,6 +405,8 @@ module.exports = {
   gerencial,
   // Helpers reutilizados por RelatoriosController e DashboardController
   resolverEscopo,
+  resolverPeriodo,
+  mesRefWhereDoPeriodo,
   mesReferenciaAtual,
   mesesDesde,
   nomeLocalizacao,

@@ -8,7 +8,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
-import { CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Info, User } from 'lucide-react';
 
 type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
 
@@ -348,14 +348,17 @@ export default function CadastroPessoal() {
 
       <BotaoVoltar className="mb-4" />
 
-      <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
-
-        <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900 mb-1">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-1">
+        <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
+          <User size={22} className="text-emerald-600" />
           Cadastro Pessoal
         </h1>
-        <p className="text-gray-500 mb-6 sm:mb-8 text-sm sm:text-base">
-          Complete suas informações para continuar
-        </p>
+      </div>
+      <p className="text-gray-500 mb-6 text-sm sm:text-base">
+        Complete suas informações para continuar
+      </p>
+
+      <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
 
         {/* noValidate desativa o popup do browser — usamos toast no lugar */}
         <form onSubmit={handleSubmit} noValidate className="space-y-5">

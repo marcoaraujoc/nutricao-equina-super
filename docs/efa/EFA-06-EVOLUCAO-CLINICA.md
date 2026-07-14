@@ -1,6 +1,10 @@
 # EFA-06 — Atendimento: Evolução Clínica (Prontuário)
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
+>
+> **Atualização 2026-07-14:** rascunho automático da evolução **nova** em localStorage —
+> salvo a cada alteração (inclui o ditado) e restaurado após refresh de página (comum no
+> celular); só se perde no logout, limpo ao salvar/finalizar.
 > A Evolução é o eixo do atendimento — Prescrição (EFA-07), Vacinas/Exames/
 > Encaminhamentos (EFA-08) vinculam-se a ela.
 

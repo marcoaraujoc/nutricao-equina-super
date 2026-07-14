@@ -11,10 +11,18 @@ router.get('/proprietarios',                   authenticate, checkPermission('fi
 router.get('/proprietario/:proprietarioId',    authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), Ctrl.obterFaturaProprietario);
 router.get('/proprietario/:proprietarioId/logo-empresa', authenticate, checkPermission('financeiro.faturas.ler', 'LEITURA'), Ctrl.obterLogoEmpresaProprietario);
 
+// Catálogo de itens frequentes (reutilizáveis em novas faturas)
+router.get('/catalogo-itens',        authenticate, checkPermission('financeiro.faturas.ler',   'LEITURA'), Ctrl.listarCatalogo);
+router.post('/catalogo-itens',       authenticate, checkPermission('financeiro.faturas.criar', 'PROPRIO'), Ctrl.criarItemCatalogo);
+router.delete('/catalogo-itens/:id', authenticate, checkPermission('financeiro.faturas.criar', 'PROPRIO'), Ctrl.excluirItemCatalogo);
+
 // Itens
 router.post('/:faturaId/itens',  authenticate, checkPermission('financeiro.faturas.criar',  'PROPRIO'), Ctrl.adicionarItem);
 router.put('/itens/:itemId',     authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.atualizarItem);
 router.delete('/itens/:itemId',  authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'),  Ctrl.removerItem);
+
+// Fechamento em lote — fecha todas as faturas ABERTAS de um mês (IDs no body)
+router.post('/fechar-lote', authenticate, checkPermission('financeiro.faturas.fechar', 'EQUIPE'), Ctrl.fecharFaturasLote);
 
 // Fechamento de fatura (adiciona assistência mensal + status FECHADA)
 router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharFatura);

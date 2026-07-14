@@ -417,6 +417,112 @@ const FaturaController = {
     }
   },
 
+  // POST /fechar-lote  { faturaIds: number[] }
+  // Fecha em lote as faturas ABERTAS informadas (IDs vêm da lista já escopada por
+  // listarProprietarios). Aplica a mesma regra de fecharFatura (assistência mensal
+  // + status FECHADA). Ignora IDs inexistentes, não-ABERTA ou de outra empresa.
+  fecharFaturasLote: async (req, res) => {
+    const { faturaIds } = req.body;
+    if (!Array.isArray(faturaIds) || faturaIds.length === 0) {
+      return res.status(400).json({ error: 'Informe as faturas a fechar' });
+    }
+    try {
+      const fechadas = [];
+      for (const rawId of faturaIds) {
+        const id = Number(rawId);
+        if (!Number.isInteger(id)) continue;
+        const fatura = await prisma.fatura.findUnique({
+          where:   { id },
+          include: { proprietario: { select: { id: true, fullName: true, phone: true, email: true, empresaId: true, valorAssistencia: true, mensalista: true } } },
+        });
+        if (!fatura || fatura.status !== 'ABERTA') continue;
+        // Guarda de escopo: não fecha fatura de proprietário de outra empresa
+        if (req.empresaId && fatura.proprietario?.empresaId && fatura.proprietario.empresaId !== req.empresaId) continue;
+
+        await adicionarAssistenciaMensal(id, fatura.proprietario, req.user.id);
+        const atualizada = await prisma.fatura.update({
+          where:  { id },
+          data:   { status: 'FECHADA' },
+          select: { id: true, total: true, mesReferencia: true },
+        });
+        fechadas.push({
+          faturaId:      atualizada.id,
+          total:         atualizada.total,
+          mesReferencia: atualizada.mesReferencia,
+          proprietario:  {
+            id:       fatura.proprietario.id,
+            fullName: fatura.proprietario.fullName,
+            phone:    fatura.proprietario.phone,
+            email:    fatura.proprietario.email,
+          },
+        });
+      }
+      res.json({ dados: { fechadas, total: fechadas.length } });
+    } catch (err) {
+      console.error('Erro ao fechar faturas em lote:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
+  // GET /catalogo-itens — itens frequentes da empresa (dropdown de nova fatura)
+  listarCatalogo: async (req, res) => {
+    try {
+      const empresaId = req.empresaId ?? null;
+      const itens = await prisma.faturaItemCatalogo.findMany({
+        where:   { ativo: true, OR: [{ empresaId }, { empresaId: null }] },
+        orderBy: { descricao: 'asc' },
+        select:  { id: true, tipo: true, descricao: true, valor: true },
+      });
+      res.json({ dados: itens });
+    } catch (err) {
+      console.error('Erro ao listar catálogo de itens:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
+  // POST /catalogo-itens { tipo, descricao, valor } — cria item frequente
+  criarItemCatalogo: async (req, res) => {
+    const { tipo, descricao, valor } = req.body;
+    if (!descricao || !String(descricao).trim()) {
+      return res.status(400).json({ error: 'Informe a descrição do item' });
+    }
+    const tiposValidos = ['ASSISTENCIA', 'MEDICAMENTO', 'PROCEDIMENTO'];
+    const tipoFinal = tiposValidos.includes(tipo) ? tipo : 'ASSISTENCIA';
+    try {
+      const item = await prisma.faturaItemCatalogo.create({
+        data: {
+          empresaId:   req.empresaId ?? null,
+          tipo:        tipoFinal,
+          descricao:   String(descricao).trim(),
+          valor:       Number(valor) || 0,
+          criadoPorId: req.user.id,
+        },
+        select: { id: true, tipo: true, descricao: true, valor: true },
+      });
+      res.status(201).json({ dados: item });
+    } catch (err) {
+      console.error('Erro ao criar item de catálogo:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
+  // DELETE /catalogo-itens/:id — remove item frequente do próprio escopo
+  excluirItemCatalogo: async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const item = await prisma.faturaItemCatalogo.findUnique({ where: { id } });
+      if (!item) return res.status(404).json({ error: 'Item não encontrado' });
+      if (req.empresaId && item.empresaId && item.empresaId !== req.empresaId) {
+        return res.status(403).json({ error: 'Sem permissão' });
+      }
+      await prisma.faturaItemCatalogo.delete({ where: { id } });
+      res.json({ sucesso: true });
+    } catch (err) {
+      console.error('Erro ao excluir item de catálogo:', err);
+      res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
   // Legado — mantido para compatibilidade
   obterFaturaAberta: async (req, res) => {
     const { animalId } = req.params;

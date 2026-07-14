@@ -100,8 +100,30 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
         />
       </div>
 
-      {/* Info — 2 linhas fixas com 5 colunas cada no desktop */}
-      <div className="flex flex-col flex-1 min-w-0 gap-y-3">
+      {/* Info MOBILE (< md): nome completo na 1ª linha; Idade, Peso e Baia na 2ª */}
+      <div className="flex md:hidden flex-col flex-1 min-w-0 gap-y-3">
+        <div>
+          <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Nome</span>
+          <span className="text-sm text-gray-900 block">{animal.nome}</span>
+        </div>
+        <div className="grid grid-cols-3 gap-x-4 gap-y-2">
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Idade</span>
+            <span className="text-sm text-gray-900 block">{idade}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Peso</span>
+            <span className="text-sm text-gray-900 block">{animal.peso != null ? `${animal.peso} kg` : '-'}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Baia</span>
+            <span className="text-sm text-gray-900 truncate block">{animal.baia ?? '-'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Info DESKTOP (>= md): 2 linhas fixas com 5 colunas cada */}
+      <div className="hidden md:flex flex-col flex-1 min-w-0 gap-y-3">
 
         {/* Linha 1: identificação */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-2">

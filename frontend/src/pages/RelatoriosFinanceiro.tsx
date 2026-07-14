@@ -7,14 +7,16 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
+import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import {
   Card, Tabela, StatTiles, RankBars, EmptyState,
   CarregandoRelatorio, ErroRelatorio, formatBRL, formatMesRef,
 } from '../components/relatorios/RelatorioUI';
 
 interface Financeiro {
-  faturamento: { dia: number; mes: number; ano: number };
-  ticketMedio: { porAtendimento: number; porCliente: number; atendimentosMes: number; clientesMes: number };
+  faturamento: { periodo: number; ano: number; granularidade: string };
+  ticketMedio: { porAtendimento: number; porCliente: number; atendimentosPeriodo: number; clientesPeriodo: number };
   porEspecialidade: { especialidade: string; receita: number }[];
   porCategoria:     { categoria: string;     receita: number }[];
   contasReceber:  number;
@@ -28,6 +30,7 @@ interface FluxoItem { mes: string; valor: number; tipo: 'realizado' | 'projetado
 export default function RelatoriosFinanceiro() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeVer = isGestor || podeExecutar('relatorios.gerencial.ler');
+  const { granularidade, data: dataRef } = usePeriodo();
 
   const [dados, setDados] = useState<Financeiro | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -36,11 +39,11 @@ export default function RelatoriosFinanceiro() {
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
-    api.get('/relatorios/financeiro')
+    api.get('/relatorios/financeiro', { params: periodoParams(granularidade, dataRef) })
       .then(res => { if (!res.data) return; setDados(res.data.dados as Financeiro); })
       .catch(() => setErro(true))
       .finally(() => setCarregando(false));
-  }, [loadingPerms, podeVer]);
+  }, [loadingPerms, podeVer, granularidade, dataRef]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -66,20 +69,21 @@ export default function RelatoriosFinanceiro() {
         </div>
       </div>
 
+      <PeriodoSelector />
+
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
 
           {/* Faturamento */}
-          <StatTiles cols={3} tiles={[
-            { label: 'Faturamento do dia',  valor: formatBRL(dados.faturamento.dia) },
-            { label: 'Faturamento do mês',  valor: formatBRL(dados.faturamento.mes) },
-            { label: 'Acumulado do ano',    valor: formatBRL(dados.faturamento.ano), tom: 'emerald' },
+          <StatTiles cols={2} tiles={[
+            { label: 'Faturamento no período', valor: formatBRL(dados.faturamento.periodo) },
+            { label: 'Acumulado do ano',       valor: formatBRL(dados.faturamento.ano), tom: 'emerald' },
           ]} />
 
           {/* Ticket médio + recebíveis */}
           <StatTiles tiles={[
-            { label: 'Ticket médio / atendimento', valor: formatBRL(dados.ticketMedio.porAtendimento), hint: `${dados.ticketMedio.atendimentosMes} atendimentos no mês` },
-            { label: 'Ticket médio / cliente',     valor: formatBRL(dados.ticketMedio.porCliente),     hint: `${dados.ticketMedio.clientesMes} clientes no mês` },
+            { label: 'Ticket médio / atendimento', valor: formatBRL(dados.ticketMedio.porAtendimento), hint: `${dados.ticketMedio.atendimentosPeriodo} atendimentos no período` },
+            { label: 'Ticket médio / cliente',     valor: formatBRL(dados.ticketMedio.porCliente),     hint: `${dados.ticketMedio.clientesPeriodo} clientes no período` },
             { label: 'Contas a receber',           valor: formatBRL(dados.contasReceber),              tom: 'amber' },
             { label: 'Inadimplência',              valor: `${dados.inadimplencia.toFixed(1)}%`,        tom: dados.inadimplencia >= 20 ? 'red' : 'amber', hint: formatBRL(dados.contasVencidas) + ' vencido' },
           ]} />
@@ -87,21 +91,21 @@ export default function RelatoriosFinanceiro() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
             {/* Receita por categoria */}
             <Card icon={<Layers size={16} />} titulo="Receita por categoria"
-              subtitulo="Consultas · Cirurgias · Vacinas · Exames · Farmácia (mês atual)">
+              subtitulo="Consultas · Cirurgias · Vacinas · Exames · Farmácia (no período)">
               <RankBars formato="brl" itens={dados.porCategoria.map(c => ({ nome: c.categoria, valor: c.receita }))} />
             </Card>
 
             {/* Receita por especialidade */}
             <Card icon={<Stethoscope size={16} />} titulo="Receita por especialidade"
-              subtitulo="Pela especialidade da evolução de origem do item (mês atual)">
+              subtitulo="Pela especialidade da evolução de origem do item (no período)">
               <RankBars formato="brl" itens={dados.porEspecialidade.map(e => ({ nome: e.especialidade, valor: e.receita }))} />
             </Card>
 
             {/* Lucro bruto estimado */}
             <Card icon={<TrendingUp size={16} />} titulo="Lucro bruto estimado"
-              subtitulo="Receita do mês − custo dos produtos consumidos (estimativa)">
+              subtitulo="Receita do período − custo dos produtos consumidos (estimativa)">
               <div className="px-5 py-4 space-y-2 text-sm">
-                <Linha label="Receita do mês"        valor={formatBRL(dados.lucroBruto.receita)} />
+                <Linha label="Receita do período"    valor={formatBRL(dados.lucroBruto.receita)} />
                 <Linha label="Custo dos produtos"    valor={'− ' + formatBRL(dados.lucroBruto.custoProdutos)} tom="text-red-600" />
                 <div className="border-t border-gray-100 pt-2 flex items-center justify-between">
                   <span className="font-semibold text-gray-700">Lucro bruto</span>

@@ -11,9 +11,10 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import {
   DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
-  CheckCircle2, AlertCircle, Ban, Share2, Download, Printer, ChevronDown,
+  CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/FaturaExport';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,10 @@ interface ProprietarioItem {
   faturaPaga?:    FaturaResumo | null;
 }
 
+interface CatalogoItem {
+  id: number; tipo: string; descricao: string; valor: number;
+}
+
 // ─── Catálogo de itens comuns ─────────────────────────────────────────────────
 
 const CATALOGO: Array<{ label: string; tipo: ItemTipo; descricao: string; valor: number }> = [
@@ -81,11 +86,36 @@ const TIPO_COR: Record<string, string> = {
   PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
 };
 
-function StatusBadge({ status }: { status: FaturaStatus }) {
-  if (status === 'PAGA')      return <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full"><CheckCircle2 size={11}/> PAGO</span>;
-  if (status === 'CANCELADA') return <span className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full"><Ban size={11}/> CANCELADA</span>;
-  if (status === 'FECHADA')   return <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full"><X size={11}/> FECHADA</span>;
-  return <span className="flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full"><AlertCircle size={11}/> ABERTO</span>;
+// WhatsApp exige número internacional (Brasil: 55 + DDD + número).
+function foneIntl(phone?: string): string {
+  const d = (phone ?? '').replace(/\D/g, '');
+  if (!d) return '';
+  return d.startsWith('55') ? d : `55${d}`;
+}
+
+function montarTextoFatura(fatura: Fatura, prop: ProprietarioItem): string {
+  return [
+    `*Fatura — ${prop.fullName}*`,
+    fatura.mesReferencia ? `Mês: ${formatMes(fatura.mesReferencia)}` : '',
+    `Ref: INV-${String(fatura.id).padStart(3, '0')}`,
+    `Total: ${formatBRL(fatura.total)}`,
+  ].filter(Boolean).join('\n');
+}
+
+// Mês anterior no formato "YYYY-MM" (padrão do fechamento em lote)
+function mesAnterior(): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 7);
+}
+
+function montarTextoFaturaLote(nome: string, mesRef: string | undefined, faturaId: number, total: number): string {
+  return [
+    `*Fatura — ${nome}*`,
+    mesRef ? `Mês: ${formatMes(mesRef)}` : '',
+    `Ref: INV-${String(faturaId).padStart(3, '0')}`,
+    `Total: ${formatBRL(total)}`,
+  ].filter(Boolean).join('\n');
 }
 
 // ─── Linha de item editável ───────────────────────────────────────────────────
@@ -207,13 +237,15 @@ function ItemRow({
   }
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 group hover:bg-gray-50/60 rounded-xl transition-colors">
-      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
-        {item.tipo}
-      </span>
+    <div className="flex items-start gap-3 px-4 py-2.5 group hover:bg-gray-50/60 rounded-xl transition-colors">
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-800 truncate">{item.descricao}</p>
-        <p className="text-[10px] text-gray-400">
+        <div className="flex items-start gap-2 flex-wrap">
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 mt-0.5 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
+            {item.tipo}
+          </span>
+          <p className="text-sm text-gray-800 flex-1 min-w-0 break-words">{item.descricao}</p>
+        </div>
+        <p className="text-[10px] text-gray-400 mt-1">
           {item.criadoEm && (
             <span className="mr-2 font-medium text-gray-500">
               {new Date(item.criadoEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
@@ -222,21 +254,23 @@ function ItemRow({
           Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
         </p>
       </div>
-      <span className="text-sm font-semibold text-gray-700 flex-shrink-0 w-24 text-right">
-        {formatBRL(item.valor * item.quantidade)}
-      </span>
-      {canEdit && (
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-          <button onClick={() => setEditing(true)}
-            className="p-1 text-gray-400 hover:text-indigo-600 rounded-md transition-colors">
-            <Pencil size={12}/>
-          </button>
-          <button onClick={() => onDelete(item.id)}
-            className="p-1 text-gray-400 hover:text-red-500 rounded-md transition-colors">
-            <Trash2 size={12}/>
-          </button>
-        </div>
-      )}
+      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+        <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">
+          {formatBRL(item.valor * item.quantidade)}
+        </span>
+        {canEdit && (
+          <div className="flex gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+            <button onClick={() => setEditing(true)}
+              className="p-1 text-gray-400 hover:text-indigo-600 rounded-md transition-colors">
+              <Pencil size={12}/>
+            </button>
+            <button onClick={() => onDelete(item.id)}
+              className="p-1 text-gray-400 hover:text-red-500 rounded-md transition-colors">
+              <Trash2 size={12}/>
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -311,12 +345,20 @@ function PainelFatura({
 
   // Formulário de novo item
   const [novoCatIdx,        setNovoCatIdx]        = useState<string>('');
+  const [novoAnimalId,      setNovoAnimalId]      = useState<string>('');
   const [novoNome,          setNovoNome]          = useState('');
   const [novoTipo,          setNovoTipo]          = useState<ItemTipo>('ASSISTENCIA');
   const [novoQty,           setNovoQty]           = useState('1');
   const [novoValor,         setNovoValor]         = useState('0');
   const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
   const [lancando,          setLancando]          = useState(false);
+
+  // Catálogo de itens frequentes (persistidos por empresa)
+  const [catalogo,      setCatalogo]      = useState<CatalogoItem[]>([]);
+  const [showNovoFreq,  setShowNovoFreq]  = useState(false);
+  const [freqTipo,      setFreqTipo]      = useState<ItemTipo>('ASSISTENCIA');
+  const [freqDesc,      setFreqDesc]      = useState('');
+  const [salvandoFreq,  setSalvandoFreq]  = useState(false);
 
   const [itemParaExcluir, setItemParaExcluir] = useState<number | null>(null);
 
@@ -336,6 +378,14 @@ function PainelFatura({
   }, [prop.id, faturaId]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  const carregarCatalogo = useCallback(async () => {
+    try {
+      const r = await api.get('/clinica/faturas/catalogo-itens');
+      if (r.data) setCatalogo(r.data.dados ?? []);
+    } catch { /* silencioso */ }
+  }, []);
+  useEffect(() => { carregarCatalogo(); }, [carregarCatalogo]);
 
   // Remoção exige justificativa (registrada na Auditoria) — abre o modal padrão
   const handleDeleteItem = (itemId: number) => {
@@ -372,14 +422,43 @@ function PainelFatura({
     } catch { toast.error('Erro ao salvar item'); }
   };
 
+  // Itens fixos do código + itens frequentes salvos no backend
+  const frequentes = [
+    ...CATALOGO.map(c => ({ id: undefined as number | undefined, label: c.label, tipo: c.tipo, descricao: c.descricao, valor: c.valor })),
+    ...catalogo.map(c => ({ id: c.id, label: c.descricao, tipo: c.tipo as ItemTipo, descricao: c.descricao, valor: c.valor })),
+  ];
+
   const handleCatalogoChange = (idx: string) => {
+    // Opção especial do dropdown: abrir o cadastro de um novo item frequente
+    if (idx === '__novo__') { setShowNovoFreq(true); setNovoCatIdx(''); return; }
     setNovoCatIdx(idx);
     if (idx === '') { setNovoNome(''); return; }
-    const cat = CATALOGO[Number(idx)];
+    const cat = frequentes[Number(idx)];
+    if (!cat) return;
     setNovoNome(cat.descricao);
     setNovoTipo(cat.tipo);
     setNovoValor(String(cat.valor));
     setNovoValorDisplay(formatarValorFatura(cat.valor));
+  };
+
+  const salvarItemFrequente = async () => {
+    if (!podeLancar) { semPermissao('salvar item frequente'); return; }
+    if (!freqDesc.trim()) { toast.error('Informe a descrição do item'); return; }
+    setSalvandoFreq(true);
+    try {
+      await api.post('/clinica/faturas/catalogo-itens', { tipo: freqTipo, descricao: freqDesc.trim(), valor: 0 });
+      toast.success('Item frequente salvo');
+      setFreqDesc(''); setFreqTipo('ASSISTENCIA'); setShowNovoFreq(false);
+      carregarCatalogo();
+    } catch { toast.error('Erro ao salvar item'); }
+    finally { setSalvandoFreq(false); }
+  };
+
+  const excluirItemFrequente = async (id: number) => {
+    try {
+      await api.delete(`/clinica/faturas/catalogo-itens/${id}`);
+      carregarCatalogo();
+    } catch { toast.error('Erro ao excluir item'); }
   };
 
   const formatarValorFatura = (v: number) =>
@@ -404,13 +483,14 @@ function PainelFatura({
         descricao:  novoNome.trim(),
         valor:      Number(novoValor),
         quantidade: Number(novoQty),
+        animalId:   novoAnimalId ? Number(novoAnimalId) : undefined,
       });
       setFatura(prev => prev ? {
         ...prev,
         total: r.data.totalFatura,
         itens: [...prev.itens, r.data.dados],
       } : prev);
-      setNovoNome(''); setNovoCatIdx(''); setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
+      setNovoNome(''); setNovoCatIdx(''); setNovoAnimalId(''); setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
       toast.success('Item lançado');
     } catch { toast.error('Erro ao lançar item'); }
     finally { setLancando(false); }
@@ -470,16 +550,15 @@ function PainelFatura({
   if (!fatura) return null;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
+    <div className="flex-1 flex flex-col min-h-0 lg:overflow-hidden min-w-0">
       {/* Header verde */}
       <div className="bg-emerald-600 rounded-2xl px-5 py-4 mb-4 flex-shrink-0">
         {/* Linha 1: label à esquerda, ações à direita */}
-        <div className="flex items-center justify-between gap-3 mb-1">
+        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
           <p className="text-[10px] font-bold text-emerald-100 uppercase tracking-widest">
             Extrato Ativo do Cliente
           </p>
-          <div className="flex items-center gap-2">
-            <StatusBadge status={fatura.status}/>
+          <div className="flex items-center gap-2 flex-wrap">
             {canEdit && (
               <>
                 <button
@@ -516,35 +595,48 @@ function PainelFatura({
                 </button>
               </>
             )}
-            <button onClick={carregar} className="p-1.5 text-emerald-100 hover:text-white rounded-lg transition-colors">
-              <RefreshCw size={13}/>
+          </div>
+        </div>
+
+        {/* Identificação: nome, telefone e e-mail + enviar por WhatsApp/E-mail */}
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Receipt size={15} className="text-emerald-200 flex-shrink-0"/>
+              <h2 className="text-lg font-bold text-white break-words">{prop.fullName}</h2>
+            </div>
+            <div className="text-xs text-emerald-50 space-y-0.5">
+              {prop.phone && <p>Telefone: <span className="text-white font-medium">{prop.phone}</span></p>}
+              <p className="break-all">E-mail: <span className="text-white font-medium">{prop.email}</span></p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {prop.phone && (
+              <button onClick={() => abrirWhatsApp(montarTextoFatura(fatura, prop), foneIntl(prop.phone))}
+                title="Enviar por WhatsApp"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#20BA5A] text-white rounded-xl text-xs font-bold transition-colors">
+                <MessageCircle size={13}/> WhatsApp
+              </button>
+            )}
+            <button onClick={() => abrirEmail(`Fatura — ${prop.fullName}`, montarTextoFatura(fatura, prop), prop.email)}
+              title="Enviar por e-mail"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-xs font-bold transition-colors border border-white/20">
+              <Mail size={13}/> E-mail
             </button>
           </div>
         </div>
 
-        {/* Linha 2: nome */}
-        <div className="flex items-center gap-2 mb-1">
-          <Receipt size={15} className="text-emerald-200"/>
-          <h2 className="text-lg font-bold text-white">{prop.fullName}</h2>
-        </div>
-
-        {/* Linha 3: fone/email à esquerda, faturamento à direita */}
-        <div className="flex items-center justify-between gap-3 flex-wrap text-xs text-emerald-100">
-          <div className="flex items-center gap-3">
-            {prop.phone && <span>Fone: <span className="text-white font-medium">{prop.phone}</span></span>}
-            <span>· Email: <span className="text-white font-medium">{prop.email}</span></span>
-          </div>
-          <span>
-            Faturamento total do mês:{' '}
-            <span className="font-bold text-white">{formatMes(fatura.mesReferencia) || 'Mês atual'}</span>
-            {' · '}
-            <span className="font-mono">{invoiceRef}</span>
-          </span>
+        {/* Fatura do mês */}
+        <div className="mt-2.5 pt-2.5 border-t border-white/15 text-xs text-emerald-100 text-right">
+          Fatura Mês:{' '}
+          <span className="font-bold text-white">{formatMes(fatura.mesReferencia) || 'Mês atual'}</span>
+          {' · '}
+          <span className="font-mono">{invoiceRef}</span>
         </div>
       </div>
 
       {/* Barra de ações — Exportar e Compartilhar à direita */}
-      <div className="flex items-center justify-between mb-3 flex-shrink-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 flex-shrink-0">
         <div>
           <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
             Lançamentos Detalhados Separados por Animal
@@ -553,7 +645,7 @@ function PainelFatura({
             Cada animal possui seu prontuário financeiro isolado, integrado em um demonstrativo consolidado de cobrança único.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+        <div className="flex items-center gap-2 flex-shrink-0 sm:ml-4">
           <button
             onClick={handleShare}
             disabled={compartilhando}
@@ -605,7 +697,7 @@ function PainelFatura({
       />
 
       {/* Corpo da fatura */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4 pr-1 pb-4">
+      <div className="flex-1 lg:overflow-y-auto overflow-x-hidden space-y-4 pr-1 pb-4">
 
         {/* Assistência e serviços gerais (sem animal) — sempre primeiro */}
         {(itensPorAnimal['sem'] ?? []).length > 0 && (
@@ -727,11 +819,62 @@ function PainelFatura({
               <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
                 className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
                 <option value="">— Selecione um item —</option>
-                {CATALOGO.map((c, i) => (
-                  <option key={i} value={i}>{c.label}</option>
+                {frequentes.map((c, i) => (
+                  <option key={i} value={i}>{c.label}{c.valor ? ` — ${formatBRL(c.valor)}` : ''}</option>
+                ))}
+                <option value="__novo__">➕ Incluir novo item…</option>
+              </select>
+
+              {/* Formulário — novo item frequente (persistido para futuras faturas) */}
+              {showNovoFreq && (
+                <div className="mt-2 p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
+                  <div className="flex gap-2">
+                    <select value={freqTipo} onChange={e => setFreqTipo(e.target.value as ItemTipo)}
+                      className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:border-emerald-400">
+                      <option value="ASSISTENCIA">Assistência</option>
+                      <option value="MEDICAMENTO">Medicamento</option>
+                      <option value="PROCEDIMENTO">Procedimento</option>
+                    </select>
+                    <input value={freqDesc} onChange={e => setFreqDesc(e.target.value)}
+                      placeholder="Descrição do item"
+                      className="flex-1 min-w-0 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-emerald-400"/>
+                  </div>
+                  <div className="flex justify-end">
+                    <button onClick={salvarItemFrequente} disabled={salvandoFreq || !freqDesc.trim()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-colors">
+                      {salvandoFreq ? <Loader2 size={13} className="animate-spin"/> : <Check size={13}/>} Salvar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Itens frequentes salvos (com remover) */}
+              {catalogo.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {catalogo.map(c => (
+                    <span key={c.id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded-full pl-2.5 pr-1 py-0.5 text-gray-600">
+                      {c.descricao}
+                      <button onClick={() => excluirItemFrequente(c.id)} title="Remover item frequente"
+                        className="p-0.5 text-gray-300 hover:text-red-500 rounded-full">
+                        <X size={11}/>
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Animal — vincula a cobrança a um cavalo (aparece por cavalo/localização nos relatórios) */}
+            <div className="mb-3">
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Animal</label>
+              <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
+                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
+                <option value="">— Geral (sem animal) —</option>
+                {prop.animais.map(a => (
+                  <option key={a.id} value={a.id}>{a.nome}</option>
                 ))}
               </select>
             </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
               {/* Quantidade */}
               <div>
@@ -814,6 +957,119 @@ function CardProprietario({
   );
 }
 
+// ─── Modal — Fechar mês em lote + envio ──────────────────────────────────────
+
+interface FechadaLote {
+  faturaId: number; total: number; mesReferencia?: string;
+  proprietario: { id: number; fullName: string; phone?: string; email: string };
+}
+
+function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
+  proprietarios: ProprietarioItem[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [mes,       setMes]       = useState(mesAnterior());
+  const [fechando,  setFechando]  = useState(false);
+  const [resultado, setResultado] = useState<FechadaLote[] | null>(null);
+
+  const abertasDoMes = proprietarios.filter(p => p.faturaAtiva?.mesReferencia === mes);
+
+  const fechar = async () => {
+    const ids = abertasDoMes.map(p => p.faturaAtiva!.id);
+    if (ids.length === 0) { toast.error('Nenhuma fatura aberta neste mês'); return; }
+    setFechando(true);
+    try {
+      const r = await api.post('/clinica/faturas/fechar-lote', { faturaIds: ids });
+      setResultado((r.data?.dados?.fechadas ?? []) as FechadaLote[]);
+      toast.success(`${r.data?.dados?.total ?? 0} fatura(s) fechada(s)`);
+      onDone();
+    } catch { toast.error('Erro ao fechar faturas'); }
+    finally { setFechando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <h3 className="font-bold text-gray-900">Fechar mês em lote</h3>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18}/></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {!resultado ? (
+            <>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Mês de referência</label>
+                <input type="month" value={mes} onChange={e => setMes(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                <p className="text-sm font-semibold text-amber-800">
+                  {abertasDoMes.length} fatura(s) aberta(s) em {formatMes(mes) || mes}
+                </p>
+                {abertasDoMes.length > 0 && (
+                  <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+                    {abertasDoMes.map(p => (
+                      <li key={p.id} className="flex justify-between gap-2 text-xs text-amber-900">
+                        <span className="truncate">{p.fullName}</span>
+                        <span className="font-semibold flex-shrink-0">{formatBRL(p.faturaAtiva!.total)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <button onClick={fechar} disabled={fechando || abertasDoMes.length === 0}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl transition-colors">
+                {fechando ? <Loader2 size={15} className="animate-spin"/> : <Check size={15}/>}
+                Fechar {abertasDoMes.length} fatura(s) do mês
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                <p className="text-sm font-semibold text-emerald-800">
+                  {resultado.length} fatura(s) fechada(s). Envie para os proprietários:
+                </p>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                O WhatsApp abre uma conversa por vez — toque em cada proprietário para enviar a mensagem já pronta.
+              </p>
+              {resultado.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">Nenhuma fatura foi fechada.</p>
+              ) : (
+                <div className="space-y-2">
+                  {resultado.map(f => {
+                    const texto = montarTextoFaturaLote(f.proprietario.fullName, f.mesReferencia, f.faturaId, f.total);
+                    return (
+                      <div key={f.faturaId} className="flex items-center gap-2 border border-gray-100 rounded-xl px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{f.proprietario.fullName}</p>
+                          <p className="text-[11px] text-gray-400">{formatBRL(f.total)}</p>
+                        </div>
+                        {f.proprietario.phone && (
+                          <button onClick={() => abrirWhatsApp(texto, foneIntl(f.proprietario.phone))}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-[#25D366] hover:bg-[#20BA5A] text-white rounded-lg text-xs font-semibold transition-colors">
+                            <MessageCircle size={12}/> WhatsApp
+                          </button>
+                        )}
+                        <button onClick={() => abrirEmail(`Fatura — ${f.proprietario.fullName}`, texto, f.proprietario.email)}
+                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg text-xs font-semibold transition-colors">
+                          <Mail size={12}/> E-mail
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function Faturamento() {
@@ -827,6 +1083,11 @@ export default function Faturamento() {
   const [selecionado,   setSelecionado]   = useState<ProprietarioItem | null>(null);
   const [contadores,    setContadores]    = useState({ abertas: 0, fechadas: 0, pagas: 0 });
   const [filtroStatus,  setFiltroStatus]  = useState<FiltroTipo>('ABERTA');
+  const [dropdownAberto, setDropdownAberto] = useState(false);
+  const [showLote,       setShowLote]       = useState(false);
+  const seletorRef = useRef<HTMLDivElement>(null);
+
+  const podeFecharLote = isGestor || podeExecutar('financeiro.faturas.fechar');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -847,6 +1108,16 @@ export default function Faturamento() {
   }, []);
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
+
+  // Fecha o dropdown do seletor ao clicar fora
+  useEffect(() => {
+    if (!dropdownAberto) return;
+    const handler = (e: MouseEvent) => {
+      if (seletorRef.current && !seletorRef.current.contains(e.target as Node)) setDropdownAberto(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownAberto]);
 
   const filtrados = proprietarios.filter(p => {
     if (!busca) return true;
@@ -882,109 +1153,178 @@ export default function Faturamento() {
               <p className="text-sm text-gray-500">Faturas e contas conveniadas por proprietário</p>
             </div>
           </div>
-          {contadores.abertas > 0 && (
-            <span className="text-xs font-bold bg-amber-500 text-white px-2.5 py-0.5 rounded-full flex-shrink-0">
-              {contadores.abertas} {contadores.abertas === 1 ? 'fatura aberta' : 'faturas abertas'}
-            </span>
+          <div className="flex items-center gap-2 flex-wrap flex-shrink-0 ml-auto">
+            {contadores.abertas > 0 && (
+              <span className="text-sm font-semibold text-amber-600">
+                {contadores.abertas} {contadores.abertas === 1 ? 'fatura aberta' : 'faturas abertas'}
+              </span>
+            )}
+            {podeFecharLote && (
+              <button
+                onClick={() => setShowLote(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors">
+                <Check size={13}/> Fechar todas Faturas
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Mobile/tablet: seletor de proprietário (no desktop usa a lista à esquerda) */}
+        <div className="lg:hidden relative" ref={seletorRef}>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Proprietário</label>
+          <button
+            type="button"
+            onClick={() => setDropdownAberto(v => !v)}
+            className="w-full flex items-center justify-between gap-2 border border-gray-200 rounded-2xl px-4 py-2.5 text-sm bg-white hover:border-indigo-300 focus:outline-none focus:border-indigo-400 transition-colors">
+            {selecionado ? (
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                  {selecionado.fullName[0]?.toUpperCase()}
+                </span>
+                <span className="font-semibold text-gray-900 truncate">{selecionado.fullName}</span>
+              </span>
+            ) : (
+              <span className="text-gray-400">Selecione um proprietário…</span>
+            )}
+            <ChevronDown size={16} className={`text-gray-400 flex-shrink-0 transition-transform ${dropdownAberto ? 'rotate-180' : ''}`}/>
+          </button>
+
+          {dropdownAberto && (
+            <div className="absolute z-30 top-full left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[70vh]">
+              {/* Busca */}
+              <div className="relative p-2 border-b border-gray-100 flex-shrink-0">
+                <Search size={13} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"/>
+                <input
+                  autoFocus
+                  value={busca}
+                  onChange={e => setBusca(e.target.value)}
+                  placeholder="Buscar proprietário..."
+                  className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 bg-white"
+                />
+              </div>
+              {/* Lista */}
+              <div className="overflow-y-auto p-1.5 space-y-1.5">
+                {loading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 size={18} className="animate-spin text-indigo-400"/>
+                  </div>
+                ) : filtrados.length === 0 ? (
+                  <div className="text-center py-8">
+                    <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
+                    <p className="text-xs text-gray-400">
+                      {busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}
+                    </p>
+                  </div>
+                ) : (
+                  filtrados.map(p => (
+                    <CardProprietario
+                      key={p.id} prop={p}
+                      selecionado={selecionado?.id === p.id}
+                      onClick={() => { setSelecionado(p); setDropdownAberto(false); setBusca(''); }}
+                    />
+                  ))
+                )}
+              </div>
+              {/* Atualizar */}
+              <div className="p-2 border-t border-gray-100 flex-shrink-0">
+                <button
+                  onClick={carregar}
+                  className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-gray-300 rounded-xl text-xs text-gray-500 hover:bg-gray-50 hover:border-gray-400 transition-colors">
+                  <RefreshCw size={11}/> Atualizar lista
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Layout split */}
-        <div className="flex gap-5 min-h-[520px] overflow-hidden">
+        {/* Split: lista de proprietários (só desktop) + detalhe (compartilhado com o mobile) */}
+        <div className="lg:flex lg:gap-5 lg:items-start">
 
-          {/* ── Painel esquerdo — lista de proprietários ── */}
-          <div className="w-60 flex-shrink-0 flex flex-col min-h-0">
-            {/* Busca */}
+          {/* Lista de proprietários — só desktop (mobile/tablet usa o seletor acima) */}
+          <div className="hidden lg:flex lg:w-60 lg:flex-shrink-0 flex-col lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-120px)]">
             <div className="relative mb-3 flex-shrink-0">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-              <input
-                value={busca}
-                onChange={e => setBusca(e.target.value)}
-                placeholder="Buscar proprietário..."
-                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"
-              />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar proprietário..."
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"/>
             </div>
-
-            {/* Lista */}
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
               {loading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 size={18} className="animate-spin text-indigo-400"/>
-                </div>
+                <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-indigo-400"/></div>
               ) : filtrados.length === 0 ? (
                 <div className="text-center py-8">
                   <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
-                  <p className="text-xs text-gray-400">
-                    {busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}
-                  </p>
+                  <p className="text-xs text-gray-400">{busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}</p>
                 </div>
               ) : (
                 filtrados.map(p => (
-                  <CardProprietario
-                    key={p.id} prop={p}
-                    selecionado={selecionado?.id === p.id}
-                    onClick={() => setSelecionado(p)}
-                  />
+                  <CardProprietario key={p.id} prop={p} selecionado={selecionado?.id === p.id} onClick={() => setSelecionado(p)}/>
                 ))
               )}
             </div>
-
-            {/* Atualizar */}
             <div className="flex-shrink-0 mt-3">
-              <button
-                onClick={carregar}
+              <button onClick={carregar}
                 className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-gray-300 rounded-xl text-xs text-gray-500 hover:bg-gray-50 hover:border-gray-400 transition-colors">
                 <RefreshCw size={11}/> Atualizar
               </button>
             </div>
           </div>
 
-          {/* ── Painel direito ── */}
-          {selecionado ? (
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
-              {/* Filtros de tipo de fatura no topo */}
-              <div className="flex gap-2 mb-3 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
-                {[
-                  { key: 'ABERTA'  as FiltroTipo, label: 'Aberta',         cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva   },
-                  { key: 'FECHADA' as FiltroTipo, label: 'Fechada',        cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada },
-                  { key: 'PAGA'    as FiltroTipo, label: 'Paga',           cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga    },
-                ].map(({ key, label, cor, existe }) => (
-                  <button
-                    key={key}
-                    onClick={() => setFiltroStatus(key)}
-                    disabled={!existe}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                      filtroStatus === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                    }`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
+          {/* Detalhe da fatura — compartilhado (mobile: abaixo do seletor; desktop: à direita) */}
+          <div className="flex-1 min-w-0 flex flex-col">
+            {selecionado ? (
+              <>
+                {/* Filtros de tipo de fatura */}
+                <div className="flex gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5 overflow-x-auto">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
+                  {[
+                    { key: 'ABERTA'  as FiltroTipo, label: 'Aberta',  cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva   },
+                    { key: 'FECHADA' as FiltroTipo, label: 'Fechada', cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada },
+                    { key: 'PAGA'    as FiltroTipo, label: 'Paga',    cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga    },
+                  ].map(({ key, label, cor, existe }) => (
+                    <button
+                      key={key}
+                      onClick={() => setFiltroStatus(key)}
+                      disabled={!existe}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                        filtroStatus === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-              <PainelFatura
-                key={`${selecionado.id}-${filtroStatus}`}
-                prop={selecionado}
-                onStatusChange={carregar}
-                faturaId={
-                  filtroStatus === 'PAGA'    ? selecionado.faturaPaga?.id    :
-                  filtroStatus === 'FECHADA' ? selecionado.faturaFechada?.id :
-                  undefined
-                }
-              />
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
-              <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center mb-4">
-                <DollarSign size={28} className="text-amber-400"/>
+                <PainelFatura
+                  key={`${selecionado.id}-${filtroStatus}`}
+                  prop={selecionado}
+                  onStatusChange={carregar}
+                  faturaId={
+                    filtroStatus === 'PAGA'    ? selecionado.faturaPaga?.id    :
+                    filtroStatus === 'FECHADA' ? selecionado.faturaFechada?.id :
+                    undefined
+                  }
+                />
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-center bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
+                <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center mb-4">
+                  <DollarSign size={28} className="text-amber-400"/>
+                </div>
+                <p className="font-semibold text-gray-700 mb-1">Selecione um proprietário</p>
+                <p className="text-sm text-gray-400 max-w-xs">
+                  Escolha um proprietário para visualizar a fatura consolidada.
+                </p>
               </div>
-              <p className="font-semibold text-gray-700 mb-1">Selecione um proprietário</p>
-              <p className="text-sm text-gray-400 max-w-xs">
-                Escolha um cliente na lista à esquerda para visualizar e gerenciar sua fatura consolidada.
-              </p>
-            </div>
-          )}
+            )}
+          </div>
         </div>
+
+        {showLote && (
+          <ModalFechamentoLote
+            proprietarios={proprietarios}
+            onClose={() => setShowLote(false)}
+            onDone={carregar}
+          />
+        )}
       </div>
     </PageContainer>
   );

@@ -1,6 +1,11 @@
 # EFA-09 — Agenda, Agendamentos e Mapa de Atendimento
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
+>
+> **Atualização 2026-07-14:** a Agenda respeita o **expediente configurado** (dias + faixa de
+> horário) da empresa/equipe ao liberar horários (config em EFA-03; leitura por qualquer
+> membro via `GET /api/equipes/horario-atendimento`). Lembretes por WhatsApp (D-1 e 2h antes)
+> com base pronta (provider plugável). Ver §9.1 do ESPECIFICACAO_FUNCIONAL.md.
 
 ## 1. Identificação
 

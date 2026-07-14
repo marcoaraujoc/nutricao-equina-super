@@ -9,8 +9,10 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   Share2, Loader2, Check, Ban,
   UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText,
+  ChevronLeft, ChevronRight, MessageCircle, Mail,
 } from 'lucide-react';
 import api from '../services/api';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 
@@ -83,52 +85,62 @@ function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
     ? enc.prestador!.fullName
     : [enc.veterinarioDestino, enc.clinicaDestino].filter(Boolean).join(' — ') || 'Não informado';
 
+  const textoCompart = [
+    '*Encaminhamento*',
+    `Especialidade: ${enc.especialidade}`,
+    `Destino: ${destino}${interno ? ' (prestador da equipe)' : ' (externo)'}`,
+    enc.urgencia !== 'NORMAL' ? `Urgência: ${urgencia.label}` : '',
+    `Data: ${formatData(enc.dataEncaminhamento)}`,
+    enc.veterinario ? `Responsável: ${enc.veterinario.fullName}` : '',
+    enc.motivo ? `\nMotivo: ${enc.motivo}` : '',
+    enc.observacao ? `Obs: ${enc.observacao}` : '',
+  ].filter(Boolean).join('\n');
+
   return (
-    <div className="border border-gray-100 rounded-2xl p-4 bg-white shadow-sm">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-gray-900">{enc.especialidade}</span>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${status.cls}`}>{status.label}</span>
-            {enc.urgencia !== 'NORMAL' && (
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${urgencia.cls}`}>{urgencia.label}</span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-600">
-            {interno
-              ? <UserCheck size={12} className="text-emerald-600 flex-shrink-0" />
-              : <ExternalLink size={12} className="text-gray-400 flex-shrink-0" />}
-            <span className="truncate">{destino}</span>
-            <span className="text-[10px] text-gray-400 flex-shrink-0">
-              {interno ? '· prestador da equipe' : '· externo'}
-            </span>
-          </div>
-
-          <p className="text-xs text-gray-500 mt-1.5 line-clamp-2">{enc.motivo}</p>
-          {enc.observacao && (
-            <p className="text-[11px] text-gray-400 mt-1 line-clamp-1">Obs: {enc.observacao}</p>
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-sm font-semibold text-gray-900 truncate">{enc.especialidade}</span>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {enc.urgencia !== 'NORMAL' && (
+            <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${urgencia.cls}`}>{urgencia.label}</span>
           )}
-
-          {interno && enc.status === 'PENDENTE' && (
-            <div className="flex items-center gap-1 mt-2 text-[11px] text-emerald-700 bg-emerald-50 rounded-lg px-2 py-1 w-fit">
-              <ShieldCheck size={12} />
-              Prestador com acesso liberado a este paciente
-            </div>
-          )}
-
-          <p className="text-[10px] text-gray-300 mt-2">
-            {formatData(enc.dataEncaminhamento)}
-            {enc.veterinario ? ` · por ${enc.veterinario.fullName}` : ''}
-          </p>
+          <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${status.cls}`}>{status.label}</span>
         </div>
+      </div>
 
+      <p className="flex items-center gap-1.5 text-xs text-gray-500">
+        {interno
+          ? <UserCheck size={12} className="text-emerald-600 flex-shrink-0" />
+          : <ExternalLink size={12} className="text-gray-400 flex-shrink-0" />}
+        <span className="truncate">{destino}</span>
+        <span className="text-[10px] text-gray-400 flex-shrink-0">{interno ? '· prestador' : '· externo'}</span>
+      </p>
+
+      {enc.motivo && <p className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+
+      {interno && enc.status === 'PENDENTE' && (
+        <p className="flex items-center gap-1 mt-1 text-[11px] text-emerald-700">
+          <ShieldCheck size={12} className="flex-shrink-0" /> Prestador com acesso a este paciente
+        </p>
+      )}
+
+      <p className="text-[11px] text-gray-400 mt-0.5">
+        {formatData(enc.dataEncaminhamento)}{enc.veterinario ? ` • ${enc.veterinario.fullName}` : ''}
+      </p>
+
+      <div className="flex flex-wrap gap-2 mt-2">
+        <button onClick={() => abrirWhatsApp(textoCompart)}
+          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+          <MessageCircle size={11} /> WhatsApp
+        </button>
+        <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, textoCompart)}
+          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+          <Mail size={11} /> E-mail
+        </button>
         {enc.status === 'PENDENTE' && podeEditar && (
-          <button
-            onClick={() => onStatus(enc.id, 'CANCELADO')}
-            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap"
-          >
-            <Ban size={12} /> Cancelar encaminhamento ao prestador
+          <button onClick={() => onStatus(enc.id, 'CANCELADO')}
+            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+            <Ban size={11} /> Cancelar
           </button>
         )}
       </div>
@@ -402,6 +414,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
   const [loading,          setLoading]         = useState(true);
   const [formKey,          setFormKey]         = useState(0);
   const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
+  const [page,             setPage]            = useState(1);
 
   const semPermissao = (acao: string) =>
     toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -420,6 +433,8 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
     if (loadingPerms) return;
     carregar();
   }, [carregar, loadingPerms]);
+
+  useEffect(() => { setPage(1); }, [animalId]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -474,6 +489,11 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
     );
   }
 
+  const LIMIT_ENC = 10;
+  const totalPags = Math.max(1, Math.ceil(encaminhamentos.length / LIMIT_ENC));
+  const pageAtual = Math.min(page, totalPags);
+  const pageItems = encaminhamentos.slice((pageAtual - 1) * LIMIT_ENC, pageAtual * LIMIT_ENC);
+
   return (
     <div className="p-4 space-y-4">
 
@@ -508,19 +528,37 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
           )}
         </div>
       ) : (
-        <div className="space-y-2">
-          {encaminhamentos.map(enc => {
-            const eAutor = enc.veterinario?.id === (user?.id ?? 0);
-            return (
-              <EncaminhamentoItem
-                key={enc.id}
-                enc={enc}
-                podeEditar={podeEditar && (!isFornecedor || eAutor)}
-                onStatus={handleStatus}
-              />
-            );
-          })}
-        </div>
+        <>
+          <div className="space-y-2">
+            {pageItems.map(enc => {
+              const eAutor = enc.veterinario?.id === (user?.id ?? 0);
+              return (
+                <EncaminhamentoItem
+                  key={enc.id}
+                  enc={enc}
+                  podeEditar={podeEditar && (!isFornecedor || eAutor)}
+                  onStatus={handleStatus}
+                />
+              );
+            })}
+          </div>
+          {totalPags > 1 && (
+            <div className="flex items-center justify-between px-1 py-3 border-t border-gray-50 mt-2">
+              <span className="text-xs text-gray-400">{encaminhamentos.length} registro{encaminhamentos.length !== 1 ? 's' : ''}</span>
+              <div className="flex items-center gap-3">
+                <button disabled={pageAtual === 1} onClick={() => setPage(p => p - 1)}
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="text-xs text-gray-500">{pageAtual} / {totalPags}</span>
+                <button disabled={pageAtual >= totalPags} onClick={() => setPage(p => p + 1)}
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <ModalJustificativa

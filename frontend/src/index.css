@@ -10,8 +10,30 @@
     margin: 0;
   }
 
+  /* Trava a largura na viewport: impede que qualquer conteúdo extrapole a
+     largura da tela e faça o mobile "afastar" o zoom (o app parecia maior que
+     a tela, exigindo pinça para caber). O scroll vertical fica só no <main>. */
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-gray-50 text-gray-900 font-sans;
+  }
+}
+
+/* iOS Safari: campo de formulário com fonte < 16px faz o Safari dar zoom
+   automático ao focar (o app "fica maior que a tela" e não volta sozinho).
+   Forçar >= 16px nos controles no mobile elimina esse zoom — vale para iPhone
+   e Android, sem depender da meta viewport (que o iOS ignora). O !important
+   é necessário para vencer as classes utilitárias do Tailwind nos inputs. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }
 
@@ -33,4 +55,36 @@
   [data-drag-handle] button {
     cursor: pointer;
   }
+}
+
+/* Relatórios — tabela responsiva: no mobile cada linha vira um card empilhado,
+   com o rótulo da coluna à esquerda (data-label) e o valor à direita. */
+@media (max-width: 767px) {
+  table.rel-table thead { display: none; }
+  table.rel-table,
+  table.rel-table tbody,
+  table.rel-table tr,
+  table.rel-table td { display: block; width: 100%; }
+  table.rel-table tr { border-bottom: 1px solid #f3f4f6; padding: 4px 0; }
+  table.rel-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: right;
+    padding: 4px 16px !important;
+    white-space: normal !important;
+  }
+  table.rel-table td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9ca3af;
+  }
+  table.rel-table td[data-label='']::before,
+  table.rel-table td[colspan]::before { content: none; }
 }

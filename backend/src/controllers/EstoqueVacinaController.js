@@ -484,6 +484,55 @@ const excluir = async (req, res) => {
   }
 };
 
+// ─── Ajuste de estoque (correção manual das doses disponíveis) ───────────────
+// Espelha o Ajuste de Estoque da farmácia: informa a contagem real de doses e a
+// diferença é registrada. Vacinas não têm tabela de movimento — o motivo é
+// persistido no AuditLog (categoria AJUSTE). Recontagem acima do total registrado
+// eleva o total (encontrou mais doses); abaixo, marca o lote como parcialmente usado.
+const ajustar = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { quantidade, motivo } = req.body ?? {};
+
+    if (quantidade === undefined || quantidade === null || quantidade === '')
+      return res.status(400).json({ error: 'Informe a quantidade de doses disponíveis.' });
+    const nova = Number(quantidade);
+    if (Number.isNaN(nova) || nova < 0)
+      return res.status(400).json({ error: 'Quantidade inválida.' });
+    if (!motivo?.trim())
+      return res.status(400).json({ error: 'Informe o motivo do ajuste.' });
+
+    const existe = await prisma.loteVacina.findUnique({
+      where:   { id },
+      include: { vacina: { select: { nome: true } }, medicamentoCat: { select: { nome: true } } },
+    });
+    if (!existe) return res.status(404).json({ error: 'Lote não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
+    if (nova === existe.qtdDisponivel)
+      return res.status(400).json({ error: 'A quantidade informada é igual ao estoque atual.' });
+
+    const data = { qtdDisponivel: nova };
+    if (nova > existe.qtdTotal) data.qtdTotal = nova; // recontagem para cima eleva o total
+
+    const loteAtualizado = await prisma.loteVacina.update({ where: { id }, data, include: INCLUDE_LOTE });
+
+    const nome = existe.medicamentoCat?.nome ?? existe.vacina?.nome ?? 'Vacina';
+    await registrarAuditoria(null, req, {
+      categoria:  'AJUSTE',
+      entidade:   'ESTOQUE_VACINA',
+      entidadeId: id,
+      motivo,
+      detalhes:   `${nome}${existe.lote ? ` — Lote ${existe.lote}` : ''}: ${existe.qtdDisponivel} → ${nova} doses`,
+    });
+
+    return res.json({ dados: loteAtualizado });
+  } catch (err) {
+    console.error('EstoqueVacinaController.ajustar:', err);
+    return res.status(500).json({ error: 'Erro ao ajustar estoque.' });
+  }
+};
+
 // ─── Lotes disponíveis por medicamentoCatId (para seletor clínico) ───────────
 
 const listarLotesDisponiveisPorMed = async (req, res) => {
@@ -543,4 +592,5 @@ module.exports = {
   criar,
   atualizar,
   excluir,
+  ajustar,
 };

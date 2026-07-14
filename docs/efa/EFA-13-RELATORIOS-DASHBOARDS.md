@@ -1,6 +1,10 @@
 # EFA-13 — Relatórios Gerenciais e Dashboards
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
+>
+> **Atualização 2026-07-14:** seletor único **Dia/Semana/Mês/Ano** no topo, respeitado por
+> todos os submódulos (Gestão/Financeiro/Atendimento/Cadastro/Farmácia); tabelas responsivas
+> (tabela no desktop, cards no mobile). Ver §16 do ESPECIFICACAO_FUNCIONAL.md.
 
 ## 1. Identificação
 

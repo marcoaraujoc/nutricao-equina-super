@@ -89,7 +89,7 @@ function fmtData(data: string | null | undefined): string {
   if (!data) return '—';
   const d = new Date(data);
   if (isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 function num(n: number): string {
@@ -168,9 +168,8 @@ export function renderCabecalhoAtendimento(dados: RelatorioAtendimentoDados): st
 
   <div class="plan-row">
     <span class="plan-name">${esc(atual.atendimentoNumero) || 'Evolução'}</span>
-    <span class="badge">${esc(atual.especialidade)}</span>
-    <span class="badge">${fmtData(atual.dataInicio)}</span>
-    <span class="badge">Vet.: ${esc(atual.veterinario.fullName)}</span>
+    <span class="plan-meta">${[esc(atual.especialidade), fmtData(atual.dataInicio)].filter(Boolean).join(' · ')}</span>
+    <span class="plan-vet">Vet.: ${esc(atual.veterinario.fullName)}</span>
   </div>`;
 }
 
@@ -289,6 +288,17 @@ const RELATORIO_CSS = `
   .avisos-title{ font-size:8pt; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:1pt; }
   .avisos-card ul{ margin:4pt 0 0 14pt; font-size:8.5pt; color:#92400e; line-height:1.6; }
   .assinatura{ text-align:center; font-size:11pt; color:#065f46; margin-top:14pt; font-family:Georgia,serif; }
+
+  /* Overrides deste relatório comparativo (vencem o PRINT_CSS por virem depois):
+     dados do animal sem negrito e ID do atendimento (EV/AG/VC) menor. */
+  .f-val{ font-weight:400; }
+  .plan-name{ font-size:10pt; }
+  /* Especialidade · data à esquerda; veterinário alinhado à direita — texto simples, sem "frame" */
+  .plan-meta{ font-size:9pt; color:#4b5563; }
+  .plan-vet{ margin-left:auto; font-size:9pt; color:#4b5563; }
+  /* Remove a Raça do card do animal (2ª coluna) e reequilibra em 3 colunas */
+  .animal-info{ grid-template-columns: repeat(3, 1fr); }
+  .animal-info > div:nth-child(2){ display:none; }
 `;
 
 // ─── Blocos do relatório ──────────────────────────────────────────────────────
@@ -346,11 +356,11 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
     <div class="maps ${anterior ? '' : 'unica'}">
       ${anterior ? `
       <div class="map-col">
-        <span class="tag before">Sessão anterior · ${fmtData(anterior.dataInicio)}</span>
+        <span class="tag before">Anterior · ${fmtData(anterior.dataInicio)}</span>
         ${anterior.svgColuna ?? '<p class="rep-sub">Sem mapa disponível.</p>'}
       </div>` : ''}
       <div class="map-col">
-        <span class="tag after">${anterior ? 'Sessão atual' : 'Primeira avaliação registrada'} · ${fmtData(atual.dataInicio)}</span>
+        <span class="tag after">${anterior ? 'Atual' : 'Primeira avaliação registrada'} · ${fmtData(atual.dataInicio)}</span>
         ${atual.svgColuna ?? '<p class="rep-sub">Sem mapa disponível.</p>'}
       </div>
     </div>
@@ -417,8 +427,8 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
   // ── Registro textual das sessões (o que foi encontrado em cada uma) ──
   const textosSection = `
   <div class="sec-title">Registro das Sessões</div>
-  ${anterior?.texto ? renderRegistroSessao('Sessão anterior', anterior, '#6b7280') : ''}
-  ${renderRegistroSessao(anterior ? 'Sessão atual' : 'Primeira avaliação registrada', atual, '#059669')}`;
+  ${anterior?.texto ? renderRegistroSessao('Anterior', anterior, '#6b7280') : ''}
+  ${renderRegistroSessao(anterior ? 'Atual' : 'Primeira avaliação registrada', atual, '#059669')}`;
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">

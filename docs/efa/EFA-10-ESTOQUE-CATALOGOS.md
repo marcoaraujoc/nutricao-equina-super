@@ -2,6 +2,11 @@
 
 > Padrões globais: **[EFA-00-TRANSVERSAL.md](EFA-00-TRANSVERSAL.md)**.
 > Consumido por Prescrição/Execução (EFA-07) e Vacinas (EFA-08).
+>
+> **Atualização 2026-07-14:** Estoque de Vacinas ganhou **Ajuste de Estoque** (igual à
+> Farmácia — contagem real de doses, motivo obrigatório auditado; slug `vacina.estoque.ajustar`,
+> `PATCH /vacinas/estoque/:id/ajuste`). Listas de Farmácia e Vacinas responsivas (tabela no
+> desktop, cards no mobile).
 
 ## 1. Identificação
 

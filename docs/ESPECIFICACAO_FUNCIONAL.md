@@ -1,6 +1,6 @@
 # S2Vet — Especificação Funcional
 
-> Documento gerado por varredura do código-fonte em 2026-07-09 (atualizado em 2026-07-10).
+> Documento gerado por varredura do código-fonte em 2026-07-09 (atualizado em 2026-07-14).
 > Descreve fielmente o que está construído — sem propostas, sem melhorias.
 > Fontes: rotas do backend (`backend/src/routes/*`), controllers, seeds de permissão,
 > schema Prisma, páginas e componentes do frontend (`frontend/src/*`) e CLAUDE.md.
@@ -300,6 +300,9 @@ histórico abre por botão flutuante.
   título (opcional; sugerido por LLM ao finalizar), vínculo opcional a agendamento.
 - **Ditado por voz:** Web Speech API online + Whisper offline (modelo local, com fila de
   áudios pendentes e opção "transcrever ou apenas anexar").
+- **Rascunho automático (2026-07-14):** o texto da evolução **nova** é salvo em localStorage
+  a cada alteração (inclui o ditado) e restaurado após um refresh de página (comum no
+  celular) — só é perdido no logout. Limpo ao salvar/finalizar.
 - **Mídias:** anexos imagem/vídeo/áudio (máx. 100MB, whitelist de extensão + mimetype).
 - **Salvar** mantém EM_ANDAMENTO; **Finalizar** grava FINALIZADA, marca `dataFim`,
   dispara interpretação LLM (`/evolucoes/interpretar`) que sugere título e ações de
@@ -398,6 +401,16 @@ histórico abre por botão flutuante.
 - **Agendamento por voz:** ditado interpretado por LLM
   (`POST /clinica/agendamentos/interpretar`) que pré-preenche o formulário.
 - **Transferir dia:** move todos os agendamentos de um dia para outra data.
+- **Expediente configurado (2026-07-14):** os horários livres são liberados apenas nos
+  **dias** e na **faixa de horário** definidos em Configurações (§15.3) — ex.: Seg–Sex
+  08:00–20:00 abre 08–19h de segunda a sexta. Fora do expediente aparece "0 Livres". O
+  bloco "Expediente Ativo" mostra período/dias configurados; no mobile o profissional vira
+  card com a contagem de livres + popover ao toque. Config lida por qualquer membro via
+  `GET /api/equipes/horario-atendimento`.
+- **Lembretes (cron):** e-mail D-1 (08:00) ao proprietário e, quando houver provider de
+  mensageria plugado, WhatsApp **1 dia antes e 2h antes** (base pronta em
+  `lembreteAgendamentoService`; idempotência por agendamento; provider "noop" por padrão só
+  loga). Ver §20 para agenda/alertas dos crons.
 - Gerenciado por ADMIN/VETERINARIO/ESTAGIARIO; PROPRIETARIO/FORNECEDOR só visualizam.
 
 ### 9.2 Minha Agenda (aba do Atendimento)
@@ -466,7 +479,11 @@ histórico abre por botão flutuante.
   frascos × doses por frasco (1–100), total/disponível de doses, validade pós-abertura
   (horas/dias), valor unitário e valor repassado, data de recebimento.
 - Indicadores: total de lotes, vencidos, vencendo, total de doses; abas
-  todas/ativas/inativas/vencidas/vencendo.
+  todas/ativas/inativas/vencidas/vencendo. Lista responsiva (tabela desktop / cards mobile).
+- **Ajuste de Estoque (2026-07-14)** — igual ao da Farmácia: informa a contagem real de
+  doses disponíveis, com motivo obrigatório; a diferença é registrada e, se a recontagem for
+  maior que o total, eleva o total. `PATCH /vacinas/estoque/:id/ajuste`, slug
+  `vacina.estoque.ajustar`, motivo auditado (categoria `AJUSTE`).
 - Alimenta a seleção de lotes na aplicação de vacinas (§8.3).
 
 ---
@@ -555,7 +572,9 @@ histórico abre por botão flutuante.
   fatura com itens por animal (tipo `ASSISTENCIA`/`MEDICAMENTO`/`PROCEDIMENTO`,
   descrição, valor unitário, quantidade, total), edição inline de itens, remoção e
   **lançamento manual** (catálogo rápido: GTA, Assistência Veterinária, Atd. Emergencial,
-  ou item livre).
+  ou item livre). O lançamento manual permite **vincular um animal** (seletor no form,
+  opcional) — assim itens como "Atd. Emergencial" aparecem por cavalo/localização no
+  relatório emergencial (antes ficavam sem animal).
 - Lançamentos automáticos de origem clínica (prescrição executada, exame finalizado,
   vacina, encaminhamento) entram na fatura ABERTA do mês (criando-a se preciso) e ficam
   **rastreados** por FK; editar/excluir a origem sincroniza os itens da fatura na mesma
@@ -576,6 +595,8 @@ histórico abre por botão flutuante.
   proprietário: `DIA_FIXO` (1–31, com clamp para meses curtos), `DIA_UTIL` (1º–10º dia
   útil — desconta fins de semana e feriados nacionais federais, com Sexta-feira Santa
   calculada pelo algoritmo de Gauss) ou `ULTIMO_DIA_MES` (padrão/fallback).
+- O **horário do cron** (assim como os demais) é **editável em runtime** pela tela de
+  Configuração de tarefas (§20) — reagendamento dinâmico do node-cron a partir do banco.
 
 ### 15.3 Configurações da empresa (`/configuracoes`, GESTOR)
 
@@ -587,6 +608,11 @@ histórico abre por botão flutuante.
   `(11) 98765-4321`; persistido somente com dígitos (`EmpresaConfiguracao.whatsapp`,
   validação 10–15 dígitos no backend); campo em branco remove o número. O campo apenas
   armazena o número — a integração de mensageria em si ainda não existe.
+- **Expediente de atendimento (2026-07-14)** — dias da semana (toggles Dom–Sáb) e faixa de
+  horário (abre/fecha) em que a clínica atende (`EmpresaConfiguracao.diasAtendimento` CSV
+  0-6, `horaInicioAtendimento`/`horaFimAtendimento` HH:MM; vazio = sem restrição). Usado
+  pela Agenda para liberar horários (§9.1). Ao salvar as Configurações, redireciona para o
+  Mapa de Atendimento.
 
 ---
 
@@ -611,6 +637,20 @@ demais NENHUM), escopado pela empresa ativa. Endpoint único
 8. **Evoluções editadas após finalização** — evoluções FINALIZADAS alteradas depois de
    `dataFim` (tolerância 60s), com atendimento, animal, **responsável original** e quem
    editou.
+
+**Seletor de período (2026-07-14).** No topo de todos os submódulos há um seletor único
+**Dia | Semana | Mês | Ano** + data (◀▶ e "Hoje"), persistido em localStorage e compartilhado
+entre os submódulos (`PeriodoContext`/`PeriodoSelector`). O backend deriva a janela
+`[inicio,fim]` a partir de `granularidade`+`data` (`resolverPeriodo`); métricas de janela
+filtram por ela e "snapshots" (base ativa, posição de estoque) são as-of a data escolhida.
+Semana = domingo a sábado.
+
+**Submódulos por categoria** (mesma permissão `relatorios.gerencial.ler`, escopo por empresa):
+`/relatorios` (Gestão, os 8 cards acima), `/relatorios/financeiro` (faturamento no período,
+ticket médio, receita por categoria/especialidade, contas a receber, fluxo de caixa, lucro
+bruto), `/relatorios/atendimento`, `/relatorios/cadastro` (novos pacientes/clientes),
+`/relatorios/farmacia` (posição de estoque, validades, consumo). As tabelas são responsivas:
+tabela no desktop e **cards empilhados no mobile** (rótulo:valor, via `RelatorioUI.Tabela`).
 
 ---
 
@@ -697,6 +737,28 @@ Arquitetura: interface `AIProvider` (implementação Groq), prompts versionados
   categoria, tipo de registro, busca textual e período, com paginação (e coluna de IP);
   GESTOR vê a empresa ativa e ADMIN vê tudo (`GET /api/audit/logs`).
 - **query-adhoc** (`/query-adhoc`): página utilitária de consulta ad-hoc (dev).
+
+### 20.1 Tarefas agendadas — Configuração, Monitoração e agenda dinâmica (2026-07-14)
+
+Tarefas de cron do sistema (globais): `crmv_sync` (SISCAD), `auto_aceite` (solicitações
+>24h), `vinculos_provisorios`, `lembrete_d1_email`, `lembrete_whatsapp`,
+`fechamento_faturas`. Acesso das telas abaixo: **ADMIN ou GESTOR** (Sidebar > Administração).
+
+- **Configuração** (`/configuracao-alertas`): (a) **alertas por e-mail** — destinatários
+  (em branco = usuários ADMIN), "avisar sucessos relevantes" (desligado = só erros),
+  ligar/desligar; (b) **agendamento das tarefas** — expressão cron editável por tarefa +
+  ligar/desligar, com **reagendamento dinâmico** (aplica ao vivo, sem reiniciar o backend).
+  Salvar redireciona para a Monitoração.
+- **Monitoração** (`/monitoracao`): histórico das execuções relevantes (erros + sucessos
+  com trabalho) por **Dia | Semana | Mês** — totais (execuções/sucessos/erros/alertas),
+  resumo por tarefa e lista de eventos (marcando os enviados por e-mail).
+- **Regra de alerta:** erro **sempre** notifica (se ativo); sucesso só quando a tarefa fez
+  trabalho relevante (evita spam nos crons frequentes). Todo evento relevante é registrado
+  para a Monitoração, independentemente do e-mail.
+- Modelos: `CronAlertaConfig` (config de e-mail), `CronExecucao` (histórico), `CronAgenda`
+  (expressão/estado por tarefa). Backend: `lib/cronManager.js` (registrar/iniciar/reagendar),
+  `lib/cronAlert.js` (`reportarCron`), `MonitoracaoController`, rotas
+  `GET/PUT /api/monitoracao/{config,execucoes,agendas}`.
 
 ---
 

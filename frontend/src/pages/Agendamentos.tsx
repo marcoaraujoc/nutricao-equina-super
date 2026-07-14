@@ -586,15 +586,51 @@ export default function Agendamentos() {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
+  // ── Expediente de atendimento (configurável em Configurações) ────────────────
+  const [expediente, setExpediente] = useState<{ dias: number[] | null; horaInicio: string | null; horaFim: string | null }>({
+    dias: null, horaInicio: null, horaFim: null,
+  });
+  useEffect(() => {
+    api.get('/equipes/horario-atendimento')
+      .then(res => {
+        const d = res.data?.dados;
+        if (!d) return;
+        setExpediente({
+          dias: d.diasAtendimento ? String(d.diasAtendimento).split(',').map(Number).filter((n: number) => n >= 0 && n <= 6) : null,
+          horaInicio: d.horaInicioAtendimento ?? null,
+          horaFim:    d.horaFimAtendimento ?? null,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  // Horários liberados para uma data conforme o expediente (dias + faixa de horas).
+  const horariosDoDia = (dateStr: string): string[] => {
+    const wd = new Date(`${dateStr}T00:00:00`).getDay();
+    if (expediente.dias && expediente.dias.length > 0 && !expediente.dias.includes(wd)) return [];
+    const hi = expediente.horaInicio ? parseInt(expediente.horaInicio.slice(0, 2), 10) : 0;
+    const hf = expediente.horaFim    ? parseInt(expediente.horaFim.slice(0, 2), 10)    : 24;
+    return HORARIOS.filter(h => { const hour = parseInt(h.slice(0, 2), 10); return hour >= hi && hour < hf; });
+  };
+
+  // Rótulos do expediente para a UI do "Expediente Ativo".
+  const labelPeriodo = expediente.horaInicio && expediente.horaFim
+    ? `${expediente.horaInicio.slice(0, 5)} — ${expediente.horaFim.slice(0, 5)}`
+    : '00:00 — 24:00';
+  const labelDias = expediente.dias && expediente.dias.length > 0
+    ? expediente.dias.slice().sort((a, b) => a - b).map(d => DIAS_PT[d]).join(', ')
+    : 'Todos os dias';
+
   // ── Slots ────────────────────────────────────────────────────────────────────
   function slotsOcupados(vetId: number): Set<string> {
     return new Set(agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora)));
   }
   function slotsLivres(vetId: number): string[] {
     const ocp   = slotsOcupados(vetId);
+    const base  = horariosDoDia(selectedDate);
     const eHoje = selectedDate === hoje();
     const agora = eHoje ? new Date() : null;
-    return HORARIOS.filter(h => {
+    return base.filter(h => {
       if (ocp.has(h)) return false;
       if (agora) {
         const [hh, mm] = h.split(':').map(Number);
@@ -1060,7 +1096,9 @@ export default function Agendamentos() {
                 <p className="text-sm text-gray-400">Nenhum profissional na equipe</p>
               </div>
             ) : (
-              <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+              <>
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto max-h-[280px] overflow-y-auto">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
@@ -1098,11 +1136,11 @@ export default function Agendamentos() {
                           {/* Período */}
                           <td className="py-3 px-4">
                             <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
-                              <Clock size={11} className="text-gray-400" /> 00h — 23h
+                              <Clock size={11} className="text-gray-400" /> {labelPeriodo}
                             </span>
                           </td>
                           {/* Dias */}
-                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">Seg — Sex</td>
+                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">{labelDias}</td>
                           {/* Horários */}
                           <td className="py-3 px-4">
                             {podeGerenciar ? (
@@ -1151,6 +1189,78 @@ export default function Agendamentos() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
+                {vetsFiltrados.map(vet => {
+                  const livres = slotsLivres(vet.userId);
+                  const isOpen = openSlotVetId === vet.userId;
+                  return (
+                    <div key={vet.userId} className="px-4 py-3">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500 uppercase flex-shrink-0">
+                            {vet.fullName.slice(0, 2)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-gray-900 truncate">{vet.fullName}</p>
+                            <p className="text-[10px] text-gray-400 truncate">{vet.cargo} - Clínica Geral</p>
+                          </div>
+                        </div>
+                        {/* Qtd de horários livres — toque abre a janela com os horários */}
+                        {podeGerenciar ? (
+                          <div
+                            className="inline-block flex-shrink-0"
+                            onMouseEnter={e => livres.length > 0 && openSlotMenu(vet.userId, e.currentTarget)}
+                            onMouseLeave={scheduleCloseSlot}
+                          >
+                            <button
+                              disabled={livres.length === 0}
+                              onClick={e => {
+                                if (livres.length === 0) return;
+                                if (isOpen) { setOpenSlotVetId(null); setSlotPos(null); }
+                                else openSlotMenu(vet.userId, e.currentTarget);
+                              }}
+                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border ${
+                                livres.length > 0
+                                  ? 'bg-green-50 hover:bg-green-100 text-green-700 border-green-200'
+                                  : 'bg-red-50 text-red-500 border-red-200 cursor-not-allowed'
+                              }`}
+                            >
+                              {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
+                              {livres.length > 0 && (isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
+                            </button>
+                            {isOpen && livres.length > 0 && slotPos && (
+                              <div
+                                style={{ position: 'fixed', top: slotPos.top, left: 16, right: 16, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
+                                onMouseEnter={cancelCloseSlot}
+                                onMouseLeave={scheduleCloseSlot}
+                                className="bg-white border border-gray-200 rounded-2xl shadow-xl p-2.5"
+                              >
+                                <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Toque para agendar</p>
+                                <div className="grid grid-cols-4 gap-1">
+                                  {livres.map(hora => (
+                                    <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora)}
+                                      className="px-2 py-1.5 text-[11px] font-bold bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors border border-green-200">
+                                      {hora}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-500 flex-shrink-0">{livres.length} livres</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-400 flex items-center gap-1">
+                        <Clock size={11} className="text-gray-400" /> {labelPeriodo} · {labelDias}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+              </>
             )}
           </div>
         </div>

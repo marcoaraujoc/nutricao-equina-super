@@ -11,6 +11,8 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
+import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { Card, EmptyState, Tabela, BigNumber, formatBRL, formatMesRef, formatData } from '../components/relatorios/RelatorioUI';
 
 // ─── Types (espelho do payload do backend) ────────────────────────────────────
@@ -118,6 +120,7 @@ const FAIXA_CLS: Record<FaixaSemAtendimento, string> = {
 export default function Relatorios() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeVer = isGestor || podeExecutar('relatorios.gerencial.ler');
+  const { granularidade, data: dataRef } = usePeriodo();
 
   const [dados,      setDados]      = useState<DadosRelatorios | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -126,14 +129,14 @@ export default function Relatorios() {
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
-    api.get('/relatorios/gerencial')
+    api.get('/relatorios/gerencial', { params: periodoParams(granularidade, dataRef) })
       .then(res => {
         if (!res.data) return; // GET 403 → { data: null }
         setDados(res.data.dados as DadosRelatorios);
       })
       .catch(() => setErro(true))
       .finally(() => setCarregando(false));
-  }, [loadingPerms, podeVer]);
+  }, [loadingPerms, podeVer, granularidade, dataRef]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -160,6 +163,8 @@ export default function Relatorios() {
         </div>
       </div>
 
+      <PeriodoSelector />
+
       {carregando ? (
         <div className="flex items-center justify-center py-24">
           <Loader2 size={26} className="animate-spin text-emerald-600" />
@@ -175,7 +180,7 @@ export default function Relatorios() {
           {/* ── Atendimentos emergenciais ── */}
           <Card icon={<Zap size={16} />} titulo="Atendimentos emergenciais"
             subtitulo='Lançamentos de "Atd. Emergencial" em faturas não canceladas'>
-            <BigNumber valor={dados.emergencias.total} label="atendimentos emergenciais no total" />
+            <BigNumber valor={dados.emergencias.total} label="atendimentos emergenciais no período" />
             {dados.emergencias.total === 0 ? (
               <EmptyState texto="Nenhum atendimento emergencial registrado" />
             ) : (

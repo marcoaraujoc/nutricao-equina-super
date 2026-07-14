@@ -189,6 +189,8 @@ const dashboardRoutes          = require('./routes/dashboard');
 const mapaAtendimentoRoutes    = require('./routes/mapa-atendimento');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const relatoriosGerenciaisRoutes = require('./routes/relatoriosGerenciais');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const monitoracaoRoutes        = require('./routes/monitoracao');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -231,6 +233,7 @@ app.use('/api/vacinas/estoque',       estoqueVacinaRoutes);
 app.use('/api/dashboard',             dashboardRoutes);
 app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
+app.use('/api/monitoracao',           monitoracaoRoutes);
 
 // Servir arquivos de upload (fotos, mídias clínicas).
 // Acesso por capability URL: os nomes são gerados com crypto.randomBytes (não enumeráveis).
@@ -320,26 +323,46 @@ app.use((err: Error & { status?: number; statusCode?: number }, req: Request, re
 
 app.listen(PORT, () => {
   logger.info('Servidor iniciado', { port: PORT, env: process.env.NODE_ENV ?? 'development' });
-  agendarSincronizacaoCrmv();
+  // Agenda todas as tarefas com base em CronAgenda (banco), aplicando os padrões
+  // quando não configurado. Reagendamento posterior é ao vivo (cronManager.reagendar).
+  iniciarJobs().catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
 });
 
-// ===================== CRON — ÍNDICE CRMV =====================
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const cron                 = require('node-cron');
+// ===================== CRON — TAREFAS AGENDADAS (agenda dinâmica no banco) =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { executarScraping } = require('./services/crmvScraperService');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { reportarCron } = require('./lib/cronAlert');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { registrarJob, iniciarJobs } = require('./lib/cronManager');
 
-function agendarSincronizacaoCrmv() {
-  // Diariamente às 23:00 (horário de Brasília)
-  cron.schedule('0 23 * * *', () => {
-    logger.info('[CRMV-Cron] Iniciando sincronização diária do SISCAD...');
-    executarScraping().catch((err: Error) =>
-      logger.error(`[CRMV-Cron] Falha na sincronização: ${err.message}`)
-    );
-  }, { timezone: 'America/Sao_Paulo' });
-
-  logger.info('[CRMV-Cron] Sincronização agendada: diariamente às 23:00 (Brasília)');
+// Executa uma tarefa agendada e reporta (e-mail ao ADMIN + registro na Monitoração):
+// - ERRO (throw ou retorno { ok:false }): SEMPRE reportado; e-mail conforme config.
+// - SUCESSO: reportado/alertado só quando a tarefa retorna { notificar:true } —
+//   evita spam nos crons frequentes (ex: WhatsApp a cada 15 min) sem trabalho.
+// A decisão de enviar e-mail e o destinatário vêm da config (reportarCron).
+type ResultadoCron = { ok?: boolean; notificar?: boolean; resumo?: string; erro?: string } | void;
+async function comAlerta(nome: string, fn: () => Promise<ResultadoCron>) {
+  let r: ResultadoCron;
+  try {
+    r = await fn();
+  } catch (err: unknown) {
+    r = { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
+  }
+  if (!r) return;
+  if (r.ok === false) logger.error(`[Cron:${nome}] ERRO: ${r.erro}`);
+  await reportarCron(nome, r);
 }
+
+registrarJob('crmv_sync', {
+  nome: 'Sincronização CRMV (SISCAD)',
+  exprPadrao: '0 23 * * *', // diariamente às 23:00
+  fn: () => comAlerta('Sincronização CRMV (SISCAD)', async () => {
+    logger.info('[CRMV-Cron] Iniciando sincronização diária do SISCAD...');
+    await executarScraping();
+    return { ok: true, notificar: true, resumo: 'Sincronização diária do índice CRMV (SISCAD) concluída com sucesso.' };
+  }),
+});
 
 // ===================== CRON — AUTO-ACEITE DE SOLICITAÇÕES (24h) =====================
 // VINCULO e DESVINCULO: updateMany simples para ACEITO.
@@ -357,7 +380,7 @@ async function autoAceitarSolicitacoesPendentes() {
       },
     });
 
-    if (pendentes.length === 0) return;
+    if (pendentes.length === 0) return { ok: true, notificar: false };
 
     const trocas   = pendentes.filter(p => p.tipo === 'TROCA_VET');
     const simples  = pendentes.filter(p => p.tipo !== 'TROCA_VET');
@@ -430,16 +453,21 @@ async function autoAceitarSolicitacoesPendentes() {
       simples: simples.map(p => p.id),
       trocas:  trocas.map(p => p.id),
     });
+    return {
+      ok: true,
+      notificar: true,
+      resumo: `${pendentes.length} solicitação(ões) auto-aceita(s) após 24h — ${simples.length} vínculo/desvínculo e ${trocas.length} troca(s) de vet.`,
+    };
   } catch (err: unknown) {
-    logger.error(`[AutoAceite-Cron] Erro: ${err instanceof Error ? err.message : err}`);
+    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
 }
 
-cron.schedule('0 * * * *', () => {
-  autoAceitarSolicitacoesPendentes();
-}, { timezone: 'America/Sao_Paulo' });
-
-logger.info('[AutoAceite-Cron] Agendado: verifica a cada hora solicitações PENDENTE > 24h');
+registrarJob('auto_aceite', {
+  nome: 'Auto-aceite de solicitações (24h)',
+  exprPadrao: '0 * * * *', // a cada hora
+  fn: () => comAlerta('Auto-aceite de solicitações (24h)', autoAceitarSolicitacoesPendentes),
+});
 
 // ===================== CRON — CANCELA VÍNCULOS PROVISÓRIOS EXPIRADOS =====================
 async function cancelarVinculosProvisionaisExpirados() {
@@ -450,7 +478,7 @@ async function cancelarVinculosProvisionaisExpirados() {
       select: { id: true, nome: true },
     });
 
-    if (animaisExpirados.length === 0) return;
+    if (animaisExpirados.length === 0) return { ok: true, notificar: false };
 
     for (const animal of animaisExpirados) {
       await prisma.vetAnimalSolicitacao.updateMany({
@@ -465,16 +493,21 @@ async function cancelarVinculosProvisionaisExpirados() {
     }
 
     logger.info(`[Provisional-Cron] ${animaisExpirados.length} vínculo(s) provisional(is) cancelado(s)`);
+    return {
+      ok: true,
+      notificar: true,
+      resumo: `${animaisExpirados.length} vínculo(s) provisional(is) expirado(s) cancelado(s).`,
+    };
   } catch (err: unknown) {
-    logger.error(`[Provisional-Cron] Erro: ${err instanceof Error ? err.message : err}`);
+    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
 }
 
-cron.schedule('15 * * * *', () => {
-  cancelarVinculosProvisionaisExpirados();
-}, { timezone: 'America/Sao_Paulo' });
-
-logger.info('[Provisional-Cron] Agendado: verifica a cada hora vínculos provisórios expirados');
+registrarJob('vinculos_provisorios', {
+  nome: 'Cancelamento de vínculos provisórios',
+  exprPadrao: '15 * * * *', // a cada hora (minuto 15)
+  fn: () => comAlerta('Cancelamento de vínculos provisórios', cancelarVinculosProvisionaisExpirados),
+});
 
 // ===================== CRON — LEMBRETE D-1 (agendamentos de amanhã) =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -497,6 +530,7 @@ async function enviarLembretesAgendamentos() {
 
     logger.info(`[Lembrete-Cron] ${agendamentos.length} agendamento(s) para amanhã`);
 
+    let enviados = 0;
     for (const ag of agendamentos) {
       const proprietarioEmail = ag.animal?.user?.email;
       if (!proprietarioEmail) continue;
@@ -509,21 +543,46 @@ async function enviarLembretesAgendamentos() {
           vetPhone:         ag.veterinario?.phone      ?? '',
           dataHora:         ag.dataHora,
         });
+        enviados++;
       } catch (err: unknown) {
         logger.warn(`[Lembrete-Cron] Falha ao enviar lembrete para ${proprietarioEmail}: ${(err as Error).message}`);
       }
     }
+    return {
+      ok: true,
+      notificar: agendamentos.length > 0,
+      resumo: `${enviados} lembrete(s) D-1 enviado(s) por e-mail, de ${agendamentos.length} agendamento(s) para amanhã.`,
+    };
   } catch (err: unknown) {
-    logger.error(`[Lembrete-Cron] Erro: ${(err as Error).message}`);
+    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
 }
 
-cron.schedule('0 8 * * *', () => {
-  logger.info('[Lembrete-Cron] Enviando lembretes de agendamentos de amanhã...');
-  enviarLembretesAgendamentos();
-}, { timezone: 'America/Sao_Paulo' });
+registrarJob('lembrete_d1_email', {
+  nome: 'Lembretes de agendamento D-1 (e-mail)',
+  exprPadrao: '0 8 * * *', // diariamente às 08:00
+  fn: () => comAlerta('Lembretes de agendamento D-1 (e-mail)', enviarLembretesAgendamentos),
+});
 
-logger.info('[Lembrete-Cron] Agendado: diariamente às 08:00 (Brasília)');
+
+// ===================== CRON — LEMBRETES POR WHATSAPP (D-1 e 2h antes) =====================
+// Base pronta: o envio real é abstraído por messaging/whatsappProvider (noop por
+// padrão — apenas loga). Plugar um provedor via env WHATSAPP_PROVIDER quando houver
+// credenciais. Requer a migration 20260713010000 + `npx prisma generate` para as
+// colunas de idempotência existirem no client.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { enviarLembretesWhatsapp } = require('./services/lembreteAgendamentoService');
+
+registrarJob('lembrete_whatsapp', {
+  nome: 'Lembretes de agendamento por WhatsApp (2h/D-1)',
+  exprPadrao: '*/15 * * * *', // a cada 15 minutos
+  fn: () => comAlerta('Lembretes de agendamento por WhatsApp (2h/D-1)', async () => {
+    const r = await enviarLembretesWhatsapp();
+    if (r.enviados > 0) logger.info(`[Lembrete-WA] ${r.enviados} lembrete(s) enviado(s) de ${r.verificados} agendamento(s) na janela`);
+    // Só alerta o admin quando de fato enviou algo (roda a cada 15 min → evita spam)
+    return { ok: true, notificar: r.enviados > 0, resumo: `${r.enviados} lembrete(s) de WhatsApp enviado(s) de ${r.verificados} agendamento(s) na janela.` };
+  }),
+});
 
 // ===================== CRON — FECHAMENTO AUTOMÁTICO DE FATURAS =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -608,19 +667,23 @@ async function fecharFaturasDoMes() {
     }
 
     logger.info(`[FaturaFechamento-Cron] Concluído — ${fechadas}/${faturas.length} fatura(s) fechada(s)`);
+    return {
+      ok: true,
+      notificar: fechadas > 0,
+      resumo: `${fechadas} fatura(s) fechada(s) automaticamente hoje (de ${faturas.length} fatura(s) ABERTA(s) verificada(s)).`,
+    };
   } catch (err: unknown) {
-    logger.error(`[FaturaFechamento-Cron] Erro geral: ${(err as Error).message}`);
+    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
 }
 
 // Executa todo dia às 23:45 (Brasília) — cada fatura decide se fecha hoje com base no dia
 // configurado (EmpresaConfiguracao.diaFechamentoFatura) da equipe/empresa do proprietário,
 // com fallback para o último dia do mês quando nada foi configurado.
-cron.schedule('45 23 * * *', () => {
-  logger.info('[FaturaFechamento-Cron] Verificando faturas a fechar hoje...');
-  fecharFaturasDoMes();
-}, { timezone: 'America/Sao_Paulo' });
-
-logger.info('[FaturaFechamento-Cron] Agendado: diariamente às 23:45 (Brasília) — por dia de fechamento configurado, com fallback no último dia do mês');
+registrarJob('fechamento_faturas', {
+  nome: 'Fechamento automático de faturas',
+  exprPadrao: '45 23 * * *', // diariamente às 23:45
+  fn: () => comAlerta('Fechamento automático de faturas', fecharFaturasDoMes),
+});
 
 export default app;

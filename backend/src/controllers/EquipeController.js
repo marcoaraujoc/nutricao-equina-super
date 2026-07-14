@@ -100,6 +100,23 @@ async function resolverEscopoConfiguracao(req) {
   return { empresaId: empresa.id, equipeId: equipe.id };
 }
 
+// Resolve o escopo da configuração para QUALQUER membro do contexto ativo (não só
+// gestor) — usado para leitura do expediente de atendimento pelo Agendamento.
+// Baseia-se em req.empresaId/req.equipeId já validados pelo auth.
+async function resolverEscopoConfiguracaoMembro(req) {
+  if (!req.empresaId) return null;
+  const empresa = await prisma.empresa.findUnique({ where: { id: req.empresaId }, select: { id: true, cnpj: true } });
+  if (!empresa) return null;
+  if (empresa.cnpj) return { empresaId: empresa.id, equipeId: null };
+  let equipeId = req.equipeId ?? null;
+  if (!equipeId) {
+    const eq = await prisma.equipe.findFirst({ where: { empresaId: empresa.id }, orderBy: { id: 'asc' }, select: { id: true } });
+    if (!eq) return null;
+    equipeId = eq.id;
+  }
+  return { empresaId: empresa.id, equipeId };
+}
+
 // ─── Helper: onboarding de vet convidado ─────────────────────────────────────
 // Marca isConvidado=true e copia espécies do dono da equipe para o vet convidado
 // (somente se o convidado for VETERINARIO e ainda não tiver espécies cadastradas)
@@ -341,10 +358,35 @@ const EquipeController = {
           tipoFechamento:      tipoFechamentoEfetivo,
           diaFechamentoFatura: config?.diaFechamentoFatura  ?? null,
           whatsapp:            config?.whatsapp             ?? null,
+          diasAtendimento:       config?.diasAtendimento       ?? null,
+          horaInicioAtendimento: config?.horaInicioAtendimento ?? null,
+          horaFimAtendimento:    config?.horaFimAtendimento    ?? null,
         },
       });
     } catch (err) {
       console.error('Erro ao obter configuração:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // Expediente de atendimento do contexto ativo — leitura para QUALQUER membro
+  // (usado pelo Agendamento para liberar apenas os horários configurados).
+  obterHorarioAtendimento: async (req, res) => {
+    try {
+      const escopo = await resolverEscopoConfiguracaoMembro(req);
+      const vazio = { diasAtendimento: null, horaInicioAtendimento: null, horaFimAtendimento: null };
+      if (!escopo) return res.json({ sucesso: true, dados: vazio });
+      const config = await prisma.empresaConfiguracao.findUnique({ where: { empresaId_equipeId: escopo } });
+      return res.json({
+        sucesso: true,
+        dados: {
+          diasAtendimento:       config?.diasAtendimento       ?? null,
+          horaInicioAtendimento: config?.horaInicioAtendimento ?? null,
+          horaFimAtendimento:    config?.horaFimAtendimento    ?? null,
+        },
+      });
+    } catch (err) {
+      console.error('Erro ao obter horário de atendimento:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -354,7 +396,10 @@ const EquipeController = {
       const escopo = await resolverEscopoConfiguracao(req);
       if (!escopo) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
 
-      const { tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp } = req.body;
+      const {
+        tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
+        diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
+      } = req.body;
 
       // WhatsApp da empresa — normaliza para somente dígitos (DDD+número, DDI opcional).
       // undefined = não altera; string vazia = remove o número.
@@ -368,6 +413,41 @@ const EquipeController = {
         } else {
           whatsappFinal = digitos;
         }
+      }
+
+      // Expediente de atendimento. undefined = não altera; vazio = remove (sem restrição).
+      const parseHora = (v) => {
+        if (v === undefined) return undefined;
+        const s = String(v).trim();
+        if (s === '') return null;
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) throw new Error('Horário de atendimento inválido — use HH:MM.');
+        return s;
+      };
+      let diasFinal;
+      if (diasAtendimento !== undefined) {
+        // Aceita array [1,2,..] ou CSV "1,2,..". Vazio = null (todos os dias).
+        const arr = Array.isArray(diasAtendimento)
+          ? diasAtendimento
+          : String(diasAtendimento).split(',').map(s => s.trim()).filter(Boolean);
+        if (arr.length === 0) {
+          diasFinal = null;
+        } else {
+          const nums = [...new Set(arr.map(Number))].sort((a, b) => a - b);
+          if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 6)) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Dias de atendimento inválidos (0=Dom … 6=Sáb).' });
+          }
+          diasFinal = nums.join(',');
+        }
+      }
+      let horaInicioFinal, horaFimFinal;
+      try {
+        horaInicioFinal = parseHora(horaInicioAtendimento);
+        horaFimFinal    = parseHora(horaFimAtendimento);
+      } catch (e) {
+        return res.status(400).json({ sucesso: false, mensagem: e.message });
+      }
+      if (horaInicioFinal && horaFimFinal && horaInicioFinal >= horaFimFinal) {
+        return res.status(400).json({ sucesso: false, mensagem: 'A hora de início deve ser menor que a de término.' });
       }
 
       let tipoFinal;
@@ -415,6 +495,9 @@ const EquipeController = {
           ...(tipoFinal     !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
           ...(logoUrlFinal  !== undefined && { logoUrl: logoUrlFinal }),
           ...(whatsappFinal !== undefined && { whatsapp: whatsappFinal }),
+          ...(diasFinal        !== undefined && { diasAtendimento: diasFinal }),
+          ...(horaInicioFinal  !== undefined && { horaInicioAtendimento: horaInicioFinal }),
+          ...(horaFimFinal     !== undefined && { horaFimAtendimento: horaFimFinal }),
         },
         create: {
           empresaId:           escopo.empresaId,
@@ -423,6 +506,9 @@ const EquipeController = {
           diaFechamentoFatura: diaFinal  ?? null,
           logoUrl:             logoUrlFinal ?? null,
           whatsapp:            whatsappFinal ?? null,
+          diasAtendimento:       diasFinal       ?? null,
+          horaInicioAtendimento: horaInicioFinal ?? null,
+          horaFimAtendimento:    horaFimFinal    ?? null,
         },
       });
 
@@ -433,6 +519,9 @@ const EquipeController = {
           tipoFechamento:      config.tipoFechamento ?? (config.diaFechamentoFatura != null ? 'DIA_FIXO' : 'ULTIMO_DIA_MES'),
           diaFechamentoFatura: config.diaFechamentoFatura,
           whatsapp:            config.whatsapp,
+          diasAtendimento:       config.diasAtendimento,
+          horaInicioAtendimento: config.horaInicioAtendimento,
+          horaFimAtendimento:    config.horaFimAtendimento,
         },
       });
     } catch (err) {

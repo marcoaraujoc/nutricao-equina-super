@@ -7,17 +7,20 @@ import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
+import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { Card, StatTiles, RankBars, CarregandoRelatorio, ErroRelatorio, formatMesRef } from '../components/relatorios/RelatorioUI';
 
 interface SerieMes { mes: string; total: number }
 interface Cadastro {
-  pacientes: { ativos: number; novosMes: number; novosPorMes: SerieMes[] };
-  clientes:  { ativos: number; novosMes: number; novosPorMes: SerieMes[] };
+  pacientes: { ativos: number; novos: number; novosPorMes: SerieMes[] };
+  clientes:  { ativos: number; novos: number; novosPorMes: SerieMes[] };
 }
 
 export default function RelatoriosCadastro() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeVer = isGestor || podeExecutar('relatorios.gerencial.ler');
+  const { granularidade, data: dataRef } = usePeriodo();
 
   const [dados, setDados] = useState<Cadastro | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -26,11 +29,11 @@ export default function RelatoriosCadastro() {
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
-    api.get('/relatorios/cadastro')
+    api.get('/relatorios/cadastro', { params: periodoParams(granularidade, dataRef) })
       .then(res => { if (!res.data) return; setDados(res.data.dados as Cadastro); })
       .catch(() => setErro(true))
       .finally(() => setCarregando(false));
-  }, [loadingPerms, podeVer]);
+  }, [loadingPerms, podeVer, granularidade, dataRef]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -58,13 +61,15 @@ export default function RelatoriosCadastro() {
         </div>
       </div>
 
+      <PeriodoSelector />
+
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
           <StatTiles tiles={[
-            { label: 'Pacientes ativos',     valor: dados.pacientes.ativos },
-            { label: 'Novos pacientes no mês', valor: dados.pacientes.novosMes, tom: 'emerald' },
-            { label: 'Clientes ativos',      valor: dados.clientes.ativos },
-            { label: 'Novos clientes no mês', valor: dados.clientes.novosMes, tom: 'emerald' },
+            { label: 'Pacientes ativos',        valor: dados.pacientes.ativos },
+            { label: 'Novos pacientes no período', valor: dados.pacientes.novos, tom: 'emerald' },
+            { label: 'Clientes ativos',         valor: dados.clientes.ativos },
+            { label: 'Novos clientes no período', valor: dados.clientes.novos, tom: 'emerald' },
           ]} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">

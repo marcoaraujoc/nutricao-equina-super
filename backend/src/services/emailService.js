@@ -17,6 +17,44 @@ const podeEnviar = () => !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 
 const emailService = {
 
+  // ── Alerta de execução de tarefa agendada (cron) para o ADMIN ─────────────
+  async enviarAlertaCron({ para, nome, ok, resumo, erro, quando }) {
+    if (!podeEnviar()) {
+      console.warn('[emailService] Credenciais não configuradas — alerta de cron suprimido');
+      return;
+    }
+    const destinatarios = Array.isArray(para) ? para.join(',') : para;
+    const dataStr = new Date(quando ?? Date.now()).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const cor    = ok ? '#059669' : '#dc2626';
+    const status = ok ? '✅ Executado com sucesso' : '❌ Erro na execução';
+    const corpo  = ok
+      ? `<p style="color:#374151;line-height:1.6;margin:0;">${resumo ?? 'Tarefa concluída.'}</p>`
+      : `<pre style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;white-space:pre-wrap;font-size:13px;margin:0;">${erro ?? 'Erro desconhecido.'}</pre>`;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      destinatarios,
+      subject: `[S2Vet] Cron ${ok ? 'OK' : 'ERRO'} — ${nome}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:${cor};padding:20px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:20px;font-weight:700;">🐴 S2Vet — Tarefa Agendada</h1>
+          </div>
+          <div style="background:#f9fafb;padding:28px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="margin:0 0 4px;font-size:13px;color:#6b7280;">Tarefa</p>
+            <h2 style="color:#111827;margin:0 0 16px;font-size:18px;">${nome}</h2>
+            <p style="font-weight:700;color:${cor};margin:0 0 16px;">${status}</p>
+            ${corpo}
+            <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px;">
+              Execução em <strong>${dataStr}</strong> (Brasília). Alerta automático do agendador do S2Vet.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Alerta de cron "${nome}" (${ok ? 'OK' : 'ERRO'}) enviado → ${destinatarios}`);
+  },
+
   // ── Solicitação de vínculo para o VET (proprietário indicou um vet) ───────
   async enviarSolicitacaoVinculo({ vetEmail, vetNome, animalNome, proprietarioNome, token }) {
     if (!podeEnviar()) {

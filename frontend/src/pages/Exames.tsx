@@ -241,107 +241,107 @@ const Exames = () => {
         </div>
 
         <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Data</th>
-                <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nutriente</th>
-                <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Valor</th>
-                <th className="text-center px-6 py-4 text-sm font-medium text-gray-500">Status</th>
-                <th className="text-right px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {examesFiltrados.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-400">
-                    {exames.length === 0 ? 'Nenhum exame registrado ainda.' : 'Nenhum exame corresponde aos filtros.'}
-                  </td>
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Resultados do Exame</p>
+            <span className="text-xs text-gray-400">{examesFiltrados.length} registro{examesFiltrados.length !== 1 ? 's' : ''}</span>
+          </div>
+
+          <datalist id="nutrientes-list">
+            {nutrientes.map(n => <option key={n.id} value={n.nome} />)}
+          </datalist>
+
+          {examesFiltrados.length === 0 ? (
+            <div className="px-6 py-12 text-center text-gray-400 text-sm">
+              {exames.length === 0 ? 'Nenhum exame registrado ainda.' : 'Nenhum exame corresponde aos filtros.'}
+            </div>
+          ) : (
+          <>
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <span className="flex items-center gap-1"><Calendar size={11} /> Data</span>
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nutriente</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
-              ) : (
-                examesFiltrados.map((ex: any) => {
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {examesFiltrados.map((ex: any) => {
                   const isEditing = editingId === ex.id;
                   const status    = getStatus(ex);
                   return (
-                    <tr key={ex.id} className="border-t hover:bg-gray-50">
-                      <td className="px-6 py-4 flex items-center gap-2 text-gray-900">
-                        <Calendar size={16} />
+                    <tr key={ex.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">
                         {isEditing ? (
                           <DateInputBR
                             value={editValues.dataExame ? editValues.dataExame.split('T')[0] : ex.dataExame?.split('T')[0] ?? ''}
                             onChange={v => setEditValues({ ...editValues, dataExame: v })}
-                            className="border rounded p-1"
+                            className="border rounded p-1 text-sm"
                           />
                         ) : formatDate(ex.dataExame)}
                       </td>
-                      <td className="px-6 py-4 font-medium text-gray-900">
+                      <td className="px-4 py-3 font-medium text-gray-900">
                         {isEditing ? (
-                          <>
-                            <input
-                              list="nutrientes-list"
-                              value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
-                              onChange={e => {
-                                const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
-                                setEditValues({
-                                  ...editValues,
-                                  nutriente:   { nome: e.target.value },
-                                  nutrienteId: selected ? selected.id : null,
-                                });
-                              }}
-                              className="border rounded p-1 text-sm w-full"
-                              placeholder="Digite o nutriente..."
-                            />
-                            <datalist id="nutrientes-list">
-                              {nutrientes.map(n => <option key={n.id} value={n.nome} />)}
-                            </datalist>
-                          </>
+                          <input
+                            list="nutrientes-list"
+                            value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
+                            onChange={e => {
+                              const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
+                              setEditValues({ ...editValues, nutriente: { nome: e.target.value }, nutrienteId: selected ? selected.id : null });
+                            }}
+                            className="border rounded p-1 text-sm w-full"
+                            placeholder="Digite o nutriente..."
+                          />
                         ) : ex.nutriente?.nome || '—'}
                       </td>
-                      <td className="px-6 py-4 font-semibold text-emerald-700">
+                      <td className="px-4 py-3 text-center font-semibold text-emerald-700 whitespace-nowrap">
                         {isEditing ? (
                           <input
                             type="number" step="0.01"
                             value={editValues.valorEncontrado || ex.valorEncontrado}
                             onChange={e => setEditValues({ ...editValues, valorEncontrado: e.target.value })}
-                            className="border rounded p-1 text-sm w-20"
+                            className="border rounded p-1 text-sm w-20 text-center"
                           />
                         ) : `${ex.valorEncontrado} ${ex.unidade}`}
                       </td>
-                      <td className="px-6 py-4 text-center">
+                      <td className="px-4 py-3 text-center">
                         {status === 'naoCalculado' ? (
-                          <span className="px-4 py-1 rounded-3xl text-xs font-medium bg-gray-100 text-gray-600">
-                            Não calculado
-                          </span>
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">Não calculado</span>
                         ) : (
-                          <span className={`px-4 py-1 rounded-3xl text-xs font-medium ${
-                            status === 'normal' ? 'bg-green-100 text-green-700'
-                            : status === 'alto'  ? 'bg-red-100 text-red-700'
-                            : 'bg-yellow-100 text-yellow-700'
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                            status === 'normal' ? 'bg-green-100 text-green-700' : status === 'alto' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
                           }`}>
                             {status === 'normal' ? 'Normal' : status === 'alto' ? 'Alto' : 'Baixo'}
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex justify-end gap-3">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1">
                           {isEditing ? (
                             <>
-                              <button onClick={() => saveEdit(ex.id)} className="text-emerald-600 hover:text-emerald-700 font-medium">Salvar</button>
-                              <button onClick={cancelEdit} className="text-gray-500 hover:text-gray-700">Cancelar</button>
+                              <button onClick={() => saveEdit(ex.id)} className="px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-50">Salvar</button>
+                              <button onClick={cancelEdit} className="px-2.5 py-1 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancelar</button>
                             </>
                           ) : (
                             <>
                               {ex.arquivoUrl && (
-                                <>
-                                  <button onClick={() => window.open(ex.arquivoUrl, '_blank')}><Eye size={18} /></button>
-                                  <button><Download size={18} /></button>
-                                </>
+                                <button onClick={() => window.open(ex.arquivoUrl, '_blank')} title="Ver laudo"
+                                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                                  <Eye size={15} />
+                                </button>
                               )}
-                              <button onClick={() => startEdit(ex)} className="text-emerald-600 hover:text-emerald-700">
-                                <Edit size={18} />
+                              <button onClick={() => startEdit(ex)} title="Editar"
+                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                                <Edit size={15} />
                               </button>
-                              <button onClick={() => handleDelete(ex.id)} className="text-red-500 hover:text-red-600">
-                                <Trash2 size={18} />
+                              <button onClick={() => handleDelete(ex.id)} title="Excluir"
+                                className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                <Trash2 size={15} />
                               </button>
                             </>
                           )}
@@ -349,10 +349,89 @@ const Exames = () => {
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="md:hidden divide-y divide-gray-50">
+            {examesFiltrados.map((ex: any) => {
+              const isEditing = editingId === ex.id;
+              const status    = getStatus(ex);
+              return (
+                <div key={ex.id} className="px-4 py-3">
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <DateInputBR
+                        value={editValues.dataExame ? editValues.dataExame.split('T')[0] : ex.dataExame?.split('T')[0] ?? ''}
+                        onChange={v => setEditValues({ ...editValues, dataExame: v })}
+                        className="border rounded-lg p-1.5 text-sm w-full"
+                      />
+                      <input
+                        list="nutrientes-list"
+                        value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
+                        onChange={e => {
+                          const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
+                          setEditValues({ ...editValues, nutriente: { nome: e.target.value }, nutrienteId: selected ? selected.id : null });
+                        }}
+                        className="border rounded-lg p-1.5 text-sm w-full"
+                        placeholder="Digite o nutriente..."
+                      />
+                      <input
+                        type="number" step="0.01"
+                        value={editValues.valorEncontrado || ex.valorEncontrado}
+                        onChange={e => setEditValues({ ...editValues, valorEncontrado: e.target.value })}
+                        className="border rounded-lg p-1.5 text-sm w-full"
+                        placeholder="Valor"
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={() => saveEdit(ex.id)} className="flex-1 px-2.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">Salvar</button>
+                        <button onClick={cancelEdit} className="flex-1 px-2.5 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancelar</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-semibold text-gray-900 text-sm truncate">{ex.nutriente?.nome || '—'}</span>
+                        {status === 'naoCalculado' ? (
+                          <span className="inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">Não calculado</span>
+                        ) : (
+                          <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                            status === 'normal' ? 'bg-green-100 text-green-700' : status === 'alto' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {status === 'normal' ? 'Normal' : status === 'alto' ? 'Alto' : 'Baixo'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-400 flex items-center gap-1">
+                        <Calendar size={11} /> {formatDate(ex.dataExame)}
+                        {' · '}<span className="font-semibold text-emerald-700">{ex.valorEncontrado} {ex.unidade}</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {ex.arquivoUrl && (
+                          <button onClick={() => window.open(ex.arquivoUrl, '_blank')}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                            <Eye size={11} /> Laudo
+                          </button>
+                        )}
+                        <button onClick={() => startEdit(ex)}
+                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                          <Edit size={11} /> Editar
+                        </button>
+                        <button onClick={() => handleDelete(ex.id)}
+                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
+                          <Trash2 size={11} /> Excluir
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          </>
+          )}
         </div>
       </div>
       <ModalJustificativa

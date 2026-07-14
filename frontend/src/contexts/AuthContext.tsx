@@ -43,6 +43,15 @@ const AuthContext = createContext<AuthContextType | null>(null);
 // O token vive em cookies HttpOnly (s2vet_at/s2vet_rt) que o JS não consegue ler.
 // A identidade do usuário vem sempre de /api/users/me (o cookie é enviado
 // automaticamente com credentials: 'include'). Não há token em storage.
+// O cookie-dica `s2vet_auth` (NÃO-HttpOnly, sem token) sinaliza que há sessão —
+// sem ele, o front não sonda /me nem /refresh (evita 401 no console na tela de login).
+
+function temDicaDeSessao(): boolean {
+  return document.cookie.split(';').some(c => c.trim().startsWith('s2vet_auth='));
+}
+function limparDicaDeSessao(): void {
+  document.cookie = 's2vet_auth=; Max-Age=0; path=/';
+}
 
 async function fetchMe(): Promise<User | null> {
   try {
@@ -98,13 +107,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      let me = await fetchMe();
-      if (!me) {
-        // Sem cookie de acesso válido — tenta renovar via refresh token (cookie)
-        const renovou = await tryRefreshSession();
-        if (renovou) me = await fetchMe();
+      // Só sonda a sessão se houver dica de sessão — sem ela (nunca logou / logout),
+      // evita GET /me e POST /refresh 401 na tela de login.
+      if (temDicaDeSessao()) {
+        let me = await fetchMe();
+        if (!me) {
+          // Cookie de acesso expirado — tenta renovar via refresh token (cookie)
+          const renovou = await tryRefreshSession();
+          if (renovou) me = await fetchMe();
+        }
+        if (me) setUser(me);
+        else limparDicaDeSessao(); // sondagem falhou — remove a dica órfã
       }
-      if (me) setUser(me);
       const savedLogs = localStorage.getItem('auditLogs');
       if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
       setLoading(false);

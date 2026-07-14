@@ -36,6 +36,8 @@ router.get('/meus-contextos', authenticate, EquipeController.meusContextos);
 // ─── Configurações (logotipo + dia de fechamento de fatura) ──────────────────
 router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
 router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);
+// Expediente de atendimento — leitura por qualquer membro (Agendamento)
+router.get('/horario-atendimento', authenticate, EquipeController.obterHorarioAtendimento);
 
 // ─── Setup inicial (cria empresa + equipe em uma transação) ──────────────────
 router.post('/setup',  authenticate, EquipeController.setup);

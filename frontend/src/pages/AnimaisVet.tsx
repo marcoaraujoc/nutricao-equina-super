@@ -6,7 +6,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Unlink, Search, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, ScrollText, Zap } from 'lucide-react';
+import { Pencil, Unlink, Search, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, Zap } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
@@ -451,13 +451,13 @@ const AnimaisVet = () => {
 
         {/* ── Header ────────────────────────────────────────────────────── */}
         <BotaoVoltar para="/" />
-        <div className="flex items-center justify-between gap-3 mt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2">
           <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
             <Zap size={22} className="text-emerald-600" />
             Meus Pacientes
           </h1>
           {podeCriarAnimal && (
-            <div className="flex gap-2">
+            <div className="flex gap-2 self-end sm:self-auto">
               <button
                 onClick={() => navigate('/animais')}
                 className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white
@@ -472,9 +472,10 @@ const AnimaisVet = () => {
                            px-4 py-2.5 rounded-2xl font-semibold text-sm transition-colors flex-shrink-0"
               >
                 <ClipboardList size={15} />
-                <span className="hidden sm:inline">Exame de Compra</span>
-                <span className="sm:hidden">Compra</span>
+                <span>Exame de Compra</span>
               </button>
+              {/* Resenha — inativado temporariamente (removido do frontend a pedido).
+                  Para reativar: descomentar este bloco e reimportar `ScrollText`.
               <button
                 onClick={() => navigate('/resenha')}
                 className="flex items-center gap-2 bg-white border border-emerald-700 text-emerald-700 hover:bg-emerald-50
@@ -484,6 +485,7 @@ const AnimaisVet = () => {
                 <span className="hidden sm:inline">Resenha</span>
                 <span className="sm:hidden">Resenha</span>
               </button>
+              */}
             </div>
           )}
         </div>

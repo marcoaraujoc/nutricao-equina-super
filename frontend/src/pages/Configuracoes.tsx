@@ -1,5 +1,6 @@
 // src/pages/Configuracoes.tsx
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Camera, Loader2, MessageCircle } from 'lucide-react';
@@ -51,6 +52,12 @@ type TipoSelecao = 'DIA_ESPECIFICO' | 'PRIMEIRO_DIA_MES' | 'ULTIMO_DIA_MES' | 'D
 
 const ORDINAIS = ['1º', '2º', '3º', '4º', '5º', '6º', '7º', '8º', '9º', '10º'];
 
+// Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
+const DIAS_SEMANA = [
+  { v: 0, l: 'Dom' }, { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' },
+  { v: 4, l: 'Qui' }, { v: 5, l: 'Sex' }, { v: 6, l: 'Sáb' },
+];
+
 // Máscara BR: (11) 98765-4321 — armazena/envia somente dígitos
 const maskWhatsapp = (v: string) => {
   const d = v.replace(/\D/g, '').slice(0, 11);
@@ -62,6 +69,7 @@ const maskWhatsapp = (v: string) => {
 
 export default function Configuracoes() {
   const { isGestor, loading: loadingPerms } = usePermissoes();
+  const navigate = useNavigate();
 
   const [loading,      setLoading]      = useState(true);
   const [salvando,     setSalvando]     = useState(false);
@@ -74,6 +82,11 @@ export default function Configuracoes() {
   const [nDiaUtil,       setNDiaUtil]       = useState('5');
   const [whatsapp,       setWhatsapp]       = useState('');
 
+  // Expediente de atendimento
+  const [diasAtend,  setDiasAtend]  = useState<number[]>([]);
+  const [horaInicio, setHoraInicio] = useState('');
+  const [horaFim,    setHoraFim]    = useState('');
+
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
@@ -83,6 +96,11 @@ export default function Configuracoes() {
       if (dados) {
         setLogoPreview(dados.logoUrl ?? null);
         setWhatsapp(maskWhatsapp(dados.whatsapp ?? ''));
+        setDiasAtend(dados.diasAtendimento
+          ? String(dados.diasAtendimento).split(',').map(Number).filter((n: number) => n >= 0 && n <= 6)
+          : []);
+        setHoraInicio(dados.horaInicioAtendimento ?? '');
+        setHoraFim(dados.horaFimAtendimento ?? '');
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -174,12 +192,20 @@ export default function Configuracoes() {
       return;
     }
 
+    if (horaInicio && horaFim && horaInicio >= horaFim) {
+      toast.error('O horário de abertura deve ser menor que o de fechamento.');
+      return;
+    }
+
     setSalvando(true);
     try {
       const fd = new FormData();
       fd.append('tipoFechamento', tipoFechamento);
       if (diaFechamentoFatura != null) fd.append('diaFechamentoFatura', String(diaFechamentoFatura));
       fd.append('whatsapp', whatsappDigitos); // vazio = remove o número
+      fd.append('diasAtendimento', diasAtend.join(','));       // vazio = todos os dias
+      fd.append('horaInicioAtendimento', horaInicio);          // vazio = sem restrição
+      fd.append('horaFimAtendimento', horaFim);
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -192,6 +218,7 @@ export default function Configuracoes() {
       setLogoFile(null);
       setLogoRemovido(false);
       toast.success('Configurações salvas com sucesso!');
+      navigate('/mapa-atendimento'); // volta para o Mapa de atendimento após salvar
     } catch {
       // interceptor já trata isPermissionError silenciosamente
       toast.error('Erro ao salvar configurações.');
@@ -315,6 +342,43 @@ export default function Configuracoes() {
             </div>
             <p className="text-xs text-gray-400 mt-1">
               Número usado para enviar e receber mensagens de WhatsApp. Deixe em branco para remover.
+            </p>
+          </div>
+
+          {/* Expediente de atendimento */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Dias e horário de atendimento
+            </label>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {DIAS_SEMANA.map(d => {
+                const on = diasAtend.includes(d.v);
+                return (
+                  <button key={d.v} type="button"
+                    onClick={() => setDiasAtend(prev => on ? prev.filter(x => x !== d.v) : [...prev, d.v].sort((a, b) => a - b))}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                      on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}>
+                    {d.l}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Abre às</label>
+                <input type="time" step={3600} value={horaInicio} onChange={e => setHoraInicio(e.target.value)}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Fecha às</label>
+                <input type="time" step={3600} value={horaFim} onChange={e => setHoraFim(e.target.value)}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              O Agendamento libera horários apenas nos dias e na faixa selecionados. Deixe os dias sem seleção
+              ou os horários em branco para não restringir.
             </p>
           </div>
 

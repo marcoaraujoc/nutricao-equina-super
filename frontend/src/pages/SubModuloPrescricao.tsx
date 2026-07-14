@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Pencil, Trash2, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Calendar, Search, FileText, Eye, Printer, Lock,
+  Clock, Calendar, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
@@ -153,6 +154,25 @@ const formatarData = (d: string | null) => {
   const [year, month, day] = d.split('T')[0].split('-').map(Number);
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 };
+
+function montarTextoPrescricao(g: PrescricaoGrupo): string {
+  const linhasItens = g.itens.map(i => {
+    const det = [
+      i.dosagem ? `${i.dosagem}${i.unidade ?? ''}` : '',
+      i.via,
+      i.frequencia,
+    ].filter(Boolean).join(' · ');
+    return `• ${i.medicamento}${det ? ` — ${det}` : ''}`;
+  });
+  return [
+    `*Prescrição #${g.numeroFormatado}*`,
+    `Data: ${formatarData(g.createdAt)}`,
+    `Veterinário: ${g.veterinario.fullName}`,
+    `Status: ${STATUS_GRUPO[g.status]?.label ?? g.status}`,
+    `\nItens (${g.itens.length}):`,
+    ...linhasItens,
+  ].join('\n');
+}
 
 // Data de hoje no fuso LOCAL do navegador, como 'YYYY-MM-DD'. Não usar
 // `new Date().toISOString()`: isso dá a data em UTC, que já vira o dia
@@ -1551,7 +1571,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [total,              setTotal]              = useState(0);
   const [salvos,             setSalvos]             = useState(0);
   const [page,               setPage]               = useState(1);
-  const [limit]                                     = useState(20);
+  const [limit]                                     = useState(10);
   const [showEditModal,      setShowEditModal]      = useState(false);
   const [editingGrupo,       setEditingGrupo]       = useState<PrescricaoGrupo | null>(null);
   const [viewingGrupo,       setViewingGrupo]       = useState<PrescricaoGrupo | null>(null);
@@ -1857,10 +1877,18 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             </div>
             <p className="text-xs text-gray-500">{g.veterinario.fullName} • {g.itens.length} item{g.itens.length !== 1 ? 'ns' : ''}</p>
             <p className="text-[11px] text-gray-400 mt-0.5">{formatarData(g.createdAt)}</p>
-            <div className="flex gap-2 mt-2">
+            <div className="flex flex-wrap gap-2 mt-2">
               <button onClick={() => abrirEdicao(g)}
                 className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                 {editavelMobile ? <><Pencil size={11} /> Editar</> : <><Eye size={11} /> Ver</>}
+              </button>
+              <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))}
+                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                <MessageCircle size={11} /> WhatsApp
+              </button>
+              <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))}
+                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                <Mail size={11} /> E-mail
               </button>
               {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                 <button onClick={() => imprimirPrescricao(g, animal)}

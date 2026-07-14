@@ -7,6 +7,10 @@
 
 const AT_COOKIE = 's2vet_at'; // access token  (JWT 24h)
 const RT_COOKIE = 's2vet_rt'; // refresh token (JWT 30d)
+// Dica de sessão legível por JS (NÃO-HttpOnly, sem segredo): apenas sinaliza ao
+// front que existe uma sessão, para ele NÃO sondar /me e /refresh (evitando 401
+// no console) quando o usuário nunca logou / fez logout. Vida = refresh (30d).
+const HINT_COOKIE = 's2vet_auth';
 
 const UM_DIA   = 24 * 60 * 60 * 1000;
 const TRINTA_D = 30 * UM_DIA;
@@ -31,12 +35,15 @@ function baseOpts() {
 function setAuthCookies(res, { accessToken, refreshToken }) {
   if (accessToken)  res.cookie(AT_COOKIE, accessToken,  { ...baseOpts(), maxAge: UM_DIA });
   if (refreshToken) res.cookie(RT_COOKIE, refreshToken, { ...baseOpts(), maxAge: TRINTA_D });
+  // Dica legível por JS (httpOnly:false), sem token — front usa para decidir sondar a sessão
+  res.cookie(HINT_COOKIE, '1', { ...baseOpts(), httpOnly: false, maxAge: TRINTA_D });
 }
 
 function clearAuthCookies(res) {
   const opts = baseOpts();
   res.clearCookie(AT_COOKIE, opts);
   res.clearCookie(RT_COOKIE, opts);
+  res.clearCookie(HINT_COOKIE, { ...opts, httpOnly: false });
 }
 
 // Parser mínimo do header Cookie (evita dependência de cookie-parser)

@@ -4,16 +4,18 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
+import { useMobileMenu } from '../contexts/MobileMenuContext';
 import { useState } from 'react';
 import {
   LayoutDashboard, User, Zap, ClipboardList,
   Wheat, TestTube, ChartBar, Carrot, Stethoscope,
-  DollarSign, ChevronDown, LogOut, Menu, X,
+  DollarSign, ChevronDown, LogOut, X,
   Users, Users2, ShieldCheck, FlaskConical, Pill,
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
   Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
+  Bell, Gauge,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -51,7 +53,9 @@ function detectSection(pathname: string): ActiveSection {
     pathname.startsWith('/ai-usage') ||
     pathname.startsWith('/medicamentos') ||
     pathname.startsWith('/procedimentos') ||
-    pathname.startsWith('/admin/vacinas')
+    pathname.startsWith('/admin/vacinas') ||
+    pathname.startsWith('/configuracao-alertas') ||
+    pathname.startsWith('/monitoracao')
   ) return 'admin';
   return 'geral';
 }
@@ -177,10 +181,12 @@ export default function Sidebar() {
     p.startsWith('/ai-usage') ||
     p.startsWith('/medicamentos') ||
     p.startsWith('/procedimentos') ||
-    p.startsWith('/admin/vacinas'),
+    p.startsWith('/admin/vacinas') ||
+    p.startsWith('/configuracao-alertas') ||
+    p.startsWith('/monitoracao'),
   );
   const [openFinanceiro,    setOpenFinanceiro]    = useState(false);
-  const [isMobileMenuOpen,  setIsMobileMenuOpen]  = useState(false);
+  const { open: isMobileMenuOpen, setOpen: setIsMobileMenuOpen } = useMobileMenu();
 
   const toggle      = (s: React.Dispatch<React.SetStateAction<boolean>>) => s(v => !v);
   const closeMobile = () => setIsMobileMenuOpen(false);
@@ -228,11 +234,9 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Hamburguer mobile */}
-      <button onClick={() => setIsMobileMenuOpen(true)}
-        className="md:hidden fixed top-6 left-6 z-50 p-3 bg-white rounded-3xl shadow-lg border border-gray-200">
-        <Menu size={28} />
-      </button>
+      {/* O gatilho do menu mobile fica na barra superior sticky (App.tsx / MobileTopBar),
+          não aqui — position:fixed se comporta mal no iOS Safari dentro do shell com
+          scroll interno. Este componente cuida só do drawer e do backdrop. */}
 
       {/* Sidebar */}
       <div className={`
@@ -299,6 +303,8 @@ export default function Sidebar() {
                   {podeVerDashboard && navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
                   {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
                   {(isGestor || isAdmin) && navLink('/auditoria-geral', <ScrollText size={20} />, 'Auditoria', p.startsWith('/auditoria-geral'))}
+                  {isAdmin && navLink('/configuracao-alertas', <Bell  size={20} />, 'Configuração', isAdminActive('/configuracao-alertas'))}
+                  {isAdmin && navLink('/monitoracao',          <Gauge size={20} />, 'Monitoração',  isAdminActive('/monitoracao'))}
 
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
                   {temAlgumCadastroItem && (
