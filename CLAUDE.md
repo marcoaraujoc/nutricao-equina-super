@@ -1,5 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-07-16 (Listagem de animais base × convidado: base própria vê todos os vínculos incl. co-tratados de outra empresa; convidada = isolamento estrito por empresa; designação de prestador escopada ao contexto)
 # Atualizado em: 2026-07-14 (Relatórios com período + Tabela responsiva; expediente de atendimento; autosave de evolução; lembretes WhatsApp; alertas/Monitoração de cron com agenda dinâmica; cookie-dica de sessão)
 
 ---
@@ -251,6 +252,20 @@ User              → usuários (todos os roles)
                     frequenciaVisitas (Int? 1-7), isConvidado (Boolean)
 Animal            → animais cadastrados
 Especie / Raca    → taxonomia
+Especialidade     → catálogo de especialidades POR espécie (tb_especialidades) — fonte única
+                    (substitui a lista fixa frontend/utils/subespecialidades.ts). unique(nome, especieId).
+                    Seed: backend/scripts/seedEspecialidades.js (72 itens: Equino/Canino/Felino/Bovino/Réptil).
+                    Rota GET /api/especialidades?especieIds=1,2 (EspecialidadeController). Migration 20260717000000.
+UsuarioEspecialidade    → especialidades do usuário (VET/FORNECEDOR c/ login). unique(userId, especialidadeId).
+FornecedorEspecialidade → especialidades do cadastro Fornecedor. unique(fornecedorId, especialidadeId).
+                    Fornecedor.tipoServico (VARCHAR 50, legado) é DERIVADO do nome da 1ª especialidade.
+                    Multi-especialidade em: Cadastro Pessoal (UsuarioEspecialidade — VET e FORNECEDOR),
+                    Novo Fornecedor (FornecedorEspecialidade), Novo Membro (UsuarioFormModal → incluir-membro).
+                    Filtro por "espécies que a empresa atende" (EmpresaConfiguracao.especiesAtendidas, CSV de
+                    IDs, configurado em /configuracoes) via GET /api/equipes/especies-atendidas (qualquer membro).
+                    No Cadastro Pessoal do convidado o filtro usa as espécies da empresa; no cadastro direto
+                    do vet usa as espécies que ele atende. Componente reutilizável: EspecialidadeSelector.tsx.
+                    Agenda (Agendamentos.tsx) lê especialidades do catálogo (fallback p/ VetSubespecialidade legado).
 Alimento          → banco de alimentos
 Nutriente         → banco de nutrientes
 ComposicaoAlimento → composição nutricional por alimento/espécie
@@ -495,8 +510,22 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
   - LISTAGEM segregada por equipe: `AnimalController.listar` e `VeterinarioController.meusAnimais`
     filtram por `getEquipeScopeDoUsuario(userId, empresaId, reqEquipeId)` (`lib/vetUtils.js`) —
     contexto x-equipe-id > equipes do usuário na empresa > null (dono sem MembroEquipe = empresa toda).
-    Animal de OUTRA equipe da mesma empresa fica fora da lista mesmo com vínculo direto do vet;
-    pacientes pessoais fora da empresa ativa (vínculo direto) continuam listados
+    Animal de OUTRA equipe da mesma empresa fica fora do escopo de equipe.
+  - **LISTAGEM base × convidado (2026-07-16):** a exibição de vínculos diretos do vet depende do
+    papel no contexto ATIVO (`req.membroCargo`):
+    - **Base própria** (`req.membroCargo === 'GESTOR'` — dono/gestor da empresa ativa): vê
+      `scopeOR` + `vetSolicitacoesWhere` (TODOS os vínculos, de qualquer empresa) → co-tratados que
+      pertencem a OUTRA empresa aparecem na base do vet.
+    - **Convidada** (cargo FORNECEDOR = `isVetPrestadorContexto`, ou VET membro não-gestor): isolamento
+      ESTRITO — `vetVinculoNaEmpresa` = `{ AND: [vetSolicitacoesWhere, { empresaId: req.empresaId }] }`
+      (só vínculos a animais DA empresa ativa) + designações escopadas. Exclusivos de outra empresa NÃO vazam.
+    - Flags em `AnimalController.listar`: `isDonoOuGestorContexto` (base) e `isVetPrestadorContexto`.
+      Substitui o antigo `vetVinculoForaDaEmpresa` (que mostrava vínculos FORA da empresa ativa e
+      vazava os exclusivos). Multi-vet = múltiplos `VetAnimalSolicitacao` (sem "vet principal" no Animal).
+    - **Fonte única (`lib/animalScope.js` → `buildAnimalScopeWhere(req)`):** a regra base × convidado
+      foi extraída e é reusada por `AnimalController.listar` (listagem/agendamento) e por
+      `PrescricaoGrupoController.listarParaExecucao` (tela `/execucao-prescricao` — `whereGrupo.animal =
+      { ...scope, ativo:true }`). Novas telas que listam por animal devem usar essa lib, não replicar o where.
   - `verificarAcessoAnimal({ animalId, userId, empresaId, equipeId })` — mesma empresa exige equipe
     do contexto (ou membership na equipe do animal / dono da empresa, quando sem x-equipe-id);
     vínculo direto do vet ainda garante acesso por ID (paciente próprio). Todos os callers
@@ -838,8 +867,9 @@ New-Item -ItemType Junction `
 - [x] **Autosave da evolução no celular** — `SubModuloEvolucao` grava rascunho da evolução NOVA em localStorage (`s2vet_ev_draft_<animalId>`) a cada alteração (inclui ditado); restaura no refresh (sem toast); limpa ao salvar/finalizar.
 - [x] **Lembretes de agendamento por WhatsApp (D-1 e 2h antes)** — base pronta: `messaging/whatsappProvider.js` (abstração + `NoopWhatsAppProvider` que só loga; env `WHATSAPP_PROVIDER`), `services/lembreteAgendamentoService.js` (FEFO de tiers, idempotência via `AgendamentoClinico.lembreteWa1DiaEnviadoEm`/`lembreteWa2hEnviadoEm` — migration `20260713010000`). Envio real pluga no provider quando houver credenciais.
 - [x] **Alertas + Monitoração das tarefas agendadas (cron)** — `lib/cronAlert.js` (`reportarCron`: e-mail ao ADMIN + registro em `CronExecucao`; erro sempre, sucesso só quando há trabalho); `emailService.enviarAlertaCron`. Config em `CronAlertaConfig` (destinatários/`notificarSucesso`/`ativo`), lida ao vivo. Tela **Monitoração** (`/monitoracao`, ADMIN): dia/semana/mês. Tela **Configuração** (`/configuracao-alertas`, ADMIN): alertas + agenda. Controller `MonitoracaoController` + rotas `/api/monitoracao/{config,execucoes,agendas}`. Migration `20260714000000`.
-- [x] **Reagendamento dinâmico do node-cron a partir do banco** — `lib/cronManager.js` (`registrarJob`/`iniciarJobs`/`reagendar`/`listarJobs`): cada job tem `chave`+expr padrão; `CronAgenda` (migration `20260714010000`) guarda a expressão/`ativo` editável; `PUT /api/monitoracao/agendas/:chave` para/recria o task do node-cron AO VIVO (sem restart). server.ts registra os 6 jobs (`crmv_sync`, `auto_aceite`, `vinculos_provisorios`, `lembrete_d1_email`, `lembrete_whatsapp`, `fechamento_faturas`) e chama `iniciarJobs()` no listen. **Não usar `cron.schedule` direto** — sempre via `registrarJob`.
+- [x] **Reagendamento dinâmico do node-cron a partir do banco** — `lib/cronManager.js` (`registrarJob`/`iniciarJobs`/`reagendar`/`listarJobs`): cada job tem `chave`+expr padrão; `CronAgenda` (migration `20260714010000`) guarda a expressão/`ativo` editável; `PUT /api/monitoracao/agendas/:chave` para/recria o task do node-cron AO VIVO (sem restart). server.ts registra os 7 jobs (`crmv_sync`, `auto_aceite`, `vinculos_provisorios`, `lembrete_d1_email`, `lembrete_whatsapp`, `fechamento_faturas`, `cancelar_agendamentos_nao_realizados`) e chama `iniciarJobs()` no listen. **Não usar `cron.schedule` direto** — sempre via `registrarJob`.
 - [x] **Cookie-dica de sessão** — `authCookies.js` seta `s2vet_auth=1` (NÃO-HttpOnly, sem token) no login/refresh e limpa no logout; `AuthContext` só sonda `/me`+`/refresh` se a dica existir → some o 401 no console da tela de login. Sessões antigas precisam de 1 novo login para ganhar a dica.
+- [x] **Job — cancelamento de agendamentos não realizados (2026-07-16)** — `services/agendamentoCronService.js` (`cancelarAgendamentosNaoRealizados`): job corporativo (todas as empresas) registrado como `cancelar_agendamentos_nao_realizados`, padrão **23:30** (`30 23 * * *`). Cancela todo `AgendamentoClinico` ainda `AGENDADO` (ativo) com `dataHora < now` → `CANCELADO` + `observacao` com o motivo (preserva EM_ANDAMENTO e futuros). Liga/desliga e horário sob controle do ADMIN na tela **Configuração** (CronAgenda, via `listarJobs`/`reagendar`). Reporta pela Monitoração via `comAlerta`/`reportarCron`.
 - [ ] Lembretes WhatsApp: implementar um provider real (Cloud API/Twilio/Z-API) e credenciais.
 - [ ] Configuração do ADMIN: se quiser digest diário dos alertas em vez de e-mail por evento.
 
@@ -976,7 +1006,12 @@ New-Item -ItemType Junction `
       `FaturaItem` ganhou 4 FKs nullable: `exameClinicoId`, `prescricaoId`, `vacinaClinicaId`,
       `encaminhamentoClinicoId`, setadas por `adicionarFaturaItem` (`faturaUtils.js`) em todo ponto que
       lança cobrança (`ExameClinicoController.finalizar`, `VacinaClinicaController.registrar`,
-      `EncaminhamentoController.criar`, `PrescricaoGrupoController.executar`). Editar (descrição) ou
+      `EncaminhamentoController.criar`, `PrescricaoGrupoController.executar`).
+      **Exame → fatura (premissa 2026-07-16):** o exame é lançado com VALOR ZERADO assim que a
+      EVOLUÇÃO é FINALIZADA (`EvolucaoController.atualizar` quando `vaiFinalizar`), não só ao concluir o
+      exame. Helper idempotente `lancarExameNaFatura(tx, exame, proprietarioUserId)` (`faturaUtils.js`)
+      evita duplicar entre os dois gatilhos (checa `exameClinicoId` já faturado); `ExameClinicoController.finalizar`
+      também passou a usá-lo. `medicamentoCliente` (prescrição) NÃO gera FaturaItem ao executar. Editar (descrição) ou
       excluir um exame/vacina/encaminhamento já faturado agora sincroniza (`atualizarFaturaItensDaOrigem`/
       `removerFaturaItensDaOrigem`) o(s) `FaturaItem` vinculado(s) dentro da mesma transaction — se a
       fatura de destino já estiver `PAGA`, a operação é bloqueada com 400 `{ code: 'FATURA_PAGA' }` e
@@ -1618,6 +1653,22 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     desconta reservas de OUTRAS prescrições — o alerta 409 `ESTOQUE_INSUFICIENTE` no finalizar
     aceita `forcarFinalizacao: true` (o restante fica reservado no último lote, podendo
     exceder o saldo físico — comportamento intencional de finalização forçada).
+
+35. Escopo clínico (`lib/clinicalScope.js`) — segregação multi-clínica dos registros clínicos:
+    `escopoEvolucaoWhere`/`escopoFilhoEvolucaoWhere`/`escopoPrescricaoGrupoWhere` filtram por
+    `{ OR: [{ empresaId: req.empresaId }, { veterinarioId: userId }] }` (a clínica ativa vê seus
+    registros + os próprios do usuário). `semEscopoClinico(req)` BYPASSA o escopo (retorna {}) para:
+    ADMIN, PROPRIETARIO (dono do animal vê tudo) e **GESTOR do contexto ativo**
+    (`req.membroCargo === 'GESTOR'`). Regra de negócio: "gestor não é perfil no controle de acesso —
+    tem acesso a TUDO". O gestor precisa ver e FINALIZAR evoluções/exames/vacinas/encaminhamentos/
+    prescrições criados por QUALQUER membro da equipe, sem depender de autoria nem de `empresaId`
+    corretamente resolvido (evolução criada com `empresaId` divergente por race de contexto NÃO some
+    para o gestor). `req.membroCargo` é setado pelo `checkPermission` da rota — todas as rotas de
+    listagem clínica por animal têm `checkPermission(...'ler'...)`, então o bypass é confiável ali.
+    Exceção conhecida: `GET /clinica/historico/animal/:id` NÃO tem `checkPermission` → `req.membroCargo`
+    fica undefined → gestor NÃO bypassa no histórico (usa escopo por empresa). Botão Finalizar no
+    front continua sendo `isGestor || nível de finalizar (EQUIPE/FULL = qualquer registro; PROPRIO =
+    só os próprios)` — o bypass do escopo só garante que o registro APAREÇA para o gestor decidir.
 ```
 
 ---

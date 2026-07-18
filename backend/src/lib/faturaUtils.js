@@ -70,6 +70,38 @@ async function adicionarFaturaItem(tx, {
 }
 
 /**
+ * Lança um exame clínico na fatura ABERTA do proprietário com VALOR ZERADO, de forma
+ * IDEMPOTENTE: se já houver um FaturaItem vinculado a este exame (exameClinicoId), não
+ * duplica. Usado ao finalizar a evolução (exames solicitados) e ao concluir o exame.
+ * Deve ser chamado dentro de uma transaction (tx).
+ *
+ * @param {object} tx
+ * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero }
+ * @param {number|null} proprietarioUserId - Animal.userId (dono do animal)
+ * @returns {Promise<boolean>} true se lançou; false se já estava faturado ou sem proprietário
+ */
+async function lancarExameNaFatura(tx, exame, proprietarioUserId) {
+  if (!proprietarioUserId) return false;
+  const jaFaturado = await tx.faturaItem.findFirst({ where: { exameClinicoId: exame.id } });
+  if (jaFaturado) return false;
+
+  const exNum     = `EX-${String(exame.numero).padStart(4, '0')}`;
+  const descricao = `[${exNum}] ${exame.tipo}: ${exame.descricao}`;
+  const fatura    = await getOrCreateFatura(tx, proprietarioUserId);
+  await adicionarFaturaItem(tx, {
+    faturaId:       fatura.id,
+    animalId:       exame.animalId,
+    tipo:           'EXAME',
+    descricao,
+    valor:          0,
+    quantidade:     1,
+    veterinarioId:  exame.veterinarioId,
+    exameClinicoId: exame.id,
+  });
+  return true;
+}
+
+/**
  * Recalcula o total da fatura a partir da soma de valor × quantidade dos itens.
  * Aceita tanto o client `prisma` quanto um client de transaction (`tx`).
  *
@@ -280,6 +312,7 @@ module.exports = {
   formatAtendimentoNum,
   getOrCreateFatura,
   adicionarFaturaItem,
+  lancarExameNaFatura,
   recalcularTotal,
   registrarCorrecaoFatura,
   removerFaturaItensDaOrigem,

@@ -8,7 +8,7 @@ import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
-import { RefreshCw, ChevronDown, ChevronRight, Download, Printer } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronRight, Download, Printer, FileBarChart } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import toast from 'react-hot-toast';
 import { formatDateTime } from '../utils/dateUtils';
@@ -450,6 +450,19 @@ const RelatorioNutricional = () => {
 
         <BotaoVoltar className="mb-4" />
 
+        {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título + descritivo */}
+        <div className="mt-2 mb-4 flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <FileBarChart size={20} className="text-emerald-700" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Relatório Nutricional</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Análise da dieta ativa frente às exigências nutricionais do animal.
+            </p>
+          </div>
+        </div>
+
         <SeletorAnimal
           animais={animaisDoProprietario}
           animalIdAtual={effectiveAnimalId}
@@ -459,44 +472,24 @@ const RelatorioNutricional = () => {
 
         {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
-        {/* Header + botão atualizar */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Relatório Nutricional</h2>
-            <div className="flex items-center gap-3 mt-0.5">
-              {snapshot?.geradoEm && (
-                <p className="text-xs text-gray-400">
-                  Gerado em {formatDateTime(snapshot.geradoEm)}
-                </p>
-              )}
-              {snapshot?.fonteCalculo && (
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                  snapshot.fonteCalculo === 'NRC_2007_CALCULADO'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-blue-100 text-blue-700'
-                }`}>
-                  {snapshot.fonteCalculo === 'NRC_2007_CALCULADO' ? 'NRC 2007 Dinâmico' : 'Tabela'}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={gerarRelatorio}
-              disabled={generating}
-              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-            >
-              <RefreshCw size={15} className={generating ? 'animate-spin' : ''} />
-              {generating ? 'Gerando...' : 'Atualizar'}
-            </button>
-            {relatorio.length > 0 && (
-              <div className="relative" ref={exportMenuRef}>
-                <button
-                  onClick={() => setShowExportMenu(v => !v)}
-                  className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 transition-colors"
-                >
-                  <Download size={15} /> Exportar <ChevronDown size={13} />
-                </button>
+        {/* Ações + info do snapshot (título foi para o cabeçalho da página) */}
+        <div className="flex items-center justify-end gap-2 flex-wrap">
+          <button
+            onClick={gerarRelatorio}
+            disabled={generating}
+            className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-xl text-xs font-medium transition-colors disabled:opacity-60"
+          >
+            <RefreshCw size={13} className={generating ? 'animate-spin' : ''} />
+            {generating ? 'Gerando...' : 'Atualizar'}
+          </button>
+          {relatorio.length > 0 && (
+            <div className="relative" ref={exportMenuRef}>
+              <button
+                onClick={() => setShowExportMenu(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 rounded-xl text-xs font-medium text-gray-700 transition-colors"
+              >
+                <Download size={13} /> Exportar <ChevronDown size={12} />
+              </button>
                 {showExportMenu && (
                   <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[160px]">
                     <button
@@ -513,9 +506,22 @@ const RelatorioNutricional = () => {
                     </button>
                   </div>
                 )}
-              </div>
-            )}
-          </div>
+            </div>
+          )}
+          {snapshot?.geradoEm && (
+            <p className="text-xs text-gray-400">
+              Gerado em {formatDateTime(snapshot.geradoEm)}
+            </p>
+          )}
+          {snapshot?.fonteCalculo && (
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              snapshot.fonteCalculo === 'NRC_2007_CALCULADO'
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-blue-100 text-blue-700'
+            }`}>
+              {snapshot.fonteCalculo === 'NRC_2007_CALCULADO' ? 'NRC 2007 Dinâmico' : 'Tabela'}
+            </span>
+          )}
         </div>
 
         {/* Filtros */}

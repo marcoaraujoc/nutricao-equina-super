@@ -3,6 +3,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
+const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
@@ -340,7 +341,13 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
 const VIA_INJETAVEL_REGEX = /intramuscular|intraven|subcut|intraderm|endovenos/i;
 
 function isViaInjetavel(via) {
-  return !!via && VIA_INJETAVEL_REGEX.test(via);
+  if (!via) return false;
+  const v = String(via).trim().toLowerCase();
+  // Abreviações injetáveis usadas no catálogo (IM, IV, EV, SC, ID) — o valor da via
+  // costuma vir abreviado do cadastro do medicamento, não como nome completo.
+  if (['im', 'iv', 'ev', 'sc', 'id'].includes(v)) return true;
+  // Nomes completos (ex.: Intramuscular, Endovenosa, Subcutânea, Intradérmica).
+  return VIA_INJETAVEL_REGEX.test(v);
 }
 
 // Localiza no estoque da empresa um item cujo nome do medicamento comece com
@@ -934,14 +941,138 @@ const cancelar = async (req, res) => {
   }
 };
 
-// ─── Executar grupo (por dia) ─────────────────────────────────────────────────
-// Debita a dose do dia do estoque e lança na fatura.
-// Se isUltimoDia = true → transita para EXECUTADO; senão mantém FINALIZADO.
+// ─── Cancelar na TELA DE EXECUÇÃO ─────────────────────────────────────────────
+// Permite cancelar toda a prescrição mesmo com execução PARCIAL (tratamento de
+// vários dias). Itens já executados/faturados são preservados; os ainda NÃO
+// executados são cancelados (ativo=false) e as reservas remanescentes liberadas.
+// Justificativa obrigatória → AuditLog (CANCELAMENTO).
+const cancelarNaExecucao = async (req, res) => {
+  try {
+    const grupoId = Number(req.params.id);
+    const userId  = req.user.id;
+    const motivo  = req.body?.motivo?.trim() ?? null;
+    if (!motivo) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo do cancelamento' });
+    }
+
+    const grupo = await prisma.prescricaoGrupo.findUnique({
+      where:   { id: grupoId },
+      include: { itens: { where: { ativo: true } } },
+    });
+    if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+
+    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
+    }
+    if (grupo.status === 'EXECUTADO') {
+      return res.status(400).json({ error: 'Prescrição já totalmente executada não pode ser cancelada.', code: 'EXECUTADO' });
+    }
+    if (!['FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
+      return res.status(400).json({ error: 'Status não permite cancelamento na execução.' });
+    }
+
+    const houveExecucao = grupo.itens.some(i => i.executadoEm);
+    await prisma.$transaction(async (tx) => {
+      await liberarReservas(tx, grupoId);
+      // Cancela só os itens ainda NÃO executados (preserva os executados/faturados).
+      await tx.prescricao.updateMany({
+        where: { grupoId, ativo: true, executadoEm: null },
+        data:  { status: 'CANCELADA', ativo: false },
+      });
+      await tx.prescricaoGrupo.update({
+        where: { id: grupoId },
+        data:  {
+          status:             houveExecucao ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO',
+          motivoCancelamento: motivo,
+        },
+      });
+      await registrarAuditoria(tx, req, {
+        categoria:  'CANCELAMENTO',
+        entidade:   'PRESCRICAO',
+        entidadeId: grupoId,
+        animalId:   grupo.animalId,
+        motivo,
+        detalhes:   houveExecucao
+          ? 'Cancelada na execução (execução parcial — itens executados preservados)'
+          : 'Cancelada na execução',
+      });
+    });
+
+    return res.json({ dados: { message: 'Prescrição cancelada.' } });
+  } catch (err) {
+    console.error('PrescricaoGrupoController.cancelarNaExecucao:', err);
+    return res.status(500).json({ error: 'Erro ao cancelar prescrição.' });
+  }
+};
+
+// ─── Reabrir para edição ──────────────────────────────────────────────────────
+// Prescrição FINALIZADA e ainda NÃO executada → volta para SALVO e libera as
+// reservas de estoque. O usuário edita como rascunho e finaliza novamente.
+// (SALVO já é editável; EXECUTADO/parcial/cancelada não podem ser reabertas.)
+const reabrirParaEdicao = async (req, res) => {
+  try {
+    const grupoId = Number(req.params.id);
+    const userId  = req.user.id;
+
+    const grupo = await prisma.prescricaoGrupo.findUnique({
+      where:   { id: grupoId },
+      include: { itens: { where: { ativo: true } } },
+    });
+    if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+
+    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite editar prescrições criadas por você.' });
+    }
+    if (grupo.status === 'SALVO') {
+      const g = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
+      return res.json({ dados: { ...g, numeroFormatado: formatNumero(g.numero) } });
+    }
+    if (grupo.status === 'EXECUTADO' || grupo.itens.some(i => i.executadoEm)) {
+      return res.status(400).json({ error: 'Prescrição já executada não pode ser editada.', code: 'EXECUTADO' });
+    }
+    if (grupo.status !== 'FINALIZADO') {
+      return res.status(400).json({ error: 'Somente prescrições finalizadas e não executadas podem ser reabertas.' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await liberarReservas(tx, grupoId);
+      await tx.prescricao.updateMany({ where: { grupoId, ativo: true }, data: { status: 'RASCUNHO' } });
+      await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'SALVO', veterinarioId: userId } });
+    });
+
+    const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
+    return res.json({ dados: { ...grupoAtualizado, numeroFormatado: formatNumero(grupoAtualizado.numero) } });
+  } catch (err) {
+    console.error('PrescricaoGrupoController.reabrirParaEdicao:', err);
+    return res.status(500).json({ error: 'Erro ao reabrir prescrição.' });
+  }
+};
+
+// ─── Executar grupo (por dia / item a item) ──────────────────────────────────
+// Debita a dose do dia do estoque e lança CADA item na fatura ao ser executado.
+// body.itemIds (opcional) → executa só esses itens; sem itemIds → todos os da janela
+// de hoje ainda não executados. Não reexecuta o mesmo item no mesmo dia.
+// Transita para EXECUTADO (backend-autoritativo) quando TODOS os itens ativos já
+// foram executados e alcançaram o último dia da sua janela.
+
+// Data local (YYYY-MM-DD) da última execução do item — para não reexecutar/refaturar
+// o MESMO item no MESMO dia (permite execução item a item sem duplicar na fatura).
+function executadoHojeItem(item, hojeStr) {
+  if (!item.executadoEm) return false;
+  const d = new Date(item.executadoEm);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === hojeStr;
+}
 
 const executar = async (req, res) => {
   try {
     const grupoId       = Number(req.params.id);
     const veterinarioId = req.user.id;
+    // itemIds (opcional): executa/fatura SOMENTE esses itens (execução item a item).
+    // Sem itemIds → mantém o comportamento antigo (todos os itens da janela de hoje).
+    const itemIdsFiltro = Array.isArray(req.body?.itemIds)
+      ? req.body.itemIds.map(Number).filter(Number.isInteger)
+      : null;
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
@@ -954,23 +1085,24 @@ const executar = async (req, res) => {
     if (!['FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
       return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
     }
-    // Regra: prescrição só pode ser executada com a evolução do atendimento FINALIZADA
-    if (grupo.evolucao && grupo.evolucao.status !== 'FINALIZADA') {
-      return res.status(400).json({ error: 'A evolução do atendimento precisa estar finalizada para executar a prescrição.' });
-    }
+    // Premissa alterada (2026-07-16): a prescrição FINALIZADA pode ser executada mesmo
+    // com a evolução ainda EM_ANDAMENTO — não exige mais a evolução FINALIZADA.
 
     const hojeStr = hojeLocalStr();
 
     // Só processa/trava hoje os itens cuja própria janela (dataInicio + duracaoDias)
     // cobre o dia de hoje — itens de duração menor já executados em dias anteriores
     // não são re-debitados/re-faturados, e itens que ainda não começaram são ignorados.
-    const itensHoje = grupo.itens.filter(item => janelaDoItem(item, hojeStr).dentro);
+    // Itens processáveis hoje: dentro da janela, ainda não executados HOJE, e — se
+    // itemIds foi enviado — restritos a esses (execução item a item).
+    const itensHoje = grupo.itens.filter(item =>
+      janelaDoItem(item, hojeStr).dentro &&
+      !executadoHojeItem(item, hojeStr) &&
+      (!itemIdsFiltro || itemIdsFiltro.includes(item.id))
+    );
     if (itensHoje.length === 0) {
-      return res.status(400).json({ error: 'Nenhum item da prescrição está dentro da janela de tratamento hoje.' });
+      return res.status(400).json({ error: 'Nenhum item da prescrição para executar agora.' });
     }
-    // Transita para EXECUTADO quando, para TODOS os itens ativos do grupo, hoje já é
-    // (ou passou d)o último dia da respectiva janela — respeita itens com durações diferentes.
-    const isUltimoDia = grupo.itens.every(item => janelaDoItem(item, hojeStr).ultimoDia);
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
@@ -1008,16 +1140,21 @@ const executar = async (req, res) => {
           : item.medicamento;
         const descricao = atendNum ? `[${atendNum}] ${descBase}` : descBase;
 
-        await adicionarFaturaItem(tx, {
-          faturaId:     fatura.id,
-          animalId:     grupo.animalId,
-          tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
-          descricao,
-          valor:        valorDaDose,  // valor total da dose (regra de 3)
-          quantidade:   1,
-          veterinarioId,
-          prescricaoId: item.id,
-        });
+        // Medicamento fornecido pelo cliente NÃO é cobrado — não gera item na fatura,
+        // mesmo após executado. (A seringa/agulha da aplicação, insumos da clínica,
+        // continuam sendo lançados abaixo quando a via for injetável.)
+        if (!item.medicamentoCliente) {
+          await adicionarFaturaItem(tx, {
+            faturaId:     fatura.id,
+            animalId:     grupo.animalId,
+            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+            descricao,
+            valor:        valorDaDose,  // valor total da dose (regra de 3)
+            quantidade:   1,
+            veterinarioId,
+            prescricaoId: item.id,
+          });
+        }
 
         // Via injetável (IV/IM/ID/SC/EV): 1 seringa + 1 agulha por dose aplicada.
         // Se não houver estoque cadastrado/disponível, apenas não lança (não bloqueia a execução).
@@ -1050,8 +1187,16 @@ const executar = async (req, res) => {
         await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
       }
 
-      // Só transita para EXECUTADO no último dia do tratamento
-      if (isUltimoDia) {
+      // Transita para EXECUTADO só quando TODOS os itens ativos já foram executados
+      // e cada um alcançou o último dia da sua janela (respeita execução item a item
+      // e durações diferentes). Backend-autoritativo — relê o estado já atualizado.
+      const itensAtuais = await tx.prescricao.findMany({
+        where:  { grupoId, ativo: true },
+        select: { executadoEm: true, dataInicio: true, duracaoDias: true },
+      });
+      const tudoConcluido = itensAtuais.length > 0 &&
+        itensAtuais.every(item => item.executadoEm && janelaDoItem(item, hojeStr).ultimoDia);
+      if (tudoConcluido) {
         await tx.prescricaoGrupo.update({
           where: { id: grupoId },
           data:  {
@@ -1082,19 +1227,20 @@ const listarParaExecucao = async (req, res) => {
     const { busca, empresaId, animalId, data } = req.query;
 
     const whereGrupo = {
-      // EXECUTADO incluído para o histórico do dia: grupo executado no último
-      // dia do tratamento ainda está dentro da janela e aparece como executado.
+      // A prescrição vai para a execução assim que o GRUPO é FINALIZADO (prescrição
+      // finalizada dentro da evolução) — NÃO depende mais de a evolução estar FINALIZADA.
+      // (Premissa alterada 2026-07-16: antes exigia evolucao.status = 'FINALIZADA'.)
+      // EXECUTADO incluído para o histórico do dia (executado no último dia da janela).
       status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO'] },
-      // Prescrição só vai para execução quando a EVOLUÇÃO do atendimento estiver
-      // FINALIZADA (única condição sobre a evolução). Grupos legados sem
-      // evolução vinculada continuam aparecendo.
-      OR: [
-        { evolucaoId: null },
-        { evolucao: { status: 'FINALIZADA' } },
-      ],
     };
     if (empresaId) whereGrupo.empresaId = Number(empresaId);
     if (animalId)  whereGrupo.animalId  = Number(animalId);
+
+    // Escopo base × convidado por ANIMAL (mesma regra da listagem/agendamento): o vet
+    // vinculado (convidado) só vê os grupos dos SEUS animais + os liberados por outros
+    // vets (designação) na empresa ativa; dono/gestor vê os pacientes que trata.
+    const { where: animalScopeWhere } = await buildAnimalScopeWhere(req);
+    whereGrupo.animal = { ...animalScopeWhere, ativo: true };
 
     const grupos = await prisma.prescricaoGrupo.findMany({
       where:   whereGrupo,
@@ -1170,6 +1316,8 @@ module.exports = {
   removerItem,
   finalizar,
   cancelar,
+  cancelarNaExecucao,
+  reabrirParaEdicao,
   executar,
   listarParaExecucao,
 };

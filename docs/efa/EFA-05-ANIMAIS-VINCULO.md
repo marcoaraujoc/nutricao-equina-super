@@ -138,10 +138,23 @@ mesmo registro; histórico de estados não é versionado (*limitação*).
 adicional não exige solicitação quando iniciado pelo proprietário no formulário
 (vínculo adicional); TROCA_VET aplica-se à troca do responsável na edição.
 
-**RN-05-005 — Segregação de listagem.** Lista por contexto: animais da(s) equipe(s) do
-usuário na empresa ativa + pacientes pessoais (vínculo direto fora da empresa). Animal
-de outra equipe da mesma empresa não aparece, mesmo com vínculo direto. PROPRIETARIO vê
-os seus; FORNECEDOR só designados.
+**RN-05-005 — Segregação de listagem por contexto (base × convidado).** A listagem
+depende do papel do usuário na empresa **ativa** do seletor:
+- **Empresa própria (usuário é dono/gestor = "base"):** vê o escopo da(s) equipe(s) +
+  **todos os pacientes que trata** — ou seja, todos os seus vínculos diretos (VINCULO
+  ACEITO), inclusive **co-tratados** que pertencem a outra empresa (um mesmo animal
+  atendido por mais de um vet, cada um na sua empresa, aparece na base de ambos).
+- **Empresa alheia (usuário é convidado — membro/fornecedor):** **isolamento estrito** —
+  só os animais **daquela** empresa que ele pode tratar (escopo de equipe + vínculo
+  direto a animal DA empresa + designação de fornecedora). Pacientes **exclusivos** de
+  outra empresa (ex.: os do próprio vet) **não** vazam para este contexto.
+- Animal de outra equipe da mesma empresa não aparece por escopo de equipe (aparece por
+  vínculo direto quando é da empresa ativa). **PROPRIETARIO** vê os seus; **FORNECEDOR**
+  (sem cargo de gestor no contexto) só os designados.
+
+O multi-vet é representado por múltiplos registros `VetAnimalSolicitacao` (um por vet) —
+não há campo de "vet principal" no animal; o animal pertence a uma única empresa
+(`empresaId`), e a coexistência entre empresas é resolvida por esta regra de exibição.
 
 **RN-05-006 — Vínculo aceito propaga tenant.** Ao aceitar, o animal recebe
 `empresaId`/`equipeId` do contexto do vet. Motivo: segregação e permissões do
@@ -202,7 +215,16 @@ Então o vínculo é aceito automaticamente e ambos são notificados.
 
 Dado que um vet da equipe A da empresa X está no contexto da equipe A
 Quando um animal pertence à equipe B da mesma empresa
-Então o animal não aparece na listagem, mesmo havendo vínculo direto.
+Então o animal não aparece na listagem por escopo de equipe (aparece por vínculo direto se for da empresa ativa).
+
+Dado que a vet Marina é dona/gestora da própria empresa e fornecedora convidada na empresa Laura
+E um animal da Laura é co-tratado por ela (vínculo direto) e pelo vet principal da Laura
+Quando ela seleciona o contexto "Laura" (convidada)
+Então o animal aparece; e os pacientes exclusivos da empresa dela NÃO aparecem nesse contexto.
+
+Dado o mesmo cenário de coexistência
+Quando ela seleciona o contexto da própria empresa (base)
+Então ela vê todos os pacientes que trata — os exclusivos dela E o animal co-tratado da Laura.
 
 Dado que o proprietário iniciou uma TROCA_VET e o vet atual recusou
 Quando consulto o vínculo

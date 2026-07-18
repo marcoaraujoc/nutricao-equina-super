@@ -9,7 +9,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Plus, Pencil, Trash2, Check, X,
-  Search, ToggleLeft, ToggleRight, AlertTriangle,
+  Search, ToggleLeft, ToggleRight, AlertTriangle, Utensils,
 } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -903,7 +903,22 @@ const Dieta = () => {
   return (
       <PageContainer>
 
-        <BotaoVoltar className="mb-4" />
+        <BotaoVoltar />
+
+        {/* Cabeçalho de página (mesmo conceito da tela de Fornecedores): título + descritivo */}
+        {planoSelecionado && (
+          <div className="mt-2 mb-4 flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Utensils size={20} className="text-emerald-700" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Plano de Dieta</h1>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
+              </p>
+            </div>
+          </div>
+        )}
 
         <SeletorAnimal
           animais={animaisDoProprietario}
@@ -914,40 +929,28 @@ const Dieta = () => {
 
         {animal && <AnimalCard animal={animal} />}
 
-        {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
-        <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
-
-          {/* Header */}
-          <div className="px-5 py-4 border-b border-gray-100 flex-shrink-0">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-base font-bold text-gray-900 truncate">{planoSelecionado?.nome ?? ''}</h2>
-                  {planoSelecionado && (
-                    <button onClick={handleTogglePlano}
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 transition-colors ${
-                        planoSelecionado.ativo
-                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}>
-                      • {planoSelecionado.ativo ? 'ATIVO' : 'INATIVO'}
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
-                </p>
-              </div>
-              {planoSelecionado && animal && (
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <DietaAcoesBar
-                    animal={animal} plano={planoSelecionado} itens={itens} user={user}
-                    podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
-                  />
-                </div>
-              )}
-            </div>
+        {/* Status da dieta + ações (Compartilhar/Imprimir/Exportar) — abaixo do animal, à direita */}
+        {planoSelecionado && (
+          <div className="flex items-center justify-end gap-2 flex-wrap mt-3 mb-4">
+            <button onClick={handleTogglePlano}
+              className={`text-xs font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                planoSelecionado.ativo
+                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}>
+              • {planoSelecionado.ativo ? 'ATIVO' : 'INATIVO'}
+            </button>
+            {animal && (
+              <DietaAcoesBar
+                animal={animal} plano={planoSelecionado} itens={itens} user={user}
+                podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
+              />
+            )}
           </div>
+        )}
+
+        {/* ══ DESKTOP ═══════════════════════════════════════════════════════ */}
+        <div className="hidden md:flex flex-col bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 330px)', minHeight: 560 }}>
 
           {/* Corpo */}
           <div className="flex flex-1 min-h-0">

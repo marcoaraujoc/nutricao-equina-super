@@ -774,42 +774,60 @@ const VeterinarioController = {
         user:    { select: { id: true, fullName: true, email: true } },
       };
 
-      // Escopo por equipe dentro da empresa ativa (segregação entre equipes do gestor)
-      const equipeScope = empresaId
-        ? await getEquipeScopeDoUsuario(vetUserId, empresaId, req.equipeId)
-        : null;
-
-      // Animais vinculados diretamente ao vet (ACEITO)
-      const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
-        where:   { vetUserId, status: 'ACEITO' },
-        include: { animal: { include: ANIMAL_INCLUDE } },
-        orderBy: { updatedAt: 'desc' },
-      });
-
-      let animais = solicitacoes.map(s => s.animal).filter(Boolean).filter(a => a.ativo);
-
-      // Vínculo direto de OUTRA equipe da mesma empresa fica fora desta listagem
-      if (empresaId && equipeScope) {
-        animais = animais.filter(a =>
-          a.empresaId !== empresaId || !a.equipeId || equipeScope.includes(a.equipeId)
-        );
-      }
-
-      // Também inclui animais da(s) equipe(s) do vet na empresa (legados sem equipe: empresa toda)
-      if (empresaId) {
-        const idsJaCarregados = new Set(animais.map(a => a.id));
-        const animaisEmpresa  = await prisma.animal.findMany({
-          where: {
-            empresaId,
-            ativo: true,
-            id:    { notIn: [...idsJaCarregados] },
-            ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
-          },
-          include: ANIMAL_INCLUDE,
-          orderBy: { dataCadastro: 'desc' },
+      // SEM empresa ativa (vet autônomo, sem contexto no seletor): mostra todos os
+      // pacientes vinculados diretamente (VINCULO ACEITO), de qualquer origem.
+      if (!empresaId) {
+        const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
+          where:   { vetUserId, status: 'ACEITO' },
+          include: { animal: { include: ANIMAL_INCLUDE } },
+          orderBy: { updatedAt: 'desc' },
         });
-        animais = [...animais, ...animaisEmpresa];
+        const animais = solicitacoes.map(s => s.animal).filter(Boolean).filter(a => a.ativo);
+        return res.json({ sucesso: true, dados: animais });
       }
+
+      // COM empresa ativa. Regra base × convidado (mesma de AnimalController.listar):
+      //   (a) vínculo direto (veterinária vinculada) a animal DA empresa;
+      //   (b) designação de fornecedora ativa — COEXISTÊNCIA: animal do vet principal
+      //       da equipe que também é acompanhado pela vet como fornecedora;
+      //   (c) escopo de equipe do vet na empresa (+ legados sem equipe).
+      const equipeScope = await getEquipeScopeDoUsuario(vetUserId, empresaId, req.equipeId);
+      const agora = new Date();
+
+      const relacaoOR = [
+        { solicitacoes: { some: { vetUserId, status: 'ACEITO' } } },
+        { designacoes:  { some: {
+          prestadorId: vetUserId,
+          ativo:       true,
+          OR: [{ dataFim: null }, { dataFim: { gte: agora } }],
+        } } },
+      ];
+      if (equipeScope) {
+        relacaoOR.push({ equipeId: { in: equipeScope } });
+        relacaoOR.push({ equipeId: null }); // legados sem equipe → empresa toda
+      } else {
+        relacaoOR.push({}); // dono/gestor sem equipe específica → empresa inteira
+      }
+      const whereEmpresa = { empresaId, OR: relacaoOR };
+
+      // "Base" = o vet é dono/gestor da empresa ativa → vê TODOS os pacientes que trata
+      // (todos os vínculos, inclusive co-tratados de OUTRA empresa). "Convidado" (membro/
+      // fornecedor) → ISOLAMENTO ESTRITO: só os animais DA empresa ativa (whereEmpresa).
+      const [dono, gestorMembro] = await Promise.all([
+        prisma.empresa.findFirst({ where: { id: empresaId, ownerId: vetUserId }, select: { id: true } }),
+        prisma.membroEquipe.findFirst({ where: { userId: vetUserId, cargo: 'GESTOR', equipe: { empresaId } }, select: { id: true } }),
+      ]);
+      const isBase = !!dono || !!gestorMembro;
+
+      const where = isBase
+        ? { ativo: true, OR: [ whereEmpresa, { solicitacoes: { some: { vetUserId, status: 'ACEITO' } } } ] }
+        : { ativo: true, ...whereEmpresa };
+
+      const animais = await prisma.animal.findMany({
+        where,
+        include: ANIMAL_INCLUDE,
+        orderBy: { dataCadastro: 'desc' },
+      });
 
       res.json({ sucesso: true, dados: animais });
     } catch (error) {

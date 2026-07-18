@@ -19,6 +19,8 @@ router.put('/grupos/:id/itens/:itemId',   authenticate, checkPermission('atendim
 router.delete('/grupos/:id/itens/:itemId', authenticate, checkPermission('atendimento.prescricoes.deletar', 'PROPRIO'), PrescricaoGrupoController.removerItem);
 router.post('/grupos/:id/finalizar',      authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.finalizar);
 router.post('/grupos/:id/cancelar',       authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
+router.post('/grupos/:id/cancelar-execucao', authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelarNaExecucao);
+router.post('/grupos/:id/reabrir',        authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.reabrirParaEdicao);
 router.post('/grupos/:id/executar',       authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.executar);
 
 // ── Legacy (individual items — backward compat) ───────────────────────────────

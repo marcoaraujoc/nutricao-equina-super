@@ -38,6 +38,10 @@ router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
 router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);
 // Expediente de atendimento — leitura por qualquer membro (Agendamento)
 router.get('/horario-atendimento', authenticate, EquipeController.obterHorarioAtendimento);
+// Logotipo da empresa do contexto ativo — leitura por qualquer membro (Sidebar/branding)
+router.get('/logo', authenticate, EquipeController.obterLogo);
+// Espécies atendidas pela empresa — leitura por qualquer membro (Cadastro Pessoal do convidado)
+router.get('/especies-atendidas', authenticate, EquipeController.obterEspeciesAtendidas);
 
 // ─── Setup inicial (cria empresa + equipe em uma transação) ──────────────────
 router.post('/setup',  authenticate, EquipeController.setup);

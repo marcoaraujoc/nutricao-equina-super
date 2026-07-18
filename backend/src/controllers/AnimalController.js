@@ -7,6 +7,7 @@ const emailService     = require('../services/emailService');
 const { storage }      = require('../storage');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -287,9 +288,11 @@ class AnimalController {
         const animais = await prisma.animal.findMany({
           where:   { nome: { contains: nome.trim(), mode: 'insensitive' }, ativo: true },
           include: {
-            user:    { select: { id: true, fullName: true, email: true, phone: true } },
-            especie: { select: { id: true, nome: true } },
-            raca:    { select: { id: true, nome: true } },
+            user:        { select: { id: true, fullName: true, email: true, phone: true } },
+            especie:     { select: { id: true, nome: true } },
+            raca:        { select: { id: true, nome: true } },
+            localizacao: { select: { id: true, nome: true } },
+            tratador:    { select: { id: true, nome: true } },
             solicitacoes: {
               // Mesmo critério do ANIMAL_INCLUDE: exclui DESVINCULO ACEITO (vet já saiu)
               where: {
@@ -372,6 +375,18 @@ class AnimalController {
             racaId:          animal.racaId          ?? null,
             especie:         animal.especie         ?? null,
             raca:            animal.raca            ?? null,
+            // Demais dados do cadastro — para pré-preencher ao continuar o cadastro
+            baia:               animal.baia               ?? null,
+            local:              animal.local              ?? null,
+            localizacaoId:      animal.localizacaoId      ?? null,
+            localizacao:        animal.localizacao        ?? null,
+            tratadorId:         animal.tratadorId         ?? null,
+            tratador:           animal.tratador           ?? null,
+            pelagem:            animal.pelagem            ?? null,
+            altura:             animal.altura             ?? null,
+            registroPassaporte: animal.registroPassaporte ?? null,
+            finalidade:         animal.finalidade         ?? null,
+            seguradora:         animal.seguradora         ?? null,
             temVet,
             vetDaMinhaEquipe,
             proprietario:    animal.user,
@@ -550,92 +565,9 @@ class AnimalController {
       const userId = req.user?.id;
       if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
 
-      const { userType, role } = await obterUserType(userId);
-      // PROPRIETARIO sempre vê apenas seus próprios animais, independente do role.
-      // Somente usuários sem userType proprietário e com role ADMIN têm acesso global.
-      const isAdmin = role === 'ADMIN' && userType !== 'PROPRIETARIO';
-
-      // Multicargo: PROPRIETARIO com cargo VETERINARIO/ESTAGIARIO/GESTOR numa equipe
-      // deve ver também os animais da equipe além dos próprios.
-      // req.membroCargo é setado pelo checkPermission com o cargo real da equipe.
-      const CARGOS_EQUIPE = ['VETERINARIO', 'ESTAGIARIO', 'GESTOR'];
-      const isProprietarioMulticargo = userType === 'PROPRIETARIO'
-        && req.membroCargo
-        && CARGOS_EQUIPE.includes(req.membroCargo);
-
-      // FORNECEDOR que atua como GESTOR no contexto ativo (assinante com empresa
-      // própria): recebe o escopo de equipe normal. Fora desse contexto, mantém
-      // o deny-by-default por designação. req.membroCargo vem do checkPermission.
-      const isFornecedorGestorContexto = userType === 'FORNECEDOR' && req.membroCargo === 'GESTOR';
-
-      // Espelho: VETERINARIO que atua como PRESTADOR no contexto ativo (cargo
-      // FORNECEDOR na equipe ativa — ex: vet gestora da própria empresa que presta
-      // serviço em outra equipe): mantém o deny-by-default do prestador ali.
-      const isVetPrestadorContexto = userType === 'VETERINARIO' && req.membroCargo === 'FORNECEDOR';
-
-      const designacoesWhere = { designacoes: { some: {
-        prestadorId: Number(userId),
-        ativo:       true,
-        OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
-      } } };
-
-      const isMembroEquipe = !!req.empresaId && !isAdmin;
-
-      const vetSolicitacoesWhere = { solicitacoes: { some: { vetUserId: Number(userId), OR: [
-        { tipo: 'VINCULO',    status: 'ACEITO'   },
-        { tipo: 'DESVINCULO', status: 'PENDENTE' },
-        { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-      ] } } };
-
-      // Escopo por equipe dentro da empresa ativa: contexto x-equipe-id > equipes do
-      // usuário na empresa > null (dono sem MembroEquipe → empresa inteira).
-      // Animais legados sem equipeId continuam visíveis para toda a empresa.
-      const equipeScope = isMembroEquipe
-        ? await getEquipeScopeDoUsuario(userId, req.empresaId, req.equipeId)
-        : null;
-      const scopeOR = equipeScope
-        ? [
-            { equipeId: { in: equipeScope } },
-            { empresaId: req.empresaId, equipeId: null },
-          ]
-        : [{ empresaId: req.empresaId }];
-
-      // Pacientes pessoais do vet FORA da empresa ativa (vínculo direto) — animais
-      // da mesma empresa em OUTRA equipe ficam fora da listagem (segregação)
-      const vetVinculoForaDaEmpresa = {
-        AND: [
-          vetSolicitacoesWhere,
-          { OR: [{ empresaId: null }, { NOT: { empresaId: req.empresaId } }] },
-        ],
-      };
-
-      const where = isAdmin
-        ? {}
-        // PROPRIETARIO: sempre inclui seus próprios animais.
-        // Multicargo (também é VET/ESTAGIARIO/GESTOR numa equipe): adiciona escopo da equipe.
-        : userType === 'PROPRIETARIO'
-          ? isProprietarioMulticargo
-            ? { OR: [{ userId: Number(userId) }, ...scopeOR] }
-            : { userId: Number(userId) }
-          // FORNECEDOR (prestador): NUNCA herda escopo de equipe — só animais com
-          // designação ativa (DesignacaoPrestador) e dentro da validade.
-          // Exceção: cargo GESTOR no contexto ativo → escopo de equipe (empresa própria).
-          : userType === 'FORNECEDOR'
-            ? isFornecedorGestorContexto
-              ? { OR: scopeOR }
-              : designacoesWhere
-            : userType === 'VETERINARIO'
-              // Vet atuando como PRESTADOR no contexto ativo: designações + pacientes próprios
-              ? isVetPrestadorContexto
-                ? { OR: [designacoesWhere, vetVinculoForaDaEmpresa] }
-                // Vet com empresa: escopo de equipe + pacientes pessoais fora da empresa
-                : isMembroEquipe
-                  ? { OR: [...scopeOR, vetVinculoForaDaEmpresa] }
-                  : vetSolicitacoesWhere
-              // ESTAGIARIO: vê os animais da(s) sua(s) equipe(s) na empresa
-              : isMembroEquipe
-                ? { OR: scopeOR }
-                : {};
+      // Escopo base × convidado (fonte única — lib/animalScope). O veterinário vinculado
+      // (convidado) só vê os seus animais + os liberados por outros vets na empresa ativa.
+      const { where } = await buildAnimalScopeWhere(req);
 
       const animais = await prisma.animal.findMany({
         where: { ...where, ativo: true },
@@ -1205,21 +1137,11 @@ class AnimalController {
       });
 
       if (vetMudou) {
-        if (vetAtualId) {
-          // TROCA do vet responsável → único caso que dispara solicitação (TROCA_VET)
-          await criarSolicitacaoPendente({
-            animalId,
-            novoVetId,
-            animalNome:        animal.nome,
-            solicitanteId:     req.user.id,
-            proprietarioNome:  animalAtual?.user?.fullName || 'Proprietário',
-            proprietarioEmail: animalAtual?.user?.email    || null,
-            proprietarioPhone: animalAtual?.user?.phone    || null,
-          });
-        } else {
-          // Animal sem vet → atribuição direta, sem solicitação
-          await vincularVetDireto({ animalId, vetId: novoVetId });
-        }
+        // Um animal pode ser tratado por MAIS DE UM veterinário. Selecionar outro vet no
+        // formulário adiciona o novo como vínculo ADICIONAL (ACEITO) e o torna o responsável
+        // exibido, SEM desvincular o vet anterior e SEM pedir aprovação de troca (TROCA_VET).
+        // A remoção de um vet continua sendo uma ação explícita (DESVINCULO).
+        await vincularVetDireto({ animalId, vetId: novoVetId });
       }
 
       if (vetRemovido && vetAtualId) {

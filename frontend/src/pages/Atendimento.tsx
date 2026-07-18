@@ -6,6 +6,7 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useEmpresa } from '../contexts/EmpresaContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -547,6 +548,7 @@ const Atendimento = () => {
   const { setSelectedAnimal, selectedAnimal } = useSelectedAnimal();
   const { user }                              = useAuth();
   const { podeExecutar, isGestor }            = usePermissoes();
+  const { contextoAtivo, loading: empresaLoading } = useEmpresa();
   const navigate                              = useNavigate();
   const location                              = useLocation();
   const { animalId: animalIdParam }           = useParams<{ animalId?: string }>();
@@ -580,6 +582,7 @@ const Atendimento = () => {
 
   const [animal,          setAnimal]          = useState<AnimalExtended | null>(null);
   const [todosAnimais,    setTodosAnimais]    = useState<AnimalExtended[]>([]);
+  const [carregandoLista, setCarregandoLista] = useState(true);
   const [activeTab,       setActiveTab]       = useState<SubModulo>(() => tabFromPath(location.pathname));
   const [showHistoricoM,  setShowHistoricoM]  = useState(false);
   const [evolucaoAtiva,   setEvolucaoAtiva]   = useState<EvolucaoAtiva | null>(null);
@@ -741,8 +744,19 @@ const Atendimento = () => {
     setViewVacinaId(null);
     carregarAnimal();
     carregarEvolucaoAtiva();
-    api.get('/animais').then(res => setTodosAnimais(res.data?.dados ?? [])).catch(() => {});
   }, [effectiveAnimalId]);
+
+  // Lista de pacientes (alimenta o SeletorAnimal). ESPERA o contexto ativo resolver —
+  // senão no login a busca ia sem os headers x-empresa-id/x-equipe-id e voltava vazia,
+  // obrigando a "trocar o seletor" para os animais aparecerem. Refaz ao trocar de contexto.
+  useEffect(() => {
+    if (empresaLoading) return;
+    setCarregandoLista(true);
+    api.get('/animais')
+      .then(res => setTodosAnimais(res.data?.dados ?? []))
+      .catch(() => {})
+      .finally(() => setCarregandoLista(false));
+  }, [empresaLoading, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -750,6 +764,16 @@ const Atendimento = () => {
     setSelectedAnimal(a);
     navigate(`/clinica/evolucao/${a.id}`);
   };
+
+  // Auto-seleciona um paciente quando a lista termina de carregar e nenhum está
+  // selecionado — assim a tela fica utilizável logo após o login, sem precisar
+  // trocar o seletor. Apenas define o animal ativo (não navega/troca de aba); o
+  // SeletorAnimal continua disponível para trocar. Ignora a aba "Minha Agenda".
+  useEffect(() => {
+    if (effectiveAnimalId || activeTab === 'agenda') return;
+    if (empresaLoading || carregandoLista) return;
+    if (todosAnimais.length > 0) setSelectedAnimal(todosAnimais[0]);
+  }, [effectiveAnimalId, activeTab, empresaLoading, carregandoLista, todosAnimais, setSelectedAnimal]);
 
   const handleSelecionarAnimalFromAgenda = useCallback(async (animalId: number) => {
     try {
@@ -766,6 +790,16 @@ const Atendimento = () => {
   // A aba "Minha Agenda" funciona sem animal selecionado
 
   if (!effectiveAnimalId && activeTab !== 'agenda') {
+    // Ainda resolvendo o contexto ativo ou carregando a lista → não mostra "sem
+    // animais" prematuramente (o auto-seleciona escolhe um assim que a lista chega).
+    if (empresaLoading || carregandoLista) {
+      return (
+        <PageContainer>
+          <BotaoVoltar className="mb-4" />
+          <div className="text-center py-20 text-gray-400 text-sm">Carregando pacientes…</div>
+        </PageContainer>
+      );
+    }
     return (
       <PageContainer>
         <BotaoVoltar className="mb-4" />

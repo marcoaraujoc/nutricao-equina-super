@@ -2,7 +2,7 @@
 // em CadastroFornecedor.tsx, mas como modal autônomo que chama a API internamente.
 // Usado em UsuarioFormModal quando "Incluir novo fornecedor" é clicado.
 
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import {
   X, Loader2, Truck, User as UserIcon,
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
+import EspecialidadeSelector from './EspecialidadeSelector';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -87,7 +88,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  tipoServico: TipoServico[];
+  especialidadeIds: number[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -98,7 +99,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoServico: [],
+  especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -124,6 +125,17 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
   const [docError,       setDocError]       = useState('');
   const [dupInativoInfo, setDupInativoInfo] = useState<{ mensagem: string } | null>(null);
   const cnpjTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Espécies atendidas pela empresa — filtram as especialidades oferecidas.
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
+  useEffect(() => {
+    api.get('/equipes/especies-atendidas')
+      .then(res => {
+        const lista = res.data?.dados?.especiesAtendidas ?? [];
+        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspeciesEmpresa([]));
+  }, []);
 
   const upd = (updates: Partial<FormForn>) => setForm(prev => ({ ...prev, ...updates }));
 
@@ -185,7 +197,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
 
   const handleSalvar = async (force = false) => {
     if (!form.nome.trim())             { toast.error('Nome é obrigatório'); return; }
-    if (form.tipoServico.length === 0) { toast.error('Selecione ao menos um tipo de serviço'); return; }
+    if (form.especialidadeIds.length === 0) { toast.error('Selecione ao menos uma especialidade'); return; }
     if (!form.email.trim())            { toast.error('E-mail é obrigatório'); return; }
     if (!isValidEmail(form.email))     { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())         { toast.error('Telefone é obrigatório'); return; }
@@ -202,7 +214,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
         telefone:    form.telefone,
         email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-        tipoServico: form.tipoServico.join(','),
+        especialidadeIds: form.especialidadeIds,
         cep:         form.cep         || null,
         endereco:    form.endereco    || null,
         complemento: form.complemento || null,
@@ -295,33 +307,14 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
                   placeholder="Nome do profissional ou empresa" className={inp} />
               </div>
               <div>
-                <label className={lbl}>Tipo de Serviço *</label>
-                <select value=""
-                  onChange={e => {
-                    const val = e.target.value as TipoServico;
-                    if (val && !form.tipoServico.includes(val))
-                      upd({ tipoServico: [...form.tipoServico, val] });
-                  }}
-                  className={`${inp} ${form.tipoServico.length === 0 ? 'border-amber-200 focus:border-amber-400' : ''}`}>
-                  <option value="">Adicionar tipo de serviço...</option>
-                  {TIPOS_SERVICO.filter(t => !form.tipoServico.includes(t)).map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                {form.tipoServico.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {form.tipoServico.map(t => (
-                      <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
-                        {t}
-                        <button type="button"
-                          onClick={() => upd({ tipoServico: form.tipoServico.filter(x => x !== t) })}
-                          className="ml-0.5 hover:text-emerald-900">
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <label className={lbl}>Especialidade *</label>
+                <EspecialidadeSelector
+                  variant="dropdown"
+                  value={form.especialidadeIds}
+                  onChange={ids => upd({ especialidadeIds: ids })}
+                  especieIds={especiesEmpresa}
+                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

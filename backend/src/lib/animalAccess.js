@@ -47,6 +47,13 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
 
   if (animal.userId === Number(userId)) return true;
 
+  // Escopa a designação ao CONTEXTO ATIVO (mesmo critério de AnimalController.listar):
+  // o prestador só acessa o animal quando o contexto selecionado é a equipe/empresa
+  // que o designou — a designação de outro contexto NÃO concede acesso aqui.
+  const escopoDesignacao = equipeId
+    ? { equipeId: Number(equipeId) }
+    : (empresaId ? { equipe: { empresaId: Number(empresaId) } } : {});
+
   // FORNECEDOR (prestador): NUNCA herda o escopo da equipe — acesso somente a
   // animais com designação ativa (DesignacaoPrestador), e dentro da validade.
   // Exceção: fornecedor que também é GESTOR no contexto ativo (assinante com
@@ -77,6 +84,7 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
           prestadorId: Number(userId),
           ativo:       true,
           OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
+          ...escopoDesignacao,
         },
         select: { id: true },
       });
@@ -101,6 +109,7 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
           prestadorId: Number(userId),
           ativo:       true,
           OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
+          ...escopoDesignacao,
         },
         select: { id: true },
       });

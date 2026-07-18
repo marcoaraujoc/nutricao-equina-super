@@ -275,7 +275,20 @@ function agruparEventos(eventos: EventoHistorico[]): GrupoHistorico[] {
     });
   }
 
-  grupos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+  // Ordem decrescente por data e, no empate (ex.: vários registros no mesmo dia),
+  // desempate pelo Nº do registro em ordem decrescente — o id sequencial cresce com a
+  // criação, então o registro mais novo (maior número) vem primeiro.
+  const numFinal = (s: string): number => { const m = /(\d+)$/.exec(s); return m ? Number(m[1]) : 0; };
+  const subDesc = (a: EventoHistorico, b: EventoHistorico) => {
+    const dd = new Date(b.data).getTime() - new Date(a.data).getTime();
+    return dd !== 0 ? dd : numFinal(b.id) - numFinal(a.id);
+  };
+  const grupoDesc = (a: GrupoHistorico, b: GrupoHistorico) => {
+    const dd = new Date(b.data).getTime() - new Date(a.data).getTime();
+    return dd !== 0 ? dd : numFinal(b.evolucao?.id ?? b.key) - numFinal(a.evolucao?.id ?? a.key);
+  };
+  for (const g of grupos) g.subitems.sort(subDesc);
+  grupos.sort(grupoDesc);
   return grupos;
 }
 

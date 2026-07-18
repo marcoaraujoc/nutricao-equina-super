@@ -126,6 +126,8 @@ const auditRoutes              = require('./routes/audit');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const especiesRoutes           = require('./routes/especies');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const especialidadesRoutes     = require('./routes/especialidades');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const racasRoutes              = require('./routes/racas');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const usersRoutes              = require('./routes/users');
@@ -201,6 +203,7 @@ app.use('/api/exames',                examesRoutes);
 app.use('/api/analise',               analiseRoutes);
 app.use('/api/audit',                 auditRoutes);
 app.use('/api/especies',              especiesRoutes);
+app.use('/api/especialidades',        especialidadesRoutes);
 app.use('/api/racas',                 racasRoutes);
 app.use('/api/users',                 usersRoutes);
 app.use('/api/nutrientes',            nutrientesRoutes);
@@ -684,6 +687,65 @@ registrarJob('fechamento_faturas', {
   nome: 'Fechamento automático de faturas',
   exprPadrao: '45 23 * * *', // diariamente às 23:45
   fn: () => comAlerta('Fechamento automático de faturas', fecharFaturasDoMes),
+});
+
+// Marca como ATRASADA toda fatura FECHADA cujo vencimento já passou e não foi paga.
+// Vencimento = dia `diaVencimentoFatura` do proprietário no mês SEGUINTE ao mesReferencia.
+async function marcarFaturasAtrasadas() {
+  try {
+    const hoje = new Date();
+    const faturas = await prisma.fatura.findMany({
+      where:   { status: 'FECHADA', mesReferencia: { not: null } },
+      include: { proprietario: { select: { diaVencimentoFatura: true } } },
+    });
+
+    let atrasadas = 0;
+    for (const fatura of faturas) {
+      try {
+        const dia = fatura.proprietario?.diaVencimentoFatura;
+        if (!dia || !fatura.mesReferencia) continue;
+        const [y, m] = String(fatura.mesReferencia).split('-').map(Number);
+        if (!y || !m) continue;
+        // m (1-based) usado como monthIndex → mês SEGUINTE ao de referência; fim do dia.
+        const vencimento = new Date(y, m, Math.min(dia, 28), 23, 59, 59, 999);
+        if (hoje > vencimento) {
+          await prisma.fatura.update({ where: { id: fatura.id }, data: { status: 'ATRASADA' } });
+          atrasadas++;
+          logger.info(`[FaturaAtraso-Cron] Fatura id=${fatura.id} marcada como ATRASADA (venc=${vencimento.toISOString().slice(0,10)})`);
+        }
+      } catch (err: unknown) {
+        logger.error(`[FaturaAtraso-Cron] Erro na fatura id=${fatura.id}: ${(err as Error).message}`);
+      }
+    }
+
+    logger.info(`[FaturaAtraso-Cron] Concluído — ${atrasadas} fatura(s) marcada(s) como ATRASADA`);
+    return {
+      ok: true,
+      notificar: atrasadas > 0,
+      resumo: `${atrasadas} fatura(s) marcada(s) como ATRASADA (fechadas, vencidas e não pagas).`,
+    };
+  } catch (err: unknown) {
+    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
+  }
+}
+
+// Executa todo dia às 00:30 — marca faturas FECHADAS vencidas e não pagas como ATRASADAS.
+registrarJob('marcar_faturas_atrasadas', {
+  nome: 'Marcação de faturas atrasadas',
+  exprPadrao: '30 0 * * *', // diariamente às 00:30
+  fn: () => comAlerta('Marcação de faturas atrasadas', marcarFaturasAtrasadas),
+});
+
+// ===================== CRON — CANCELAMENTO DE AGENDAMENTOS NÃO REALIZADOS =====================
+// Corporativo (todas as empresas). Liga/desliga e horário ficam sob controle do ADMIN
+// na tela de Configuração (CronAgenda). Cancela os agendamentos ainda AGENDADO cujo
+// horário já passou (não realizados/CONCLUIDO), preservando os EM_ANDAMENTO e futuros.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { cancelarAgendamentosNaoRealizados } = require('./services/agendamentoCronService');
+registrarJob('cancelar_agendamentos_nao_realizados', {
+  nome: 'Cancelamento de agendamentos não realizados',
+  exprPadrao: '30 23 * * *', // diariamente às 23:30
+  fn: () => comAlerta('Cancelamento de agendamentos não realizados', cancelarAgendamentosNaoRealizados),
 });
 
 export default app;

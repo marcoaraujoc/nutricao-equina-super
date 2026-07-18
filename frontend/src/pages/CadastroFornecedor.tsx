@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../services/api';
+import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
@@ -111,6 +112,7 @@ interface FormForn {
   telefone:    string;
   email:       string;
   tipoServico: TipoServico[];
+  especialidadeIds: number[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -121,7 +123,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoServico: [],
+  tipoServico: [], especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -159,12 +161,13 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalFornecedor({
-  editando, form, saving,
+  editando, form, saving, especiesEmpresa,
   onFormChange, onSalvar, onClose,
 }: {
   editando:    Fornecedor | null;
   form:        FormForn;
   saving:      boolean;
+  especiesEmpresa: number[];
   onFormChange:(updates: Partial<FormForn>) => void;
   onSalvar:    () => void;
   onClose:     () => void;
@@ -305,37 +308,14 @@ function ModalFornecedor({
                   placeholder="Nome do profissional ou empresa" className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Tipo de Serviço *</label>
-                <select
-                  value=""
-                  onChange={e => {
-                    const val = e.target.value as TipoServico;
-                    if (val && !form.tipoServico.includes(val))
-                      onFormChange({ tipoServico: [...form.tipoServico, val] });
-                  }}
-                  className={`${inputCls} ${form.tipoServico.length === 0 ? 'border-amber-200 focus:border-amber-400' : ''}`}
-                >
-                  <option value="">Adicionar tipo de serviço...</option>
-                  {TIPOS_SERVICO.filter(t => !form.tipoServico.includes(t)).map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                {form.tipoServico.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {form.tipoServico.map(t => (
-                      <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
-                        {t}
-                        <button
-                          type="button"
-                          onClick={() => onFormChange({ tipoServico: form.tipoServico.filter(x => x !== t) })}
-                          className="ml-0.5 hover:text-emerald-900 transition-colors"
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
+                <EspecialidadeSelector
+                  variant="dropdown"
+                  value={form.especialidadeIds}
+                  onChange={ids => onFormChange({ especialidadeIds: ids })}
+                  especieIds={especiesEmpresa}
+                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -461,6 +441,18 @@ export default function CadastroFornecedor() {
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
+  // Espécies atendidas pela empresa — filtram as especialidades oferecidas no cadastro.
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
+  useEffect(() => {
+    if (loadingPerms) return;
+    api.get('/equipes/especies-atendidas')
+      .then(res => {
+        const lista = res.data?.dados?.especiesAtendidas ?? [];
+        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspeciesEmpresa([]));
+  }, [loadingPerms]);
+
   const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setShowModal(true); };
 
   // Veio de "Incluir Membro" (Equipe) via "+ Cadastrar Novo Fornecedor" — abre o modal direto
@@ -472,7 +464,7 @@ export default function CadastroFornecedor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const abrirEdicao = (f: Fornecedor) => {
+  const abrirEdicao = async (f: Fornecedor) => {
     setEditando(f);
     setForm({
       nome:        f.nome,
@@ -484,6 +476,7 @@ export default function CadastroFornecedor() {
       tipoServico: f.tipoServico
         ? (f.tipoServico.split(',').map(t => t.trim()).filter(t => (TIPOS_SERVICO as readonly string[]).includes(t)) as TipoServico[])
         : [],
+      especialidadeIds: [],
       cep:         f.cep         ? mascaraCEP(f.cep.replace(/\D/g,'')) : '',
       endereco:    f.endereco    ?? '',
       complemento: f.complemento ?? '',
@@ -492,6 +485,12 @@ export default function CadastroFornecedor() {
       estado:      f.estado      ?? '',
     });
     setShowModal(true);
+    // Carrega as especialidades vinculadas (catálogo por espécie) do detalhe.
+    try {
+      const res = await api.get(`/cadastro/fornecedores/${f.id}`);
+      const ids = res.data?.dados?.especialidadeIds;
+      if (Array.isArray(ids)) setForm(prev => ({ ...prev, especialidadeIds: ids }));
+    } catch { /* mantém vazio */ }
   };
 
   const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); };
@@ -502,7 +501,7 @@ export default function CadastroFornecedor() {
     if (editando && !podeEditar) { semPermissao('alterar fornecedor'); return; }
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
     if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
-    if (form.tipoServico.length === 0) { toast.error('Selecione ao menos um tipo de serviço'); return; }
+    if (form.especialidadeIds.length === 0) { toast.error('Selecione ao menos uma especialidade'); return; }
     if (form.email.trim() && !isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
@@ -521,7 +520,7 @@ export default function CadastroFornecedor() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-      tipoServico: form.tipoServico.length > 0 ? form.tipoServico.join(',') : null,
+      especialidadeIds: form.especialidadeIds,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -764,6 +763,7 @@ export default function CadastroFornecedor() {
           editando={editando}
           form={form}
           saving={saving}
+          especiesEmpresa={especiesEmpresa}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}

@@ -96,6 +96,17 @@ interface AnimalEncontrado {
   racaId?:          number | null;
   especie?:         { id: number; nome: string } | null;
   raca?:            { id: number; nome: string } | null;
+  baia?:               string | null;
+  local?:              string | null;
+  localizacaoId?:      number | null;
+  localizacao?:        { id: number; nome: string } | null;
+  tratadorId?:         number | null;
+  tratador?:           { id: number; nome: string } | null;
+  pelagem?:            string | null;
+  altura?:             string | null;
+  registroPassaporte?: string | null;
+  finalidade?:         string | null;
+  seguradora?:         string | null;
   temVet:           boolean;
   vetDaMinhaEquipe?: boolean;
   proprietario?:    { id: number; fullName: string; email: string; phone?: string | null } | null;
@@ -113,6 +124,20 @@ const calcularIdadeEmMeses = (dn: string, ia: string): number | null => {
     return (h.getFullYear() - nasc.getFullYear()) * 12 + (h.getMonth() - nasc.getMonth());
   }
   return ia && Number(ia) > 0 ? Number(ia) * 12 : null;
+};
+
+// Idade em anos completos a partir da data de nascimento (YYYY-MM-DD). '' se inválida.
+const calcularIdadeAnos = (dn: string): string => {
+  if (!dn) return '';
+  const nasc = new Date(dn + 'T00:00');
+  if (isNaN(nasc.getTime())) return '';
+  const h = new Date(); h.setHours(0, 0, 0, 0);
+  let anos = h.getFullYear() - nasc.getFullYear();
+  const antesDoAniversario =
+    h.getMonth() < nasc.getMonth() ||
+    (h.getMonth() === nasc.getMonth() && h.getDate() < nasc.getDate());
+  if (antesDoAniversario) anos--;
+  return anos >= 0 ? String(anos) : '0';
 };
 
 // ─── Utilitário de compressão ─────────────────────────────────────────────────
@@ -225,6 +250,9 @@ const Animal = () => {
   const role          = (user?.role     ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
   const isVet         = role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO';
+  // Página de "Pacientes": só o PROPRIETÁRIO usa /meus-animais; todos os demais
+  // perfis (vet, estagiário, gestor, fornecedor, admin) usam /animais-vet.
+  const paginaPacientes = userTypeUpper === 'PROPRIETARIO' ? '/meus-animais' : '/animais-vet';
 
   // ── Estado base ────────────────────────────────────────────────────────────
   const [loading,        setLoading]        = useState(true);
@@ -243,10 +271,6 @@ const Animal = () => {
   const [localizacoes,   setLocalizacoes]   = useState<Localizacao[]>([]);
   const [locBusca,       setLocBusca]       = useState('');
   const [locDropdownOpen, setLocDropdownOpen] = useState(false);
-  const [criandoLocal,   setCriandoLocal]   = useState(false);
-  const [novoLocalNome,  setNovoLocalNome]  = useState('');
-  const [novoLocalTipo,  setNovoLocalTipo]  = useState('');
-  const [salvandoLocal,  setSalvandoLocal]  = useState(false);
 
   // ── Tratador do animal ─────────────────────────────────────────────────────
   const [tratadores,       setTratadores]       = useState<Tratador[]>([]);
@@ -320,12 +344,9 @@ const Animal = () => {
   );
   const temIdadeOuData = !!formData.dataNascimento || !!formData.idadeAnos;
 
-  const filteredLocs = useMemo(() => {
-    if (!locBusca.trim()) return localizacoes;
-    return localizacoes.filter(l =>
-      l.nome.toLowerCase().includes(locBusca.trim().toLowerCase()),
-    );
-  }, [localizacoes, locBusca]);
+  // Busca de localização é server-side (autocomplete) — o backend já devolve os
+  // primeiros resultados filtrados; usa direto o que veio.
+  const filteredLocs = localizacoes;
 
   const filteredTrats = useMemo(() => {
     if (!tratBusca.trim()) return tratadores;
@@ -334,28 +355,27 @@ const Animal = () => {
     );
   }, [tratadores, tratBusca]);
 
-  const tiposCompativeis = useMemo(() => {
-    const especieNome = especieAtual?.nome ?? '';
-    return Object.keys(TIPO_ESPECIES_MAP).filter(tipo => {
-      const specs = TIPO_ESPECIES_MAP[tipo];
-      if (specs === null) return true;
-      return especieNome && specs.some(s => especieNome.toLowerCase().includes(s.toLowerCase()));
-    });
-  }, [especieAtual]);
-
   const vetFoiAlterado = isEditMode
     && formData.veterinarioUserId !== null
     && formData.veterinarioUserId !== vetOriginalId;
 
-  // ── Buscar localizações ao trocar espécie ─────────────────────────────────
+  // ── Buscar localizações (autocomplete server-side) ────────────────────────
+  // Catálogo grande: traz só os primeiros 10 e refaz a busca conforme digita
+  // (debounce). Busca apenas com o dropdown aberto — evita refetch ao selecionar.
   useEffect(() => {
     if (!formData.especieId || !especies.length) return;
+    if (!locDropdownOpen) return;
     const especieNome = especieAtual?.nome ?? '';
-    const params = `ativo=true${especieNome ? `&especie=${encodeURIComponent(especieNome)}` : ''}`;
-    api.get(`/cadastro/localizacoes?${params}`)
-      .then(res => { if (res.data) setLocalizacoes(res.data?.dados ?? []); })
-      .catch(() => setLocalizacoes([]));
-  }, [formData.especieId, especies.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = setTimeout(() => {
+      const params = new URLSearchParams({ ativo: 'true', limit: '10' });
+      if (especieNome)     params.set('especie', especieNome);
+      if (locBusca.trim()) params.set('busca', locBusca.trim());
+      api.get(`/cadastro/localizacoes?${params.toString()}`)
+        .then(res => { if (res.data) setLocalizacoes(res.data?.dados ?? []); })
+        .catch(() => setLocalizacoes([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [formData.especieId, especies.length, locBusca, locDropdownOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Buscar tratadores (filtrado pelo local do animal, se definido) ─────────
   useEffect(() => {
@@ -471,7 +491,9 @@ const Animal = () => {
             racaId:            a.racaId          ?? null,
             peso:              a.peso?.toString() ?? '',
             dataNascimento:    a.dataNascimento   ? a.dataNascimento.split('T')[0] : '',
-            idadeAnos:         a.idadeAnos        ? String(a.idadeAnos) : '',
+            // Com data de nascimento, a idade é sempre derivada dela (mantém consistência)
+            idadeAnos:         a.dataNascimento   ? calcularIdadeAnos(a.dataNascimento.split('T')[0])
+                                                  : (a.idadeAnos ? String(a.idadeAnos) : ''),
             sexo:              a.sexo             ?? '',
             categoriaAnimal:   a.categoriaAnimal  ?? '',
             tipoExercicio:     a.tipoExercicio    ?? '',
@@ -529,18 +551,31 @@ const Animal = () => {
       if (animal) {
         setAnimalEncontrado(animal);
 
-        // Pré-preenche campos do animal com os dados encontrados
+        // Pré-preenche TODOS os dados do animal encontrados (inclusive baia, local,
+        // tratador, resenha) para continuar o cadastro sem redigitar.
         setFormData(prev => ({
           ...prev,
           especieId:       animal.especieId       ?? prev.especieId,
           racaId:          animal.racaId          ?? prev.racaId,
           peso:            animal.peso != null     ? String(animal.peso) : prev.peso,
           dataNascimento:  animal.dataNascimento   ? animal.dataNascimento.split('T')[0] : prev.dataNascimento,
-          idadeAnos:       animal.idadeAnos != null ? String(animal.idadeAnos) : prev.idadeAnos,
+          idadeAnos:       animal.dataNascimento   ? calcularIdadeAnos(animal.dataNascimento.split('T')[0])
+                            : (animal.idadeAnos != null ? String(animal.idadeAnos) : prev.idadeAnos),
           sexo:            animal.sexo             ?? prev.sexo,
           categoriaAnimal: animal.categoriaAnimal  ?? prev.categoriaAnimal,
           tipoExercicio:   animal.tipoExercicio    ?? prev.tipoExercicio,
+          baia:               animal.baia               ?? prev.baia,
+          localizacaoId:      animal.localizacaoId      ?? prev.localizacaoId,
+          tratadorId:         animal.tratadorId         ?? prev.tratadorId,
+          pelagem:            animal.pelagem            ?? prev.pelagem,
+          altura:             animal.altura             ?? prev.altura,
+          registroPassaporte: animal.registroPassaporte ?? prev.registroPassaporte,
+          finalidades:        animal.finalidade ? animal.finalidade.split('|') : prev.finalidades,
+          seguradora:         animal.seguradora         ?? prev.seguradora,
         }));
+        // Pré-preenche o texto dos comboboxes de localização e tratador
+        if (animal.localizacao?.nome) setLocBusca(animal.localizacao.nome);
+        if (animal.tratador?.nome)    setTratBusca(animal.tratador.nome);
         if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
 
         if (!animal.temVet) {
@@ -646,36 +681,10 @@ const Animal = () => {
       if (obj > hoje) {
         toast.error('A data de nascimento não pode ser futura.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
       }
-      setFormData(p => ({ ...p, dataNascimento: `${parts[2]}-${parts[1]}-${parts[0]}`, idadeAnos: '' }));
+      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      setFormData(p => ({ ...p, dataNascimento: iso, idadeAnos: calcularIdadeAnos(iso) }));
     } else {
       setFormData(p => ({ ...p, dataNascimento: val }));
-    }
-  };
-
-  // ── Criar localização inline ───────────────────────────────────────────────
-  const handleCriarLocal = async () => {
-    if (!novoLocalNome.trim() || !novoLocalTipo) return;
-    setSalvandoLocal(true);
-    try {
-      const res = await api.post('/cadastro/localizacoes', {
-        nome:            novoLocalNome.trim(),
-        tipoLocalizacao: novoLocalTipo,
-      });
-      if (res.data?.dados) {
-        const novaLoc: Localizacao = res.data.dados;
-        setLocalizacoes(prev => [...prev, novaLoc].sort((a, b) => a.nome.localeCompare(b.nome)));
-        setFormData(p => ({ ...p, localizacaoId: novaLoc.id }));
-        setLocBusca(novaLoc.nome);
-        setCriandoLocal(false);
-        setNovoLocalNome('');
-        setNovoLocalTipo('');
-        toast.success('Local criado com sucesso!');
-      }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar local';
-      toast.error(msg);
-    } finally {
-      setSalvandoLocal(false);
     }
   };
 
@@ -852,10 +861,8 @@ const Animal = () => {
         navigate('/');
       } else if (returnTo && !isEditMode) {
         navigate(createdAnimalId ? `${returnTo}/${createdAnimalId}` : returnTo);
-      } else if (isVet) {
-        navigate('/animais-vet');
       } else {
-        navigate('/meus-animais');
+        navigate(paginaPacientes);
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })
@@ -878,7 +885,7 @@ const Animal = () => {
   if (!loadingPerms && (isEditMode ? !podeEditar : !podeCriar)) {
     return (
       <PageContainer maxWidth="2xl">
-        <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
+        <BotaoVoltar para={paginaPacientes} className="mb-4" />
         <div className="text-center py-16">
           <h2 className="text-lg font-semibold text-gray-700 mb-2">Acesso não autorizado</h2>
           <p className="text-sm text-gray-500">Você não tem permissão para {isEditMode ? 'alterar' : 'criar'} animais.</p>
@@ -995,12 +1002,11 @@ const Animal = () => {
                 <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
-                    <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário no S2Vet.
-                    O cadastro segue normalmente: você será incluído como <strong>veterinário adicional</strong> —
-                    o vínculo do veterinário atual é mantido.{' '}
+                    <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário.
+                    O cadastro segue normalmente: você será incluído como <strong>veterinário adicional</strong>.{' '}
                     {pedirAutorizacao
                       ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o seu vínculo.'
-                      : 'Após salvar, o vínculo será estabelecido imediatamente e o proprietário receberá um e-mail informativo.'}
+                      : 'Após salvar, o proprietário receberá um e-mail informativo.'}
                   </span>
                 </div>
               )}
@@ -1058,7 +1064,7 @@ const Animal = () => {
                     }}
                     onFocus={() => setLocDropdownOpen(true)}
                     onBlur={() => setTimeout(() => setLocDropdownOpen(false), 200)}
-                    placeholder={formData.especieId ? 'Buscar ou criar local...' : 'Selecione a espécie primeiro'}
+                    placeholder={formData.especieId ? 'Buscar local...' : 'Selecione a espécie primeiro'}
                     disabled={!formData.especieId}
                     className={`${inputClass} pr-8 ${!formData.especieId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                     autoComplete="off"
@@ -1092,14 +1098,6 @@ const Animal = () => {
                     ))}
                     {filteredLocs.length === 0 && locBusca.trim() && (
                       <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{locBusca}"</p>
-                    )}
-                    {locBusca.trim() && filteredLocs.length === 0 && (
-                      <button type="button"
-                        onMouseDown={() => { setNovoLocalNome(locBusca); setCriandoLocal(true); setLocDropdownOpen(false); }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100">
-                        <Plus size={13} />
-                        Criar "{locBusca}"
-                      </button>
                     )}
                   </div>
                 )}
@@ -1196,7 +1194,7 @@ const Animal = () => {
                         const d = new Date(e.target.value + 'T00:00');
                         const h = new Date(); h.setHours(0, 0, 0, 0);
                         if (d > h) { toast.error('Data futura não permitida.'); return; }
-                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: '' });
+                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: calcularIdadeAnos(e.target.value) });
                       }}
                       className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                     />
@@ -1365,8 +1363,9 @@ const Animal = () => {
                   }}
                   onFocus={() => setTratDropdownOpen(true)}
                   onBlur={() => setTimeout(() => setTratDropdownOpen(false), 200)}
-                  placeholder="Buscar ou criar tratador…"
-                  className={`${inputClass} pr-8`}
+                  placeholder={formData.localizacaoId ? 'Buscar ou incluir tratador…' : 'Selecione o local primeiro'}
+                  disabled={!formData.localizacaoId}
+                  className={`${inputClass} pr-8 ${!formData.localizacaoId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                   autoComplete="off"
                 />
                 {formData.tratadorId
@@ -1402,14 +1401,12 @@ const Animal = () => {
                   {filteredTrats.length === 0 && tratBusca.trim() && (
                     <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{tratBusca}"</p>
                   )}
-                  {tratBusca.trim() && filteredTrats.length === 0 && (
-                    <button type="button"
-                      onMouseDown={() => abrirModalNovoTratador(tratBusca)}
-                      className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100">
-                      <Plus size={13} />
-                      Criar "{tratBusca}"
-                    </button>
-                  )}
+                  <button type="button"
+                    onMouseDown={() => abrirModalNovoTratador(tratBusca.trim())}
+                    className="w-full text-left px-4 py-2.5 hover:bg-blue-50 text-blue-600 text-sm flex items-center gap-2 border-t border-gray-100">
+                    <Plus size={13} />
+                    Incluir novo Tratador{tratBusca.trim() ? ` "${tratBusca.trim()}"` : ''}
+                  </button>
                 </div>
               )}
             </div>
@@ -1580,11 +1577,12 @@ const Animal = () => {
                   )}
 
                   {vetFoiAlterado && vetOriginalId && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
-                      <RefreshCw size={13} className="flex-shrink-0 mt-0.5" />
+                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
                       <span>
-                        O veterinário será <strong>trocado</strong>. Uma solicitação será enviada por e-mail ao
-                        veterinário atual para aprovar a troca. O vínculo atual permanece até o aceite.
+                        O veterinário selecionado será <strong>vinculado como responsável</strong>.
+                        Um animal pode ser tratado por mais de um veterinário — o vínculo do
+                        veterinário anterior é <strong>mantido</strong> (sem pedido de desvinculação).
                       </span>
                     </div>
                   )}
@@ -1636,66 +1634,6 @@ const Animal = () => {
           </form>
         </div>
     </PageContainer>
-
-    {/* ── Mini-modal: criar localização inline ──────────────────────────── */}
-
-    {criandoLocal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-        <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm space-y-4">
-          <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2">
-            <MapPin size={16} className="text-emerald-600" />
-            Novo Local
-          </h3>
-
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Nome <span className="text-red-500">*</span>
-            </label>
-            <input
-              value={novoLocalNome}
-              onChange={e => setNovoLocalNome(e.target.value)}
-              className={inputClass}
-              placeholder="Ex: Haras Bela Vista"
-              autoFocus
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Tipo <span className="text-red-500">*</span>
-            </label>
-            <select
-              value={novoLocalTipo}
-              onChange={e => setNovoLocalTipo(e.target.value)}
-              className={inputClass}
-            >
-              <option value="">Selecione o tipo</option>
-              {tiposCompativeis.map(t => (
-                <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={() => { setCriandoLocal(false); setNovoLocalNome(''); setNovoLocalTipo(''); }}
-              className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              type="button"
-              onClick={handleCriarLocal}
-              disabled={salvandoLocal || !novoLocalNome.trim() || !novoLocalTipo}
-              className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-            >
-              {salvandoLocal ? 'Salvando...' : 'Criar local'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
 
     {/* ── Mini-modal: Novo Tratador ──────────────────────────────────────── */}
     {modalNovoTrat && (

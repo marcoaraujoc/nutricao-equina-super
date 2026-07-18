@@ -91,7 +91,7 @@ const FaturaController = {
             id: true, fullName: true, email: true, phone: true,
             animais: { where: { ativo: true }, select: ANIMAL_SELECT },
             faturas: {
-              where:   { status: { in: ['ABERTA', 'FECHADA', 'PAGA'] } },
+              where:   { status: { in: ['ABERTA', 'FECHADA', 'ATRASADA', 'PAGA'] } },
               orderBy: { criadoEm: 'desc' },
               take:    6,
               select:  { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
@@ -99,10 +99,11 @@ const FaturaController = {
           },
         });
         if (!prop) return res.json({ dados: [] });
-        const faturaAberta  = prop.faturas.find(f => f.status === 'ABERTA')  ?? null;
-        const faturaFechada = prop.faturas.find(f => f.status === 'FECHADA') ?? null;
-        const faturaPaga    = prop.faturas.find(f => f.status === 'PAGA')    ?? null;
-        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaFechada, faturaPaga, faturas: undefined }];
+        const faturaAberta   = prop.faturas.find(f => f.status === 'ABERTA')   ?? null;
+        const faturaFechada  = prop.faturas.find(f => f.status === 'FECHADA')  ?? null;
+        const faturaAtrasada = prop.faturas.find(f => f.status === 'ATRASADA') ?? null;
+        const faturaPaga     = prop.faturas.find(f => f.status === 'PAGA')     ?? null;
+        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }];
         return res.json({ dados });
       }
 
@@ -154,9 +155,9 @@ const FaturaController = {
             },
           },
           faturas: {
-            where: { status: { in: ['ABERTA', 'FECHADA'] } },
+            where: { status: { in: ['ABERTA', 'FECHADA', 'ATRASADA'] } },
             orderBy: { criadoEm: 'desc' },
-            take: 2,
+            take: 6,
             select: { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
           },
         },
@@ -179,9 +180,10 @@ const FaturaController = {
 
       const dados = proprietarios.map(p => ({
         ...p,
-        faturaAtiva:   p.faturas.find(f => f.status === 'ABERTA')   ?? null,
-        faturaFechada: p.faturas.find(f => f.status === 'FECHADA')  ?? null,
-        faturaPaga:    faturaPagaPorProp[p.id] ?? null,
+        faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
+        faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
+        faturaAtrasada: p.faturas.find(f => f.status === 'ATRASADA') ?? null,
+        faturaPaga:     faturaPagaPorProp[p.id] ?? null,
         faturas: undefined,
       }));
 
@@ -192,22 +194,40 @@ const FaturaController = {
     }
   },
 
-  // GET /proprietario/:proprietarioId?faturaId=N
-  // Sem faturaId → retorna (ou cria) a fatura ABERTA do mês atual.
-  // Com faturaId  → retorna a fatura específica pelo ID (sem criar).
+  // GET /proprietario/:proprietarioId?faturaId=N&mes=YYYY-MM
+  // Sem faturaId/mes → retorna (ou cria) a fatura ABERTA do mês atual.
+  // Com faturaId      → retorna a fatura específica pelo ID (sem criar).
+  // Com mes           → retorna a fatura do proprietário no mês (sem criar; null se não houver).
+  // Sempre inclui `meses` — lista de faturas do proprietário para o seletor de mês/ano.
   obterFaturaProprietario: async (req, res) => {
     const { proprietarioId } = req.params;
-    const { faturaId }       = req.query;
+    const { faturaId, mes }  = req.query;
     const mesRef = mesReferenciaAtual();
 
     try {
+      // Meses/faturas existentes do proprietário — alimenta o seletor de mês/ano.
+      const meses = await prisma.fatura.findMany({
+        where:   { proprietarioId: Number(proprietarioId) },
+        select:  { id: true, mesReferencia: true, status: true },
+        orderBy: { mesReferencia: 'desc' },
+      });
+
+      if (mes) {
+        const fatura = await prisma.fatura.findFirst({
+          where:   { proprietarioId: Number(proprietarioId), mesReferencia: String(mes) },
+          include: FATURA_INCLUDE,
+          orderBy: { criadoEm: 'desc' },
+        });
+        return res.json({ dados: fatura ?? null, meses });
+      }
+
       if (faturaId) {
         const fatura = await prisma.fatura.findFirst({
           where:   { id: Number(faturaId), proprietarioId: Number(proprietarioId) },
           include: FATURA_INCLUDE,
         });
         if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
-        return res.json({ dados: fatura });
+        return res.json({ dados: fatura, meses });
       }
 
       let fatura = await prisma.fatura.findFirst({
@@ -229,7 +249,11 @@ const FaturaController = {
         fatura = await prisma.fatura.findUnique({ where: { id: fatura.id }, include: FATURA_INCLUDE });
       }
 
-      res.json({ dados: fatura });
+      // Inclui a fatura recém-criada/aberta na lista de meses, se ainda não estiver.
+      if (fatura && !meses.some(m => m.id === fatura.id)) {
+        meses.unshift({ id: fatura.id, mesReferencia: fatura.mesReferencia, status: fatura.status });
+      }
+      res.json({ dados: fatura, meses });
     } catch (err) {
       console.error('Erro ao obter fatura do proprietário:', err);
       res.status(500).json({ error: 'Erro interno' });

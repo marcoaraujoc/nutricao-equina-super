@@ -56,6 +56,13 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // CRÍTICO (multi-perfil): enquanto o contexto ativo não estiver resolvido, mantém
+    // loading=true para que o usePermissoes NÃO dispare um fetch prematuro sem os headers
+    // x-empresa-id/x-equipe-id. Sem isto, no login o backend cai no vínculo mais recente
+    // (ex.: FORNECEDOR) e o gestor via o sidebar limitado (só Cadastro) de forma instável —
+    // duas buscas concorrentes podiam resolver fora de ordem e a errada sobrescrevia a certa.
+    setLoading(true);
+
     let cancelado = false;
     (async () => {
       try {

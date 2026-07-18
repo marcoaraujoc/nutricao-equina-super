@@ -15,6 +15,54 @@ const normalizarCRMV = (v) => {
   return `${parseInt(num, 10)}/${uf}`;
 };
 
+// Valida/normaliza o expediente de atendimento (dias 0-6 CSV + HH:MM).
+// Cada campo: undefined = não altera; ''/[] = limpa (herda o da empresa).
+const parseExpedienteBody = (body) => {
+  let dias;
+  if (body.diasTrabalho !== undefined) {
+    const arr = Array.isArray(body.diasTrabalho)
+      ? body.diasTrabalho
+      : String(body.diasTrabalho).split(',').map(s => s.trim()).filter(Boolean);
+    if (arr.length === 0) dias = null;
+    else {
+      const nums = [...new Set(arr.map(Number))].sort((a, b) => a - b);
+      if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 6)) return { erro: 'Dias de atendimento inválidos (0=Dom … 6=Sáb).' };
+      dias = nums.join(',');
+    }
+  }
+  const parseHora = (v) => {
+    if (v === undefined) return undefined;
+    const s = String(v).trim();
+    if (s === '') return null;
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return '__ERRO__';
+    return s;
+  };
+  const hi = parseHora(body.horaInicioTrabalho);
+  const hf = parseHora(body.horaFimTrabalho);
+  if (hi === '__ERRO__' || hf === '__ERRO__') return { erro: 'Horário de atendimento inválido — use HH:MM.' };
+  if (hi && hf && hi >= hf) return { erro: 'A hora de início do atendimento deve ser menor que a de término.' };
+  return { diasTrabalho: dias, horaInicioTrabalho: hi, horaFimTrabalho: hf };
+};
+
+// Resolve o MembroEquipe do CONTEXTO ATIVO: equipe selecionada > equipe dentro da
+// empresa ativa > primeiro vínculo do usuário. Assim o expediente editado/exibido é
+// sempre o da empresa/equipe em que o usuário está trabalhando (não um vínculo aleatório).
+const resolverMembroDoContexto = async (userId, req) => {
+  if (req.equipeId) {
+    const m = await prisma.membroEquipe.findFirst({ where: { userId, equipeId: Number(req.equipeId) }, select: { id: true } });
+    if (m) return m;
+  }
+  if (req.empresaId) {
+    const m = await prisma.membroEquipe.findFirst({
+      where:   { userId, equipe: { empresaId: Number(req.empresaId) } },
+      orderBy: { createdAt: 'desc' },
+      select:  { id: true },
+    });
+    if (m) return m;
+  }
+  return prisma.membroEquipe.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+};
+
 const UserController = {
 
   /**
@@ -50,6 +98,7 @@ const UserController = {
               subespecialidades: { select: { nome: true } },
             },
           },
+          especialidades: { select: { especialidadeId: true } },
         },
       });
 
@@ -81,14 +130,42 @@ const UserController = {
         orderBy: { createdAt: 'asc' },
       });
 
-      const { vetPerfil, ...userData } = user;
+      // Expediente de atendimento do profissional. Lê o do vínculo do contexto; se vazio,
+      // herda o que o profissional definiu em qualquer vínculo (mais recente).
+      let expediente = { diasTrabalho: null, horaInicioTrabalho: null, horaFimTrabalho: null };
+      const membroExp = await resolverMembroDoContexto(user.id, req);
+      try {
+        if (membroExp) {
+          const rows = await prisma.$queryRawUnsafe(
+            `SELECT "diasTrabalho","horaInicioTrabalho","horaFimTrabalho" FROM schs2vet.tb_membros_equipe WHERE id=$1`,
+            membroExp.id,
+          );
+          if (rows[0]) expediente = rows[0];
+        }
+        if (!expediente.diasTrabalho && !expediente.horaInicioTrabalho && !expediente.horaFimTrabalho) {
+          const rows = await prisma.$queryRawUnsafe(
+            `SELECT "diasTrabalho","horaInicioTrabalho","horaFimTrabalho" FROM schs2vet.tb_membros_equipe
+              WHERE "userId"=$1 AND ("diasTrabalho" IS NOT NULL OR "horaInicioTrabalho" IS NOT NULL OR "horaFimTrabalho" IS NOT NULL)
+              ORDER BY id DESC LIMIT 1`,
+            user.id,
+          );
+          if (rows[0]) expediente = rows[0];
+        }
+      } catch { /* colunas ainda não migradas — ignora */ }
+
+      const { vetPerfil, especialidades, ...userData } = user;
       return res.status(200).json({
         ...userData,
         isConvidado,
         cargoEquipe: membroEquipe?.cargo ?? null,
+        temEquipe:   !!membroExp,
+        diasTrabalho:       expediente.diasTrabalho,
+        horaInicioTrabalho: expediente.horaInicioTrabalho,
+        horaFimTrabalho:    expediente.horaFimTrabalho,
         crmv:              vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
         subespecialidades: vetPerfil?.subespecialidades.map(s => s.nome) ?? [],
+        especialidadeIds:  especialidades?.map(e => e.especialidadeId) ?? [],
         profileComplete:   !!(user.phone && user.fullName && user.fullName.trim()),
         pendingInvite:     convitePendente
           ? { id: convitePendente.id, cargo: convitePendente.cargo, equipeNome: convitePendente.equipe?.nome ?? '' }
@@ -123,6 +200,10 @@ const UserController = {
         crmv,
         especiesAtendidas,
         subespecialidades,
+        especialidadeIds,
+        diasTrabalho,
+        horaInicioTrabalho,
+        horaFimTrabalho,
       } = req.body;
 
       // Determina se é usuário convidado (userType foi definido pelo convite)
@@ -226,6 +307,35 @@ const UserController = {
               skipDuplicates: true,
             });
           }
+        }
+      }
+
+      // Expediente de atendimento (dias/horários) — "o MEU horário": grava em TODOS os
+      // vínculos do profissional, para valer em qualquer empresa/equipe/agenda.
+      if (diasTrabalho !== undefined || horaInicioTrabalho !== undefined || horaFimTrabalho !== undefined) {
+        const exp = parseExpedienteBody({ diasTrabalho, horaInicioTrabalho, horaFimTrabalho });
+        if (exp.erro) return res.status(400).json({ success: false, error: exp.erro });
+        const sets = [], vals = [];
+        let i = 1;
+        if (exp.diasTrabalho       !== undefined) { sets.push(`"diasTrabalho"=$${i++}`);       vals.push(exp.diasTrabalho); }
+        if (exp.horaInicioTrabalho !== undefined) { sets.push(`"horaInicioTrabalho"=$${i++}`); vals.push(exp.horaInicioTrabalho); }
+        if (exp.horaFimTrabalho    !== undefined) { sets.push(`"horaFimTrabalho"=$${i++}`);    vals.push(exp.horaFimTrabalho); }
+        if (sets.length > 0) {
+          vals.push(updatedUser.id);
+          await prisma.$executeRawUnsafe(`UPDATE schs2vet.tb_membros_equipe SET ${sets.join(', ')} WHERE "userId"=$${i}`, ...vals);
+        }
+      }
+
+      // Especialidades (catálogo por espécie) — fonte única para VET e FORNECEDOR.
+      // Recria o vínculo do usuário (delete + insert). Array vazio = limpa.
+      if (Array.isArray(especialidadeIds)) {
+        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: updatedUser.id } });
+        if (ids.length > 0) {
+          await prisma.usuarioEspecialidade.createMany({
+            data: ids.map(especialidadeId => ({ userId: updatedUser.id, especialidadeId })),
+            skipDuplicates: true,
+          });
         }
       }
 

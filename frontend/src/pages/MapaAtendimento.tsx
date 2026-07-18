@@ -1,7 +1,7 @@
 // frontend/src/pages/MapaAtendimento.tsx
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, RefreshCw, PlayCircle, Loader2 } from 'lucide-react';
+import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, RefreshCw, PlayCircle, Loader2, Activity } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -248,8 +248,10 @@ export default function MapaAtendimento() {
   const [resumo,        setResumo]        = useState<ResumoData | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [dataFiltro,    setDataFiltro]    = useState(() => new Date().toISOString().slice(0, 10));
+  const [granularidade, setGranularidade] = useState<'DIARIO' | 'SEMANAL' | 'MENSAL'>('DIARIO');
   const [localizacaoId, setLocalizacaoId] = useState('');
   const [veterinarioId, setVeterinarioId] = useState('');
+  const [animalFiltro,  setAnimalFiltro]  = useState('');
   const [tipoFiltro,    setTipoFiltro]    = useState('');
   const [hoveredHaras,  setHoveredHaras]  = useState<number | null>(null);
   const [activeHaras,   setActiveHaras]   = useState<number | null>(null);
@@ -288,7 +290,7 @@ export default function MapaAtendimento() {
     if (!podeExecutar('dashboard.geral.ler')) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ data: dataFiltro });
+      const params = new URLSearchParams({ data: dataFiltro, granularidade });
       if (localizacaoId) params.set('localizacaoId', localizacaoId);
       if (veterinarioId) params.set('veterinarioId', veterinarioId);
       const res = await api.get(`/mapa-atendimento/resumo?${params}`);
@@ -296,7 +298,7 @@ export default function MapaAtendimento() {
     } finally {
       setLoading(false);
     }
-  }, [loadingPerms, podeExecutar, dataFiltro, localizacaoId, veterinarioId]);
+  }, [loadingPerms, podeExecutar, dataFiltro, granularidade, localizacaoId, veterinarioId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -338,6 +340,7 @@ export default function MapaAtendimento() {
     if (item.status === 'SEM_ATENDIMENTO' && activeStatus !== 'SEM_ATENDIMENTO') return false;
     if (activeHaras !== null && (item.localizacao?.id ?? 0) !== activeHaras) return false;
     if (activeStatus && item.status !== activeStatus) return false;
+    if (animalFiltro && String(item.animal.id) !== animalFiltro) return false;
     if (tipoFiltro && item.procedimento !== tipoFiltro) return false;
     return true;
   });
@@ -366,9 +369,17 @@ export default function MapaAtendimento() {
     if (id !== null) scrollToCronograma();
   };
 
-  const dataLabel = new Date(dataFiltro + 'T12:00:00').toLocaleDateString('pt-BR', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  });
+  const dataLabel = (() => {
+    const d = new Date(dataFiltro + 'T12:00:00');
+    if (granularidade === 'MENSAL') return d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    if (granularidade === 'SEMANAL') {
+      const ini = new Date(d); ini.setDate(d.getDate() - d.getDay());
+      const fim = new Date(ini); fim.setDate(ini.getDate() + 6);
+      const f = (x: Date) => x.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' });
+      return `Semana de ${f(ini)} a ${f(fim)}`;
+    }
+    return d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  })();
 
   const locOpcoes: SelectOption[] = (resumo?.filtros.localizacoes ?? []).map(l => ({ value: String(l.id), label: l.nome }));
   const vetOpcoes: SelectOption[] = (resumo?.filtros.veterinarios ?? []).map(v => ({ value: String(v.id), label: v.fullName }));
@@ -376,6 +387,30 @@ export default function MapaAtendimento() {
     .filter(c => c.status !== 'SEM_ATENDIMENTO')
     .map(c => c.procedimento))];
   const tipoOpcoes: SelectOption[] = tiposUnicos.map(t => ({ value: t, label: TIPO_LABELS[t] ?? t }));
+
+  const PERIODO_OPCOES: SelectOption[] = [
+    { value: 'DIARIO',  label: 'Diário'  },
+    { value: 'SEMANAL', label: 'Semanal' },
+    { value: 'MENSAL',  label: 'Mensal'  },
+  ];
+
+  // Animais presentes no cronograma (filtro client-side).
+  const animalMap = new Map<number, string>();
+  for (const c of resumo?.cronograma ?? []) animalMap.set(c.animal.id, c.animal.nome);
+  const animalOpcoes: SelectOption[] = [...animalMap]
+    .map(([id, nome]) => ({ value: String(id), label: nome }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  // Status presentes no cronograma.
+  const STATUS_LABELS: Record<string, string> = {
+    AGENDADO: 'Agendado', EM_ANDAMENTO: 'Em andamento', CONCLUIDO: 'Concluído',
+    FINALIZADO: 'Finalizado', EXECUTADO: 'Executado', CANCELADO: 'Cancelado',
+    SEM_ATENDIMENTO: 'Sem atendimento',
+  };
+  const statusUnicos = [...new Set((resumo?.cronograma ?? []).map(c => c.status))];
+  const statusOpcoes: SelectOption[] = statusUnicos
+    .map(s => ({ value: s, label: STATUS_LABELS[s] ?? s }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   return (
     <PageContainer maxWidth="7xl">
@@ -386,6 +421,11 @@ export default function MapaAtendimento() {
           <p className="text-sm text-gray-500 capitalize mt-0.5">{dataLabel}</p>
         </div>
         <div className="flex items-center gap-2">
+          <SimpleSelect
+            options={PERIODO_OPCOES}
+            value={granularidade}
+            onChange={v => setGranularidade(v as 'DIARIO' | 'SEMANAL' | 'MENSAL')}
+          />
           <input
             type="date"
             value={dataFiltro}
@@ -428,6 +468,26 @@ export default function MapaAtendimento() {
             />
           </>
         )}
+        <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500 ml-2">
+          <Activity size={15} className="text-indigo-500" />
+          <span>Animal</span>
+        </div>
+        <SimpleSelect
+          options={animalOpcoes}
+          value={animalFiltro}
+          onChange={setAnimalFiltro}
+          placeholder="Todos"
+        />
+        <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500 ml-2">
+          <CheckCircle2 size={15} className="text-indigo-500" />
+          <span>Status</span>
+        </div>
+        <SimpleSelect
+          options={statusOpcoes}
+          value={activeStatus ?? ''}
+          onChange={v => setActiveStatus(v || null)}
+          placeholder="Todos"
+        />
       </div>
 
       {/* ── Cards de KPI ────────────────────────────────────────────── */}

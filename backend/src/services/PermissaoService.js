@@ -119,8 +119,16 @@ async function aplicarPermissoesPadrao({ equipeId, userId, cargo, atualizadoPor 
 
   if (Object.keys(mapa).length === 0) return;
 
+  // Só propaga slugs que existem no catálogo ModuloSistema — PermissaoMembro.moduloSlug
+  // tem FK para ModuloSistema.slug; um slug do mapa ausente no DB (seed desatualizado)
+  // causaria P2003 e abortaria toda a inclusão do membro. Degrada graciosamente.
+  const catalogo   = await prisma.moduloSistema.findMany({ select: { slug: true } });
+  const catalogoSet = new Set(catalogo.map(m => m.slug));
+  const entradas   = Object.entries(mapa).filter(([moduloSlug]) => catalogoSet.has(moduloSlug));
+  if (entradas.length === 0) return;
+
   const agora   = new Date();
-  const upserts = Object.entries(mapa).map(([moduloSlug, nivel]) =>
+  const upserts = entradas.map(([moduloSlug, nivel]) =>
     prisma.permissaoMembro.upsert({
       where:  { equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug } },
       update: { nivel, atualizadoPor, updatedAt: agora },

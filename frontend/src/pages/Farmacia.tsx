@@ -14,6 +14,7 @@ import {
   ChevronDown, Eye, ArrowUpDown,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
+import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,11 @@ type FiltroTab = 'todos' | 'critico' | 'alarmante' | 'controlados' | 'inativos';
 
 // Tipos de fornecedor relevantes para farmácia (excluem prestadores de serviço clínico)
 const TIPOS_FORNECEDOR_FARMACIA = new Set(['Farmácia', 'Laboratório', 'Loja']);
+// Fornecedor pode ter vários tipos (CSV) — basta um relevante para aparecer na farmácia.
+const fornecedorDeFarmacia = (tipoServico: string | null | undefined) =>
+  (tipoServico ?? '').split(',').some(t => TIPOS_FORNECEDOR_FARMACIA.has(t.trim()));
+// Valor sentinela do seletor: abrir o cadastro de novo fornecedor.
+const NOVO_FORNECEDOR = -1;
 
 const FORM_VAZIO = {
   medicamentoId: 0,
@@ -142,6 +148,7 @@ export default function Farmacia() {
   const [itens,        setItens]        = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
   const [fornecedores, setFornecedores] = useState<FornecedorItem[]>([]);
+  const [showNovoForn, setShowNovoForn] = useState(false);
   const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
   const [loading,      setLoading]      = useState(false);
   const [busca,        setBusca]        = useState('');
@@ -168,6 +175,7 @@ export default function Farmacia() {
   const [dropdownAjusteAberto,  setDropdownAjusteAberto]  = useState(false);
   // Quantidade FINAL em estoque (pré-preenchida com a atual) — o delta é calculado
   const [ajusteQtd,      setAjusteQtd]      = useState<number | ''>('');
+  const [ajusteFrascos,  setAjusteFrascos]  = useState<number | ''>('');
   const [ajusteMotivo,   setAjusteMotivo]   = useState('');
   const [ajustando,      setAjustando]      = useState(false);
   const [valorStr,             setValorStr]             = useState('');
@@ -191,6 +199,10 @@ export default function Farmacia() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   })();
+
+  // Validade vencida (anterior a hoje) no campo editável — feedback imediato na entrada.
+  // Item já movimentado tem a validade travada, então não sinaliza como erro.
+  const validadeVencida = !!form.validade && form.validade < hoje && !(editandoId && editandoEmUso);
 
   const formatarValor = (v: number) =>
     v === 0 ? '' : new Intl.NumberFormat(navigator.language || 'pt-BR', {
@@ -241,13 +253,34 @@ export default function Farmacia() {
       setMeta(estoqueRes.data.meta ?? { total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
       setMedicamentos(medRes.data.dados ?? []);
       setFornecedores(
-        (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => TIPOS_FORNECEDOR_FARMACIA.has(f.tipoServico))
+        (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => fornecedorDeFarmacia(f.tipoServico))
       );
     } catch { toast.error('Erro ao carregar estoque.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
+
+  // Recarrega só a lista de fornecedores da farmácia (após cadastrar um novo pelo seletor).
+  const recarregarFornecedores = useCallback(async (): Promise<FornecedorItem[]> => {
+    try {
+      const res = await api.get('/cadastro/fornecedores', { params: { ativo: 'true' } });
+      const lista = ((res.data?.dados ?? []) as FornecedorItem[]).filter(f => fornecedorDeFarmacia(f.tipoServico));
+      setFornecedores(lista);
+      return lista;
+    } catch { return []; }
+  }, []);
+
+  const handleFornecedorCriado = async (novo: NovoFornecedorResult) => {
+    setShowNovoForn(false);
+    const lista = await recarregarFornecedores();
+    // Se o novo fornecedor não passar no filtro de tipos da farmácia, adiciona mesmo assim
+    // para ficar selecionável neste contexto.
+    if (!lista.some(f => f.id === novo.id)) {
+      setFornecedores(prev => [{ id: novo.id, nome: novo.nome, tipoServico: '' }, ...prev]);
+    }
+    setForm(f => ({ ...f, fornecedorId: novo.id }));
+  };
 
   useEffect(() => {
     // Só reseta a calculadora na CRIAÇÃO (troca de medicamento no combobox).
@@ -385,7 +418,11 @@ export default function Farmacia() {
     if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
     if (!form.lote.trim())   return toast.error('Lote é obrigatório.');
     if (!form.validade)      return toast.error('Validade é obrigatória.');
-    if (form.validade && form.validade < hoje && !editandoId) return toast.error('Validade não pode ser anterior à data de hoje.');
+    // Não permite validade vencida (anterior a hoje) sempre que o campo for editável —
+    // na criação e na edição de item ainda não movimentado (item em uso tem a validade travada).
+    if (validadeVencida) {
+      return toast.error('Validade vencida: informe uma data igual ou posterior a hoje.');
+    }
 
     if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return toast.error('Quantidades não podem ser negativas.');
     if (!editandoId && form.qtdEstoque < 0) return toast.error('Estoque não pode ser negativo.');
@@ -455,10 +492,17 @@ export default function Farmacia() {
   // Item selecionado no modal de ajuste (resolvido a partir da lista carregada)
   const itemAjuste = ajusteItemId != null ? (itens.find((i) => i.id === ajusteItemId) ?? null) : null;
 
+  // ml (ou unidade base) por frasco/embalagem — 0 quando o item não tem embalagem.
+  const arred2 = (n: number) => Math.round(n * 100) / 100;
+  const mlPorFrasco = itemAjuste?.pesoPorEmbalagem && itemAjuste.pesoPorEmbalagem > 0 ? itemAjuste.pesoPorEmbalagem : 0;
+  const frascosDe = (ml: number): number | '' => (mlPorFrasco > 0 ? arred2(ml / mlPorFrasco) : '');
+
   const abrirAjuste = (item?: EstoqueItem) => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
     setAjusteItemId(item?.id ?? null);
     setAjusteQtd(item ? item.qtdEstoque : '');
+    const mpf = item?.pesoPorEmbalagem && item.pesoPorEmbalagem > 0 ? item.pesoPorEmbalagem : 0;
+    setAjusteFrascos(item && mpf > 0 ? arred2(item.qtdEstoque / mpf) : '');
     setAjusteMotivo('');
     setBuscaAjuste('');
     setDropdownAjusteAberto(false);
@@ -848,12 +892,17 @@ export default function Farmacia() {
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Fornecedor</label>
                   <select
                     value={form.fornecedorId}
-                    onChange={(e) => setForm((f) => ({ ...f, fornecedorId: Number(e.target.value) }))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val === NOVO_FORNECEDOR) { setShowNovoForn(true); return; }
+                      setForm((f) => ({ ...f, fornecedorId: val }));
+                    }}
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900">
                     <option value={0}>Selecione o fornecedor...</option>
                     {fornecedores.map((f) => (
                       <option key={f.id} value={f.id}>{f.nome}</option>
                     ))}
+                    <option value={NOVO_FORNECEDOR}>+ Cadastrar novo fornecedor...</option>
                   </select>
                 </div>
                 <div>
@@ -912,12 +961,17 @@ export default function Farmacia() {
                   <input
                     type="date"
                     value={form.validade}
-                    min={editandoId ? undefined : hoje}
+                    min={editandoId && editandoEmUso ? undefined : hoje}
                     disabled={!!editandoId && editandoEmUso}
                     title={editandoId && editandoEmUso ? 'Item já movimentado — validade não pode ser alterada' : undefined}
                     onChange={(e) => setForm((f) => ({ ...f, validade: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                    className={`w-full border rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 disabled:bg-gray-100 disabled:text-gray-400 ${
+                      validadeVencida ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-emerald-500'
+                    }`}
                   />
+                  {validadeVencida && (
+                    <p className="text-[11px] text-red-500 mt-1">Validade vencida — informe uma data igual ou posterior a hoje.</p>
+                  )}
                 </div>
               </div>
 
@@ -1222,7 +1276,7 @@ export default function Farmacia() {
                       </span>
                       {itemAjuste ? (
                         <X size={14} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
-                          onClick={(e) => { e.stopPropagation(); setAjusteItemId(null); setAjusteQtd(''); }} />
+                          onClick={(e) => { e.stopPropagation(); setAjusteItemId(null); setAjusteQtd(''); setAjusteFrascos(''); }} />
                       ) : (
                         <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
                       )}
@@ -1258,6 +1312,8 @@ export default function Farmacia() {
                                     onMouseDown={() => {
                                       setAjusteItemId(i.id);
                                       setAjusteQtd(i.qtdEstoque);
+                                      const mpf = i.pesoPorEmbalagem && i.pesoPorEmbalagem > 0 ? i.pesoPorEmbalagem : 0;
+                                      setAjusteFrascos(mpf > 0 ? Math.round((i.qtdEstoque / mpf) * 100) / 100 : '');
                                       setDropdownAjusteAberto(false);
                                       setBuscaAjuste('');
                                     }}
@@ -1289,6 +1345,11 @@ export default function Farmacia() {
                   <div className="grid grid-cols-2 gap-1">
                     <p><span className="text-gray-400">Estoque atual:</span>{' '}
                       <b className="text-emerald-700">{fmtQtd(itemAjuste.qtdEstoque)} {itemAjuste.medicamento.unidade}</b></p>
+                    {mlPorFrasco > 0 && (
+                      <p><span className="text-gray-400">Frascos:</span>{' '}
+                        <b className="text-emerald-700">{fmtQtd(frascosDe(itemAjuste.qtdEstoque) || 0)}</b>
+                        <span className="text-gray-400"> ({fmtQtd(mlPorFrasco)} {itemAjuste.medicamento.unidade}/frasco)</span></p>
+                    )}
                     <p><span className="text-gray-400">Lote:</span> {itemAjuste.lote ?? '—'}</p>
                     <p><span className="text-gray-400">Forma:</span> {itemAjuste.medicamento.formaFarmaceutica}</p>
                     <p><span className="text-gray-400">Validade:</span> {itemAjuste.validade ? formatDate(itemAjuste.validade) : '—'}</p>
@@ -1296,18 +1357,47 @@ export default function Farmacia() {
                 </div>
               )}
 
-              {/* Quantidade final em estoque — pré-preenchida com a atual */}
+              {/* Quantidade final em estoque — pré-preenchida com a atual.
+                  Frascos e ml ficam sincronizados (ml = frascos × ml/frasco). */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Quantidade em Estoque{itemAjuste && <span className="text-gray-400 font-normal ml-1">({itemAjuste.medicamento.unidade})</span>} <span className="text-red-500">*</span>
+                  Quantidade em Estoque <span className="text-red-500">*</span>
                 </label>
-                <input type="number" min={0} value={ajusteQtd === '' ? '' : ajusteQtd}
-                  onChange={(e) => setAjusteQtd(e.target.value === '' ? '' : Number(e.target.value))}
-                  placeholder="0"
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <div className={mlPorFrasco > 0 ? 'grid grid-cols-2 gap-2' : ''}>
+                  {mlPorFrasco > 0 && (
+                    <div>
+                      <span className="block text-[10px] text-gray-400 mb-0.5">Frascos</span>
+                      <input type="number" min={0} step="any" value={ajusteFrascos === '' ? '' : ajusteFrascos}
+                        onChange={(e) => {
+                          if (e.target.value === '') { setAjusteFrascos(''); setAjusteQtd(''); return; }
+                          const f = Number(e.target.value);
+                          setAjusteFrascos(f);
+                          setAjusteQtd(arred2(f * mlPorFrasco));
+                        }}
+                        placeholder="0"
+                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                  )}
+                  <div>
+                    {mlPorFrasco > 0 && (
+                      <span className="block text-[10px] text-gray-400 mb-0.5">
+                        {itemAjuste?.medicamento.unidade ?? 'Total'}
+                      </span>
+                    )}
+                    <input type="number" min={0} value={ajusteQtd === '' ? '' : ajusteQtd}
+                      onChange={(e) => {
+                        if (e.target.value === '') { setAjusteQtd(''); setAjusteFrascos(''); return; }
+                        const v = Number(e.target.value);
+                        setAjusteQtd(v);
+                        setAjusteFrascos(frascosDe(v));
+                      }}
+                      placeholder={mlPorFrasco > 0 ? `Total (${itemAjuste?.medicamento.unidade ?? ''})` : '0'}
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                </div>
                 {itemAjuste && (
                   <p className="text-[10px] text-gray-400 mt-1">
-                    Informe a quantidade real em estoque — a diferença será registrada como ajuste.
+                    Informe a quantidade real em estoque{mlPorFrasco > 0 ? ' (frascos ou ' + itemAjuste.medicamento.unidade + ')' : ''} — a diferença será registrada como ajuste.
                   </p>
                 )}
               </div>
@@ -1338,18 +1428,23 @@ export default function Farmacia() {
                       {delta > 0 ? '+' : '−'}{fmtQtd(Math.abs(delta))} {itemAjuste.medicamento.unidade}
                     </b>
                     {' '}({fmtQtd(itemAjuste.qtdEstoque)} → {fmtQtd(novaQtd)})
+                    {mlPorFrasco > 0 && (
+                      <span className="text-gray-400">
+                        {' '}· {fmtQtd(frascosDe(itemAjuste.qtdEstoque) || 0)} → {fmtQtd(frascosDe(novaQtd) || 0)} frascos
+                      </span>
+                    )}
                   </p>
                 );
               })()}
 
-              <div className="flex gap-2">
-                <button onClick={confirmarAjuste} disabled={ajustando || !itemAjuste}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
-                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
-                </button>
+              <div className="flex justify-end gap-2">
                 <button onClick={fecharAjuste}
-                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  className="px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-50">
                   Cancelar
+                </button>
+                <button onClick={confirmarAjuste} disabled={ajustando || !itemAjuste}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold disabled:opacity-60">
+                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
                 </button>
               </div>
             </div>
@@ -1366,6 +1461,14 @@ export default function Farmacia() {
         onConfirmar={confirmarExcluir}
         onFechar={() => setConfirmExcluir(null)}
       />
+
+      {/* ── Modal: cadastrar novo fornecedor pelo seletor da entrada de estoque ── */}
+      {showNovoForn && (
+        <ModalNovoFornecedor
+          onSalvo={handleFornecedorCriado}
+          onClose={() => setShowNovoForn(false)}
+        />
+      )}
     </PageContainer>
   );
 }

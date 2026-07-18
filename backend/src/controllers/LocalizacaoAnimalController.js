@@ -2,7 +2,6 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
-const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 
 // Mapeamento estático: tipoLocalizacao → espécies atendidas (null = TODOS)
@@ -49,10 +48,13 @@ async function verificarDuplicidade({ nome, empresaId, excludeId = null }) {
 
 const LocalizacaoAnimalController = {
 
-  // GET /api/cadastro/localizacoes?busca=X&ativo=true|false|all&especie=Equino
+  // GET /api/cadastro/localizacoes?busca=X&ativo=true|false|all&especie=Equino&limit=10
   listar: async (req, res) => {
     try {
-      const { busca, ativo, especie } = req.query;
+      const { busca, ativo, especie, limit } = req.query;
+      // Catálogo grande (dezenas de milhares após importação): com `limit`, faz busca
+      // server-side e devolve só os primeiros N — evita varrer/enviar tudo (autocomplete).
+      const limitNum = limit ? Math.max(1, Math.min(Number(limit) || 0, 100)) : null;
       const where = {};
 
       if (ativo === 'all') { /* sem filtro */ }
@@ -81,30 +83,40 @@ const LocalizacaoAnimalController = {
         where.tipoLocalizacao = { in: tiposCompativeis };
       }
 
-      // Escopo por empresa/equipe: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
-      // + localizações da empresa ativa, segregadas pela equipe do contexto (igual Animal)
-      if (req.user?.role !== 'ADMIN') {
-        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
-        where.AND = [
-          ...(where.AND ?? []),
-          {
-            OR: [
-              { empresaId: null },
-              { empresaId: req.empresaId ?? -1, equipeId: null },
-              ...(equipeScope
-                ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]
-                : [{ empresaId: req.empresaId ?? -1 }]),
-            ],
-          },
-        ];
-      }
+      // Localização é CORPORATIVA (cross entre todas as empresas): não há escopo por
+      // empresa/equipe na listagem — todos os usuários veem todas as localizações
+      // (SYSTEM + CLIENTE de qualquer empresa), como um catálogo compartilhado.
 
       const localizacoes = await prisma.localizacaoAnimal.findMany({
         where,
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
+        // Busca uma folga (dedup pode reduzir) mas nunca varre a tabela inteira.
+        ...(limitNum ? { take: Math.min(limitNum * 5, 300) } : {}),
       });
 
-      res.json({ sucesso: true, dados: localizacoes });
+      // Catálogo corporativo: podem existir linhas duplicadas (mesmo nome+tipo)
+      // criadas por empresas diferentes antes da unificação. Mostra apenas UMA por
+      // nome+tipo, preferindo a linha que o usuário atual consegue gerenciar
+      // (a da própria empresa), depois SYSTEM (global), depois o menor id.
+      const prefScore = (l) => {
+        if (req.empresaId && l.empresaId === req.empresaId) return 3; // própria empresa (editável)
+        if (l.empresaId == null) return 2;                            // SYSTEM global
+        return 1;
+      };
+      const melhorPorChave = new Map();
+      for (const l of localizacoes) {
+        const chave = `${normalizarTexto(l.nome)}|${l.tipoLocalizacao}`;
+        const atual = melhorPorChave.get(chave);
+        if (!atual
+          || prefScore(l) > prefScore(atual)
+          || (prefScore(l) === prefScore(atual) && l.id < atual.id)) {
+          melhorPorChave.set(chave, l);
+        }
+      }
+      const deduped = [...melhorPorChave.values()].sort((a, b) =>
+        a.ativo === b.ativo ? a.nome.localeCompare(b.nome) : (a.ativo ? -1 : 1));
+
+      res.json({ sucesso: true, dados: limitNum ? deduped.slice(0, limitNum) : deduped });
     } catch (err) {
       console.error('Erro ao listar localizações:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar localizações' });
@@ -174,8 +186,11 @@ const LocalizacaoAnimalController = {
     }
   },
 
-  // PUT /api/cadastro/localizacoes/:id — escopado por empresa/equipe (checkPermission na rota)
+  // PUT /api/cadastro/localizacoes/:id — ALTERAÇÃO EXCLUSIVA DO ADMIN
   atualizar: async (req, res) => {
+    if (req.user?.role !== 'ADMIN' && req.user?.userType !== 'ADMIN')
+      return res.status(403).json({ sucesso: false, mensagem: 'Apenas o ADMIN pode alterar localizações.' });
+
     const { id } = req.params;
     const { nome, cnpj, cep, endereco, pessoaResponsavel, telefone, tipoLocalizacao } = req.body;
 
@@ -215,8 +230,11 @@ const LocalizacaoAnimalController = {
     }
   },
 
-  // PATCH /api/cadastro/localizacoes/:id/toggle — escopado por empresa/equipe (checkPermission na rota)
+  // PATCH /api/cadastro/localizacoes/:id/toggle — ATIVAR/INATIVAR EXCLUSIVO DO ADMIN
   toggleAtivo: async (req, res) => {
+    if (req.user?.role !== 'ADMIN' && req.user?.userType !== 'ADMIN')
+      return res.status(403).json({ sucesso: false, mensagem: 'Apenas o ADMIN pode ativar/inativar localizações.' });
+
     const { id } = req.params;
     try {
       const existe = await prisma.localizacaoAnimal.findUnique({ where: { id: Number(id) } });

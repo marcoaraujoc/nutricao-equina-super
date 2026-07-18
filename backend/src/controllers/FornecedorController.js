@@ -21,6 +21,22 @@ const normalizarDigitos = v => (v ?? '').replace(/\D/g, '');
 const normalizarTexto   = v => (v ?? '').trim().toLowerCase();
 const normalizarTipos   = v => (v ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).sort().join('|');
 
+// Resolve as especialidades (catálogo por espécie) enviadas pelo cadastro.
+// Retorna { ids, tipoServico } — tipoServico (VARCHAR 50, legado) recebe o nome da
+// 1ª especialidade para compatibilidade com quem lê Fornecedor.tipoServico (ex.: encaminhamento).
+async function resolverEspecialidades(especialidadeIds) {
+  if (!Array.isArray(especialidadeIds) || especialidadeIds.length === 0) return null;
+  const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+  if (ids.length === 0) return { ids: [], tipoServico: null };
+  const especialidades = await prisma.especialidade.findMany({
+    where: { id: { in: ids }, ativo: true },
+    select: { id: true, nome: true },
+  });
+  const validos = especialidades.map(e => e.id);
+  const tipoServico = especialidades[0]?.nome?.slice(0, 50) ?? null;
+  return { ids: validos, tipoServico };
+}
+
 // ─── Helper: verifica duplicidade por CPF ou por nome+tipoServico+telefone ────
 // Escopo: mesma visibilidade da listagem (empresaId null = global/SYSTEM, OU empresa alvo)
 // excludeId: ignora o próprio registro (usado no update)
@@ -133,9 +149,11 @@ const FornecedorController = {
     try {
       const fornecedor = await prisma.fornecedor.findUnique({
         where: { id: Number(req.params.id) },
+        include: { especialidades: { select: { especialidadeId: true } } },
       });
       if (!fornecedor) return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
-      res.json({ sucesso: true, dados: fornecedor });
+      const { especialidades, ...dados } = fornecedor;
+      res.json({ sucesso: true, dados: { ...dados, especialidadeIds: especialidades.map(e => e.especialidadeId) } });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar fornecedor' });
     }
@@ -145,7 +163,7 @@ const FornecedorController = {
   // ADMIN → tipoEntrada=SYSTEM; demais → tipoEntrada=CLIENTE
   criar: async (req, res) => {
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico,
+      nome, cpf, cnpj, telefone, email, tipoServico, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
@@ -153,20 +171,29 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    if (!tipoServico?.trim())
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório' });
-    const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
-    if (tiposEnviados.length === 0)
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório' });
-    if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+
+    // Especialidades do catálogo (novo) têm precedência; tipoServico (legado) é derivado.
+    const espec = await resolverEspecialidades(especialidadeIds);
+    let tipoServicoFinal;
+    if (espec && espec.ids.length > 0) {
+      tipoServicoFinal = espec.tipoServico;
+    } else {
+      if (!tipoServico?.trim())
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
+      const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
+      if (tiposEnviados.length === 0)
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
+      if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
+        return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+      tipoServicoFinal = tipoServico.trim();
+    }
 
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
     const empresaAlvo = tipoEntrada === 'CLIENTE' ? (req.empresaId ?? null) : null;
     const equipeAlvo  = tipoEntrada === 'CLIENTE' ? (req.equipeId ?? null)  : null;
 
     try {
-      const dup = await verificarDuplicidade({ cpf, nome, tipoServico, telefone, empresaId: empresaAlvo });
+      const dup = await verificarDuplicidade({ cpf, nome, tipoServico: tipoServicoFinal, telefone, empresaId: empresaAlvo });
       if (dup) {
         if (dup.ativo) return res.status(409).json({ sucesso: false, mensagem: MSG_DUPLICADO[dup.tipo] });
         if (!req.body.force) return res.status(409).json({
@@ -186,7 +213,7 @@ const FornecedorController = {
           cnpj:        cnpj?.trim()        || null,
           telefone:    telefone.trim(),
           email:       email?.trim() ? email.trim().toLowerCase() : null,
-          tipoServico: tipoServico.trim(),
+          tipoServico: tipoServicoFinal,
           tipoEntrada,
           cep:         cep?.trim()         || null,
           endereco:    endereco?.trim()    || null,
@@ -196,6 +223,14 @@ const FornecedorController = {
           estado:      estado?.trim()      || null,
         },
       });
+
+      if (espec && espec.ids.length > 0) {
+        await prisma.fornecedorEspecialidade.createMany({
+          data: espec.ids.map(especialidadeId => ({ fornecedorId: fornecedor.id, especialidadeId })),
+          skipDuplicates: true,
+        });
+      }
+
       res.status(201).json({ sucesso: true, dados: fornecedor });
     } catch (err) {
       console.error('Erro ao criar fornecedor:', err);
@@ -207,7 +242,7 @@ const FornecedorController = {
   atualizar: async (req, res) => {
     const { id } = req.params;
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico,
+      nome, cpf, cnpj, telefone, email, tipoServico, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
@@ -215,7 +250,10 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    if (tipoServico) {
+
+    // Especialidades do catálogo (novo) têm precedência; tipoServico (legado) é derivado.
+    const espec = await resolverEspecialidades(especialidadeIds);
+    if (!espec && tipoServico) {
       const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
       if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
         return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
@@ -227,9 +265,13 @@ const FornecedorController = {
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este fornecedor.' });
 
+      const tipoServicoFinal = (espec && espec.ids.length > 0)
+        ? espec.tipoServico
+        : (tipoServico?.trim() || existe.tipoServico);
+
       const dup = await verificarDuplicidade({
         cpf, nome, telefone,
-        tipoServico: tipoServico?.trim() || existe.tipoServico,
+        tipoServico: tipoServicoFinal,
         empresaId:   existe.empresaId,
         excludeId:   Number(id),
       });
@@ -250,7 +292,7 @@ const FornecedorController = {
           cnpj:        cnpj?.trim()        || null,
           telefone:    telefone.trim(),
           email:       email?.trim() ? email.trim().toLowerCase() : null,
-          tipoServico: tipoServico?.trim() || existe.tipoServico,
+          tipoServico: tipoServicoFinal,
           cep:         cep?.trim()         || null,
           endereco:    endereco?.trim()    || null,
           complemento: complemento?.trim() || null,
@@ -259,6 +301,18 @@ const FornecedorController = {
           estado:      estado?.trim()      || null,
         },
       });
+
+      // Recria os vínculos de especialidade quando enviados (delete + insert).
+      if (espec) {
+        await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedor.id } });
+        if (espec.ids.length > 0) {
+          await prisma.fornecedorEspecialidade.createMany({
+            data: espec.ids.map(especialidadeId => ({ fornecedorId: fornecedor.id, especialidadeId })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
       res.json({ sucesso: true, dados: fornecedor });
     } catch (err) {
       if (err.code === 'P2025')

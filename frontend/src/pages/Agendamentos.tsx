@@ -7,6 +7,7 @@ import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import { isSubespecialidadeValida } from '../utils/subespecialidades';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Check,
   X, Clock, User as UserIcon, RefreshCw, Search,
@@ -60,9 +61,14 @@ interface BookingForm {
 }
 
 interface VetMembro {
-  userId:   number;
-  fullName: string;
-  cargo:    string;
+  userId:        number;
+  fullName:      string;
+  cargo:         string;
+  especialidades: string[];
+  // Expediente próprio do profissional (null = herda o da empresa)
+  diasTrab:   number[] | null;
+  horaIni:    string | null;
+  horaFim:    string | null;
 }
 
 type VozEtapa = 'IDLE' | 'GRAVANDO' | 'PROCESSANDO' | 'DISPONIVEL' | 'INDISPONIVEL' | 'ERRO';
@@ -91,10 +97,6 @@ interface InterpretacaoResultado {
   vetNomeNaoEncontrado?:    string | null;
 }
 
-interface ConflictWarning {
-  message:   string;
-  onConfirm: () => void;
-}
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -430,6 +432,9 @@ export default function Agendamentos() {
   const [busca, setBusca]               = useState('');
   const [agendamentosMes, setAgendamentosMes] = useState<AgendamentoGlobal[]>([]);
   const [mesCarregado, setMesCarregado] = useState('');
+  // Ocupação GLOBAL do profissional no dia (todas as empresas) — para descontar os slots
+  // em que ele já está agendado em QUALQUER empresa. Map<vetUserId, Set<'HH:MM'>>.
+  const [ocupacaoGlobal, setOcupacaoGlobal] = useState<Map<number, Set<string>>>(new Map());
 
   // ── Modais ──────────────────────────────────────────────────────────────────
   const [booking, setBooking]             = useState<BookingInfo | null>(null);
@@ -442,7 +447,10 @@ export default function Agendamentos() {
   const [novaDataHora, setNovaDataHora]   = useState('');
   const [salvandoReag, setSalvandoReag]   = useState(false);
   const [cancelando, setCancelando]       = useState<number | null>(null);
-  const [conflictWarning, setConflictWarning] = useState<ConflictWarning | null>(null);
+  // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
+  const [conflitoConfirm, setConflitoConfirm] = useState<{
+    animalNome: string; quando: string; hora: string; vetNome: string; onConfirm: () => void;
+  } | null>(null);
 
   // ── Modal Voz/IA ────────────────────────────────────────────────────────────
   // ── Trocar profissional / Transferir dia ────────────────────────────────────
@@ -538,10 +546,53 @@ export default function Agendamentos() {
     try {
       const res = await api.get('/equipes/membros');
       if (!res.data) return;
-      const membros = (res.data.dados ?? []) as Array<{ cargo: string; user: { id: number; fullName: string; userType: string } }>;
+      const membros = (res.data.dados ?? []) as Array<{
+        cargo: string;
+        diasTrabalho?: string | null;
+        horaInicioTrabalho?: string | null;
+        horaFimTrabalho?: string | null;
+        user: {
+          id: number; fullName: string; userType: string;
+          vetPerfil?: { subespecialidades?: { nome: string }[] } | null;
+          fornecedorPerfil?: { tipoServico?: string | null } | null;
+          especialidades?: { especialidade?: { nome?: string | null } | null }[] | null;
+        };
+      }>;
       setVets(membros
-        .filter(m => m.user.userType === 'VETERINARIO' || m.cargo === 'GESTOR')
-        .map(m => ({ userId: m.user.id, fullName: m.user.fullName, cargo: m.cargo }))
+        // Veterinários, gestores E fornecedores (prestadores) — o fornecedor também
+        // agenda e ocupa horários (debita da cota do dia).
+        .filter(m => m.user.userType === 'VETERINARIO' || m.cargo === 'GESTOR' || m.cargo === 'FORNECEDOR')
+        .map(m => {
+          let especialidades: string[];
+          if (m.cargo === 'FORNECEDOR') {
+            // Fornecedor: especialidade vem do tipo de serviço do cadastro
+            especialidades = (m.user.fornecedorPerfil?.tipoServico ?? '')
+              .split(',').map(s => s.trim()).filter(Boolean);
+            if (especialidades.length === 0) especialidades = ['Prestador'];
+          } else {
+            // Fonte única: catálogo de especialidades (UsuarioEspecialidade). Fallback para
+            // o vocabulário legado (VetSubespecialidade) em vets sem catálogo migrado.
+            const doCatalogo = (m.user.especialidades ?? [])
+              .map(e => e.especialidade?.nome?.trim())
+              .filter((n): n is string => !!n);
+            const legado = (m.user.vetPerfil?.subespecialidades ?? [])
+              .map(s => s.nome?.trim())
+              .filter((n): n is string => !!n && isSubespecialidadeValida(n));
+            const esp = doCatalogo.length > 0 ? doCatalogo : legado;
+            especialidades = esp.length > 0 ? esp : ['Clínica Geral'];
+          }
+          return {
+            userId: m.user.id,
+            fullName: m.user.fullName,
+            cargo: m.cargo,
+            especialidades,
+            diasTrab: m.diasTrabalho
+              ? String(m.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+              : null,
+            horaIni: m.horaInicioTrabalho ?? null,
+            horaFim: m.horaFimTrabalho ?? null,
+          };
+        })
       );
     } catch { /* silencioso */ }
   }, []);
@@ -554,6 +605,24 @@ export default function Agendamentos() {
       setAgendamentos(res.data.dados ?? []);
     } catch { toast.error('Erro ao carregar agendamentos'); }
     finally { setLoading(false); }
+  }, []);
+
+  // Ocupação global dos profissionais visíveis no dia (todas as empresas). Só devolve
+  // { veterinarioId, dataHora } — usado para marcar como ocupado o horário em que o
+  // profissional já está agendado em outra empresa (evita duplo agendamento).
+  const fetchOcupacaoGlobal = useCallback(async (date: string, vetIds: number[]) => {
+    if (vetIds.length === 0) { setOcupacaoGlobal(new Map()); return; }
+    try {
+      const res = await api.get('/clinica/agendamentos/ocupacao', { params: { data: date, vetIds: vetIds.join(',') } });
+      if (!res.data) { setOcupacaoGlobal(new Map()); return; }
+      const map = new Map<number, Set<string>>();
+      for (const o of (res.data.dados ?? []) as { veterinarioId: number | null; dataHora: string }[]) {
+        if (o.veterinarioId == null) continue;
+        if (!map.has(o.veterinarioId)) map.set(o.veterinarioId, new Set());
+        map.get(o.veterinarioId)!.add(formatarHora(o.dataHora));
+      }
+      setOcupacaoGlobal(map);
+    } catch { /* silencioso — cai no fallback do contexto ativo */ }
   }, []);
 
   const fetchMes = useCallback(async (mesAno: string) => {
@@ -576,6 +645,12 @@ export default function Agendamentos() {
     fetchAgendamentos(selectedDate);
     fetchMes(selectedDate.slice(0, 7));
   }, [selectedDate, loadingPerms]);
+
+  // Recarrega a ocupação global sempre que o dia ou a lista de profissionais mudar.
+  useEffect(() => {
+    if (loadingPerms) return;
+    fetchOcupacaoGlobal(selectedDate, vets.map(v => v.userId));
+  }, [selectedDate, vets, loadingPerms, fetchOcupacaoGlobal]);
 
   // Fecha combo ao clicar fora
   useEffect(() => {
@@ -604,30 +679,66 @@ export default function Agendamentos() {
       .catch(() => {});
   }, []);
 
-  // Horários liberados para uma data conforme o expediente (dias + faixa de horas).
-  const horariosDoDia = (dateStr: string): string[] => {
+  // Expediente EFETIVO do profissional na equipe = INTERSEÇÃO do expediente pessoal
+  // dele com o expediente da equipe/empresa (a equipe é o limitador).
+  // Ex.: equipe 08:00–20:00 + profissional 16:00–23:00 → 16:00–20:00.
+  // Dias: interseção; horas: início = o mais TARDE, fim = o mais CEDO.
+  // dias = null → todos os dias; dias = [] → nenhum dia.
+  const expedienteDoVet = (vetId: number) => {
+    const v = vets.find(x => x.userId === vetId);
+    const cIni = expediente.horaInicio, cFim = expediente.horaFim, cDias = expediente.dias;
+    const vIni = v?.horaIni ?? null, vFim = v?.horaFim ?? null, vDias = v?.diasTrab ?? null;
+
+    // Início = o mais tarde entre profissional e equipe; fim = o mais cedo (HH:MM compara como string)
+    const horaInicio = (vIni && cIni) ? (vIni > cIni ? vIni : cIni) : (vIni ?? cIni);
+    const horaFim    = (vFim && cFim) ? (vFim < cFim ? vFim : cFim) : (vFim ?? cFim);
+
+    // Dias: interseção. null (qualquer lado) = sem restrição naquele lado.
+    let dias: number[] | null;
+    if (cDias && vDias) dias = vDias.filter(d => cDias.includes(d));
+    else                dias = vDias ?? cDias;
+
+    return { dias, horaInicio, horaFim };
+  };
+
+  // Horários liberados para uma data conforme o expediente do PROFISSIONAL (dias + faixa).
+  const horariosDoDia = (vetId: number, dateStr: string): string[] => {
+    const exp = expedienteDoVet(vetId);
     const wd = new Date(`${dateStr}T00:00:00`).getDay();
-    if (expediente.dias && expediente.dias.length > 0 && !expediente.dias.includes(wd)) return [];
-    const hi = expediente.horaInicio ? parseInt(expediente.horaInicio.slice(0, 2), 10) : 0;
-    const hf = expediente.horaFim    ? parseInt(expediente.horaFim.slice(0, 2), 10)    : 24;
+    // dias null = todos; array (mesmo vazio) = só os listados (vazio → nenhum dia)
+    if (exp.dias && !exp.dias.includes(wd)) return [];
+    const hi = exp.horaInicio ? parseInt(exp.horaInicio.slice(0, 2), 10) : 0;
+    const hf = exp.horaFim    ? parseInt(exp.horaFim.slice(0, 2), 10)    : 24;
     return HORARIOS.filter(h => { const hour = parseInt(h.slice(0, 2), 10); return hour >= hi && hour < hf; });
   };
 
-  // Rótulos do expediente para a UI do "Expediente Ativo".
-  const labelPeriodo = expediente.horaInicio && expediente.horaFim
-    ? `${expediente.horaInicio.slice(0, 5)} — ${expediente.horaFim.slice(0, 5)}`
-    : '00:00 — 24:00';
-  const labelDias = expediente.dias && expediente.dias.length > 0
-    ? expediente.dias.slice().sort((a, b) => a - b).map(d => DIAS_PT[d]).join(', ')
-    : 'Todos os dias';
+  // Rótulos do expediente por profissional (coluna "Período"/"Dias").
+  // Cada lado é independente: início ausente = 00:00, fim ausente = 24:00.
+  // (Antes, se só um dos dois estava definido, caía no default "00:00 — 24:00".)
+  const labelPeriodoVet = (vetId: number): string => {
+    const exp = expedienteDoVet(vetId);
+    const ini = exp.horaInicio ? exp.horaInicio.slice(0, 5) : '00:00';
+    const fim = exp.horaFim    ? exp.horaFim.slice(0, 5)    : '24:00';
+    return `${ini} — ${fim}`;
+  };
+  const labelDiasVet = (vetId: number): string => {
+    const exp = expedienteDoVet(vetId);
+    if (exp.dias === null) return 'Todos os dias';   // sem restrição
+    if (exp.dias.length === 0) return 'Nenhum';       // interseção vazia
+    return exp.dias.slice().sort((a, b) => a - b).map(d => DIAS_PT[d]).join(', ');
+  };
 
   // ── Slots ────────────────────────────────────────────────────────────────────
   function slotsOcupados(vetId: number): Set<string> {
-    return new Set(agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora)));
+    // Ocupado = agendamentos do contexto ativo + ocupação GLOBAL do profissional
+    // (mesmo horário agendado em outra empresa também bloqueia o slot).
+    const local  = agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora));
+    const global = ocupacaoGlobal.get(vetId);
+    return new Set(global ? [...local, ...global] : local);
   }
   function slotsLivres(vetId: number): string[] {
     const ocp   = slotsOcupados(vetId);
-    const base  = horariosDoDia(selectedDate);
+    const base  = horariosDoDia(vetId, selectedDate);
     const eHoje = selectedDate === hoje();
     const agora = eHoje ? new Date() : null;
     return base.filter(h => {
@@ -678,6 +789,10 @@ export default function Agendamentos() {
   }
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
+  // Extrai a mensagem de erro do backend (campo `error`) para exibir ao usuário.
+  const msgErroAgenda = (err: unknown, fallback: string): string =>
+    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
+
   async function criarAgendamentoDireto(animalId: number, animalNome: string, vetId: number, hora: string) {
     setSalvando(true);
     try {
@@ -688,7 +803,7 @@ export default function Agendamentos() {
       toast.success(`Consulta agendada às ${hora}`);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch { toast.error('Erro ao criar agendamento'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -697,10 +812,14 @@ export default function Agendamentos() {
     if (selectedAnimalId && selectedAnimal) {
       const conflito = findConflictAnimal(Number(selectedAnimalId));
       if (conflito) {
-        const quando = dataRelativa(selectedDate);
-        const vetNome = conflito.veterinario?.fullName ?? vetName;
-        const msg = `${selectedAnimal.nome} já tem um agendamento para ${quando} às ${formatarHora(conflito.dataHora)} com ${vetNome}. Deseja criar outro agendamento no mesmo dia?`;
-        setConflictWarning({ message: msg, onConfirm: () => { setConflictWarning(null); criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora); } });
+        // Não bloqueia, mas exige ciência do vet: abre modal de confirmação antes de agendar
+        setConflitoConfirm({
+          animalNome: selectedAnimal.nome,
+          quando:     dataRelativa(selectedDate),
+          hora:       formatarHora(conflito.dataHora),
+          vetNome:    conflito.veterinario?.fullName ?? vetName,
+          onConfirm:  () => criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora),
+        });
         return;
       }
       criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora);
@@ -761,6 +880,24 @@ export default function Agendamentos() {
     try {
       const res = await api.post('/clinica/agendamentos/interpretar', { texto, dataReferencia: selectedDate, vetHint: vozContexto?.vetId, horaHint: vozContexto?.hora });
       const resultado: InterpretacaoResultado = res.data?.dados ?? res.data;
+
+      // Respeita o expediente do PROFISSIONAL (dias + faixa de horas) — mesmo critério da
+      // grade de horários. O backend do voz usa uma faixa fixa; aqui recortamos ao expediente.
+      if (resultado && resultado.vetId && resultado.data) {
+        const permitidos = new Set(horariosDoDia(resultado.vetId, resultado.data));
+        if (permitidos.size === 0) {
+          resultado.disponivel = false;      // profissional não atende nesse dia
+          resultado.horariosLivres = [];
+        } else {
+          if (resultado.horariosLivres) {
+            resultado.horariosLivres = resultado.horariosLivres.filter(h => permitidos.has(h));
+          }
+          if (resultado.hora && !permitidos.has(resultado.hora)) {
+            resultado.disponivel = false;    // horário fora do expediente do profissional
+          }
+        }
+      }
+
       setVozResultado(resultado);
       setVozEtapa(resultado?.disponivel ? 'DISPONIVEL' : 'INDISPONIVEL');
     } catch { setVozEtapa('ERRO'); }
@@ -788,7 +925,7 @@ export default function Agendamentos() {
       });
       toast.success('Agendamento confirmado!');
       resetVoz(); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch { toast.error('Erro ao confirmar agendamento'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -805,7 +942,7 @@ export default function Agendamentos() {
       });
       toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch { toast.error('Erro ao criar agendamento'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -816,10 +953,14 @@ export default function Agendamentos() {
     const conflito = findConflictAnimal(Number(bookingForm.animalId));
     if (conflito) {
       const nomeAnimal = animais.find(a => String(a.id) === bookingForm.animalId)?.nome ?? 'este animal';
-      const quando = dataRelativa(selectedDate);
-      const vetNome = conflito.veterinario?.fullName ?? booking.vetName;
-      const msg = `${nomeAnimal} já tem um agendamento para ${quando} às ${formatarHora(conflito.dataHora)} com ${vetNome}. Deseja criar outro agendamento no mesmo dia?`;
-      setConflictWarning({ message: msg, onConfirm: () => { setConflictWarning(null); executarConfirmarBooking(); } });
+      // Não bloqueia, mas exige ciência do vet: abre modal de confirmação antes de agendar
+      setConflitoConfirm({
+        animalNome: nomeAnimal,
+        quando:     dataRelativa(selectedDate),
+        hora:       formatarHora(conflito.dataHora),
+        vetNome:    conflito.veterinario?.fullName ?? booking.vetName,
+        onConfirm:  () => executarConfirmarBooking(),
+      });
       return;
     }
     executarConfirmarBooking();
@@ -897,7 +1038,7 @@ export default function Agendamentos() {
       });
       toast.success('Reagendado');
       setReagendando(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch { toast.error('Erro ao reagendar'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao reagendar')); }
     finally { setSalvandoReag(false); }
   }
 
@@ -1117,9 +1258,13 @@ export default function Agendamentos() {
                         <tr key={vet.userId} className="hover:bg-gray-50/50 transition-colors">
                           {/* Especialidade */}
                           <td className="py-3 px-4">
-                            <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full whitespace-nowrap">
-                              Clínica Geral
-                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {vet.especialidades.map(esp => (
+                                <span key={esp} className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full whitespace-nowrap">
+                                  {esp}
+                                </span>
+                              ))}
+                            </div>
                           </td>
                           {/* Profissional */}
                           <td className="py-3 px-4">
@@ -1136,11 +1281,11 @@ export default function Agendamentos() {
                           {/* Período */}
                           <td className="py-3 px-4">
                             <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
-                              <Clock size={11} className="text-gray-400" /> {labelPeriodo}
+                              <Clock size={11} className="text-gray-400" /> {labelPeriodoVet(vet.userId)}
                             </span>
                           </td>
                           {/* Dias */}
-                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">{labelDias}</td>
+                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">{labelDiasVet(vet.userId)}</td>
                           {/* Horários */}
                           <td className="py-3 px-4">
                             {podeGerenciar ? (
@@ -1204,7 +1349,7 @@ export default function Agendamentos() {
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-gray-900 truncate">{vet.fullName}</p>
-                            <p className="text-[10px] text-gray-400 truncate">{vet.cargo} - Clínica Geral</p>
+                            <p className="text-[10px] text-gray-400 truncate">{vet.cargo} - {vet.especialidades.join(', ')}</p>
                           </div>
                         </div>
                         {/* Qtd de horários livres — toque abre a janela com os horários */}
@@ -1254,7 +1399,7 @@ export default function Agendamentos() {
                         )}
                       </div>
                       <p className="text-[11px] text-gray-400 flex items-center gap-1">
-                        <Clock size={11} className="text-gray-400" /> {labelPeriodo} · {labelDias}
+                        <Clock size={11} className="text-gray-400" /> {labelPeriodoVet(vet.userId)} · {labelDiasVet(vet.userId)}
                       </p>
                     </div>
                   );
@@ -1338,8 +1483,9 @@ export default function Agendamentos() {
                       <span className="text-xs font-bold font-mono text-gray-500">{formatarHora(ag.dataHora)}</span>
                     </div>
                     <div>
-                      <p className="font-bold text-sm text-gray-900">{ag.titulo}</p>
-                      {ag.animal && <p className="text-xs text-gray-500 mt-0.5">{ag.animal.nome}{ag.animal.especie && <> · {ag.animal.especie.nome}</>}</p>}
+                      {ag.animal
+                        ? <p className="font-bold text-sm text-gray-900">{ag.animal.nome}{ag.animal.especie && <span className="font-normal text-gray-500"> · {ag.animal.especie.nome}</span>}</p>
+                        : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                       {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
                       {isCancelado && ag.observacao && (
@@ -1396,7 +1542,7 @@ export default function Agendamentos() {
                   <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
                     <th className="py-3 px-4">Horário</th>
                     <th className="py-3 px-4">Animal / Paciente</th>
-                    <th className="py-3 px-4">Título / Tipo</th>
+                    <th className="py-3 px-4">Tipo</th>
                     <th className="py-3 px-4">Veterinário</th>
                     <th className="py-3 px-4">Status</th>
                     {podeGerenciar && <th className="py-3 px-4 text-center">Ações</th>}
@@ -1426,8 +1572,7 @@ export default function Agendamentos() {
                           {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                         </td>
                         <td className="py-3.5 px-4">
-                          <p className="font-semibold text-gray-800">{ag.titulo}</p>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-0.5 inline-block ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
                         </td>
                         <td className="py-3.5 px-4">
                           {ag.veterinario
@@ -1502,35 +1647,6 @@ export default function Agendamentos() {
           </>
         )}
       </div>
-
-      {/* ── Modal: Aviso de Agendamento Duplicado ────────────────────────────── */}
-      {conflictWarning && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="bg-amber-500 px-5 py-4 flex items-center gap-3">
-              <AlertTriangle size={22} className="text-white flex-shrink-0" />
-              <div>
-                <p className="text-[10px] font-bold text-amber-100 uppercase tracking-widest">Atenção</p>
-                <h3 className="text-sm font-bold text-white">Agendamento duplicado</h3>
-              </div>
-            </div>
-            <div className="px-5 py-4">
-              <p className="text-sm text-gray-700 mb-1">{conflictWarning.message}</p>
-              <p className="text-xs text-gray-500">Deseja continuar mesmo assim e criar o agendamento?</p>
-            </div>
-            <div className="flex gap-3 px-5 pb-5">
-              <button onClick={() => setConflictWarning(null)}
-                className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">
-                Cancelar
-              </button>
-              <button onClick={conflictWarning.onConfirm}
-                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-colors">
-                Continuar assim
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Modal: Confirmar Horário ──────────────────────────────────────────── */}
       {booking && (
@@ -1902,6 +2018,40 @@ export default function Agendamentos() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Ciência de agendamento existente ──────────────────────────── */}
+      {conflitoConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm border border-gray-100 overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-4 bg-amber-50 border-b border-amber-100">
+              <AlertTriangle size={18} className="text-amber-500 flex-shrink-0" />
+              <h3 className="font-bold text-amber-800">Agendamento já existente</h3>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-gray-700 leading-relaxed">
+                <span className="font-bold">{conflitoConfirm.animalNome}</span> já tem um agendamento {conflitoConfirm.quando} às{' '}
+                <span className="font-bold">{conflitoConfirm.hora}</span> com{' '}
+                <span className="font-bold">{conflitoConfirm.vetNome}</span>.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Confirme que está ciente para criar um novo agendamento assim mesmo.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button onClick={() => setConflitoConfirm(null)}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={() => { const acao = conflitoConfirm.onConfirm; setConflitoConfirm(null); acao(); }}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5">
+                <Check size={14} />
+                Estou ciente, agendar
+              </button>
             </div>
           </div>
         </div>

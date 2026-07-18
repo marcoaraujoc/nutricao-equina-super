@@ -19,6 +19,9 @@ interface Membro {
   cargo:     string;
   cargos?:   string[];
   createdAt: string;
+  diasTrabalho?:       string | null;  // CSV 0-6
+  horaInicioTrabalho?: string | null;  // HH:MM
+  horaFimTrabalho?:    string | null;  // HH:MM
   user: {
     id:       number;
     fullName: string;
@@ -144,6 +147,10 @@ export default function Equipe() {
         estado:       values.estado.trim()      || null,
         fornecedorId: values.fornecedorId ?? null,
         tipoServico:  values.tipoServico  ?? null,
+        especialidadeIds:   values.especialidadeIds ?? [],
+        diasTrabalho:       values.diasTrabalho ?? [],
+        horaInicioTrabalho: values.horaInicioTrabalho ?? '',
+        horaFimTrabalho:    values.horaFimTrabalho ?? '',
         equipeId,  // inclui na equipe gerenciada nesta tela (não na do contexto ativo)
       });
       toast.success('Membro incluído com sucesso!');
@@ -182,6 +189,9 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         bairro:      values.bairro.trim()      || null,
         cidade:      values.cidade.trim()      || null,
         estado:      values.estado.trim()      || null,
+        diasTrabalho:       values.diasTrabalho ?? [],
+        horaInicioTrabalho: values.horaInicioTrabalho ?? '',
+        horaFimTrabalho:    values.horaFimTrabalho ?? '',
       });
       if (equipeId) {
         await api.patch(`/equipes/${equipeId}/membros/${membroEditando.user.id}/cargos`, { cargos });
@@ -275,6 +285,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input
             type="text"
+            name="busca-equipe"
+            autoComplete="off"
             placeholder="Buscar por nome, e-mail ou tipo de serviço..."
             value={busca}
             onChange={e => setBusca(e.target.value)}
@@ -481,6 +493,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
           textoBotao="Incluir"
           comFornecedor
+          comExpediente
           salvando={enviando}
           onClose={() => setShowConvite(false)}
           onSubmit={handleIncluirMembro}
@@ -494,6 +507,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           modoEdicao
           permitirSenha={isGestor}
           ocultarPerfil
+          comExpediente
           textoBotao="Salvar"
           salvando={salvandoEdicao}
           onClose={() => setMembroEditando(null)}
@@ -511,6 +525,11 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
             bairro:      membroEditando.user.bairro      ?? '',
             cidade:      membroEditando.user.cidade      ?? '',
             estado:      membroEditando.user.estado      ?? '',
+            diasTrabalho:       membroEditando.diasTrabalho
+              ? String(membroEditando.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+              : [],
+            horaInicioTrabalho: membroEditando.horaInicioTrabalho ?? '',
+            horaFimTrabalho:    membroEditando.horaFimTrabalho    ?? '',
           }}
         />
       )}

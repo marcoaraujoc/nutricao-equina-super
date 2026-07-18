@@ -46,6 +46,9 @@ model User {
   mensalista        Boolean  @default(false)
   valorAssistencia  Float?
   frequenciaVisitas Int?
+  // Dia do mês (1-28) em que a fatura vence. Fatura FECHADA não paga após o
+  // vencimento (dia do mês SEGUINTE ao mesReferencia) é considerada ATRASADA.
+  diaVencimentoFatura Int?   @map("dia_vencimento_fatura")
   empresaId         Int?     @map("empresa_id")
   equipeId          Int?     @map("equipe_id") // equipe que cadastrou o proprietário (segregação por equipe)
 
@@ -68,6 +71,7 @@ model User {
   faturas              Fatura[]               @relation("FaturaProprietario")
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
+  especialidades       UsuarioEspecialidade[]
   vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
   novasVetSolicitacoes VetAnimalSolicitacao[] @relation("NovoVetSolicitacoes")
   empresasOwner        Empresa[]              @relation("EmpresaOwner")
@@ -174,6 +178,7 @@ model Especie {
   exigenciasNRC ExigenciasNRC[]
   vetEspecies   VetEspecie[]
   medicamentos  MedicamentoEspecie[]
+  especialidades Especialidade[]
 
   @@map("tb_especies")
   @@schema("schs2vet")
@@ -652,6 +657,10 @@ model AgendamentoClinico {
   ativo         Boolean  @default(true)
   numero        Int?     // sequencial por animal (AG-0001)
   criadoPorId   Int?     @map("criado_por_id")
+  // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
+  // por equipe. Sem FK (sobrevive à exclusão da empresa/equipe). Backfill = contexto do animal.
+  empresaId     Int?     @map("empresa_id")
+  equipeId      Int?     @map("equipe_id")
   // Controle de idempotência dos lembretes por WhatsApp (D-1 e 2h antes)
   lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")
   lembreteWa2hEnviadoEm   DateTime? @map("lembrete_wa_2h_em")
@@ -665,6 +674,8 @@ model AgendamentoClinico {
 
   @@unique([animalId, numero])
   @@index([animalId, dataHora])
+  @@index([empresaId, dataHora])
+  @@index([equipeId, dataHora])
   @@map("tb_agendamentos_clinicos")
   @@schema("schs2vet")
 }
@@ -911,6 +922,56 @@ model VetSubespecialidade {
   @@schema("schs2vet")
 }
 
+// Catálogo de especialidades por espécie (fonte única — substitui a lista fixa
+// subespecialidades.ts). Cada linha = uma especialidade para uma espécie; uma
+// especialidade comum (ex.: "Cardiologia") tem uma linha por espécie.
+model Especialidade {
+  id        Int      @id @default(autoincrement())
+  nome      String   @db.VarChar(80)
+  especieId Int      @map("especie_id")
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  especie      Especie                   @relation(fields: [especieId], references: [id], onDelete: Cascade)
+  usuarios     UsuarioEspecialidade[]
+  fornecedores FornecedorEspecialidade[]
+
+  @@unique([nome, especieId])
+  @@index([especieId])
+  @@map("tb_especialidades")
+  @@schema("schs2vet")
+}
+
+// Especialidades de um usuário (VETERINARIO/FORNECEDOR com login). Multi-especialidade.
+model UsuarioEspecialidade {
+  id              Int @id @default(autoincrement())
+  userId          Int @map("user_id")
+  especialidadeId Int @map("especialidade_id")
+
+  user          User          @relation(fields: [userId],          references: [id], onDelete: Cascade)
+  especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, especialidadeId])
+  @@index([userId])
+  @@map("tb_usuario_especialidades")
+  @@schema("schs2vet")
+}
+
+// Especialidades de um cadastro de Fornecedor (pode não ter login). Multi-especialidade.
+model FornecedorEspecialidade {
+  id              Int @id @default(autoincrement())
+  fornecedorId    Int @map("fornecedor_id")
+  especialidadeId Int @map("especialidade_id")
+
+  fornecedor    Fornecedor    @relation(fields: [fornecedorId],    references: [id], onDelete: Cascade)
+  especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
+
+  @@unique([fornecedorId, especialidadeId])
+  @@index([fornecedorId])
+  @@map("tb_fornecedor_especialidades")
+  @@schema("schs2vet")
+}
+
 model VetAnimalSolicitacao {
   id              Int       @id @default(autoincrement())
   animalId        Int
@@ -1011,6 +1072,9 @@ model EmpresaConfiguracao {
   diasAtendimento       String?  @map("dias_atendimento")
   horaInicioAtendimento String?  @db.VarChar(5) @map("hora_inicio_atendimento")
   horaFimAtendimento    String?  @db.VarChar(5) @map("hora_fim_atendimento")
+  // Espécies que a empresa atende — CSV de IDs de Especie (ex: "1,2"). null/"" = todas.
+  // Usado para filtrar as especialidades oferecidas no cadastro de membros/fornecedores.
+  especiesAtendidas     String?  @map("especies_atendidas")
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -1093,6 +1157,11 @@ model MembroEquipe {
   userId    Int
   cargo     String
   cargos    String[] @default([])
+  // Expediente de trabalho do profissional (usado pela Agenda para liberar horários).
+  // null = herda o expediente da empresa (EmpresaConfiguracao).
+  diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
+  horaInicioTrabalho String?  @db.VarChar(5)  // HH:MM
+  horaFimTrabalho    String?  @db.VarChar(5)  // HH:MM
   createdAt DateTime @default(now())
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
@@ -1447,6 +1516,7 @@ model Fornecedor {
   user     User?            @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
   estoques EstoqueClinica[] @relation("FornecedorEstoque")
   equipe   Equipe?          @relation("EquipeFornecedores", fields: [equipeId], references: [id], onDelete: SetNull)
+  especialidades FornecedorEspecialidade[]
 
   @@index([empresaId])
   @@index([equipeId])

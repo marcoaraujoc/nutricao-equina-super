@@ -6,7 +6,7 @@ const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
-const { formatAtendimentoNum }  = require('../lib/faturaUtils');
+const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 const { PROMPTS }               = require('../ai/prompts');
@@ -408,6 +408,27 @@ const EvolucaoController = {
       );
 
       res.json({ sucesso: true, dados: atualizada });
+
+      // Ao FINALIZAR a evolução, lança os exames dela na fatura com VALOR ZERADO
+      // (idempotente — o financeiro define o preço depois). Fire-and-forget: não
+      // bloqueia nem falha a finalização da evolução.
+      if (vaiFinalizar) {
+        setImmediate(async () => {
+          try {
+            const exames = await prisma.exameClinico.findMany({
+              where:  { evolucaoId: Number(id), ativo: true },
+              select: { id: true, animalId: true, veterinarioId: true, tipo: true, descricao: true, numero: true },
+            });
+            if (exames.length === 0) return;
+            const animal = await prisma.animal.findUnique({
+              where: { id: existente.animalId }, select: { userId: true },
+            });
+            await prisma.$transaction(async (tx) => {
+              for (const ex of exames) await lancarExameNaFatura(tx, ex, animal?.userId);
+            });
+          } catch { /* silencioso — fatura não bloqueia a finalização da evolução */ }
+        });
+      }
     } catch (error) {
       console.error('Erro ao atualizar evolução:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

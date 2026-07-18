@@ -87,6 +87,9 @@ export default function Configuracoes() {
   const [horaInicio, setHoraInicio] = useState('');
   const [horaFim,    setHoraFim]    = useState('');
 
+  const [especies,          setEspecies]          = useState<{ id: number; nome: string }[]>([]);
+  const [especiesAtendidas, setEspeciesAtendidas] = useState<number[]>([]);
+
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
@@ -101,6 +104,7 @@ export default function Configuracoes() {
           : []);
         setHoraInicio(dados.horaInicioAtendimento ?? '');
         setHoraFim(dados.horaFimAtendimento ?? '');
+        setEspeciesAtendidas(Array.isArray(dados.especiesAtendidas) ? dados.especiesAtendidas : []);
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -125,6 +129,16 @@ export default function Configuracoes() {
     if (loadingPerms || !isGestor) return; // gating — evita chamada prematura antes de carregar permissões
     carregar();
   }, [loadingPerms, isGestor, carregar]);
+
+  useEffect(() => {
+    if (loadingPerms || !isGestor) return;
+    api.get('/especialidades/especies')
+      .then(res => {
+        const lista = res.data?.dados ?? res.data ?? [];
+        setEspecies(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspecies([]));
+  }, [loadingPerms, isGestor]);
 
   const handleLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -178,8 +192,8 @@ export default function Configuracoes() {
       diaFechamentoFatura = n;
     } else {
       const n = Number(diaEspecifico);
-      if (!Number.isInteger(n) || n < 1 || n > 31) {
-        toast.error('O dia específico deve estar entre 1 e 31.');
+      if (!Number.isInteger(n) || n < 1 || n > 28) {
+        toast.error('O dia específico deve estar entre 1 e 28.');
         return;
       }
       tipoFechamento = 'DIA_FIXO';
@@ -206,6 +220,7 @@ export default function Configuracoes() {
       fd.append('diasAtendimento', diasAtend.join(','));       // vazio = todos os dias
       fd.append('horaInicioAtendimento', horaInicio);          // vazio = sem restrição
       fd.append('horaFimAtendimento', horaFim);
+      fd.append('especiesAtendidas', especiesAtendidas.join(',')); // vazio = todas as espécies
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -297,10 +312,10 @@ export default function Configuracoes() {
               <input
                 type="number"
                 min={1}
-                max={31}
+                max={28}
                 value={diaEspecifico}
                 onChange={e => setDiaEspecifico(e.target.value)}
-                placeholder="Ex: 5"
+                placeholder="Ex: 5 (1 a 28)"
                 className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm mt-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             )}
@@ -320,7 +335,9 @@ export default function Configuracoes() {
             <p className="text-xs text-gray-400 mt-1">
               {tipoSelecao === 'DIA_UTIL'
                 ? 'Dia útil considera fins de semana e feriados nacionais.'
-                : 'Se o dia escolhido não existir no mês (ex: dia 31 em fevereiro), a fatura fecha no último dia do mês.'}
+                : tipoSelecao === 'DIA_ESPECIFICO'
+                ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
+                : 'Se o dia escolhido não existir no mês, a fatura fecha no último dia do mês.'}
             </p>
           </div>
 
@@ -345,6 +362,39 @@ export default function Configuracoes() {
             </p>
           </div>
 
+          {/* Espécies atendidas pela empresa */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Espécies atendidas
+            </label>
+            <p className="text-xs text-gray-400 mb-2">
+              Define quais especialidades aparecem no cadastro de profissionais e fornecedores.
+              Deixe tudo desmarcado para permitir todas as espécies.
+            </p>
+            {especies.length === 0 ? (
+              <p className="text-xs text-amber-600">Nenhuma espécie cadastrada.</p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {especies.map(esp => {
+                  const on = especiesAtendidas.includes(esp.id);
+                  return (
+                    <label key={esp.id}
+                      className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
+                        on ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                           : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
+                      }`}>
+                      <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
+                        checked={on}
+                        onChange={() => setEspeciesAtendidas(prev =>
+                          prev.includes(esp.id) ? prev.filter(i => i !== esp.id) : [...prev, esp.id])} />
+                      <span className="text-sm font-medium">{esp.nome}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Expediente de atendimento */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -367,12 +417,12 @@ export default function Configuracoes() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Abre às</label>
-                <input type="time" step={3600} value={horaInicio} onChange={e => setHoraInicio(e.target.value)}
+                <input type="time" step={1800} value={horaInicio} onChange={e => setHoraInicio(e.target.value)}
                   className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Fecha às</label>
-                <input type="time" step={3600} value={horaFim} onChange={e => setHoraFim(e.target.value)}
+                <input type="time" step={1800} value={horaFim} onChange={e => setHoraFim(e.target.value)}
                   className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
             </div>

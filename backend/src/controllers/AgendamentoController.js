@@ -51,81 +51,55 @@ const AgendamentoController = {
 
       const where = { ativo: true };
 
+      let inicio = null, fim = null;
       if (data) {
-        where.dataHora = {
-          gte: new Date(data + 'T00:00:00'),
-          lte: new Date(data + 'T23:59:59.999'),
-        };
+        inicio = new Date(data + 'T00:00:00');
+        fim    = new Date(data + 'T23:59:59.999');
       } else if (mesAno) {
         const [ano, mes] = mesAno.split('-').map(Number);
-        where.dataHora = {
-          gte: new Date(ano, mes - 1, 1),
-          lte: new Date(ano, mes, 0, 23, 59, 59, 999),
-        };
+        inicio = new Date(ano, mes - 1, 1);
+        fim    = new Date(ano, mes, 0, 23, 59, 59, 999);
       }
+      if (inicio && fim) where.dataHora = { gte: inicio, lte: fim };
 
       if (status && STATUS_VALIDOS.includes(status)) {
         where.status = status;
       }
 
-      if (!isAdmin) {
-        if (userType === 'PROPRIETARIO') {
-          where.animal = { userId: Number(userId) };
-        } else if (userType === 'FORNECEDOR') {
-          where.animal = {
-            designacoesPrestador: {
-              some: {
-                prestadorId: Number(userId),
-                ativo:       true,
-                OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
-              },
-            },
-          };
-        } else {
-          // VETERINARIO / ESTAGIARIO
-          // GESTOR vê todos os agendamentos da equipe; demais profissionais só os seus próprios.
-          let isGestor = false;
-          if (req.empresaId) {
-            const membroWhere = { userId: Number(userId), cargo: 'GESTOR' };
-            if (req.equipeId) membroWhere.equipeId = Number(req.equipeId);
-            else              membroWhere.equipe   = { empresaId: Number(req.empresaId) };
-            isGestor = !!(await prisma.membroEquipe.findFirst({ where: membroWhere, select: { id: true } }));
-          }
+      // IDs dos agendamentos do CONTEXTO ATIVO (empresa/equipe) — agendas independentes
+      // por equipe. Colunas novas → via SQL raw. NÃO filtra por data aqui (o Prisma
+      // envia Date ao raw em horário local, o que descasaria da janela UTC do
+      // where.dataHora); o filtro de data fica no where.dataHora tipado do Prisma.
+      const idsDoContexto = async () => {
+        const rows = req.equipeId
+          ? await prisma.$queryRawUnsafe(
+              `SELECT id FROM schs2vet.tb_agendamentos_clinicos WHERE ativo = true AND equipe_id = $1`,
+              Number(req.equipeId))
+          : await prisma.$queryRawUnsafe(
+              `SELECT id FROM schs2vet.tb_agendamentos_clinicos WHERE ativo = true AND empresa_id = $1`,
+              Number(req.empresaId));
+        return rows.map(r => r.id);
+      };
 
-          if (isGestor) {
-            // GESTOR: todos os agendamentos da empresa/equipe ativa
-            const animalWhere = { empresaId: Number(req.empresaId) };
-            if (req.equipeId) animalWhere.equipeId = Number(req.equipeId);
-            where.animal = animalWhere;
-          } else if (req.empresaId) {
-            // VET/ESTAGIÁRIO com contexto de empresa: apenas os próprios agendamentos
-            where.veterinarioId = Number(userId);
-          } else if (userType === 'VETERINARIO') {
-            // Sem contexto de empresa: agendamentos via vínculo direto com o animal
-            where.OR = [
-              {
-                animal: {
-                  solicitacoes: {
-                    some: {
-                      vetUserId: Number(userId),
-                      OR: [
-                        { tipo: 'VINCULO',    status: 'ACEITO'   },
-                        { tipo: 'DESVINCULO', status: 'PENDENTE' },
-                        { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-                      ],
-                    },
-                  },
-                },
-              },
-              { veterinarioId: Number(userId) },
-            ];
-          } else {
-            // ESTAGIÁRIO sem contexto: apenas os explicitamente atribuídos
-            where.veterinarioId = Number(userId);
-          }
-        }
+      // Regra: equipes/agendas são INDEPENDENTES em tudo. Cada agendamento pertence ao
+      // contexto em que foi criado. Um profissional vê apenas os agendamentos DAQUELE
+      // contexto — GESTOR vê todos do contexto; os demais veem só os SEUS (vet responsável
+      // ou criador), mesmo que o animal seja compartilhado com outra equipe.
+      if (isAdmin) {
+        if (req.empresaId) where.id = { in: await idsDoContexto() };
+      } else if (userType === 'PROPRIETARIO') {
+        where.animal = { userId: Number(userId) };
       } else if (req.empresaId) {
-        where.animal = { empresaId: Number(req.empresaId) };
+        const ids = await idsDoContexto();
+        const membroWhere = { userId: Number(userId), cargo: 'GESTOR' };
+        if (req.equipeId) membroWhere.equipeId = Number(req.equipeId);
+        else              membroWhere.equipe   = { empresaId: Number(req.empresaId) };
+        const isGestor = !!(await prisma.membroEquipe.findFirst({ where: membroWhere, select: { id: true } }));
+        where.id = { in: ids };
+        if (!isGestor) where.OR = [{ veterinarioId: Number(userId) }, { criadoPorId: Number(userId) }];
+      } else {
+        // Sem contexto de empresa ativo: apenas os próprios (vet responsável ou criador)
+        where.OR = [{ veterinarioId: Number(userId) }, { criadoPorId: Number(userId) }];
       }
 
       const itens = await prisma.agendamentoClinico.findMany({
@@ -139,6 +113,43 @@ const AgendamentoController = {
     } catch (err) {
       console.error('Erro ao listar agendamentos globais:', err);
       res.status(500).json({ error: 'Erro ao listar agendamentos' });
+    }
+  },
+
+  // GET /clinica/agendamentos/ocupacao?data=YYYY-MM-DD&vetIds=1,2,3
+  // Ocupação GLOBAL dos profissionais no dia (TODAS as empresas) — usada pela grade de
+  // horários para descontar os slots em que o profissional já está agendado em qualquer
+  // empresa (janela por empresa, mas ocupação global — evita duplo agendamento).
+  // Retorna somente { veterinarioId, dataHora } (sem dados do paciente) e apenas para os
+  // vetIds pedidos (os profissionais já visíveis na grade) — não vaza dados de outra empresa.
+  ocupacaoDoDia: async (req, res) => {
+    try {
+      const { data, vetIds } = req.query;
+      if (!data) return res.json({ dados: [] });
+      const inicio = new Date(data + 'T00:00:00');
+      const fim    = new Date(data + 'T23:59:59.999');
+      if (isNaN(inicio.getTime())) return res.json({ dados: [] });
+
+      const ids = String(vetIds ?? '')
+        .split(',').map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
+      if (ids.length === 0) return res.json({ dados: [] });
+
+      // Sem filtro de empresa/equipe: a ocupação do profissional é GLOBAL. Todo status
+      // exceto CANCELADO conta como ocupado (AGENDADO/EM_ANDAMENTO/CONCLUIDO/FINALIZADO).
+      const itens = await prisma.agendamentoClinico.findMany({
+        where: {
+          ativo:         true,
+          veterinarioId: { in: ids },
+          dataHora:      { gte: inicio, lte: fim },
+          status:        { not: 'CANCELADO' },
+        },
+        select: { veterinarioId: true, dataHora: true },
+      });
+
+      res.json({ dados: itens });
+    } catch (err) {
+      console.error('Erro ao obter ocupação do dia:', err);
+      res.status(500).json({ error: 'Erro ao obter ocupação' });
     }
   },
 
@@ -197,6 +208,16 @@ const AgendamentoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
+      // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
+      // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
+      const mesmoHorario = await prisma.agendamentoClinico.findFirst({
+        where: { animalId: Number(animalId), dataHora: quando, ativo: true, status: { not: 'CANCELADO' } },
+        select: { id: true },
+      });
+      if (mesmoHorario) {
+        return res.status(409).json({ error: 'Este animal já tem um agendamento neste horário.', code: 'HORARIO_OCUPADO' });
+      }
+
       const item = await prisma.$transaction(async (tx) => {
         const maxResult = await tx.agendamentoClinico.aggregate({
           where:   { animalId: Number(animalId), ativo: true },
@@ -220,6 +241,18 @@ const AgendamentoController = {
           include: INCLUDE,
         });
       });
+
+      // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
+      // por equipe. Usa o contexto ativo; se ausente, herda o do animal. (SQL raw — colunas novas.)
+      await prisma.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_agendamentos_clinicos ag
+            SET empresa_id = COALESCE($1::int, a."empresaId"), equipe_id = COALESCE($2::int, a."equipeId")
+           FROM schs2vet.tb_animais a
+          WHERE ag.id = $3::int AND ag.animal_id = a.id`,
+        req.empresaId ? Number(req.empresaId) : null,
+        req.equipeId  ? Number(req.equipeId)  : null,
+        item.id,
+      );
 
       res.status(201).json({
         dados: {

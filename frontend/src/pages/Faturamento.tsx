@@ -18,7 +18,7 @@ import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA';
+type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA' | 'ATRASADA';
 type ItemTipo     = 'ASSISTENCIA' | 'MEDICAMENTO' | 'PROCEDIMENTO';
 
 interface AnimalResumo {
@@ -49,9 +49,10 @@ interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
   valorAssistencia?: number; mensalista?: boolean;
   animais: AnimalResumo[];
-  faturaAtiva?:   FaturaResumo | null;
-  faturaFechada?: FaturaResumo | null;
-  faturaPaga?:    FaturaResumo | null;
+  faturaAtiva?:    FaturaResumo | null;
+  faturaFechada?:  FaturaResumo | null;
+  faturaAtrasada?: FaturaResumo | null;
+  faturaPaga?:     FaturaResumo | null;
 }
 
 interface CatalogoItem {
@@ -254,19 +255,19 @@ function ItemRow({
           Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
         </p>
       </div>
-      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+      <div className="flex items-center gap-2 flex-shrink-0">
         <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">
           {formatBRL(item.valor * item.quantidade)}
         </span>
         {canEdit && (
-          <div className="flex gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-            <button onClick={() => setEditing(true)}
-              className="p-1 text-gray-400 hover:text-indigo-600 rounded-md transition-colors">
-              <Pencil size={12}/>
+          <div className="flex gap-0.5">
+            <button onClick={() => setEditing(true)} title="Editar item"
+              className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+              <Pencil size={14}/>
             </button>
-            <button onClick={() => onDelete(item.id)}
-              className="p-1 text-gray-400 hover:text-red-500 rounded-md transition-colors">
-              <Trash2 size={12}/>
+            <button onClick={() => onDelete(item.id)} title="Excluir item"
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={14}/>
             </button>
           </div>
         )}
@@ -277,12 +278,16 @@ function ItemRow({
 
 // ─── Painel direito — detalhe da fatura ──────────────────────────────────────
 
+type MesFatura = { id: number; mesReferencia?: string; status: string };
+
 function PainelFatura({
-  prop, onStatusChange, faturaId,
+  prop, onStatusChange, faturaId, mes = null, onMeta,
 }: {
   prop: ProprietarioItem;
   onStatusChange: () => void;
   faturaId?: number;
+  mes?: string | null;
+  onMeta?: (m: { meses: MesFatura[]; mesAtual?: string }) => void;
 }) {
   const { podeExecutar, isGestor } = usePermissoes();
   const podeEditar  = isGestor || podeExecutar('financeiro.faturas.editar');
@@ -345,7 +350,8 @@ function PainelFatura({
 
   // Formulário de novo item
   const [novoCatIdx,        setNovoCatIdx]        = useState<string>('');
-  const [novoAnimalId,      setNovoAnimalId]      = useState<string>('');
+  // Um único animal → já vem selecionado por padrão (sem precisar escolher).
+  const [novoAnimalId,      setNovoAnimalId]      = useState<string>(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
   const [novoNome,          setNovoNome]          = useState('');
   const [novoTipo,          setNovoTipo]          = useState<ItemTipo>('ASSISTENCIA');
   const [novoQty,           setNovoQty]           = useState('1');
@@ -355,27 +361,24 @@ function PainelFatura({
 
   // Catálogo de itens frequentes (persistidos por empresa)
   const [catalogo,      setCatalogo]      = useState<CatalogoItem[]>([]);
-  const [showNovoFreq,  setShowNovoFreq]  = useState(false);
-  const [freqTipo,      setFreqTipo]      = useState<ItemTipo>('ASSISTENCIA');
-  const [freqDesc,      setFreqDesc]      = useState('');
-  const [salvandoFreq,  setSalvandoFreq]  = useState(false);
 
   const [itemParaExcluir, setItemParaExcluir] = useState<number | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const url = faturaId
-        ? `/clinica/faturas/proprietario/${prop.id}?faturaId=${faturaId}`
-        : `/clinica/faturas/proprietario/${prop.id}`;
-      const r = await api.get(url);
+      const q = mes
+        ? `?mes=${mes}`
+        : faturaId ? `?faturaId=${faturaId}` : '';
+      const r = await api.get(`/clinica/faturas/proprietario/${prop.id}${q}`);
       setFatura(r.data.dados);
+      onMeta?.({ meses: Array.isArray(r.data.meses) ? r.data.meses : [], mesAtual: r.data.dados?.mesReferencia });
     } catch {
       toast.error('Erro ao carregar fatura');
     } finally {
       setLoading(false);
     }
-  }, [prop.id, faturaId]);
+  }, [prop.id, faturaId, mes, onMeta]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -429,8 +432,6 @@ function PainelFatura({
   ];
 
   const handleCatalogoChange = (idx: string) => {
-    // Opção especial do dropdown: abrir o cadastro de um novo item frequente
-    if (idx === '__novo__') { setShowNovoFreq(true); setNovoCatIdx(''); return; }
     setNovoCatIdx(idx);
     if (idx === '') { setNovoNome(''); return; }
     const cat = frequentes[Number(idx)];
@@ -439,26 +440,6 @@ function PainelFatura({
     setNovoTipo(cat.tipo);
     setNovoValor(String(cat.valor));
     setNovoValorDisplay(formatarValorFatura(cat.valor));
-  };
-
-  const salvarItemFrequente = async () => {
-    if (!podeLancar) { semPermissao('salvar item frequente'); return; }
-    if (!freqDesc.trim()) { toast.error('Informe a descrição do item'); return; }
-    setSalvandoFreq(true);
-    try {
-      await api.post('/clinica/faturas/catalogo-itens', { tipo: freqTipo, descricao: freqDesc.trim(), valor: 0 });
-      toast.success('Item frequente salvo');
-      setFreqDesc(''); setFreqTipo('ASSISTENCIA'); setShowNovoFreq(false);
-      carregarCatalogo();
-    } catch { toast.error('Erro ao salvar item'); }
-    finally { setSalvandoFreq(false); }
-  };
-
-  const excluirItemFrequente = async (id: number) => {
-    try {
-      await api.delete(`/clinica/faturas/catalogo-itens/${id}`);
-      carregarCatalogo();
-    } catch { toast.error('Erro ao excluir item'); }
   };
 
   const formatarValorFatura = (v: number) =>
@@ -490,7 +471,22 @@ function PainelFatura({
         total: r.data.totalFatura,
         itens: [...prev.itens, r.data.dados],
       } : prev);
-      setNovoNome(''); setNovoCatIdx(''); setNovoAnimalId(''); setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
+
+      // Item digitado manualmente (não veio dos frequentes) → adiciona automaticamente
+      // aos Itens Frequentes para reuso. Ignora se já existir descrição igual.
+      const desc = novoNome.trim();
+      const jaExiste = frequentes.some(f => f.descricao.trim().toLowerCase() === desc.toLowerCase());
+      if (!novoCatIdx && desc && !jaExiste) {
+        try {
+          // Salva só o NOME do item frequente (sem valor — informado a cada lançamento).
+          await api.post('/clinica/faturas/catalogo-itens', { tipo: novoTipo, descricao: desc, valor: 0 });
+          carregarCatalogo();
+        } catch { /* silencioso — não impede o lançamento */ }
+      }
+
+      setNovoNome(''); setNovoCatIdx('');
+      setNovoAnimalId(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
+      setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
       toast.success('Item lançado');
     } catch { toast.error('Erro ao lançar item'); }
     finally { setLancando(false); }
@@ -551,82 +547,16 @@ function PainelFatura({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 lg:overflow-hidden min-w-0">
-      {/* Header verde */}
-      <div className="bg-emerald-600 rounded-2xl px-5 py-4 mb-4 flex-shrink-0">
-        {/* Linha 1: label à esquerda, ações à direita */}
-        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-          <p className="text-[10px] font-bold text-emerald-100 uppercase tracking-widest">
-            Extrato Ativo do Cliente
-          </p>
-          <div className="flex items-center gap-2 flex-wrap">
-            {canEdit && (
-              <>
-                <button
-                  onClick={handleFechar}
-                  disabled={salvando}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/20">
-                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <X size={11}/>}
-                  Fechar Fatura
-                </button>
-                <button
-                  onClick={() => handleStatus('PAGA')}
-                  disabled={salvando}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/30">
-                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>}
-                  Marcar como Pago
-                </button>
-              </>
-            )}
-            {fatura?.status === 'FECHADA' && (
-              <>
-                <button
-                  onClick={() => handleStatus('ABERTA')}
-                  disabled={salvando}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/20">
-                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>}
-                  Reabrir
-                </button>
-                <button
-                  onClick={() => handleStatus('PAGA')}
-                  disabled={salvando}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors border border-white/30">
-                  {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>}
-                  Marcar como Pago
-                </button>
-              </>
-            )}
-          </div>
+      {/* Card do cliente — SOMENTE proprietário + fatura (ações ficam fora) */}
+      <div className="bg-emerald-600 rounded-2xl px-5 py-4 mb-3 flex-shrink-0">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Receipt size={15} className="text-emerald-200 flex-shrink-0"/>
+          <h2 className="text-lg font-bold text-white break-words">{prop.fullName}</h2>
         </div>
-
-        {/* Identificação: nome, telefone e e-mail + enviar por WhatsApp/E-mail */}
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Receipt size={15} className="text-emerald-200 flex-shrink-0"/>
-              <h2 className="text-lg font-bold text-white break-words">{prop.fullName}</h2>
-            </div>
-            <div className="text-xs text-emerald-50 space-y-0.5">
-              {prop.phone && <p>Telefone: <span className="text-white font-medium">{prop.phone}</span></p>}
-              <p className="break-all">E-mail: <span className="text-white font-medium">{prop.email}</span></p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {prop.phone && (
-              <button onClick={() => abrirWhatsApp(montarTextoFatura(fatura, prop), foneIntl(prop.phone))}
-                title="Enviar por WhatsApp"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#20BA5A] text-white rounded-xl text-xs font-bold transition-colors">
-                <MessageCircle size={13}/> WhatsApp
-              </button>
-            )}
-            <button onClick={() => abrirEmail(`Fatura — ${prop.fullName}`, montarTextoFatura(fatura, prop), prop.email)}
-              title="Enviar por e-mail"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-xs font-bold transition-colors border border-white/20">
-              <Mail size={13}/> E-mail
-            </button>
-          </div>
+        <div className="text-xs text-emerald-50 space-y-0.5">
+          {prop.phone && <p>Telefone: <span className="text-white font-medium">{prop.phone}</span></p>}
+          <p className="break-all">E-mail: <span className="text-white font-medium">{prop.email}</span></p>
         </div>
-
-        {/* Fatura do mês */}
         <div className="mt-2.5 pt-2.5 border-t border-white/15 text-xs text-emerald-100 text-right">
           Fatura Mês:{' '}
           <span className="font-bold text-white">{formatMes(fatura.mesReferencia) || 'Mês atual'}</span>
@@ -635,51 +565,51 @@ function PainelFatura({
         </div>
       </div>
 
-      {/* Barra de ações — Exportar e Compartilhar à direita */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 flex-shrink-0">
-        <div>
-          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-            Lançamentos Detalhados Separados por Animal
-          </p>
-          <p className="text-[11px] text-gray-400">
-            Cada animal possui seu prontuário financeiro isolado, integrado em um demonstrativo consolidado de cobrança único.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 sm:ml-4">
-          <button
-            onClick={handleShare}
-            disabled={compartilhando}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#25D366] hover:bg-[#20BA5A] disabled:opacity-60 text-white rounded-lg text-xs font-semibold transition-colors">
-            {compartilhando ? (
-              <Loader2 size={13} className="animate-spin"/>
-            ) : (
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-              </svg>
-            )}
-            WhatsApp
+      {/* Ações da fatura — FORA do card */}
+      <div className="flex flex-wrap items-center justify-end gap-2 mb-3 flex-shrink-0">
+        {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA') && (
+          <button onClick={() => handleStatus('ABERTA')} disabled={salvando}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir
           </button>
-          <div className="relative" ref={exportMenuRef}>
-            <button
-              onClick={() => setShowExportMenu(v => !v)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold transition-colors">
-              <Download size={13}/> Exportar <ChevronDown size={11}/>
-            </button>
-            {showExportMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
-                <button
-                  onClick={handlePDF}
-                  className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                  <Printer size={13}/> PDF / Imprimir
-                </button>
-                <button
-                  onClick={handleCSV}
-                  className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                  <Download size={13}/> CSV (.csv)
-                </button>
-              </div>
-            )}
-          </div>
+        )}
+        {canEdit && (
+          <button onClick={handleFechar} disabled={salvando}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            {salvando ? <Loader2 size={11} className="animate-spin"/> : <Check size={13}/>} Fechar Fatura
+          </button>
+        )}
+        {(canEdit || fatura.status === 'FECHADA' || fatura.status === 'ATRASADA') && (
+          <button onClick={() => handleStatus('PAGA')} disabled={salvando}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>} Marcar como Pago
+          </button>
+        )}
+        <button onClick={() => abrirEmail(`Fatura — ${prop.fullName}`, montarTextoFatura(fatura, prop), prop.email)}
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+          <Mail size={13}/> E-mail
+        </button>
+        <button onClick={handleShare} disabled={compartilhando}
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+          {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
+        </button>
+        <button onClick={handlePDF}
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+          <Printer size={13}/> Imprimir
+        </button>
+        <div className="relative" ref={exportMenuRef}>
+          <button onClick={() => setShowExportMenu(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+            <Download size={13}/> Exportar <ChevronDown size={11}/>
+          </button>
+          {showExportMenu && (
+            <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
+              <button onClick={handleCSV}
+                className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                <Download size={13}/> CSV (.csv)
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -815,65 +745,55 @@ function PainelFatura({
               Lançar Novo Item / Cobrança na Fatura
             </p>
             <div className="mb-3">
-              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Itens Frequentes</label>
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+                Itens Frequentes <span className="text-gray-400 font-normal">(atalho — opcional)</span>
+              </label>
               <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
                 className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                <option value="">— Selecione um item —</option>
+                <option value="">— Escolha um item —</option>
                 {frequentes.map((c, i) => (
                   <option key={i} value={i}>{c.label}{c.valor ? ` — ${formatBRL(c.valor)}` : ''}</option>
                 ))}
-                <option value="__novo__">➕ Incluir novo item…</option>
               </select>
+            </div>
+            {/* Tipo + Descrição — lançamento DIRETO (não precisa salvar como frequente antes) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Tipo</label>
+                <select value={novoTipo} onChange={e => setNovoTipo(e.target.value as ItemTipo)}
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
+                  <option value="ASSISTENCIA">Assistência</option>
+                  <option value="MEDICAMENTO">Medicamento</option>
+                  <option value="PROCEDIMENTO">Procedimento</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+                  Descrição <span className="text-red-400">*</span>
+                </label>
+                <input value={novoNome} onChange={e => { setNovoNome(e.target.value); setNovoCatIdx(''); }}
+                  placeholder="Descreva o item ou cobrança"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+              </div>
+            </div>
 
-              {/* Formulário — novo item frequente (persistido para futuras faturas) */}
-              {showNovoFreq && (
-                <div className="mt-2 p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
-                  <div className="flex gap-2">
-                    <select value={freqTipo} onChange={e => setFreqTipo(e.target.value as ItemTipo)}
-                      className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:border-emerald-400">
-                      <option value="ASSISTENCIA">Assistência</option>
-                      <option value="MEDICAMENTO">Medicamento</option>
-                      <option value="PROCEDIMENTO">Procedimento</option>
-                    </select>
-                    <input value={freqDesc} onChange={e => setFreqDesc(e.target.value)}
-                      placeholder="Descrição do item"
-                      className="flex-1 min-w-0 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-emerald-400"/>
-                  </div>
-                  <div className="flex justify-end">
-                    <button onClick={salvarItemFrequente} disabled={salvandoFreq || !freqDesc.trim()}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-colors">
-                      {salvandoFreq ? <Loader2 size={13} className="animate-spin"/> : <Check size={13}/>} Salvar
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Itens frequentes salvos (com remover) */}
-              {catalogo.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {catalogo.map(c => (
-                    <span key={c.id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded-full pl-2.5 pr-1 py-0.5 text-gray-600">
-                      {c.descricao}
-                      <button onClick={() => excluirItemFrequente(c.id)} title="Remover item frequente"
-                        className="p-0.5 text-gray-300 hover:text-red-500 rounded-full">
-                        <X size={11}/>
-                      </button>
-                    </span>
+            {/* Animal — com 1 animal já vem selecionado; com vários, escolher (opcional) */}
+            {prop.animais.length === 1 ? (
+              <p className="text-[11px] text-gray-500 mb-3">
+                Animal: <span className="font-semibold text-gray-700">{prop.animais[0].nome}</span>
+              </p>
+            ) : prop.animais.length > 1 ? (
+              <div className="mb-3">
+                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Animal</label>
+                <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
+                  <option value="">— Geral (sem animal) —</option>
+                  {prop.animais.map(a => (
+                    <option key={a.id} value={a.id}>{a.nome}</option>
                   ))}
-                </div>
-              )}
-            </div>
-            {/* Animal — vincula a cobrança a um cavalo (aparece por cavalo/localização nos relatórios) */}
-            <div className="mb-3">
-              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Animal</label>
-              <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
-                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                <option value="">— Geral (sem animal) —</option>
-                {prop.animais.map(a => (
-                  <option key={a.id} value={a.id}>{a.nome}</option>
-                ))}
-              </select>
-            </div>
+                </select>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
               {/* Quantidade */}
@@ -948,9 +868,10 @@ function CardProprietario({
         </div>
         {/* Bolinhas indicadoras de faturas existentes */}
         <div className="flex gap-1 flex-shrink-0">
-          {prop.faturaAtiva   && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
-          {prop.faturaFechada && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
-          {prop.faturaPaga    && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
+          {prop.faturaAtiva    && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
+          {prop.faturaFechada  && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
+          {prop.faturaAtrasada && <span className="w-2 h-2 rounded-full bg-red-500" title="Fatura atrasada"/>}
+          {prop.faturaPaga     && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
         </div>
       </div>
     </button>
@@ -1075,7 +996,7 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
 export default function Faturamento() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
 
-  type FiltroTipo = 'ABERTA' | 'FECHADA' | 'PAGA';
+  type FiltroTipo = 'ABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
 
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -1083,6 +1004,9 @@ export default function Faturamento() {
   const [selecionado,   setSelecionado]   = useState<ProprietarioItem | null>(null);
   const [contadores,    setContadores]    = useState({ abertas: 0, fechadas: 0, pagas: 0 });
   const [filtroStatus,  setFiltroStatus]  = useState<FiltroTipo>('ABERTA');
+  // Seletor de mês/ano (só para fatura FECHADA/PAGA) — controla o mês visualizado.
+  const [mesView,       setMesView]       = useState<string | null>(null);
+  const [faturaMeta,    setFaturaMeta]    = useState<{ meses: MesFatura[]; mesAtual?: string }>({ meses: [] });
   const [dropdownAberto, setDropdownAberto] = useState(false);
   const [showLote,       setShowLote]       = useState(false);
   const seletorRef = useRef<HTMLDivElement>(null);
@@ -1108,6 +1032,11 @@ export default function Faturamento() {
   }, []);
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
+
+  // Trocar de proprietário volta TODOS os filtros ao padrão (status Aberta, sem mês).
+  useEffect(() => { setFiltroStatus('ABERTA'); setMesView(null); }, [selecionado?.id]);
+  // Trocar o tipo de fatura reseta o mês visualizado.
+  useEffect(() => { setMesView(null); }, [filtroStatus]);
 
   // Fecha o dropdown do seletor ao clicar fora
   useEffect(() => {
@@ -1273,17 +1202,18 @@ export default function Faturamento() {
           <div className="flex-1 min-w-0 flex flex-col">
             {selecionado ? (
               <>
-                {/* Filtros de tipo de fatura */}
-                <div className="flex gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5 overflow-x-auto">
+                {/* Filtros de tipo de fatura + seletor de mês/ano (só p/ Fechada/Paga) */}
+                <div className="flex items-center gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5 overflow-x-auto">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
                   {[
-                    { key: 'ABERTA'  as FiltroTipo, label: 'Aberta',  cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva   },
-                    { key: 'FECHADA' as FiltroTipo, label: 'Fechada', cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada },
-                    { key: 'PAGA'    as FiltroTipo, label: 'Paga',    cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga    },
+                    { key: 'ABERTA'   as FiltroTipo, label: 'Aberta',   cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva    },
+                    { key: 'FECHADA'  as FiltroTipo, label: 'Fechada',  cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada  },
+                    { key: 'ATRASADA' as FiltroTipo, label: 'Atrasada', cor: 'bg-red-600',     existe: !!selecionado.faturaAtrasada },
+                    { key: 'PAGA'     as FiltroTipo, label: 'Paga',     cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga     },
                   ].map(({ key, label, cor, existe }) => (
                     <button
                       key={key}
-                      onClick={() => setFiltroStatus(key)}
+                      onClick={() => { setFiltroStatus(key); setMesView(null); }}
                       disabled={!existe}
                       className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
                         filtroStatus === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
@@ -1291,15 +1221,28 @@ export default function Faturamento() {
                       {label}
                     </button>
                   ))}
+                  {(filtroStatus === 'FECHADA' || filtroStatus === 'ATRASADA' || filtroStatus === 'PAGA') &&
+                    faturaMeta.meses.filter(m => m.status === filtroStatus).length > 0 && (
+                    <select value={mesView ?? faturaMeta.mesAtual ?? ''}
+                      onChange={e => setMesView(e.target.value)}
+                      className="ml-auto border border-gray-300 rounded-lg px-2.5 py-1 text-[11px] bg-white focus:outline-none focus:border-indigo-400">
+                      {faturaMeta.meses.filter(m => m.status === filtroStatus).map(m => (
+                        <option key={m.id} value={m.mesReferencia ?? ''}>{formatMes(m.mesReferencia) || 'Mês atual'}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <PainelFatura
                   key={`${selecionado.id}-${filtroStatus}`}
                   prop={selecionado}
                   onStatusChange={carregar}
+                  mes={mesView}
+                  onMeta={setFaturaMeta}
                   faturaId={
-                    filtroStatus === 'PAGA'    ? selecionado.faturaPaga?.id    :
-                    filtroStatus === 'FECHADA' ? selecionado.faturaFechada?.id :
+                    filtroStatus === 'PAGA'     ? selecionado.faturaPaga?.id     :
+                    filtroStatus === 'ATRASADA' ? selecionado.faturaAtrasada?.id :
+                    filtroStatus === 'FECHADA'  ? selecionado.faturaFechada?.id  :
                     undefined
                   }
                 />

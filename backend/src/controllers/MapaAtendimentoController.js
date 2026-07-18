@@ -14,21 +14,44 @@ const ANIMAL_SELECT = {
 const MapaAtendimentoController = {
 
   // GET /api/mapa-atendimento/resumo
-  // Query params: data (YYYY-MM-DD), localizacaoId, veterinarioId (só GESTOR/ADMIN)
+  // Query params: data (YYYY-MM-DD), granularidade (DIARIO|SEMANAL|MENSAL),
+  //               localizacaoId, veterinarioId (só GESTOR/ADMIN)
   resumo: async (req, res) => {
     try {
-      const { data, localizacaoId, veterinarioId: vetIdParam } = req.query;
+      const { data, granularidade, localizacaoId, veterinarioId: vetIdParam } = req.query;
       const { user, empresaId, equipeId, membroCargo } = req;
       const { id: userId, userType } = user;
 
       const isAdmin  = userType === 'ADMIN';
       const isGestor = isAdmin || membroCargo === 'GESTOR';
 
-      // ── Data de referência ────────────────────────────────────────────
-      const dataRef = data ? new Date(data + 'T00:00:00') : new Date();
-      const dataStr = dataRef.toISOString().slice(0, 10);
-      const inicioDia = new Date(dataStr + 'T00:00:00');
-      const fimDia    = new Date(dataStr + 'T23:59:59.999');
+      // ── Período de referência (Diário / Semanal / Mensal) ──────────────
+      const gran = ['SEMANAL', 'MENSAL'].includes(String(granularidade).toUpperCase())
+        ? String(granularidade).toUpperCase()
+        : 'DIARIO';
+      const isDiario = gran === 'DIARIO';
+      const dataRef  = data ? new Date(data + 'T00:00:00') : new Date();
+
+      // inicio/fim locais (mesma base do inicioDia/fimDia original).
+      let inicio, fim;
+      if (gran === 'SEMANAL') {
+        // Semana de domingo a sábado (mesma convenção dos Relatórios).
+        inicio = new Date(dataRef); inicio.setDate(dataRef.getDate() - dataRef.getDay());
+        inicio.setHours(0, 0, 0, 0);
+        fim = new Date(inicio); fim.setDate(inicio.getDate() + 6); fim.setHours(23, 59, 59, 999);
+      } else if (gran === 'MENSAL') {
+        inicio = new Date(dataRef.getFullYear(), dataRef.getMonth(), 1, 0, 0, 0, 0);
+        fim    = new Date(dataRef.getFullYear(), dataRef.getMonth() + 1, 0, 23, 59, 59, 999);
+      } else {
+        const dStr = dataRef.toISOString().slice(0, 10);
+        inicio = new Date(dStr + 'T00:00:00');
+        fim    = new Date(dStr + 'T23:59:59.999');
+      }
+      const inicioDia = inicio;
+      const fimDia    = fim;
+      const dataStr   = dataRef.toISOString().slice(0, 10);
+      const inicioStr = new Date(inicio.getTime() - inicio.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      const fimStr    = new Date(fim.getTime()    - fim.getTimezoneOffset()    * 60000).toISOString().slice(0, 10);
 
       // ── Escopo base de animais ────────────────────────────────────────
       const whereAnimalBase = { ativo: true };
@@ -125,17 +148,18 @@ const MapaAtendimentoController = {
         orderBy: { numero: 'asc' },
       });
 
-      // Janela de um item (mesmo algoritmo de listarParaExecucao/executar)
-      const itemDentroDoDia = (item) => {
-        const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
-        const fim = new Date(inicioStr + 'T00:00:00Z');
-        fim.setUTCDate(fim.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
-        const fimStr = fim.toISOString().split('T')[0];
-        return inicioStr <= dataStr && dataStr < fimStr;
+      // Janela de um item sobrepõe o período [inicioStr, fimStr]?
+      // (mesmo algoritmo de janela do listarParaExecucao/executar, estendido p/ período)
+      const itemNoPeriodo = (item) => {
+        const itemInicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
+        const fimItem = new Date(itemInicioStr + 'T00:00:00Z');
+        fimItem.setUTCDate(fimItem.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
+        const itemFimStr = fimItem.toISOString().split('T')[0]; // exclusivo
+        return itemInicioStr <= fimStr && itemFimStr > inicioStr;
       };
 
-      // Mantém apenas grupos cuja janela inclui dataStr (mesmo filtro JS do listarParaExecucao)
-      const prescricoesDoDia = gruposCandidate.filter(g => g.itens.some(itemDentroDoDia));
+      // Mantém apenas grupos cuja janela sobrepõe o período
+      const prescricoesDoDia = gruposCandidate.filter(g => g.itens.some(itemNoPeriodo));
 
       // ── 4. Vacinas do dia (aplicação ou reforço) ──────────────────────
       const vacinasDoDia = await prisma.vacinaClinica.findMany({
@@ -218,12 +242,13 @@ const MapaAtendimentoController = {
           dataHora.setHours(hh, mm, 0, 0);
         }
 
-        // Itens cuja dose de hoje já foi dada (executadoEm registrado no próprio dia
-        // de referência — executar() atualiza a data a cada execução diária).
-        const itensDoDia = g.itens.filter(itemDentroDoDia);
-        const jaExecutadoHoje = itensDoDia.length > 0 && itensDoDia.every(i =>
+        // No modo Diário, marca EXECUTADO quando a dose do dia já foi dada em todos
+        // os itens da janela. Em período (semana/mês) usa o status do grupo.
+        const itensDoDia = g.itens.filter(itemNoPeriodo);
+        const jaExecutadoHoje = isDiario && itensDoDia.length > 0 && itensDoDia.every(i =>
           i.executadoEm && new Date(i.executadoEm).toISOString().split('T')[0] === dataStr
         );
+        const statusPresc = jaExecutadoHoje || g.status === 'EXECUTADO' ? 'EXECUTADO' : 'AGENDADO';
 
         return {
           id:            `grupo-${g.id}`,
@@ -233,7 +258,7 @@ const MapaAtendimentoController = {
           localizacao:   g.animal.localizacao ?? null,
           procedimento:  'PRESCRICAO',
           descricao:     nomes || 'Prescrição',
-          status:        jaExecutadoHoje ? 'EXECUTADO' : 'AGENDADO',
+          status:        statusPresc,
           dataHora,
           responsavel:   g.veterinario?.fullName ?? null,
           responsavelId: g.veterinario?.id ?? null,

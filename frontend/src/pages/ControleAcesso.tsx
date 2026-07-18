@@ -1068,10 +1068,11 @@ function TabPermissoesGlobais() {
 // ABA — Gerenciar Profissionais
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TabProfissionais({ equipeId, isGestor, isAdmin }: {
+function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   equipeId: number;
   isGestor:  boolean;
   isAdmin?: boolean;
+  onEmpresasChange?: () => void;
 }) {
   const { user }             = useAuth();
   const [membros,  setMembros]  = useState<Membro[]>([]);
@@ -1343,6 +1344,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin }: {
       setShowConvite(false);
       resetConviteForm();
       carregar();
+      onEmpresasChange?.(); // atualiza o seletor de empresas do topo (ADMIN) sem reload da página
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
       toast.error(msg);
@@ -2695,6 +2697,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           phone:        values.phone,
           fornecedorId: values.fornecedorId ?? null,
           tipoServico:  values.tipoServico  ?? null,
+          especialidadeIds: values.especialidadeIds ?? [],
           equipeId,
         });
         toast.success('Fornecedor incluído. Selecione os animais com acesso.');
@@ -3310,7 +3313,7 @@ export default function ControleAcesso() {
 
         {isAdmin && todasEquipes.length > 1 && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 font-medium">Equipe:</span>
+            <span className="text-xs text-gray-500 font-medium">Empresa:</span>
             <select
               value={equipeId ?? ''}
               onChange={e => carregarEquipe(Number(e.target.value))}
@@ -3318,7 +3321,7 @@ export default function ControleAcesso() {
             >
               {todasEquipes.map(eq => (
                 <option key={eq.id} value={eq.id}>
-                  {eq.nome}{eq.empresaNome ? ` — ${eq.empresaNome}` : ''}
+                  {eq.empresaNome || eq.nome}
                 </option>
               ))}
             </select>
@@ -3351,7 +3354,7 @@ export default function ControleAcesso() {
       </div>
 
       {isAdmin && aba === 'globais'       && <TabPermissoesGlobais />}
-      {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isGestor={isGestor} isAdmin={isAdmin} />}
+      {isAdmin && aba === 'profissionais' && <TabProfissionais equipeId={equipeId ?? 0} isGestor={isGestor} isAdmin={isAdmin} onEmpresasChange={() => carregarEquipe(equipeId ?? undefined)} />}
       {!isAdmin && aba === 'equipe'       && equipeId && <TabEquipe equipeId={equipeId} isGestor={isGestor} />}
       {!isAdmin && aba === 'convites'     && equipeId && <TabConvites equipeId={equipeId} isGestor={isGestor} />}
       {aba === 'auditoria'                && equipeId && <TabAuditoria equipeId={equipeId} />}

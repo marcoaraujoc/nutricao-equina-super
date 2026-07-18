@@ -100,6 +100,12 @@ async function resolverEscopoConfiguracao(req) {
   return { empresaId: empresa.id, equipeId: equipe.id };
 }
 
+// Espécies atendidas: coluna TEXT com CSV de IDs de Especie. Converte de/para array de números.
+function parseEspeciesAtendidas(csv) {
+  if (!csv) return [];
+  return String(csv).split(',').map(s => Number(s.trim())).filter(Number.isInteger);
+}
+
 // Resolve o escopo da configuração para QUALQUER membro do contexto ativo (não só
 // gestor) — usado para leitura do expediente de atendimento pelo Agendamento.
 // Baseia-se em req.empresaId/req.equipeId já validados pelo auth.
@@ -115,6 +121,15 @@ async function resolverEscopoConfiguracaoMembro(req) {
     equipeId = eq.id;
   }
   return { empresaId: empresa.id, equipeId };
+}
+
+// Prisma rejeita `null` num campo de chave única composta em findUnique/upsert.
+// Empresa com CNPJ usa equipeId=null → usar findFirst, que traduz `equipeId: null`
+// para `IS NULL` corretamente.
+async function buscarConfiguracao(escopo) {
+  return prisma.empresaConfiguracao.findFirst({
+    where: { empresaId: escopo.empresaId, equipeId: escopo.equipeId },
+  });
 }
 
 // ─── Helper: onboarding de vet convidado ─────────────────────────────────────
@@ -208,6 +223,86 @@ async function anexarPerfisGlobais(membros, { empresaId = null, todos = false } 
   }
   for (const d of donos) add(d.ownerId, 'GESTOR');
   return membros.map(m => ({ ...m, perfisGlobais: [...(perfisPorUser.get(m.user.id) ?? [])] }));
+}
+
+// ─── Expediente de trabalho do MEMBRO (via SQL raw — colunas novas em tb_membros_equipe) ──
+// Valida e normaliza os campos do body. Cada campo: undefined = não altera; ''/[] = limpa.
+function parseExpedienteTrabalho(body) {
+  let dias; // undefined = não enviado
+  if (body.diasTrabalho !== undefined) {
+    const arr = Array.isArray(body.diasTrabalho)
+      ? body.diasTrabalho
+      : String(body.diasTrabalho).split(',').map(s => s.trim()).filter(Boolean);
+    if (arr.length === 0) dias = null;
+    else {
+      const nums = [...new Set(arr.map(Number))].sort((a, b) => a - b);
+      if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 6)) return { erro: 'Dias de trabalho inválidos (0=Dom … 6=Sáb).' };
+      dias = nums.join(',');
+    }
+  }
+  const parseHora = (v) => {
+    if (v === undefined) return undefined;
+    const s = String(v).trim();
+    if (s === '') return null;
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return '__ERRO__';
+    return s;
+  };
+  const hi = parseHora(body.horaInicioTrabalho);
+  const hf = parseHora(body.horaFimTrabalho);
+  if (hi === '__ERRO__' || hf === '__ERRO__') return { erro: 'Horário de trabalho inválido — use HH:MM.' };
+  if (hi && hf && hi >= hf) return { erro: 'A hora de início do trabalho deve ser menor que a de término.' };
+  return { diasTrabalho: dias, horaInicioTrabalho: hi, horaFimTrabalho: hf };
+}
+
+// Grava só os campos enviados (undefined = não altera).
+async function gravarExpedienteTrabalho(membroId, exp) {
+  const sets = [], vals = [];
+  let i = 1;
+  if (exp.diasTrabalho       !== undefined) { sets.push(`"diasTrabalho"=$${i++}`);       vals.push(exp.diasTrabalho); }
+  if (exp.horaInicioTrabalho !== undefined) { sets.push(`"horaInicioTrabalho"=$${i++}`); vals.push(exp.horaInicioTrabalho); }
+  if (exp.horaFimTrabalho    !== undefined) { sets.push(`"horaFimTrabalho"=$${i++}`);    vals.push(exp.horaFimTrabalho); }
+  if (sets.length === 0) return;
+  vals.push(Number(membroId));
+  await prisma.$executeRawUnsafe(`UPDATE schs2vet.tb_membros_equipe SET ${sets.join(', ')} WHERE id=$${i}`, ...vals);
+}
+
+// Anexa diasTrabalho/horaInicioTrabalho/horaFimTrabalho a uma lista de membros já carregados.
+// Resolução POR PROFISSIONAL: usa o expediente do vínculo do contexto; se ele estiver
+// vazio, herda o expediente que o profissional definiu em QUALQUER vínculo (o mais
+// recente). Assim o expediente "definido uma vez" aparece em qualquer equipe/agenda.
+async function anexarExpedienteTrabalho(membros) {
+  const ids     = membros.map(m => m.id).filter(Boolean);
+  const userIds = [...new Set(membros.map(m => m.user?.id).filter(Boolean))];
+  if (ids.length === 0) return membros;
+  const [rowsMembro, rowsUser] = await Promise.all([
+    prisma.$queryRawUnsafe(
+      `SELECT id, "diasTrabalho", "horaInicioTrabalho", "horaFimTrabalho"
+         FROM schs2vet.tb_membros_equipe WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(', ')})`,
+      ...ids,
+    ),
+    userIds.length
+      ? prisma.$queryRawUnsafe(
+          `SELECT DISTINCT ON ("userId") "userId", "diasTrabalho", "horaInicioTrabalho", "horaFimTrabalho"
+             FROM schs2vet.tb_membros_equipe
+            WHERE "userId" IN (${userIds.map((_, i) => `$${i + 1}`).join(', ')})
+              AND ("diasTrabalho" IS NOT NULL OR "horaInicioTrabalho" IS NOT NULL OR "horaFimTrabalho" IS NOT NULL)
+            ORDER BY "userId", id DESC`,
+          ...userIds,
+        )
+      : [],
+  ]);
+  const porMembro = new Map(rowsMembro.map(r => [r.id, r]));
+  const porUser   = new Map(rowsUser.map(r => [r.userId, r]));
+  return membros.map(m => {
+    const e = porMembro.get(m.id) ?? {};
+    const u = porUser.get(m.user?.id) ?? {};
+    return {
+      ...m,
+      diasTrabalho:       e.diasTrabalho       ?? u.diasTrabalho       ?? null,
+      horaInicioTrabalho: e.horaInicioTrabalho ?? u.horaInicioTrabalho ?? null,
+      horaFimTrabalho:    e.horaFimTrabalho    ?? u.horaFimTrabalho    ?? null,
+    };
+  });
 }
 
 const EquipeController = {
@@ -342,9 +437,7 @@ const EquipeController = {
       const escopo = await resolverEscopoConfiguracao(req);
       if (!escopo) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
 
-      const config = await prisma.empresaConfiguracao.findUnique({
-        where: { empresaId_equipeId: escopo },
-      });
+      const config = await buscarConfiguracao(escopo);
 
       // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
       // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
@@ -361,10 +454,28 @@ const EquipeController = {
           diasAtendimento:       config?.diasAtendimento       ?? null,
           horaInicioAtendimento: config?.horaInicioAtendimento ?? null,
           horaFimAtendimento:    config?.horaFimAtendimento    ?? null,
+          especiesAtendidas:     parseEspeciesAtendidas(config?.especiesAtendidas),
         },
       });
     } catch (err) {
       console.error('Erro ao obter configuração:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // Espécies atendidas pela empresa do contexto ativo — leitura para QUALQUER membro
+  // (usado no Cadastro Pessoal do membro convidado para filtrar as especialidades).
+  obterEspeciesAtendidas: async (req, res) => {
+    try {
+      const escopo = await resolverEscopoConfiguracaoMembro(req);
+      if (!escopo) return res.json({ sucesso: true, dados: { especiesAtendidas: [] } });
+      const config = await buscarConfiguracao(escopo);
+      return res.json({
+        sucesso: true,
+        dados: { especiesAtendidas: parseEspeciesAtendidas(config?.especiesAtendidas) },
+      });
+    } catch (err) {
+      console.error('Erro ao obter espécies atendidas:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -376,7 +487,7 @@ const EquipeController = {
       const escopo = await resolverEscopoConfiguracaoMembro(req);
       const vazio = { diasAtendimento: null, horaInicioAtendimento: null, horaFimAtendimento: null };
       if (!escopo) return res.json({ sucesso: true, dados: vazio });
-      const config = await prisma.empresaConfiguracao.findUnique({ where: { empresaId_equipeId: escopo } });
+      const config = await buscarConfiguracao(escopo);
       return res.json({
         sucesso: true,
         dados: {
@@ -391,6 +502,27 @@ const EquipeController = {
     }
   },
 
+  // Logotipo + nome da empresa do contexto ativo — leitura por QUALQUER membro
+  // (usado pelo Sidebar para exibir a logomarca no lugar do texto padrão).
+  obterLogo: async (req, res) => {
+    try {
+      const escopo = await resolverEscopoConfiguracaoMembro(req);
+      const vazio = { logoUrl: null, empresaNome: null };
+      if (!escopo) return res.json({ sucesso: true, dados: vazio });
+      const [config, empresa] = await Promise.all([
+        buscarConfiguracao(escopo),
+        prisma.empresa.findUnique({ where: { id: escopo.empresaId }, select: { nome: true } }),
+      ]);
+      return res.json({
+        sucesso: true,
+        dados: { logoUrl: config?.logoUrl ?? null, empresaNome: empresa?.nome ?? null },
+      });
+    } catch (err) {
+      console.error('Erro ao obter logo:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   salvarConfiguracao: async (req, res) => {
     try {
       const escopo = await resolverEscopoConfiguracao(req);
@@ -399,7 +531,19 @@ const EquipeController = {
       const {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
+        especiesAtendidas,
       } = req.body;
+
+      // Espécies atendidas — aceita array [1,2] ou CSV "1,2". undefined = não altera;
+      // vazio = null (todas as espécies). Persiste como CSV de IDs.
+      let especiesFinal;
+      if (especiesAtendidas !== undefined) {
+        const arr = Array.isArray(especiesAtendidas)
+          ? especiesAtendidas
+          : String(especiesAtendidas).split(',').map(s => s.trim()).filter(Boolean);
+        const nums = [...new Set(arr.map(Number))].filter(Number.isInteger).sort((a, b) => a - b);
+        especiesFinal = nums.length ? nums.join(',') : null;
+      }
 
       // WhatsApp da empresa — normaliza para somente dígitos (DDD+número, DDI opcional).
       // undefined = não altera; string vazia = remove o número.
@@ -465,20 +609,21 @@ const EquipeController = {
           diaFinal = null; // ignora qualquer valor enviado
         } else {
           const n = Number(diaFechamentoFatura);
-          const limite = tipoFechamento === 'DIA_UTIL' ? 10 : 31;
+          // Dia fixo limitado a 28 para existir em todos os meses do ano.
+          const limite = tipoFechamento === 'DIA_UTIL' ? 10 : 28;
           if (!Number.isInteger(n) || n < 1 || n > limite) {
             return res.status(400).json({
               sucesso: false,
               mensagem: tipoFechamento === 'DIA_UTIL'
                 ? 'Para dia útil, informe um número entre 1 e 10.'
-                : 'Para dia fixo, informe um número entre 1 e 31.',
+                : 'Para dia fixo, informe um número entre 1 e 28.',
             });
           }
           diaFinal = n;
         }
       }
 
-      const existente = await prisma.empresaConfiguracao.findUnique({ where: { empresaId_equipeId: escopo } });
+      const existente = await buscarConfiguracao(escopo);
 
       let logoUrlFinal;
       if (req.file) {
@@ -489,28 +634,34 @@ const EquipeController = {
         logoUrlFinal = null;
       }
 
-      const config = await prisma.empresaConfiguracao.upsert({
-        where:  { empresaId_equipeId: escopo },
-        update: {
-          ...(tipoFinal     !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
-          ...(logoUrlFinal  !== undefined && { logoUrl: logoUrlFinal }),
-          ...(whatsappFinal !== undefined && { whatsapp: whatsappFinal }),
-          ...(diasFinal        !== undefined && { diasAtendimento: diasFinal }),
-          ...(horaInicioFinal  !== undefined && { horaInicioAtendimento: horaInicioFinal }),
-          ...(horaFimFinal     !== undefined && { horaFimAtendimento: horaFimFinal }),
-        },
-        create: {
-          empresaId:           escopo.empresaId,
-          equipeId:            escopo.equipeId,
-          tipoFechamento:      tipoFinal ?? null,
-          diaFechamentoFatura: diaFinal  ?? null,
-          logoUrl:             logoUrlFinal ?? null,
-          whatsapp:            whatsappFinal ?? null,
-          diasAtendimento:       diasFinal       ?? null,
-          horaInicioAtendimento: horaInicioFinal ?? null,
-          horaFimAtendimento:    horaFimFinal    ?? null,
-        },
-      });
+      // Não usar upsert: Prisma rejeita null em chave única composta (empresa CNPJ = equipeId null).
+      const config = existente
+        ? await prisma.empresaConfiguracao.update({
+            where: { id: existente.id },
+            data: {
+              ...(tipoFinal     !== undefined && { tipoFechamento: tipoFinal, diaFechamentoFatura: diaFinal }),
+              ...(logoUrlFinal  !== undefined && { logoUrl: logoUrlFinal }),
+              ...(whatsappFinal !== undefined && { whatsapp: whatsappFinal }),
+              ...(diasFinal        !== undefined && { diasAtendimento: diasFinal }),
+              ...(horaInicioFinal  !== undefined && { horaInicioAtendimento: horaInicioFinal }),
+              ...(horaFimFinal     !== undefined && { horaFimAtendimento: horaFimFinal }),
+              ...(especiesFinal    !== undefined && { especiesAtendidas: especiesFinal }),
+            },
+          })
+        : await prisma.empresaConfiguracao.create({
+            data: {
+              empresaId:           escopo.empresaId,
+              equipeId:            escopo.equipeId,
+              tipoFechamento:      tipoFinal ?? null,
+              diaFechamentoFatura: diaFinal  ?? null,
+              logoUrl:             logoUrlFinal ?? null,
+              whatsapp:            whatsappFinal ?? null,
+              diasAtendimento:       diasFinal       ?? null,
+              horaInicioAtendimento: horaInicioFinal ?? null,
+              horaFimAtendimento:    horaFimFinal    ?? null,
+              especiesAtendidas:     especiesFinal   ?? null,
+            },
+          });
 
       res.json({
         sucesso: true,
@@ -522,6 +673,7 @@ const EquipeController = {
           diasAtendimento:       config.diasAtendimento,
           horaInicioAtendimento: config.horaInicioAtendimento,
           horaFimAtendimento:    config.horaFimAtendimento,
+          especiesAtendidas:     parseEspeciesAtendidas(config.especiesAtendidas),
         },
       });
     } catch (err) {
@@ -710,7 +862,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidade: { select: { nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -718,7 +870,7 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          dados:        await anexarPerfisGlobais(membros, { todos: true }), // ADMIN da plataforma vê tudo
+          dados:        await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true })), // ADMIN da plataforma vê tudo
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -741,7 +893,7 @@ const EquipeController = {
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } } } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidade: { select: { nome: true } } } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -749,7 +901,7 @@ const EquipeController = {
       res.json({
         sucesso: true,
         // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
-        dados:        await anexarPerfisGlobais(membros, { empresaId: empresa.id }),
+        dados:        await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id })),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -1042,6 +1194,11 @@ const EquipeController = {
 
       if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
 
+      // Expediente de trabalho do profissional (dias/horários) — via SQL raw
+      const expediente = parseExpedienteTrabalho(req.body);
+      if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
+      await gravarExpedienteTrabalho(Number(id), expediente);
+
       const dadosUser = {};
       if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
       if (email    !== undefined && email.trim())    dadosUser.email    = email.trim().toLowerCase();
@@ -1304,7 +1461,7 @@ const EquipeController = {
   incluirMembroDireto: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
-      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, equipeId: equipeIdBody } = req.body;
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, especialidadeIds, equipeId: equipeIdBody } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
@@ -1328,10 +1485,21 @@ const EquipeController = {
           }
         } else {
           const { TIPOS_SERVICO_VALIDOS } = require('./FornecedorController');
-          if (!tipoServico?.trim() || !TIPOS_SERVICO_VALIDOS.includes(tipoServico)) {
-            return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço é obrigatório para fornecedor' });
+          const temEspec = Array.isArray(especialidadeIds) && especialidadeIds.length > 0;
+          if (!temEspec && (!tipoServico?.trim() || !TIPOS_SERVICO_VALIDOS.includes(tipoServico))) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade para o fornecedor' });
           }
         }
+      }
+
+      // Especialidades do catálogo (se enviadas) — fonte única; derivam o tipoServico legado.
+      let especResolvidas = null;
+      if (Array.isArray(especialidadeIds) && especialidadeIds.length > 0) {
+        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+        const rows = await prisma.especialidade.findMany({
+          where: { id: { in: ids }, ativo: true }, select: { id: true, nome: true },
+        });
+        especResolvidas = { ids: rows.map(r => r.id), tipoServico: rows[0]?.nome?.slice(0, 50) ?? null };
       }
 
       // Inclui na equipe que a tela está gerenciando (equipeIdBody) — garantirEquipePadrao
@@ -1402,12 +1570,28 @@ const EquipeController = {
         return res.status(409).json({ sucesso: false, mensagem: 'Este fornecedor já está vinculado a outro usuário' });
       }
 
+      // Reverso: o usuário (por e-mail) já pode estar vinculado a OUTRO cadastro de
+      // fornecedor. Como Fornecedor.userId é @unique, vincular/criar aqui violaria a
+      // constraint (Unique constraint on user_id). Bloqueia com mensagem clara.
+      if (cargo === 'FORNECEDOR') {
+        const fornecedorDoUsuario = await prisma.fornecedor.findUnique({ where: { userId: usuario.id } });
+        if (fornecedorDoUsuario && (!fornecedorVinculo || fornecedorDoUsuario.id !== fornecedorVinculo.id)) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já está vinculado a outro cadastro de fornecedor.' });
+        }
+      }
+
       // Adicionar à equipe diretamente
-      await prisma.membroEquipe.create({
+      const novoMembro = await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: usuario.id, cargo },
       });
 
+      // Expediente de trabalho do profissional (dias/horários) — via SQL raw
+      const expediente = parseExpedienteTrabalho(req.body);
+      if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
+      await gravarExpedienteTrabalho(novoMembro.id, expediente);
+
       // Vincular/criar cadastro Fornecedor
+      let fornecedorFinalId = null;
       if (cargo === 'FORNECEDOR') {
         if (fornecedorVinculo) {
           await prisma.fornecedor.update({
@@ -1418,18 +1602,39 @@ const EquipeController = {
               telefone: fornecedorVinculo.telefone || phone.trim(),
             },
           });
+          fornecedorFinalId = fornecedorVinculo.id;
         } else {
-          await prisma.fornecedor.create({
+          const novoForn = await prisma.fornecedor.create({
             data: {
               nome:        fullName.trim(),
               email,
               telefone:    phone.trim(),
-              tipoServico: tipoServico.trim(),
+              tipoServico: especResolvidas?.tipoServico ?? tipoServico?.trim() ?? 'Prestador',
               tipoEntrada: 'CLIENTE',
               empresaId:   req.empresaId ?? null,
               equipeId:    equipe.id,
               userId:      usuario.id,
             },
+          });
+          fornecedorFinalId = novoForn.id;
+        }
+      }
+
+      // Especialidades (catálogo por espécie) — grava no usuário e, se fornecedor, no cadastro.
+      if (especResolvidas) {
+        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: usuario.id } });
+        if (especResolvidas.ids.length > 0) {
+          await prisma.usuarioEspecialidade.createMany({
+            data: especResolvidas.ids.map(especialidadeId => ({ userId: usuario.id, especialidadeId })),
+            skipDuplicates: true,
+          });
+        }
+        // Só grava no cadastro de Fornecedor quando ele é NOVO — um fornecedor
+        // existente preserva as especialidades definidas no próprio cadastro.
+        if (fornecedorFinalId && !fornecedorVinculo && especResolvidas.ids.length > 0) {
+          await prisma.fornecedorEspecialidade.createMany({
+            data: especResolvidas.ids.map(especialidadeId => ({ fornecedorId: fornecedorFinalId, especialidadeId })),
+            skipDuplicates: true,
           });
         }
       }

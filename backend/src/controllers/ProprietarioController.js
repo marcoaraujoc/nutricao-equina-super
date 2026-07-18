@@ -11,7 +11,7 @@ const SELECT_PROPRIETARIO = {
   id: true, fullName: true, email: true, phone: true, phone2: true,
   role: true, userType: true, ativo: true, createdAt: true,
   cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true,
-  cpf: true, cnpj: true, mensalista: true, valorAssistencia: true, frequenciaVisitas: true,
+  cpf: true, cnpj: true, mensalista: true, valorAssistencia: true, frequenciaVisitas: true, diaVencimentoFatura: true,
 };
 
 // Proprietário pertence ao escopo (empresa + equipes do contexto):
@@ -120,7 +120,7 @@ const ProprietarioController = {
     const {
       fullName, email, phone, phone2, senha,
       cep, endereco, complemento, bairro, cidade, estado,
-      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas,
+      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -154,6 +154,7 @@ const ProprietarioController = {
           mensalista:        Boolean(mensalista),
           valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
           frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null,
+          diaVencimentoFatura: diaVencimentoFatura ? Math.min(Math.max(Number(diaVencimentoFatura), 1), 28) : null,
           passwordHash,
           mustChangePassword: true,
           ativo:     true,
@@ -187,7 +188,7 @@ const ProprietarioController = {
     const {
       fullName, email, phone, phone2, senha, ativo,
       cep, endereco, complemento, bairro, cidade, estado,
-      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas,
+      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -226,6 +227,7 @@ const ProprietarioController = {
         mensalista:       mensalista !== undefined ? Boolean(mensalista) : existe.mensalista,
         valorAssistencia: valorAssistencia !== undefined ? (valorAssistencia ? Number(valorAssistencia) : null) : existe.valorAssistencia,
         frequenciaVisitas: frequenciaVisitas !== undefined ? (frequenciaVisitas ? Number(frequenciaVisitas) : null) : existe.frequenciaVisitas,
+        diaVencimentoFatura: diaVencimentoFatura !== undefined ? (diaVencimentoFatura ? Math.min(Math.max(Number(diaVencimentoFatura), 1), 28) : null) : existe.diaVencimentoFatura,
         ...(isAdmin && ativo !== undefined ? { ativo: Boolean(ativo) } : {}),
       };
 

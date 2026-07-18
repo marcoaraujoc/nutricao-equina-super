@@ -5,10 +5,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, ClipboardList, Loader2, Search,
   Eye, Printer, ChevronLeft, ChevronRight, Calendar,
-  User, X, Link,
+  User, X, Link, Ban,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import ModalJustificativa from '../components/ModalJustificativa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { imprimirPrescricao } from '../utils/PrescricaoPrint';
@@ -188,15 +189,26 @@ export function ModalExecucao({
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
   const [erroEstoque, setErroEstoque] = useState<AlertaEstoque[]>([]);
+  const [showCancel,  setShowCancel]  = useState(false);
+  const [cancelando,  setCancelando]  = useState(false);
 
   const itensDoDia = grupo.itens.filter(
     i => i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias,
   );
 
+  // Item já executado HOJE no backend (fonte de verdade — cobre itens sem horários
+  // gerados e reaberturas em que o mapa local não registrou a execução).
+  const executadoHojeFront = (item: ItemExecucao): boolean => {
+    if (!item.executadoEm) return false;
+    const d = new Date(item.executadoEm);
+    const h = new Date();
+    return d.getFullYear() === h.getFullYear() && d.getMonth() === h.getMonth() && d.getDate() === h.getDate();
+  };
+
   const itensComInfo = itensDoDia.map(item => {
     const slots      = calcSlots(item);
     const activeIdx  = getActiveSlotIdx(slots);
-    const activeDone = activeIdx >= 0 && isSlotDone(execMap, item.id, activeIdx);
+    const activeDone = executadoHojeFront(item) || (activeIdx >= 0 && isSlotDone(execMap, item.id, activeIdx));
     return { item, slots, activeIdx, activeDone };
   });
 
@@ -209,27 +221,61 @@ export function ModalExecucao({
 
   const diaAtualLabel = itensComInfo[0]?.item.diaAtual ?? 1;
 
-  const handleToggle = (item: ItemExecucao, activeIdx: number) => {
-    if (activeIdx < 0 || isSlotDone(execMap, item.id, activeIdx)) return;
-    setErroEstoque([]);
-    setExecMap(prev => toggleSlot(grupo.id, prev, item.id, activeIdx));
+  // Marca todos os slots de HOJE do item como concluídos (a dose diária é única —
+  // executar uma vez cobre o dia inteiro do item). Sem horários gerados (slots vazio),
+  // getActiveSlotIdx usa o índice 0 — por isso marcamos no mínimo [0], senão o botão
+  // continuaria habilitado.
+  const marcarItemFeito = (m: ExecMap, itemId: number, slots: string[]): ExecMap => {
+    const updated = { ...m };
+    const n = Math.max(slots.length, 1);
+    updated[String(itemId)] = Array.from({ length: n }, (_, idx) => idx);
+    return updated;
   };
 
-  const handleFinalizar = async () => {
+  const tratarErroExec = (err: unknown, fallback: string) => {
+    const e = err as { response?: { status?: number; data?: { error?: string; erro?: string; alertas?: AlertaEstoque[] } } };
+    if (e?.response?.status === 409 && e?.response?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
+      setErroEstoque(e.response.data?.alertas ?? []);
+    } else {
+      toast.error(e?.response?.data?.error ?? fallback);
+    }
+  };
+
+  // Execução ITEM A ITEM: lança o item na fatura assim que ele é executado.
+  const handleExecutarItem = async (item: ItemExecucao, slots: string[]) => {
+    if (salvando) return;
     setSalvando(true);
+    setErroEstoque([]);
     try {
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { itemIds: [item.id] });
+      const m = marcarItemFeito(execMap, item.id, slots);
+      saveExecMap(grupo.id, m);
+      setExecMap(m);
+      toast.success(`${item.medicamento} — executado e lançado na fatura`);
+      // Execução é POR ITEM: mantém o modal aberto para executar os demais. Só fecha
+      // quando TODOS os itens do dia já estão executados (este + os demais já feitos).
+      const todosExecutados = itensComInfo.every(x => x.item.id === item.id || x.activeDone);
+      if (todosExecutados) { markDoneToday(grupo.id); onClose(); }
+    } catch (err) {
+      tratarErroExec(err, 'Erro ao executar item');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  // Executa TODOS os itens restantes do dia de uma vez (backend ignora os já
+  // executados hoje). Cada item continua sendo faturado individualmente.
+  const handleExecutarTodos = async () => {
+    setSalvando(true);
+    setErroEstoque([]);
+    try {
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {});
       let m = { ...execMap };
-      for (const { item, activeIdx } of itensComInfo) {
-        if (activeIdx >= 0 && !isSlotDone(m, item.id, activeIdx)) {
-          const arr = [...(m[String(item.id)] ?? [])];
-          arr.push(activeIdx);
-          m[String(item.id)] = arr;
-        }
+      for (const { item, slots, activeIdx } of itensComInfo) {
+        if (activeIdx >= 0) m = marcarItemFeito(m, item.id, slots);
       }
       saveExecMap(grupo.id, m);
       setExecMap(m);
-
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { isUltimoDia });
       toast.success(
         isUltimoDia
           ? 'Tratamento concluído — prescrição finalizada'
@@ -237,15 +283,26 @@ export function ModalExecucao({
       );
       markDoneToday(grupo.id);
       onClose();
-    } catch (err: unknown) {
-      const e = err as { response?: { status?: number; data?: { error?: string; erro?: string; alertas?: AlertaEstoque[] } } };
-      if (e?.response?.status === 409 && e?.response?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
-        setErroEstoque(e.response.data?.alertas ?? []);
-      } else {
-        toast.error(e?.response?.data?.error ?? 'Erro ao finalizar');
-      }
+    } catch (err) {
+      tratarErroExec(err, 'Erro ao finalizar');
     } finally {
       setSalvando(false);
+    }
+  };
+
+  // Cancela toda a prescrição (justificada + auditada) — itens já executados são preservados.
+  const handleCancelar = async (motivo: string) => {
+    setCancelando(true);
+    try {
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/cancelar-execucao`, { motivo });
+      toast.success('Prescrição cancelada');
+      setShowCancel(false);
+      onClose();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e?.response?.data?.error ?? 'Erro ao cancelar prescrição');
+    } finally {
+      setCancelando(false);
     }
   };
 
@@ -253,6 +310,7 @@ export function ModalExecucao({
   const especieInfo = [animal.especie?.nome, animal.raca?.nome].filter(Boolean).join(' • ');
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col max-h-[92vh]">
 
@@ -360,9 +418,8 @@ export function ModalExecucao({
                   </span>
                 ) : (
                   <button
-                    // Prescrição com UMA única tarefa: executar já finaliza o dia
-                    // automaticamente (sem precisar clicar em "Finalizar Dia").
-                    onClick={() => totalItens === 1 ? handleFinalizar() : handleToggle(item, activeIdx)}
+                    // Execução item a item: já debita o estoque e lança este item na fatura.
+                    onClick={() => handleExecutarItem(item, slots)}
                     disabled={activeIdx < 0 || activeDone || salvando}
                     className={`flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
                       activeDone
@@ -373,7 +430,7 @@ export function ModalExecucao({
                     }`}>
                     {activeDone ? 'Executado'
                       : activeIdx < 0 ? 'Aguardando'
-                      : salvando && totalItens === 1 ? 'Executando…'
+                      : salvando ? 'Executando…'
                       : 'Executar'}
                   </button>
                 )}
@@ -401,21 +458,29 @@ export function ModalExecucao({
             </div>
           ) : (
             <>
-              <button
-                onClick={handleFinalizar}
-                disabled={salvando || !todosFeitos}
-                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
-                  todosFeitos
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                }`}>
-                {salvando
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <CheckCircle2 size={14} />}
-                {isUltimoDia ? 'Finalizar Tratamento' : 'Finalizar Dia'}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowCancel(true)}
+                  disabled={salvando}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors">
+                  <Ban size={14} /> Cancelar
+                </button>
+                <button
+                  onClick={handleExecutarTodos}
+                  disabled={salvando || todosFeitos}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                    !todosFeitos
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  }`}>
+                  {salvando
+                    ? <Loader2 size={14} className="animate-spin" />
+                    : <CheckCircle2 size={14} />}
+                  {isUltimoDia ? 'Executar todos e finalizar' : 'Executar todos do dia'}
+                </button>
+              </div>
               <p className="text-center text-[10px] text-gray-400 mt-1">
-                {marcados}/{totalItens} itens marcados
+                {marcados}/{totalItens} itens executados
                 {!isUltimoDia && totalItens > 0 && (
                   <span className="ml-1 text-gray-300">
                     · Dia {diaAtualLabel}/{itensComInfo[0]?.item.duracaoDias ?? '—'}
@@ -427,6 +492,18 @@ export function ModalExecucao({
         </div>
       </div>
     </div>
+
+    {showCancel && (
+      <ModalJustificativa
+        aberto={showCancel}
+        titulo={`Cancelar prescrição #${grupo.numeroFormatado}`}
+        descricao="Cancela toda a prescrição. Itens já executados permanecem na fatura; os não executados são cancelados. A justificativa vai para a auditoria."
+        acaoLabel="Cancelar prescrição"
+        onConfirmar={handleCancelar}
+        onFechar={() => { if (!cancelando) setShowCancel(false); }}
+      />
+    )}
+    </>
   );
 }
 
@@ -803,13 +880,18 @@ export default function ExecucaoPrescricao() {
         );
       }) : () => true);
 
-  // Grupo executado hoje: marcado neste navegador (localStorage) OU sinal do
-  // backend — status EXECUTADO (último dia do tratamento) ou item com
-  // executadoEm de hoje (execução feita em outro dispositivo).
+  // Item ainda a executar HOJE: dentro da janela do dia e ainda não executado hoje.
+  const itemPendenteHoje = (item: ItemExecucao): boolean => {
+    const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
+    const feitoHoje = !!item.executadoEm && String(item.executadoEm).slice(0, 10) === dataSel;
+    return dentroJanela && !feitoHoje;
+  };
+
+  // Grupo concluído hoje (vai para o Histórico) SÓ quando: totalmente executado
+  // (EXECUTADO) ou sem NENHUM item pendente para hoje. Com execução item a item,
+  // a prescrição continua em "a executar" enquanto houver item do dia não executado.
   const foiExecutadoHoje = (g: GrupoExecucao): boolean =>
-    isDoneToday(g.id) ||
-    g.status === 'EXECUTADO' ||
-    g.itens.some(i => i.executadoEm && String(i.executadoEm).slice(0, 10) === dataSel);
+    g.status === 'EXECUTADO' || !g.itens.some(itemPendenteHoje);
 
   // Hora da execução para o badge: localStorage (hora exata do clique) com
   // fallback no executadoEm dos itens vindo do backend.

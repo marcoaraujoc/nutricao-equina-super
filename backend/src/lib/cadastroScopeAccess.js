@@ -17,7 +17,8 @@
  *  - caso contrário: equipeId do registro precisa bater com req.equipeId
  */
 function podeAlterarRegistroEscopado(record, req) {
-  if (req.user?.role === 'ADMIN') return true;
+  // ADMIN vem no JWT como userType (role normalmente não está presente) — checa os dois.
+  if (req.user?.userType === 'ADMIN' || req.user?.role === 'ADMIN') return true;
   if (record.tipoEntrada === 'SYSTEM') return false;
   if (!record.empresaId) return false;
   if (record.empresaId !== req.empresaId) return false;

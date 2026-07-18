@@ -16,6 +16,7 @@ import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../u
 import RelatorioAtendimentoModal from '../components/RelatorioAtendimentoModal';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora } from '../utils/dateUtils';
+import DateInput from '../components/DateInput';
 import ConfirmModal from '../components/ConfirmModal';
 
 import {
@@ -1412,21 +1413,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <div className="hidden md:flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
           <div className="flex flex-col px-2 py-1 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Inicial</span>
-            <input
-              type="date"
+            <DateInput
               value={filtroDataInicio}
-              onChange={e => { setFiltroDataInicio(e.target.value); setPage(1); }}
-              className="w-32 text-xs text-gray-900 focus:outline-none bg-transparent"
+              onChange={v => { setFiltroDataInicio(v); setPage(1); }}
+              className="w-32 text-xs text-gray-900"
             />
           </div>
           <span className="text-gray-300 text-xs px-1 flex-shrink-0">→</span>
           <div className="flex flex-col px-2 py-1 border-l border-gray-100 min-w-0">
             <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Final</span>
-            <input
-              type="date"
+            <DateInput
               value={filtroDataFim}
-              onChange={e => { setFiltroDataFim(e.target.value); setPage(1); }}
-              className="w-32 text-xs text-gray-900 focus:outline-none bg-transparent"
+              onChange={v => { setFiltroDataFim(v); setPage(1); }}
+              className="w-32 text-xs text-gray-900"
             />
           </div>
         </div>

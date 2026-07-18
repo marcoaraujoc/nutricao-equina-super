@@ -4,7 +4,7 @@
 const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
-const { getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 
@@ -214,9 +214,10 @@ const ExameClinicoController = {
       const descricaoMudou = descricaoTrim !== undefined && descricaoTrim !== item.descricao;
 
       const atualizado = await prisma.$transaction(async (tx) => {
-        // Exame já faturado (CONCLUIDO) e descrição mudou → sincroniza o FaturaItem vinculado.
-        // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
-        if (descricaoMudou && item.status === 'CONCLUIDO') {
+        // Descrição mudou → sincroniza o FaturaItem vinculado (se houver), independente
+        // do status — o exame pode estar faturado ainda como SOLICITADO (valor 0 ao
+        // finalizar a evolução). Idempotente; bloqueia se a fatura de destino for PAGA.
+        if (descricaoMudou) {
           const exNum = `EX-${String(item.numero).padStart(4, '0')}`;
           await atualizarFaturaItensDaOrigem(tx, 'exameClinicoId', item.id, {
             descricao: `[${exNum}] ${item.tipo}: ${descricaoTrim}`,
@@ -276,30 +277,17 @@ const ExameClinicoController = {
 
       res.json({ dados: atualizado });
 
-      // Lança na fatura com valor zerado — exame clínico não tem preço automático no sistema
+      // Lança na fatura com valor zerado (idempotente — não duplica se o exame já foi
+      // lançado ao finalizar a evolução). Exame clínico não tem preço automático.
       setImmediate(async () => {
         try {
           const animal = await prisma.animal.findUnique({
             where:  { id: item.animalId },
             select: { userId: true },
           });
-          if (animal?.userId) {
-            const exNum     = `EX-${String(item.numero).padStart(4, '0')}`;
-            const descricao = `[${exNum}] ${item.tipo}: ${item.descricao}`;
-            await prisma.$transaction(async (tx) => {
-              const fatura = await getOrCreateFatura(tx, animal.userId);
-              await adicionarFaturaItem(tx, {
-                faturaId:      fatura.id,
-                animalId:      item.animalId,
-                tipo:          'EXAME',
-                descricao,
-                valor:         0,
-                quantidade:    1,
-                veterinarioId: item.veterinarioId,
-                exameClinicoId: item.id,
-              });
-            });
-          }
+          await prisma.$transaction(async (tx) => {
+            await lancarExameNaFatura(tx, item, animal?.userId);
+          });
         } catch { /* silencioso — fatura não bloqueia a finalização */ }
       });
     } catch (err) {
@@ -336,11 +324,11 @@ const ExameClinicoController = {
       }
 
       await prisma.$transaction(async (tx) => {
-        // Exame já faturado (CONCLUIDO) → remove o FaturaItem vinculado.
+        // Remove o FaturaItem vinculado ao exame (se houver) — independente do status,
+        // pois desde 2026-07-16 o exame pode ser faturado (valor 0) já ao FINALIZAR a
+        // evolução, ainda como SOLICITADO. Idempotente: sem item vinculado, não faz nada.
         // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
-        if (item.status === 'CONCLUIDO') {
-          await removerFaturaItensDaOrigem(tx, 'exameClinicoId', item.id);
-        }
+        await removerFaturaItensDaOrigem(tx, 'exameClinicoId', item.id);
         await tx.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
 
         await registrarAuditoria(tx, req, {

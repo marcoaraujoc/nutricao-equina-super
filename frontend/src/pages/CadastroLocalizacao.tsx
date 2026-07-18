@@ -90,8 +90,9 @@ export default function CadastroLocalizacao() {
   const isAdmin    = user?.role === 'ADMIN';
   const podeCriar  = isAdmin || podeExecutar('cadastro.localizacao.criar');
   const podeVer    = isAdmin || podeExecutar('cadastro.localizacao.ler');
-  const podeEditar = isAdmin || podeExecutar('cadastro.localizacao.editar');
-  const podeAtivar = isAdmin || podeExecutar('cadastro.localizacao.ativar');
+  // Alteração e inativação de localização são EXCLUSIVAS do ADMIN (catálogo corporativo).
+  const podeEditar = isAdmin;
+  const podeAtivar = isAdmin;
 
   const [lista,          setLista]          = useState<Localizacao[]>([]);
   const [loading,        setLoading]        = useState(false);
@@ -112,7 +113,9 @@ export default function CadastroLocalizacao() {
     setLoading(true);
     try {
       const res = await api.get('/cadastro/localizacoes', {
-        params: { busca: busca || undefined, ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false' },
+        // Catálogo grande (importação por CNAE): traz só os primeiros 50 e refina
+        // pela busca server-side — evita carregar/renderizar milhares de linhas.
+        params: { busca: busca || undefined, ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false', limit: 50 },
       });
       if (!res.data) return;
       setLista(res.data.dados ?? []);
@@ -123,7 +126,11 @@ export default function CadastroLocalizacao() {
     }
   }, [busca, filtroAtivo, loadingPerms]);
 
-  useEffect(() => { carregar(); }, [carregar]);
+  // Debounce: evita uma requisição por tecla digitada na busca.
+  useEffect(() => {
+    const t = setTimeout(() => { carregar(); }, 250);
+    return () => clearTimeout(t);
+  }, [carregar]);
 
   // ── Busca CEP via ViaCEP ────────────────────────────────────────────────────
   const buscarCEP = async (cep: string) => {
@@ -261,10 +268,9 @@ export default function CadastroLocalizacao() {
         <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
           <strong>Regras deste cadastro:</strong>
           <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN (catálogo global) e só o ADMIN pode editá-las.</li>
-            <li>Entradas <strong>CLIENTE</strong> pertencem à empresa/equipe de quem criou — membros com permissão podem editar e inativar os registros da própria equipe; gestores veem e alteram os de toda a empresa.</li>
-            <li>Localizações nunca são excluídas, apenas inativadas.</li>
-            <li>Duas empresas diferentes podem ter localizações com o mesmo nome.</li>
+            <li>O catálogo de localizações é <strong>corporativo</strong> (compartilhado entre todas as empresas).</li>
+            <li><strong>Alterar</strong> e <strong>inativar</strong> localizações é exclusivo do <strong>ADMIN</strong>. Os demais usuários apenas visualizam e cadastram novas.</li>
+            <li>Localizações nunca são excluídas, apenas inativadas (pelo ADMIN).</li>
           </ul>
         </div>
       )}
@@ -297,6 +303,12 @@ export default function CadastroLocalizacao() {
           ))}
         </div>
       </div>
+
+      {!loading && lista.length >= 50 && (
+        <p className="text-xs text-gray-400 mb-3">
+          Mostrando os primeiros 50 resultados. Use a busca para refinar.
+        </p>
+      )}
 
       {/* ── Tabela desktop ────────────────────────────────────────────────────── */}
       <div className="hidden md:block">

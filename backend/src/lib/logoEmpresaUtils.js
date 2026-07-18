@@ -28,7 +28,11 @@ async function resolverChaveConfiguracao(empresaId, equipeIdPreferida = null) {
 
 async function buscarLogoPelaChave(chave) {
   if (!chave) return null;
-  const config = await prisma.empresaConfiguracao.findUnique({ where: { empresaId_equipeId: chave } });
+  // findFirst (não findUnique): Prisma rejeita null em chave única composta,
+  // e empresa com CNPJ usa equipeId=null.
+  const config = await prisma.empresaConfiguracao.findFirst({
+    where: { empresaId: chave.empresaId, equipeId: chave.equipeId },
+  });
   return config?.logoUrl ?? null;
 }
 

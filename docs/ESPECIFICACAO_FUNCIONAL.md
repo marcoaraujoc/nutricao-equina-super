@@ -213,10 +213,17 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 - **Meus Animais** (`/meus-animais`, proprietário): cards dos animais com badge de status
   do vínculo (VINCULO âmbar / DESVINCULO vermelho / TROCA_VET azul), botões
   Autorizar/Recusar para solicitações de vets e cancelamento de solicitações próprias.
-- **Listagem** é segregada por contexto: animais da(s) equipe(s) do usuário na empresa
-  ativa + pacientes pessoais do vet fora da empresa (vínculo direto). Animal de outra
-  equipe da mesma empresa fica fora. PROPRIETARIO vê apenas os seus. FORNECEDOR vê apenas
-  animais com **designação ativa** (exceto quando atua como gestor no contexto — §4).
+- **Listagem** é segregada por contexto, distinguindo **base** de **convidado**: na
+  empresa onde o usuário é **dono/gestor** (sua base), ele vê o escopo da(s) equipe(s) +
+  **todos os pacientes que trata** (todos os vínculos diretos), inclusive **co-tratados**
+  que pertencem a outra empresa — um mesmo animal atendido por mais de um vet aparece na
+  base de cada um. Na empresa onde é **convidado** (membro/fornecedor de outra empresa) o
+  isolamento é **estrito**: só os animais **daquela** empresa que ele pode tratar (escopo
+  de equipe + vínculo a animal DA empresa + designação); pacientes exclusivos de outra
+  empresa **não** vazam. Animal de outra equipe da mesma empresa fica fora do escopo de
+  equipe. PROPRIETARIO vê apenas os seus. FORNECEDOR vê apenas animais com **designação
+  ativa** (exceto quando atua como gestor no contexto — §4). O multi-vet é modelado por
+  múltiplos `VetAnimalSolicitacao` (não há "vet principal" no animal).
 - Exclusão de animal = soft delete **global** (o animal sai das listagens de todos,
   inclusive do proprietário; histórico preservado) com **justificativa obrigatória**
   registrada na Auditoria. Criação exige nível EQUIPE em `animais.criar`.

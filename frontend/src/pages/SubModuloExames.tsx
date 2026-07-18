@@ -10,6 +10,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
+import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
@@ -448,7 +449,7 @@ export default function SubModuloExames({
 
   // ── Common form fields ────────────────────────────────────────────────────
   const [dataSolicitacao,  setDataSolicitacao]  = useState(hoje());
-  const [dataHoraColeta,   setDataHoraColeta]   = useState(() => new Date().toISOString().slice(0, 16));
+  const [dataHoraColeta,   setDataHoraColeta]   = useState('');
   const [tipoAmostra,      setTipoAmostra]      = useState('');
   const [qtdAmostra,       setQtdAmostra]       = useState<number>(1);
   const [indicacaoClinica, setIndicacaoClinica] = useState('');
@@ -505,6 +506,13 @@ export default function SubModuloExames({
   const laboratorioNomeSalvo = labId === OUTROS_ID
     ? (outroLabNome.trim() || 'Outro laboratório')
     : (labs.find(l => l.id === labId)?.nome ?? '');
+
+  // Exame digitado no campo "não listado" mas ainda não confirmado (Enter/botão) é
+  // considerado efetivo — libera o Inserir e é incluído ao salvar, sem exigir Enter.
+  const customExamPendente = customExamText.trim();
+  const examesEfetivos = customExamPendente && !selectedExams.includes(customExamPendente)
+    ? [...selectedExams, customExamPendente]
+    : selectedExams;
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
@@ -597,14 +605,15 @@ export default function SubModuloExames({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imagemGrupoId]);
 
-  // Carrega grupos ao trocar de lab
+  // Carrega grupos ao trocar de lab. NÃO limpa selectedExams — os exames já escolhidos
+  // (inclusive os inseridos manualmente) são preservados ao escolher/trocar o laboratório,
+  // senão o Inserir nunca habilitava quando o exame era adicionado antes do laboratório.
   useEffect(() => {
     if (!isRestoringRef.current) {
       setGrupos([]);
       setGrupoId(null);
       setGrupoNome('');
       setExamesCat([]);
-      setSelectedExams([]);
     }
     if (labId == null) return;
 
@@ -621,9 +630,10 @@ export default function SubModuloExames({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labId]);
 
-  // Carrega exames ao trocar de grupo
+  // Carrega exames ao trocar de grupo. NÃO limpa selectedExams — permite acumular
+  // exames de áreas diferentes e preserva os inseridos manualmente.
   useEffect(() => {
-    if (!isRestoringRef.current) { setExamesCat([]); setSelectedExams([]); }
+    if (!isRestoringRef.current) { setExamesCat([]); }
     if (grupoId == null || grupos.length === 0) return;
 
     setLoadingExames(true);
@@ -759,7 +769,7 @@ export default function SubModuloExames({
     setImagemGrupoId(null); setImagemGrupoNome('');
     setSelectedExams([]); setCustomExamText(''); setShowCustomInput(false);
     setDataSolicitacao(hoje());
-    setDataHoraColeta(new Date().toISOString().slice(0, 16));
+    setDataHoraColeta('');
     setTipoAmostra(''); setQtdAmostra(1); setIndicacaoClinica(''); setObservacao('');
     setTimeout(() => { isRestoringRef.current = false; }, 0);
     restaurarRascunho();
@@ -777,10 +787,8 @@ export default function SubModuloExames({
     setSelectedExams(prev => prev.filter(e => e !== name));
 
   const validateCurrentForm = (): boolean => {
-    if (selectedExams.length === 0)                                { toast.error('Selecione ao menos um exame'); return false; }
+    if (examesEfetivos.length === 0)                               { toast.error('Selecione ao menos um exame'); return false; }
     if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { toast.error('Selecione o laboratório de destino'); return false; }
-    if (mainTab === 'laboratorial' && !dataHoraColeta)              { toast.error('Informe a data e hora da coleta'); return false; }
-    if (mainTab === 'laboratorial' && !tipoAmostra.trim())          { toast.error('Informe o tipo de amostra'); return false; }
     return true;
   };
 
@@ -789,7 +797,7 @@ export default function SubModuloExames({
     return {
       localId:          `${Date.now()}-${Math.random()}`,
       tipo,
-      descricao:        selectedExams.join(', '),
+      descricao:        examesEfetivos.join(', '),
       laboratorio:      laboratorioNomeSalvo.trim() || null,
       dataHoraColeta:   dataHoraColeta || null,
       tipoAmostra:      tipoAmostra.trim() || null,
@@ -823,12 +831,19 @@ export default function SubModuloExames({
       setGrupoNome('');
       setExamesCat([]);
       setGrupos([]);
-      setDataHoraColeta(new Date().toISOString().slice(0, 16));
+      setDataHoraColeta('');
       setTipoAmostra('');
       setQtdAmostra(1);
       setIndicacaoClinica('');
       setObservacao('');
     }
+    // Estados transitórios de UI — para o Inserir limpar a tela por completo.
+    setShowCustomInput(false);
+    setCustomExamText('');
+    setShowProcDrop(false);
+    setProcSearch('');
+    setShowImagemProcDrop(false);
+    setImagemProcSearch('');
     setDataSolicitacao(hoje());
   };
 
@@ -853,52 +868,52 @@ export default function SubModuloExames({
     }
     if (rawGroups.length === 0) { toast.error('Selecione ao menos um exame para salvar'); return; }
 
-    // Um único registro com todos os grupos.
-    // Cada grupo inclui tipo + laboratório para que a impressão gere
-    // uma página por laboratório/tipo distinto.
-    const allDescricao   = rawGroups.map(g => g.descricao).filter(Boolean).join(', ');
-    const tipoRecord     = rawGroups[0].tipo;
-    const labPrimario    = rawGroups.find(g => g.laboratorio)?.laboratorio ?? null;
-    const dataColeta     = rawGroups.find(g => g.dataHoraColeta)?.dataHoraColeta ?? null;
-    const tipoAmostraPri = rawGroups.find(g => g.tipoAmostra)?.tipoAmostra ?? null;
-    const qtdTotal       = rawGroups.reduce<number | null>(
-      (s, g) => g.qtdAmostra != null ? (s ?? 0) + g.qtdAmostra : s, null
-    );
-    const indicacoes = rawGroups.map(g => g.indicacaoClinica).filter(Boolean).join('; ') || null;
-
-    const gruposPayload = rawGroups.map(g => ({
-      tipo:             g.tipo,
-      laboratorio:      g.laboratorio,
-      dataHoraColeta:   g.dataHoraColeta,
-      nome:             g.grupoNome,
-      exames:           g.examsDisplay,
-      tipoAmostra:      g.tipoAmostra,
-      qtdAmostra:       g.qtdAmostra,
-      indicacaoClinica: g.indicacaoClinica,
-      obs:              g.observacao,
-      laudoCompra:      g.laudoCompra,
-    }));
+    // Um pedido (registro no histórico) por LABORATÓRIO distinto — exames solicitados
+    // de laboratórios diferentes viram entradas separadas, mesmo na mesma evolução.
+    // Grupos sem laboratório (ex.: imagem) ficam juntos num único registro.
+    const porLaboratorio = new Map<string, PendingExamGroup[]>();
+    for (const g of rawGroups) {
+      const chave = (g.laboratorio || '').trim().toLowerCase() || '__sem_laboratorio__';
+      const arr = porLaboratorio.get(chave) ?? [];
+      arr.push(g);
+      porLaboratorio.set(chave, arr);
+    }
 
     setSaving(true);
     try {
-      await api.post('/clinica/exames', {
-        animalId,
-        tipo:             tipoRecord,
-        evolucaoId,
-        descricao:        allDescricao,
-        laboratorio:      labPrimario,
-        dataHoraColeta:   dataColeta,
-        tipoAmostra:      tipoAmostraPri,
-        qtdAmostra:       qtdTotal,
-        indicacaoClinica: indicacoes,
-        observacao:       null,
-        grupoNome:        null,
-        dataSolicitacao:  rawGroups[0].dataSolicitacao,
-        grupos:           gruposPayload,
-      });
+      for (const gruposDoLab of porLaboratorio.values()) {
+        const gruposPayload = gruposDoLab.map(g => ({
+          tipo:             g.tipo,
+          laboratorio:      g.laboratorio,
+          dataHoraColeta:   g.dataHoraColeta,
+          nome:             g.grupoNome,
+          exames:           g.examsDisplay,
+          tipoAmostra:      g.tipoAmostra,
+          qtdAmostra:       g.qtdAmostra,
+          indicacaoClinica: g.indicacaoClinica,
+          obs:              g.observacao,
+          laudoCompra:      g.laudoCompra,
+        }));
+        await api.post('/clinica/exames', {
+          animalId,
+          tipo:             gruposDoLab[0].tipo,
+          evolucaoId,
+          descricao:        gruposDoLab.map(g => g.descricao).filter(Boolean).join(', '),
+          laboratorio:      gruposDoLab.find(g => g.laboratorio)?.laboratorio ?? null,
+          dataHoraColeta:   gruposDoLab.find(g => g.dataHoraColeta)?.dataHoraColeta ?? null,
+          tipoAmostra:      gruposDoLab.find(g => g.tipoAmostra)?.tipoAmostra ?? null,
+          qtdAmostra:       gruposDoLab.reduce<number | null>((s, g) => g.qtdAmostra != null ? (s ?? 0) + g.qtdAmostra : s, null),
+          indicacaoClinica: gruposDoLab.map(g => g.indicacaoClinica).filter(Boolean).join('; ') || null,
+          observacao:       null,
+          grupoNome:        null,
+          dataSolicitacao:  gruposDoLab[0].dataSolicitacao,
+          grupos:           gruposPayload,
+        });
+      }
+      const nRegistros = porLaboratorio.size;
       const nExames = rawGroups.reduce((s, g) => s + g.examsDisplay.length, 0);
-      const msg = rawGroups.length > 1
-        ? `Pedido criado com ${rawGroups.length} grupos (${nExames} exames)`
+      const msg = nRegistros > 1
+        ? `${nRegistros} pedidos criados (${nExames} exames)`
         : 'Pedido de exame criado com sucesso';
       toast.success(msg);
       localStorage.removeItem(DRAFT_KEY);
@@ -984,9 +999,8 @@ export default function SubModuloExames({
   // ─── Derived ──────────────────────────────────────────────────────────────
 
   const canSave = mainTab === 'imagem'
-    ? selectedExams.length > 0
-    : selectedExams.length > 0 && laboratorioNomeSalvo.trim().length > 0 &&
-      !!dataHoraColeta && tipoAmostra.trim().length > 0;
+    ? examesEfetivos.length > 0
+    : examesEfetivos.length > 0 && laboratorioNomeSalvo.trim().length > 0;
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -1100,22 +1114,21 @@ export default function SubModuloExames({
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                               Data da Solicitação *
                             </label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={dataSolicitacao}
-                              onChange={e => setDataSolicitacao(e.target.value)}
-                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                              onChange={setDataSolicitacao}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-blue-500"
                             />
                           </div>
                           <div className="flex-[1.5] min-w-[170px]">
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
-                              Data e Hora da Coleta *
+                              Data e Hora da Coleta
                             </label>
-                            <input
-                              type="datetime-local"
+                            <DateInput
+                              withTime
                               value={dataHoraColeta}
-                              onChange={e => setDataHoraColeta(e.target.value)}
-                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                              onChange={setDataHoraColeta}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-blue-500"
                             />
                           </div>
                         </div>
@@ -1155,22 +1168,21 @@ export default function SubModuloExames({
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                               Data da Solicitação *
                             </label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={dataSolicitacao}
-                              onChange={e => setDataSolicitacao(e.target.value)}
-                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                              onChange={setDataSolicitacao}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-blue-500"
                             />
                           </div>
                           <div className="flex-[1.5] min-w-[170px]">
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
-                              Data e Hora da Coleta *
+                              Data e Hora da Coleta
                             </label>
-                            <input
-                              type="datetime-local"
+                            <DateInput
+                              withTime
                               value={dataHoraColeta}
-                              onChange={e => setDataHoraColeta(e.target.value)}
-                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                              onChange={setDataHoraColeta}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-blue-500"
                             />
                           </div>
                         </div>
@@ -1225,7 +1237,7 @@ export default function SubModuloExames({
                         <div className="flex-[2] min-w-[160px]">
                           <div className="h-5 flex items-center gap-2 mb-1">
                             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
-                              Tipo de Amostra *
+                              Tipo de Amostra
                             </label>
                             {tipoAmostra && countPorTipoAmostra[tipoAmostra] != null && (
                               <span className="text-[11px] font-semibold bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full border border-violet-200 whitespace-nowrap">
@@ -1571,15 +1583,25 @@ export default function SubModuloExames({
                         Adicionar exame não listado
                       </button>
                       {showCustomInput && (
-                        <input
-                          type="text"
-                          value={customExamText}
-                          onChange={e => setCustomExamText(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomExam(); } }}
-                          placeholder="Nome do exame e pressione Enter para adicionar..."
-                          autoFocus
-                          className="w-full border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400"
-                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={customExamText}
+                            onChange={e => setCustomExamText(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomExam(); } }}
+                            placeholder="Nome do exame (Enter ou Adicionar)..."
+                            autoFocus
+                            className="flex-1 border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400"
+                          />
+                          <button
+                            type="button"
+                            onClick={addCustomExam}
+                            disabled={!customExamText.trim()}
+                            className="px-3 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex-shrink-0"
+                          >
+                            Adicionar
+                          </button>
+                        </div>
                       )}
                     </div>
 

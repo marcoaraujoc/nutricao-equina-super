@@ -4,11 +4,18 @@
 // os PRÓPRIOS registros + os criados pelo próprio usuário. ADMIN e o PROPRIETÁRIO do
 // animal veem o histórico completo (o acesso ao animal já é validado pelos callers
 // via verificarAcessoAnimal).
+//
+// GESTOR do contexto ativo também vê tudo: "gestor não é um perfil no controle de
+// acesso — tem acesso a tudo". Ele precisa enxergar (e finalizar) registros criados
+// por QUALQUER membro da sua equipe/empresa, sem depender da resolução de empresaId
+// nem da autoria. req.membroCargo === 'GESTOR' é setado pelo checkPermission da rota
+// (dono da empresa ou cargo GESTOR na equipe ativa).
 'use strict';
 
 function semEscopoClinico(req) {
   const { role, userType } = req.user ?? {};
-  return role === 'ADMIN' || userType === 'ADMIN' || userType === 'PROPRIETARIO';
+  return role === 'ADMIN' || userType === 'ADMIN' || userType === 'PROPRIETARIO'
+      || req.membroCargo === 'GESTOR';
 }
 
 /**

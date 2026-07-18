@@ -15,6 +15,7 @@ import {
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from './ModalNovoFornecedor';
+import EspecialidadeSelector from './EspecialidadeSelector';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,12 @@ export interface UsuarioFormValues {
   fornecedorId?: number | null;
   /** Perfil FORNECEDOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
   tipoServico?: string;
+  /** Especialidades (catálogo por espécie) — VET e FORNECEDOR. */
+  especialidadeIds?: number[];
+  /** Expediente de trabalho do profissional (Agenda). Vazio = herda o da empresa. */
+  diasTrabalho?: number[];       // 0=Dom … 6=Sáb
+  horaInicioTrabalho?: string;   // HH:MM
+  horaFimTrabalho?: string;      // HH:MM
 }
 
 interface FornecedorDisponivel {
@@ -92,7 +99,14 @@ const mascaraCEP = (v: string): string => {
 const FORM_VAZIO: UsuarioFormValues = {
   fullName: '', email: '', phone: '', perfil: 'VETERINARIO', cargos: ['VETERINARIO'], senha: '', ativo: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
+  diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '', especialidadeIds: [],
 };
+
+// Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
+const DIAS_SEMANA_TRAB = [
+  { v: 0, l: 'Dom' }, { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' },
+  { v: 4, l: 'Qui' }, { v: 5, l: 'Sex' }, { v: 6, l: 'Sáb' },
+];
 
 interface UsuarioFormModalProps {
   titulo: string;
@@ -110,6 +124,8 @@ interface UsuarioFormModalProps {
   permitirMultiCargos?: boolean;
   /** Oculta o campo "Perfil de acesso" (usado em telas de cadastro simples) */
   ocultarPerfil?: boolean;
+  /** Exibe a seção de expediente de trabalho (dias + horário) — usado em Equipe */
+  comExpediente?: boolean;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -121,7 +137,7 @@ interface UsuarioFormModalProps {
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
-  comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false,
+  comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
   initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
@@ -141,6 +157,18 @@ export default function UsuarioFormModal({
   const [criandoNovo,         setCriandoNovo]         = useState(false);
 
   const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
+
+  // Especialidades (catálogo por espécie) — VET e FORNECEDOR em novos membros.
+  const mostrarEspecialidades = !modoEdicao && (form.perfil === 'VETERINARIO' || form.perfil === 'FORNECEDOR');
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
+  useEffect(() => {
+    api.get('/equipes/especies-atendidas')
+      .then(res => {
+        const lista = res.data?.dados?.especiesAtendidas ?? [];
+        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspeciesEmpresa([]));
+  }, []);
 
   useEffect(() => {
     if (!mostrarSeletorFornecedor || fornecedores.length > 0 || loadingFornecedores) return;
@@ -222,15 +250,21 @@ export default function UsuarioFormModal({
       const erroSenha = validarSenha(form.senha);
       if (erroSenha) { toast.error(erroSenha); return; }
     }
+    const perfilFinal = cargosFinais[0];
+    const enviaEspec = !modoEdicao && (perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR');
+    if (enviaEspec && (form.especialidadeIds ?? []).length === 0) {
+      toast.error('Selecione ao menos uma especialidade'); return;
+    }
     onSubmit({
       ...form,
       fullName:     form.fullName.trim(),
       email:        form.email.trim().toLowerCase(),
       phone:        form.phone.trim(),
       cargos:       cargosFinais,
-      perfil:       cargosFinais[0],
+      perfil:       perfilFinal,
       fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
+      especialidadeIds: enviaEspec ? (form.especialidadeIds ?? []) : undefined,
     });
   };
 
@@ -280,8 +314,14 @@ export default function UsuarioFormModal({
                   <select value={form.perfil}
                     onChange={e => {
                       const val = e.target.value;
-                      set('perfil', val); set('cargos', [val]);
                       setFornecedorId(''); setCriandoNovo(false);
+                      if (modoEdicao) {
+                        set('perfil', val); set('cargos', [val]);
+                      } else {
+                        // Inclusão: trocar o perfil zera o formulário (evita dados do perfil
+                        // anterior — fornecedor selecionado, especialidades, etc.).
+                        setForm({ ...FORM_VAZIO, perfil: val, cargos: [val] });
+                      }
                     }}
                     className={inputCls}>
                     {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -312,6 +352,19 @@ export default function UsuarioFormModal({
                     <Plus size={13} />
                     Incluir novo fornecedor
                   </button>
+                </div>
+              )}
+
+              {mostrarEspecialidades && (
+                <div className="sm:col-span-2">
+                  <label className={labelCls}>Especialidade *</label>
+                  <EspecialidadeSelector
+                    variant="dropdown"
+                    value={form.especialidadeIds ?? []}
+                    onChange={ids => setForm(prev => ({ ...prev, especialidadeIds: ids }))}
+                    especieIds={especiesEmpresa}
+                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                  />
                 </div>
               )}
 
@@ -387,6 +440,48 @@ export default function UsuarioFormModal({
                 </>
             </div>
           </section>
+
+          {/* ── Expediente de trabalho (Agenda) ── */}
+          {comExpediente && (
+            <section>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                <UserIcon size={12} /> Dias e horário de trabalho
+              </h4>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {DIAS_SEMANA_TRAB.map(d => {
+                  const on = (form.diasTrabalho ?? []).includes(d.v);
+                  return (
+                    <button key={d.v} type="button"
+                      onClick={() => setForm(prev => {
+                        const atual = prev.diasTrabalho ?? [];
+                        return { ...prev, diasTrabalho: on ? atual.filter(x => x !== d.v) : [...atual, d.v].sort((a, b) => a - b) };
+                      })}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                        on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}>
+                      {d.l}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Entra às</label>
+                  <input type="time" step={1800} value={form.horaInicioTrabalho ?? ''}
+                    onChange={e => set('horaInicioTrabalho', e.target.value)} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Sai às</label>
+                  <input type="time" step={1800} value={form.horaFimTrabalho ?? ''}
+                    onChange={e => set('horaFimTrabalho', e.target.value)} className={inputCls} />
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                A Agenda libera horários deste profissional apenas nos dias e na faixa informados.
+                Deixe em branco para herdar o expediente da empresa.
+              </p>
+            </section>
+          )}
 
           {/* ── Endereço ── */}
           <section>

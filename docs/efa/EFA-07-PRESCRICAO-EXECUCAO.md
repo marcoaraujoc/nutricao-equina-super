@@ -88,8 +88,9 @@ em execução apenas para os dias restantes.
   último) e as **reservas são recalculadas** com os itens restantes.
 
 ### UC-07-04 — Executar (enfermagem, `/execucao-prescricao`)
-- **Pré:** grupo FINALIZADO/CANCELADO_PARCIALMENTE com janela cobrindo hoje; evolução
-  do atendimento FINALIZADA; permissão `enfermagem.prescricao.executar`.
+- **Pré:** grupo FINALIZADO/CANCELADO_PARCIALMENTE com janela cobrindo hoje; permissão
+  `enfermagem.prescricao.executar`. (Desde 2026-07-16 **NÃO** exige a evolução finalizada —
+  a prescrição finalizada já entra na execução mesmo com a evolução EM_ANDAMENTO.)
 - **Principal:** lista de prescrições aptas do dia (busca/paginação) → marcar itens
   administrados → sistema debita a **dose do dia em FEFO** (um movimento SAÍDA por lote
   debitado; abate as reservas do grupo), lança consumo na fatura (valor pelo preço
@@ -98,8 +99,7 @@ em execução apenas para os dias restantes.
   lança na fatura.
 - **Alternativos:** último dia de todas as janelas → grupo EXECUTADO + reservas
   remanescentes liberadas. Item de duração menor não é re-debitado.
-- **Erros:** estoque do dia insuficiente (soma dos lotes) → 409 com alertas (bloqueia);
-  evolução não finalizada → 400.
+- **Erros:** estoque do dia insuficiente (soma dos lotes) → 409 com alertas (bloqueia).
 
 ### UC-07-05 — Editar item em execução parcial
 - Item já em execução só pode ser editado para os **dias restantes** (dataInicio vira
@@ -165,9 +165,10 @@ administração é fato clínico.
 **RN-07-007 — Medicamento do cliente não movimenta estoque.** Sem reserva, baixa ou
 lançamento de custo de estoque (o item clínico permanece no documento).
 
-**RN-07-008 — Execução exige evolução finalizada.** A prescrição só entra na fila de
-execução quando a evolução do atendimento está FINALIZADA (grupos legados sem evolução
-continuam aptos).
+**RN-07-008 — Execução independe da evolução (premissa alterada em 2026-07-16).** A
+prescrição entra na fila de execução assim que o grupo é FINALIZADO (prescrição finalizada
+dentro da evolução), **sem** depender de a evolução do atendimento estar FINALIZADA — pode
+estar EM_ANDAMENTO. Antes, a fila e o `executar` exigiam a evolução FINALIZADA.
 
 ## 11. Fluxograma
 
@@ -209,7 +210,7 @@ Estoque (EFA-10), Fatura (EFA-12 — itens rastreados por `prescricaoId`), impre
 | MSG-07-004 | "Esta prescrição já foi executada e não pode ser alterada ou cancelada." | code EXECUTADO. |
 | MSG-07-005 | "É obrigatório informar o motivo do cancelamento/exclusão" | RN-G-002. |
 | MSG-07-006 | "Prescrição cancelada. Estoque reservado liberado." | Cancelar ok. |
-| MSG-07-007 | "A evolução do atendimento precisa estar finalizada para executar a prescrição." | Execução. |
+| ~~MSG-07-007~~ | ~~"A evolução do atendimento precisa estar finalizada para executar a prescrição."~~ | Removida em 2026-07-16 — execução não exige mais evolução finalizada. |
 
 ## 17. Tratamento de erros
 

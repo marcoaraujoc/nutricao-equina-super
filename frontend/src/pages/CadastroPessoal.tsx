@@ -8,6 +8,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import { CheckCircle2, XCircle, Loader2, Info, User } from 'lucide-react';
 
 type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
@@ -28,6 +29,12 @@ const mascaraCEP = (v: string): string => {
   return d.length <= 5 ? d : `${d.slice(0,5)}-${d.slice(5)}`;
 };
 
+// Dias da semana (0=Dom … 6=Sáb) — convenção de Date.getDay()
+const DIAS_SEMANA_ATEND = [
+  { v: 0, l: 'Dom' }, { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' },
+  { v: 4, l: 'Qui' }, { v: 5, l: 'Sex' }, { v: 6, l: 'Sáb' },
+];
+
 const LABEL_TIPO_USUARIO: Record<string, string> = {
   PROPRIETARIO: 'Proprietário(a)',
   VETERINARIO:  'Médico(a) Veterinário(a)',
@@ -35,13 +42,6 @@ const LABEL_TIPO_USUARIO: Record<string, string> = {
   FORNECEDOR:   'Fornecedor(a)',
   ADMIN:        'Administrador(a)',
 };
-
-const SUBESPECIALIDADES = [
-  'Clínico', 'Quiroprata', 'Fisioterapeuta', 'Oftalmologista',
-  'Dermatologista', 'Cardiologista', 'Ortopedista', 'Neurologista',
-  'Oncologista', 'Nutricionista', 'Anestesiologista', 'Radiologista',
-  'Reprodução Animal',
-];
 
 // ── Label com asterisco de obrigatório ────────────────────────────────────────
 function Label({ text, required, optional }: { text: string; required?: boolean; optional?: boolean }) {
@@ -72,6 +72,8 @@ export default function CadastroPessoal() {
   const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
   // Cargo na equipe (ex: GESTOR) — definido quando foi incluído como membro
   const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
+  // Membro de alguma equipe → habilita o expediente de atendimento
+  const [temEquipe,       setTemEquipe]       = useState(false);
 
   // Gestor: sem dados profissionais (CRMV/espécies/subespecialidade) e tipo travado
   const isGestorEquipe = cargoEquipe === 'GESTOR';
@@ -79,7 +81,7 @@ export default function CadastroPessoal() {
   const carregarEspecies = () => {
     setEspeciesErro(false);
     setEspeciesLoaded(false);
-    api.get('/especies')
+    api.get('/especialidades/especies')
       .then(res => {
         const lista = res.data?.dados ?? res.data ?? [];
         setEspecies(Array.isArray(lista) ? lista : []);
@@ -89,6 +91,25 @@ export default function CadastroPessoal() {
   };
 
   useEffect(() => { carregarEspecies(); }, []);
+
+  // Espécies que a empresa atende — quando o membro foi convidado (cadastro de equipe
+  // primeiro), as especialidades ficam restritas ao que a empresa atende.
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
+  useEffect(() => {
+    if (loadingPerms) return;
+    api.get('/equipes/especies-atendidas')
+      .then(res => {
+        const lista = res.data?.dados?.especiesAtendidas ?? [];
+        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
+      })
+      .catch(() => setEspeciesEmpresa([]));
+  }, [loadingPerms]);
+
+  // Filtro de especialidades: convidado → espécies da empresa; cadastro direto →
+  // as espécies que o próprio veterinário atende. Vazio = mostra todas.
+  const especiesFiltroEspecialidade = (isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
+    ? especiesEmpresa
+    : form.especiesAtendidas;
 
   const [form, setForm] = useState({
     nomeCompleto:      '',
@@ -104,6 +125,10 @@ export default function CadastroPessoal() {
     crmv:              '',
     especiesAtendidas: [] as number[],
     subespecialidades: [] as string[],
+    especialidadeIds:  [] as number[],
+    diasAtendimento:   [] as number[],   // 0=Dom … 6=Sáb
+    horaInicioAtend:   '',               // HH:MM
+    horaFimAtend:      '',               // HH:MM
   });
 
   useEffect(() => {
@@ -129,9 +154,17 @@ export default function CadastroPessoal() {
             crmv:              data.crmv              || '',
             especiesAtendidas: data.especiesAtendidas || [],
             subespecialidades: data.subespecialidades || [],
+            especialidadeIds:  data.especialidadeIds  || [],
+            // Expediente de atendimento — preenche com o que já existe no banco
+            diasAtendimento:   data.diasTrabalho
+              ? String(data.diasTrabalho).split(',').map(Number).filter((n: number) => n >= 0 && n <= 6)
+              : [],
+            horaInicioAtend:   data.horaInicioTrabalho || '',
+            horaFimAtend:      data.horaFimTrabalho    || '',
           });
           if (data.isConvidado) setIsConvidadoFlag(true);
           setCargoEquipe(data.cargoEquipe ?? null);
+          setTemEquipe(!!data.temEquipe);
         }
       } catch (err) {
         console.error('Erro ao carregar dados do usuário:', err);
@@ -258,7 +291,10 @@ export default function CadastroPessoal() {
         toast.error('Selecione ao menos uma espécie atendida');
         return false;
       }
-      if (form.subespecialidades.length === 0) {
+    }
+    // Especialidade: obrigatória para VET e FORNECEDOR (gestor não preenche)
+    if ((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe) {
+      if (form.especialidadeIds.length === 0) {
         toast.error('Selecione ao menos uma especialidade');
         return false;
       }
@@ -286,6 +322,16 @@ export default function CadastroPessoal() {
         crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
+      }),
+      // Especialidades do catálogo (VET e FORNECEDOR) — fonte única
+      ...((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && {
+        especialidadeIds: form.especialidadeIds,
+      }),
+      // Expediente de atendimento (grava no MembroEquipe do contexto ativo)
+      ...(temEquipe && {
+        diasTrabalho:       form.diasAtendimento,
+        horaInicioTrabalho: form.horaInicioAtend,
+        horaFimTrabalho:    form.horaFimAtend,
       }),
     };
 
@@ -579,32 +625,70 @@ export default function CadastroPessoal() {
                 </div>
               )}
 
-              <div>
-                <Label text="Especialidade" required />
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-1">
-                  {SUBESPECIALIDADES.map(sub => {
-                    const selecionada = form.subespecialidades.includes(sub);
-                    return (
-                      <label key={sub}
-                        className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
-                          selecionada
-                            ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                            : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
-                        }`}>
-                        <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
-                          checked={selecionada}
-                          onChange={() => setForm(prev => ({
-                            ...prev,
-                            subespecialidades: selecionada
-                              ? prev.subespecialidades.filter(s => s !== sub)
-                              : [...prev.subespecialidades, sub],
-                          }))} />
-                        <span className="text-sm font-medium">{sub}</span>
-                      </label>
-                    );
-                  })}
+            </div>
+          )}
+
+          {/* ── Especialidade — VET e FORNECEDOR (gestor não preenche) ── */}
+          {(form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && (
+            <div className="pt-2 border-t border-gray-100">
+              <Label text="Especialidade" required />
+              <p className="text-xs text-gray-400 mb-2">
+                {(isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
+                  ? 'Especialidades das espécies que a empresa atende. Selecione uma ou mais.'
+                  : 'Selecione as espécies atendidas acima para listar as especialidades. Uma ou mais.'}
+              </p>
+              <EspecialidadeSelector
+                value={form.especialidadeIds}
+                onChange={ids => setForm(prev => ({ ...prev, especialidadeIds: ids }))}
+                especieIds={especiesFiltroEspecialidade}
+                emptyText={(isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
+                  ? 'A empresa ainda não configurou as espécies atendidas. Contate o gestor.'
+                  : 'Selecione ao menos uma espécie atendida para listar as especialidades.'}
+              />
+            </div>
+          )}
+
+          {/* ── Dias e horário de atendimento (expediente do profissional) ── */}
+          {temEquipe && form.tipoUsuario !== 'PROPRIETARIO' && (
+            <div>
+              <Label text="Dias e horário de atendimento" optional />
+              <div className="flex flex-wrap gap-1.5 mt-1 mb-3">
+                {DIAS_SEMANA_ATEND.map(d => {
+                  const on = form.diasAtendimento.includes(d.v);
+                  return (
+                    <button key={d.v} type="button"
+                      onClick={() => setForm(prev => ({
+                        ...prev,
+                        diasAtendimento: on
+                          ? prev.diasAtendimento.filter(x => x !== d.v)
+                          : [...prev.diasAtendimento, d.v].sort((a, b) => a - b),
+                      }))}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                        on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}>
+                      {d.l}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Entra às</label>
+                  <input type="time" step={1800} value={form.horaInicioAtend}
+                    onChange={e => setForm(prev => ({ ...prev, horaInicioAtend: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Sai às</label>
+                  <input type="time" step={1800} value={form.horaFimAtend}
+                    onChange={e => setForm(prev => ({ ...prev, horaFimAtend: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:outline-none" />
                 </div>
               </div>
+              <p className="text-xs text-gray-400 mt-1">
+                A Agenda libera seus horários apenas nos dias e na faixa informados.
+                Deixe em branco para herdar o expediente da empresa.
+              </p>
             </div>
           )}
 

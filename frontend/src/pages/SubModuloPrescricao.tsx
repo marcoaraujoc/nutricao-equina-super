@@ -8,11 +8,13 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import DateInput from '../components/DateInput';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
 import ModalJustificativa from '../components/ModalJustificativa';
+import ConfirmModal from '../components/ConfirmModal';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1087,11 +1089,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                   <div className="col-span-2 sm:col-span-2">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA INÍCIO</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={form.dataInicio}
-                      onChange={e => set('dataInicio', e.target.value)}
-                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus:outline-none focus:border-emerald-500"
+                      onChange={v => set('dataInicio', v)}
+                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus-within:border-emerald-500"
                     />
                   </div>
                 </div>
@@ -1597,6 +1598,47 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
 
+  // Visualização SOMENTE LEITURA — busca o detalhe e abre o VisualizacaoGrupo,
+  // sem entrar em modo de edição (independente do status).
+  const abrirVisualizacao = async (g: PrescricaoGrupo) => {
+    try {
+      const res = await api.get(`/clinica/prescricoes/grupos/${g.id}`);
+      setViewingGrupo((res.data?.dados as PrescricaoGrupo) ?? g);
+    } catch { setViewingGrupo(g); }
+  };
+
+  // "Não executada" = editável: SALVO ou FINALIZADO sem NENHUM item executado.
+  const grupoNaoExecutado = (g: PrescricaoGrupo) =>
+    !['EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) &&
+    !g.itens.some(i => i.executadoEm);
+
+  // Alterar: SALVO abre direto; FINALIZADA (não executada) confirma a reabertura
+  // (volta para rascunho e libera reservas) antes de editar.
+  const [reabrindo,        setReabrindo]        = useState<PrescricaoGrupo | null>(null);
+  const [reabrindoLoading, setReabrindoLoading] = useState(false);
+
+  const handleAlterar = (g: PrescricaoGrupo) => {
+    if (g.status === 'SALVO') { abrirEdicao(g); return; }
+    setReabrindo(g);
+  };
+
+  const confirmarReabrir = async () => {
+    if (!reabrindo) return;
+    setReabrindoLoading(true);
+    try {
+      const res = await api.post(`/clinica/prescricoes/grupos/${reabrindo.id}/reabrir`);
+      const g = (res.data?.dados as PrescricaoGrupo) ?? { ...reabrindo, status: 'SALVO' as StatusGrupo };
+      setReabrindo(null);
+      abrirEdicao(g);
+      carregar();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e?.response?.data?.error ?? 'Erro ao reabrir prescrição');
+    } finally {
+      setReabrindoLoading(false);
+    }
+  };
+
   // Clique no Histórico do Paciente / Visualizar atendimento: popula o
   // formulário da página com a prescrição (somente leitura), independente do
   // status, e rola até ele para o usuário ver os campos preenchidos.
@@ -1796,14 +1838,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           </thead>
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
-              const isViewOnly = g.status !== 'SALVO';
               const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
-              const editavel   = g.status === 'SALVO' && canEdit && (!isFornecedor || eProprioAutor);
+              const editavel   = grupoNaoExecutado(g) && canEdit && (!isFornecedor || eProprioAutor);
+              const podeFinalizarDireto = g.status === 'SALVO';
               const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
-                    <button onClick={() => abrirEdicao(g)}
+                    <button onClick={() => abrirVisualizacao(g)}
                       className="font-mono font-bold text-emerald-700 hover:text-emerald-900 text-sm hover:underline">
                       #{g.numeroFormatado}
                     </button>
@@ -1828,11 +1870,17 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => abrirEdicao(g)} title={isViewOnly ? 'Visualizar' : 'Editar'}
-                        className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                        {isViewOnly ? <Eye size={13} /> : <Pencil size={13} />}
+                      <button onClick={() => abrirVisualizacao(g)} title="Visualizar"
+                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+                        <Eye size={13} />
                       </button>
-                      {editavel && canFinalizarCancelar && (
+                      {editavel && (
+                        <button onClick={() => handleAlterar(g)} title="Alterar"
+                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                          <Pencil size={13} />
+                        </button>
+                      )}
+                      {podeFinalizarDireto && canFinalizarCancelar && (
                         <button onClick={() => handleFinalizarDireto(g.id)} title="Finalizar prescrição"
                           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                           <CheckCircle2 size={13} />
@@ -1863,11 +1911,11 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       <div className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
           const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
-          const editavelMobile = g.status === 'SALVO' && (!isFornecedor || eProprioAutorMobile);
+          const editavelMobile = grupoNaoExecutado(g) && canEdit && (!isFornecedor || eProprioAutorMobile);
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
-              <button onClick={() => abrirEdicao(g)}
+              <button onClick={() => abrirVisualizacao(g)}
                 className="font-mono font-bold text-emerald-700 hover:underline text-sm">
                 #{g.numeroFormatado}
               </button>
@@ -1878,10 +1926,16 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             <p className="text-xs text-gray-500">{g.veterinario.fullName} • {g.itens.length} item{g.itens.length !== 1 ? 'ns' : ''}</p>
             <p className="text-[11px] text-gray-400 mt-0.5">{formatarData(g.createdAt)}</p>
             <div className="flex flex-wrap gap-2 mt-2">
-              <button onClick={() => abrirEdicao(g)}
-                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                {editavelMobile ? <><Pencil size={11} /> Editar</> : <><Eye size={11} /> Ver</>}
+              <button onClick={() => abrirVisualizacao(g)}
+                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                <Eye size={11} /> Visualizar
               </button>
+              {editavelMobile && (
+                <button onClick={() => handleAlterar(g)}
+                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                  <Pencil size={11} /> Alterar
+                </button>
+              )}
               <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))}
                 className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
                 <MessageCircle size={11} /> WhatsApp
@@ -1958,6 +2012,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           onCancelar={() => setAlertaDireto(null)}
         />
       )}
+      <ConfirmModal
+        open={reabrindo !== null}
+        variante="aviso"
+        titulo={`Reabrir prescrição #${reabrindo?.numeroFormatado ?? ''} para edição?`}
+        mensagem="Esta prescrição está finalizada. Para editá-la ela voltará a rascunho e as reservas de estoque serão liberadas. Ao terminar, finalize-a novamente para reenviá-la à execução."
+        labelConfirmar={reabrindoLoading ? 'Reabrindo…' : 'Reabrir e editar'}
+        onConfirmar={confirmarReabrir}
+        onCancelar={() => { if (!reabrindoLoading) setReabrindo(null); }}
+      />
     </>
   );
 }

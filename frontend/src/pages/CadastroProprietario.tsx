@@ -100,6 +100,7 @@ interface Proprietario {
   mensalista:       boolean;
   valorAssistencia: number | null;
   frequenciaVisitas: number | null;
+  diaVencimentoFatura: number | null;
   cep:              string | null;
   endereco:         string | null;
   complemento:      string | null;
@@ -120,6 +121,7 @@ interface FormProp {
   mensalista:        boolean;
   valorAssistencia:  string;
   frequenciaVisitas: string;
+  diaVencimentoFatura: string;
   cep:               string;
   endereco:          string;
   complemento:       string;
@@ -131,7 +133,7 @@ interface FormProp {
 const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
-  mensalista: false, valorAssistencia: '', frequenciaVisitas: '',
+  mensalista: false, valorAssistencia: '', frequenciaVisitas: '', diaVencimentoFatura: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -450,6 +452,18 @@ function ModalProprietario({
                 ))}
               </select>
             </div>
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura</label>
+              <input type="number" min={1} max={28}
+                value={form.diaVencimentoFatura}
+                onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
+                placeholder="Ex.: 10"
+                className={inputCls} />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Dia do mês (1-28) em que a fatura vence. Fatura fechada e não paga após o vencimento fica <b>Atrasada</b>.
+              </p>
+            </div>
           </section>
 
         </div>
@@ -532,6 +546,7 @@ export default function CadastroProprietario() {
         ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
         : '',
       frequenciaVisitas: p.frequenciaVisitas ? String(p.frequenciaVisitas) : '',
+      diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '',
       cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
       endereco:          p.endereco    ?? '',
       complemento:       p.complemento ?? '',
@@ -572,6 +587,7 @@ export default function CadastroProprietario() {
       mensalista:        form.mensalista,
       valorAssistencia:  form.mensalista && form.valorAssistencia ? parseMoeda(form.valorAssistencia) : null,
       frequenciaVisitas: form.frequenciaVisitas ? Number(form.frequenciaVisitas) : null,
+      diaVencimentoFatura: form.diaVencimentoFatura ? Number(form.diaVencimentoFatura) : null,
       cep:               form.cep         || null,
       endereco:          form.endereco    || null,
       complemento:       form.complemento || null,

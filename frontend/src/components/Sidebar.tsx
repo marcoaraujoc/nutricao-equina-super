@@ -5,7 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { useMobileMenu } from '../contexts/MobileMenuContext';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import api from '../services/api';
 import {
   LayoutDashboard, User, Zap, ClipboardList,
   Wheat, TestTube, ChartBar, Carrot, Stethoscope,
@@ -69,6 +70,22 @@ export default function Sidebar() {
   const { opcoes: opcoesContexto, contextoAtivo, trocarContexto } = useEmpresa();
   useVetSolicitacaoMonitor();
   useProprietarioNotificacoes();
+
+  // Logomarca da empresa do contexto ativo (substitui o texto padrão no header)
+  const [logoUrl,     setLogoUrl]     = useState<string | null>(null);
+  const [empresaNome, setEmpresaNome] = useState<string | null>(null);
+  useEffect(() => {
+    let ativo = true;
+    api.get('/equipes/logo')
+      .then(r => {
+        if (!ativo || !r.data) return;
+        setLogoUrl(r.data?.dados?.logoUrl ?? null);
+        setEmpresaNome(r.data?.dados?.empresaNome ?? null);
+      })
+      .catch(() => {});
+    return () => { ativo = false; };
+    // Recarrega ao trocar de empresa/equipe ativa
+  }, [contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
 
   const role          = (user?.role      ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType  ?? '').toUpperCase();
@@ -247,14 +264,31 @@ export default function Sidebar() {
         md:translate-x-0 md:static md:flex
       `}>
 
-        {/* Header */}
-        <div className="px-6 py-6 border-b border-gray-200 flex items-center gap-3 flex-shrink-0">
-          <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-2xl">🥕</div>
-          <div>
-            <h1 className="text-xl font-bold text-emerald-700">Nutrição Equina</h1>
-            <p className="text-emerald-500 text-sm -mt-0.5">Super</p>
-          </div>
-          <button onClick={closeMobile} className="md:hidden ml-auto p-2 text-gray-500 hover:text-gray-700">
+        {/* Header — logomarca da empresa (Configurações) com fallback ao padrão.
+            Com logo: centralizada na largura do sidebar; botão de fechar (mobile)
+            fica absoluto para não desalinhar. */}
+        <div className={`relative px-6 py-6 border-b border-gray-200 flex items-center gap-3 flex-shrink-0 ${logoUrl ? 'justify-center' : ''}`}>
+          {logoUrl ? (
+            <img src={logoUrl} alt={empresaNome ?? 'Logomarca da empresa'}
+              className="h-16 max-w-full object-contain" />
+          ) : empresaNome ? (
+            <>
+              <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
+                {empresaNome.charAt(0).toUpperCase()}
+              </div>
+              <h1 className="text-lg font-bold text-emerald-700 leading-tight line-clamp-2">{empresaNome}</h1>
+            </>
+          ) : (
+            <>
+              <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-2xl">🥕</div>
+              <div>
+                <h1 className="text-xl font-bold text-emerald-700">Nutrição Equina</h1>
+                <p className="text-emerald-500 text-sm -mt-0.5">Super</p>
+              </div>
+            </>
+          )}
+          <button onClick={closeMobile}
+            className={`md:hidden p-2 text-gray-500 hover:text-gray-700 ${logoUrl ? 'absolute right-4 top-1/2 -translate-y-1/2' : 'ml-auto'}`}>
             <X size={28} />
           </button>
         </div>
@@ -478,7 +512,7 @@ export default function Sidebar() {
                         <div className="mt-1 pl-6 space-y-0.5">
                           {podeVerDieta && subLink(
                             animalId ? `/dieta/${animalId}` : '/dieta',
-                            <Utensils size={14} />, 'Dieta',
+                            <Utensils size={14} />, 'Plano de Dieta',
                             isNutricionalSubActive('/dieta'),
                           )}
                           {podeVerRelatorio && subLink(
