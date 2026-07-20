@@ -4,8 +4,9 @@
 
 const express                 = require('express');
 const router                  = express.Router();
-const HistoricoController     = require('../controllers/HistoricoController');
-const AgendamentoController   = require('../controllers/AgendamentoController');
+const HistoricoController         = require('../controllers/HistoricoController');
+const AgendamentoController       = require('../controllers/AgendamentoController');
+const ResumoAtendimentoController = require('../controllers/ResumoAtendimentoController');
 const { authenticate }        = require('../middlewares/auth');
 const { checkPermission }     = require('../middlewares/permissao.middleware');
 
@@ -14,6 +15,10 @@ const { checkPermission }     = require('../middlewares/permissao.middleware');
 // /resumo deve vir ANTES de /:animalId para não ser capturado como parâmetro
 router.get('/historico/animal/:animalId/resumo', authenticate, HistoricoController.resumirPorAnimal);
 router.get('/historico/animal/:animalId',        authenticate, HistoricoController.listarPorAnimal);
+
+// Resumo consolidado de atendimentos por IA (persistido; append só com evento novo)
+router.get('/resumo-atendimento/animal/:animalId',             authenticate, ResumoAtendimentoController.obter);
+router.post('/resumo-atendimento/animal/:animalId/atualizar',  authenticate, ResumoAtendimentoController.atualizar);
 
 // /agendamentos (sem parâmetro) deve vir ANTES de /agendamentos/animal/:id
 // /agendamentos/interpretar deve vir ANTES de /agendamentos (evita ambiguidade)

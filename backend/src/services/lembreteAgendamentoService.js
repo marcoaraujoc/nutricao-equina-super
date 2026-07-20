@@ -66,7 +66,8 @@ async function enviarLembretesWhatsapp(agora = new Date()) {
         await provider.enviarMensagem({
           para,
           texto:    montarTexto(tier, ag),
-          contexto: { agendamentoId: ag.id, tier },
+          // empresaId/equipeId do animal → provider Evolution resolve a instância da clínica
+          contexto: { agendamentoId: ag.id, tier, empresaId: ag.animal?.empresaId ?? null, equipeId: ag.animal?.equipeId ?? null },
         });
         enviados++;
       } catch (err) {

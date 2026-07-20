@@ -35,6 +35,28 @@ class NoopWhatsAppProvider extends WhatsAppProvider {
   }
 }
 
+/**
+ * Provider real via Evolution API — envia pela INSTÂNCIA da clínica.
+ * Requer `contexto.empresaId` (a instância é por clínica); sem ele a mensagem
+ * é suprimida com warn. Toda a comunicação passa pelo WhatsappService.
+ */
+class EvolutionWhatsAppProvider extends WhatsAppProvider {
+  async enviarMensagem({ para, texto, contexto }) {
+    const empresaId = contexto?.empresaId ?? null;
+    if (!empresaId) {
+      logger.warn('[WhatsApp:evolution] contexto.empresaId ausente — mensagem suprimida.');
+      return { sucesso: false, erro: 'SEM_EMPRESA' };
+    }
+    // require tardio evita ciclo de dependência no boot
+    const whatsappService = require('../services/whatsappService');
+    const res = await whatsappService.sendMessage(
+      { empresaId, equipeId: contexto?.equipeId ?? null }, para, texto,
+    );
+    if (!res.sucesso) logger.warn(`[WhatsApp:evolution] Envio falhou (${res.erro}) para=${para}`);
+    return res;
+  }
+}
+
 let instancia = null;
 
 /**
@@ -46,9 +68,9 @@ function getWhatsAppProvider() {
   if (instancia) return instancia;
   const tipo = String(process.env.WHATSAPP_PROVIDER || 'noop').toLowerCase();
   switch (tipo) {
+    case 'evolution': instancia = new EvolutionWhatsAppProvider(); break; // Evolution API (instância por clínica)
     // case 'cloud':  instancia = new CloudApiWhatsAppProvider();  break; // Meta WhatsApp Cloud API
     // case 'twilio': instancia = new TwilioWhatsAppProvider();    break; // Twilio WhatsApp
-    // case 'zapi':   instancia = new ZApiWhatsAppProvider();       break; // Z-API / Evolution (não-oficial)
     default:
       if (tipo !== 'noop') {
         logger.warn(`[WhatsApp] Provider "${tipo}" não implementado — usando noop (envio simulado).`);

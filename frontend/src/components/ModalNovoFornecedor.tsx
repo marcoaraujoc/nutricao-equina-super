@@ -29,6 +29,10 @@ export const TIPOS_SERVICO = [
 type TipoServico = typeof TIPOS_SERVICO[number];
 type TipoDoc     = 'cpf' | 'cnpj';
 
+// Tipo de fornecedor — especialidades só se aplicam a Veterinário
+const TIPOS_FORNECEDOR = ['Veterinário', 'Farmácia', 'Laboratório'] as const;
+type TipoFornecedor = typeof TIPOS_FORNECEDOR[number];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function validarCPF(cpf: string): boolean {
@@ -88,6 +92,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
+  tipoFornecedor: TipoFornecedor;
   especialidadeIds: number[];
   cep:         string;
   endereco:    string;
@@ -99,7 +104,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  especialidadeIds: [],
+  tipoFornecedor: 'Veterinário', especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -197,7 +202,9 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
 
   const handleSalvar = async (force = false) => {
     if (!form.nome.trim())             { toast.error('Nome é obrigatório'); return; }
-    if (form.especialidadeIds.length === 0) { toast.error('Selecione ao menos uma especialidade'); return; }
+    if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
+      toast.error('Selecione ao menos uma especialidade'); return;
+    }
     if (!form.email.trim())            { toast.error('E-mail é obrigatório'); return; }
     if (!isValidEmail(form.email))     { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())         { toast.error('Telefone é obrigatório'); return; }
@@ -214,7 +221,9 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
         telefone:    form.telefone,
         email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-        especialidadeIds: form.especialidadeIds,
+        // Veterinário → especialidades do catálogo; demais tipos → tipoServico é o próprio tipo
+        especialidadeIds: form.tipoFornecedor === 'Veterinário' ? form.especialidadeIds : [],
+        ...(form.tipoFornecedor !== 'Veterinário' ? { tipoServico: form.tipoFornecedor } : {}),
         cep:         form.cep         || null,
         endereco:    form.endereco    || null,
         complemento: form.complemento || null,
@@ -307,15 +316,31 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
                   placeholder="Nome do profissional ou empresa" className={inp} />
               </div>
               <div>
-                <label className={lbl}>Especialidade *</label>
-                <EspecialidadeSelector
-                  variant="dropdown"
-                  value={form.especialidadeIds}
-                  onChange={ids => upd({ especialidadeIds: ids })}
-                  especieIds={especiesEmpresa}
-                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                />
+                <label className={lbl}>Tipo de Fornecedor *</label>
+                <select
+                  value={form.tipoFornecedor}
+                  onChange={e => upd({
+                    tipoFornecedor: e.target.value as TipoFornecedor,
+                    // Especialidades só se aplicam a Veterinário — limpa ao trocar
+                    ...(e.target.value !== 'Veterinário' ? { especialidadeIds: [] } : {}),
+                  })}
+                  className={inp}
+                >
+                  {TIPOS_FORNECEDOR.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
+              {form.tipoFornecedor === 'Veterinário' && (
+                <div>
+                  <label className={lbl}>Especialidade *</label>
+                  <EspecialidadeSelector
+                    variant="dropdown"
+                    value={form.especialidadeIds}
+                    onChange={ids => upd({ especialidadeIds: ids })}
+                    especieIds={especiesEmpresa}
+                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                  />
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className={lbl}>E-mail *</label>

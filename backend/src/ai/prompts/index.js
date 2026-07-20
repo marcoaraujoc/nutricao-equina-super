@@ -236,6 +236,33 @@ ${JSON.stringify(eventos.map(e => ({
 })))}`,
   },
 
+  // ── Resumo consolidado de atendimentos do animal (painel AnimalDetail) ──────
+  // v1: recebe o resumo salvo (pode ser vazio) + eventos novos e devolve o resumo
+  // ATUALIZADO completo em texto corrido (append incremental).
+  'resumo_atendimentos': {
+    version: 'v1',
+    build: ({ resumoAtual, eventos, animalNome }) => `Você é um médico-veterinário responsável pelo prontuário do paciente${animalNome ? ` "${animalNome}"` : ''}.
+
+Abaixo está o RESUMO CLÍNICO CONSOLIDADO atual do paciente (pode estar vazio) e uma lista de NOVOS EVENTOS (atendimentos, vacinas, exames, prescrições, encaminhamentos e serviços lançados manualmente na fatura).
+
+Sua tarefa: devolver o resumo consolidado ATUALIZADO, incorporando os novos eventos ao histórico.
+
+Regras:
+- Escreva em português do Brasil, tom clínico e objetivo.
+- Organize cronologicamente (mais antigo → mais recente), citando datas no formato dd/mm/aaaa.
+- Preserve as informações relevantes do resumo atual — não descarte histórico; apenas condense o que ficou redundante.
+- Agrupe eventos do mesmo dia numa mesma linha quando fizer sentido.
+- Inclua serviços lançados manualmente na fatura (ex.: atendimento emergencial) como parte do histórico.
+- Máximo de ~350 palavras. Sem markdown, sem títulos, sem bullets — apenas parágrafos curtos de texto simples.
+- Retorne APENAS o texto do resumo atualizado, sem comentários nem explicações.
+
+RESUMO ATUAL:
+${(resumoAtual || '(vazio — primeiro resumo do paciente)').slice(0, 4000)}
+
+NOVOS EVENTOS:
+${JSON.stringify(eventos.slice(0, 80))}`,
+  },
+
   // ── Composição alimentar: rótulo em imagem (Gemini Vision) ──────────────────
   'parse_composicao_visao': {
     version: 'v1',

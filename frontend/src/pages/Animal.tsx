@@ -281,8 +281,6 @@ const Animal = () => {
   const [novoTratNome,     setNovoTratNome]     = useState('');
   const [novoTratTelefone, setNovoTratTelefone] = useState('');
   const [novoTratLocId,    setNovoTratLocId]    = useState<number | null>(null);
-  const [novoTratLocBusca, setNovoTratLocBusca] = useState('');
-  const [novoTratLocOpen,  setNovoTratLocOpen]  = useState(false);
 
   // ── Busca por nome (vet, novo cadastro) ────────────────────────────────────
   const [buscandoAnimal,    setBuscandoAnimal]    = useState(false);
@@ -692,10 +690,8 @@ const Animal = () => {
   const abrirModalNovoTratador = (nome: string) => {
     setNovoTratNome(nome);
     setNovoTratTelefone('');
+    // Local de trabalho replicado automaticamente do local do animal
     setNovoTratLocId(formData.localizacaoId);
-    const locAtual = localizacoes.find(l => l.id === formData.localizacaoId);
-    setNovoTratLocBusca(locAtual?.nome ?? '');
-    setNovoTratLocOpen(false);
     setTratDropdownOpen(false);
     setModalNovoTrat(true);
   };
@@ -752,8 +748,13 @@ const Animal = () => {
       toast.error('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
     }
 
-    // Vet criando animal novo (não encontrado) — valida dados do proprietário
-    if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
+    // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
+    // registro (duplicado) para este veterinário — mesmo fluxo do não encontrado.
+    const criandoNovoRegistro = isVet && !isEditMode
+      && (statusBuscaAnimal === 'nao_encontrado' || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet');
+
+    // Vet criando animal novo — valida dados do proprietário
+    if (criandoNovoRegistro) {
       if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
       if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
       const digsTel = formProp.telefone.replace(/\D/g, '');
@@ -789,13 +790,14 @@ const Animal = () => {
         registroPassaporte: formData.registroPassaporte.trim() || null,
         finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         seguradora:         formData.seguradora.trim() || null,
-        // Vet vinculando animal existente (sem vet, ou com vet de outra equipe →
-        // vínculo adicional — um animal pode ter mais de um veterinário)
-        ...(animalEncontrado && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') && {
-          animalExistenteId: animalEncontrado.id,
+        // Animal já existente (sem vet ou com vet de outra equipe) → NOVO registro
+        // duplicado para este veterinário; a origem é enviada apenas para o backend
+        // reaproveitar a foto do animal original
+        ...(criandoNovoRegistro && animalEncontrado && {
+          animalOrigemId: animalEncontrado.id,
         }),
-        // Vet criando animal novo → envia dados do proprietário
-        ...(isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado' && {
+        // Vet criando animal novo (inclusive duplicado) → envia dados do proprietário
+        ...(criandoNovoRegistro && {
           proprietario: {
             fullName: formProp.nomeCompleto.trim(),
             email:    formProp.email.trim(),
@@ -804,9 +806,7 @@ const Animal = () => {
           },
         }),
         // Informa o backend se o proprietário precisa aprovar ou vínculo é imediato
-        ...(isVet && !isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado') && {
-          pedirAutorizacao,
-        }),
+        ...(criandoNovoRegistro && { pedirAutorizacao }),
       };
 
       let createdAnimalId: number | null = null;
@@ -818,7 +818,7 @@ const Animal = () => {
           if (v != null && typeof v !== 'object') fd.append(k, String(v));
         });
         // proprietario é um objeto → precisa ser serializado manualmente
-        if (isVet && !isEditMode && statusBuscaAnimal === 'nao_encontrado') {
+        if (criandoNovoRegistro) {
           fd.append('proprietario', JSON.stringify({
             fullName: formProp.nomeCompleto.trim(),
             email:    formProp.email.trim(),
@@ -845,11 +845,10 @@ const Animal = () => {
       }
 
       // Mensagem de sucesso contextual
-      const vinculandoParaProprietario = (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado');
-      const msgSucesso = vinculandoParaProprietario
+      const msgSucesso = criandoNovoRegistro
         ? (pedirAutorizacao
             ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
-            : 'Vínculo estabelecido com sucesso!')
+            : 'Animal cadastrado com sucesso!')
         : isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!';
 
       toast.success(msgSucesso);
@@ -997,15 +996,16 @@ const Animal = () => {
                 </div>
               </div>
 
-              {/* Animal com vet de outra equipe — cadastro segue como vínculo adicional */}
+              {/* Animal com vet de outra equipe — novo registro duplicado para este vet */}
               {statusBuscaAnimal === 'com_vet' && (
                 <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
                     <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário.
-                    O cadastro segue normalmente: você será incluído como <strong>veterinário adicional</strong>.{' '}
+                    Será criado um <strong>novo cadastro do animal</strong> tendo você como
+                    veterinário responsável — o registro do outro veterinário não é alterado.{' '}
                     {pedirAutorizacao
-                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o seu vínculo.'
+                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.'
                       : 'Após salvar, o proprietário receberá um e-mail informativo.'}
                   </span>
                 </div>
@@ -1022,16 +1022,17 @@ const Animal = () => {
                 </div>
               )}
 
-              {/* Animal sem vet — pode vincular */}
+              {/* Animal sem vet — novo registro duplicado para este vet */}
               {statusBuscaAnimal === 'sem_vet' && animalEncontrado && (
                 <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
                     <strong>{formData.nome}</strong> já está cadastrado sem veterinário responsável.
-                    Os dados do proprietário foram preenchidos automaticamente.{' '}
+                    Os dados do proprietário foram preenchidos automaticamente. Será criado um{' '}
+                    <strong>novo cadastro do animal</strong> tendo você como veterinário responsável.{' '}
                     {pedirAutorizacao
-                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo. O animal ficará bloqueado até a aprovação.'
-                      : 'Após salvar, o vínculo será estabelecido imediatamente e o proprietário receberá um e-mail informativo.'}
+                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.'
+                      : 'Após salvar, o proprietário receberá um e-mail informativo.'}
                   </span>
                 </div>
               )}
@@ -1624,11 +1625,9 @@ const Animal = () => {
                 ? (isEditMode ? 'Atualizando...' : 'Cadastrando...')
                 : statusBuscaAnimal === 'minha_equipe'
                   ? 'Animal já com sua equipe'
-                  : statusBuscaAnimal === 'com_vet'
-                    ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Vincular como veterinário adicional')
-                    : statusBuscaAnimal === 'sem_vet'
-                      ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Vincular diretamente')
-                      : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
+                  : (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'sem_vet')
+                    ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Cadastrar Animal')
+                    : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
             </button>
 
           </form>
@@ -1667,52 +1666,15 @@ const Animal = () => {
             />
           </div>
 
-          <div className="relative">
+          <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Local de Trabalho <span className="text-red-500">*</span>
+              Local de Trabalho
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                value={novoTratLocBusca}
-                onChange={e => {
-                  setNovoTratLocBusca(e.target.value);
-                  setNovoTratLocOpen(true);
-                  if (novoTratLocId) setNovoTratLocId(null);
-                }}
-                onFocus={() => setNovoTratLocOpen(true)}
-                onBlur={() => setTimeout(() => setNovoTratLocOpen(false), 200)}
-                placeholder="Buscar localização…"
-                className={`${inputClass} pr-8`}
-                autoComplete="off"
-              />
-              {novoTratLocId
-                ? <CheckCircle2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
-                : novoTratLocBusca && (
-                  <button type="button"
-                    onMouseDown={() => { setNovoTratLocBusca(''); setNovoTratLocId(null); }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-400">
-                    <X size={14} />
-                  </button>
-                )
-              }
+            <div className={`${inputClass} bg-gray-50 text-gray-600 cursor-not-allowed flex items-center gap-2`}>
+              <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
+              {locBusca || '—'}
             </div>
-            {novoTratLocOpen && (
-              <div className="absolute z-20 w-full bg-white border border-gray-200 shadow-xl rounded-xl mt-1 max-h-44 overflow-y-auto">
-                {localizacoes
-                  .filter(l => !novoTratLocBusca.trim() || l.nome.toLowerCase().includes(novoTratLocBusca.toLowerCase()))
-                  .map(loc => (
-                    <button key={loc.id} type="button"
-                      onMouseDown={() => { setNovoTratLocId(loc.id); setNovoTratLocBusca(loc.nome); setNovoTratLocOpen(false); }}
-                      className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 text-sm border-b border-gray-50 last:border-0">
-                      <span className="font-medium text-gray-800">{loc.nome}</span>
-                    </button>
-                  ))}
-                {novoTratLocBusca.trim() && localizacoes.filter(l => l.nome.toLowerCase().includes(novoTratLocBusca.toLowerCase())).length === 0 && (
-                  <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{novoTratLocBusca}"</p>
-                )}
-              </div>
-            )}
+            <p className="text-xs text-gray-400 mt-1">Replicado automaticamente do local do animal.</p>
           </div>
 
           <div className="flex gap-3 pt-1">

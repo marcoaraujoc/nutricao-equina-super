@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { useMobileMenu } from '../contexts/MobileMenuContext';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import {
   LayoutDashboard, User, Zap, ClipboardList,
@@ -16,7 +16,7 @@ import {
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
   Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
-  Bell, Gauge,
+  Bell, Gauge, ListChecks,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -63,9 +63,20 @@ function detectSection(pathname: string): ActiveSection {
 
 export default function Sidebar() {
   const { user, logout }              = useAuth();
-  const { isNewUser, selectedAnimal } = useSelectedAnimal();
+  const { isNewUser, selectedAnimal, cadastroCompleto, perfilCarregado } = useSelectedAnimal();
   const location                      = useLocation();
   const navigate                      = useNavigate();
+
+  // Ao entrar na aplicação com o cadastro pessoal incompleto, leva direto para a
+  // tela de Cadastro Pessoal (uma vez por sessão — depois o usuário navega livre).
+  const redirecionouCadastroRef = useRef(false);
+  useEffect(() => {
+    if (!perfilCarregado || redirecionouCadastroRef.current) return;
+    if (isNewUser && !cadastroCompleto && location.pathname !== '/cadastro-pessoal') {
+      redirecionouCadastroRef.current = true;
+      navigate('/cadastro-pessoal');
+    }
+  }, [perfilCarregado, isNewUser, cadastroCompleto, location.pathname, navigate]);
   const pendentesCount                = useVetPendentes();
   const { opcoes: opcoesContexto, contextoAtivo, trocarContexto } = useEmpresa();
   useVetSolicitacaoMonitor();
@@ -76,14 +87,22 @@ export default function Sidebar() {
   const [empresaNome, setEmpresaNome] = useState<string | null>(null);
   useEffect(() => {
     let ativo = true;
-    api.get('/equipes/logo')
-      .then(r => {
-        if (!ativo || !r.data) return;
-        setLogoUrl(r.data?.dados?.logoUrl ?? null);
-        setEmpresaNome(r.data?.dados?.empresaNome ?? null);
-      })
-      .catch(() => {});
-    return () => { ativo = false; };
+    const carregarLogo = () => {
+      api.get('/equipes/logo')
+        .then(r => {
+          if (!ativo || !r.data) return;
+          setLogoUrl(r.data?.dados?.logoUrl ?? null);
+          setEmpresaNome(r.data?.dados?.empresaNome ?? null);
+        })
+        .catch(() => {});
+    };
+    carregarLogo();
+    // Configurações dispara este evento ao salvar — atualiza a logomarca sem reload
+    window.addEventListener('s2vet:config-atualizada', carregarLogo);
+    return () => {
+      ativo = false;
+      window.removeEventListener('s2vet:config-atualizada', carregarLogo);
+    };
     // Recarrega ao trocar de empresa/equipe ativa
   }, [contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
 
@@ -377,6 +396,7 @@ export default function Sidebar() {
                           {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                           {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
                           {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
+                          {(isVet || isAdmin || isGestor) && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                           {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
                           {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
                         </div>
@@ -391,12 +411,18 @@ export default function Sidebar() {
 
           {/* ═══ MÓDULOS ═════════════════════════════════════════════════════ */}
           {isNewUser ? (
-            <div className="mx-3 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm">
+            <button
+              type="button"
+              onClick={() => navigate(!cadastroCompleto ? '/cadastro-pessoal' : '/animais')}
+              className="block w-[calc(100%-1.5rem)] mx-3 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm text-left hover:bg-amber-100 transition-colors cursor-pointer"
+            >
               <strong>Funcionalidades bloqueadas</strong><br />
-              {isProprietario
-                ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
-                : 'Complete seu Cadastro Pessoal para liberar os módulos.'}
-            </div>
+              <span className="underline underline-offset-2">
+                {isProprietario
+                  ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
+                  : 'Complete seu Cadastro Pessoal para liberar os módulos.'}
+              </span>
+            </button>
           ) : temAlgumModulo ? (
             <div>
               <button onClick={() => toggle(setOpenModulos)}

@@ -21,6 +21,7 @@ import CadastroPessoal      from './pages/CadastroPessoal';
 import ResetPassword        from './pages/ResetPassword';
 import CadastroProprietario from './pages/CadastroProprietario';
 import CadastroTratador     from './pages/CadastroTratador';
+import CadastroProcedimento from './pages/CadastroProcedimento';
 import CadastroFornecedor   from './pages/CadastroFornecedor';
 import CadastroLocalizacao  from './pages/CadastroLocalizacao';
 import CadastroVacina       from './pages/CadastroVacina';
@@ -185,6 +186,7 @@ function App() {
                           {/* Cadastro */}
                           <Route path="/cadastro/proprietarios" element={<CadastroProprietario />} />
                           <Route path="/cadastro/tratadores"    element={<CadastroTratador />} />
+                          <Route path="/cadastro/procedimentos" element={<CadastroProcedimento />} />
                           <Route path="/cadastro/fornecedores"  element={<CadastroFornecedor />} />
                           <Route path="/cadastro/localizacoes"  element={<CadastroLocalizacao />} />
 

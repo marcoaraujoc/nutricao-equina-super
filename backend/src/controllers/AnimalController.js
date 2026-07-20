@@ -855,7 +855,17 @@ class AnimalController {
               proprietarioEmailParaEmail = prop?.email    || null;
             }
 
-      const photoUrl = req.file ? await storage.upload(req.file, '') : null;
+      let photoUrl = req.file ? await storage.upload(req.file, '') : null;
+
+      // Duplicação de animal existente (novo registro para outro vet): sem foto
+      // nova enviada, reaproveita a foto do animal de origem
+      if (!photoUrl && req.body.animalOrigemId) {
+        const origem = await prisma.animal.findUnique({
+          where:  { id: Number(req.body.animalOrigemId) },
+          select: { photoUrl: true },
+        });
+        photoUrl = origem?.photoUrl ?? null;
+      }
 
       const criadoParaSiMesmo = isVet && Number(targetUserId) === Number(req.user.id);
 

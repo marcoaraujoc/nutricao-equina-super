@@ -127,6 +127,17 @@ const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = 
   { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2       size={15} /> },
 ];
 
+// Cabeçalho de página por submódulo (ícone em box + título + descritivo —
+// mesmo padrão de Agendamentos). O título acompanha a aba ativa.
+const HEADER_SUBMODULO: Record<SubModulo, { titulo: string; descricao: string; icon: React.ReactNode }> = {
+  agenda:         { titulo: 'Minha Agenda',     descricao: 'Agendamentos e atendimentos do dia do profissional.',      icon: <CalendarDays size={20} className="text-emerald-700" /> },
+  evolucao:       { titulo: 'Evolução Clínica', descricao: 'Prontuário e registros de evolução do paciente.',          icon: <FileText     size={20} className="text-emerald-700" /> },
+  prescricao:     { titulo: 'Prescrição',       descricao: 'Medicamentos e procedimentos prescritos ao paciente.',     icon: <Pill         size={20} className="text-emerald-700" /> },
+  vacina:         { titulo: 'Vacinas',          descricao: 'Registro e histórico vacinal do paciente.',                icon: <Syringe      size={20} className="text-emerald-700" /> },
+  exames:         { titulo: 'Pedido de Exames', descricao: 'Solicitação e acompanhamento de exames do paciente.',      icon: <FlaskConical size={20} className="text-emerald-700" /> },
+  encaminhamento: { titulo: 'Encaminhamento',   descricao: 'Encaminhamentos a prestadores e serviços externos.',       icon: <Share2       size={20} className="text-emerald-700" /> },
+};
+
 const ORIGEM_COLOR: Record<string, string> = {
   EVOLUCAO:        'bg-emerald-100 text-emerald-700',
   VACINA:          'bg-teal-100 text-teal-700',
@@ -896,6 +907,17 @@ const Atendimento = () => {
     <PageContainer>
 
       <BotaoVoltar className="mb-4" />
+
+      {/* Cabeçalho — título acompanha o submódulo ativo */}
+      <div className="mt-2 mb-4 flex items-center gap-3">
+        <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+          {HEADER_SUBMODULO[activeTab].icon}
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{HEADER_SUBMODULO[activeTab].titulo}</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{HEADER_SUBMODULO[activeTab].descricao}</p>
+        </div>
+      </div>
 
       <SeletorAnimalInteligente
         animais={todosAnimais}

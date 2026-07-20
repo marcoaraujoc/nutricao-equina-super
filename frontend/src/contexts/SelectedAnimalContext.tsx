@@ -31,6 +31,10 @@ interface SelectedAnimalContextType {
   hasAnimals: boolean;
   hasSingleAnimal: boolean;
   isNewUser: boolean;
+  /** Cadastro pessoal completo (telefone + endereço + CEP). */
+  cadastroCompleto: boolean;
+  /** true depois que o perfil (/users/me) foi carregado — evita redirect prematuro. */
+  perfilCarregado: boolean;
 }
 
 const SelectedAnimalContext = createContext<SelectedAnimalContextType | undefined>(undefined);
@@ -43,6 +47,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
   const [hasSingleAnimal, setHasSingleAnimal] = useState(false);
   const [cadastroCompleto, setCadastroCompleto] = useState(false);
   const [isProprietario, setIsProprietario] = useState(false);
+  const [perfilCarregado, setPerfilCarregado] = useState(false);
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
@@ -83,6 +88,7 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
         console.warn('Não foi possível carregar cadastro pessoal:', perfilRes.reason);
         setCadastroCompleto(false);
       }
+      setPerfilCarregado(true);
 
       if (animais.length === 0) {
         setSelectedAnimalState(null);
@@ -151,6 +157,8 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
         // PROPRIETÁRIO: precisa de cadastro completo + ao menos um animal.
         // Demais perfis (vet, gestor, fornecedor): apenas cadastro completo.
         isNewUser: isProprietario ? (!hasAnimals || !cadastroCompleto) : !cadastroCompleto,
+        cadastroCompleto,
+        perfilCarregado,
       }}
     >
       {children}

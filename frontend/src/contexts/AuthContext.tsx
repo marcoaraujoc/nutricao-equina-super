@@ -126,11 +126,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     init();
   }, []);
 
-  // ── Logout automático por inatividade (5 minutos sem interação) ────────────
+  // ── Logout automático por inatividade (1 hora sem interação) ───────────────
   useEffect(() => {
     if (!user) return;
 
-    const TIMEOUT_MS = 5 * 60 * 1000;
+    const TIMEOUT_MS = 60 * 60 * 1000;
     let timer: ReturnType<typeof setTimeout>;
 
     const resetTimer = () => {

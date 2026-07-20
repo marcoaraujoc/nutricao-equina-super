@@ -133,7 +133,7 @@ interface FormProp {
 const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
-  mensalista: false, valorAssistencia: '', frequenciaVisitas: '', diaVencimentoFatura: '',
+  mensalista: false, valorAssistencia: '', frequenciaVisitas: '', diaVencimentoFatura: '5',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -146,6 +146,15 @@ const VISITAS_OPTIONS = [
   { value: '6', label: '6x na semana' },
   { value: '7', label: '7x na semana (diário)' },
 ];
+
+// Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25 (rejeita 0,
+// negativo e >25). Retorna a mensagem de erro inline ('' = válido).
+const validarDiaVencimento = (valor: string): string => {
+  if (!valor.trim()) return 'Informe o dia de vencimento da fatura (1 a 25).';
+  const n = Number(valor);
+  if (!Number.isInteger(n) || n < 1 || n > 25) return 'Dia inválido — escolha um dia entre 1 e 25.';
+  return '';
+};
 
 // ─── Modal Formulário ─────────────────────────────────────────────────────────
 
@@ -164,6 +173,8 @@ function ModalProprietario({
   const [docError,      setDocError]      = useState('');
   const [buscandoCEP,   setBuscandoCEP]   = useState(false);
   const cnpjTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const diaVencimentoErro = validarDiaVencimento(form.diaVencimentoFatura);
 
   const handleTipoDoc = (tipo: TipoDoc) => {
     setDocError('');
@@ -454,15 +465,21 @@ function ModalProprietario({
             </div>
 
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura</label>
-              <input type="number" min={1} max={28}
+              <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
+              <input type="number" min={1} max={25}
                 value={form.diaVencimentoFatura}
                 onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
-                placeholder="Ex.: 10"
-                className={inputCls} />
-              <p className="text-[10px] text-gray-400 mt-1">
-                Dia do mês (1-28) em que a fatura vence. Fatura fechada e não paga após o vencimento fica <b>Atrasada</b>.
-              </p>
+                placeholder="Ex.: 5"
+                className={`${inputCls} ${diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
+              {diaVencimentoErro ? (
+                <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
+                  <AlertCircle size={11} /> {diaVencimentoErro}
+                </p>
+              ) : (
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Escolha um dia do mês entre <b>1 e 25</b>. Fatura fechada e não paga após o vencimento fica <b>Atrasada</b>.
+                </p>
+              )}
             </div>
           </section>
 
@@ -546,7 +563,7 @@ export default function CadastroProprietario() {
         ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
         : '',
       frequenciaVisitas: p.frequenciaVisitas ? String(p.frequenciaVisitas) : '',
-      diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '',
+      diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
       cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
       endereco:          p.endereco    ?? '',
       complemento:       p.complemento ?? '',
@@ -569,6 +586,7 @@ export default function CadastroProprietario() {
     if (!form.email.trim())         { toast.error('E-mail é obrigatório'); return; }
     if (!form.phone.trim())         { toast.error('Telefone é obrigatório'); return; }
     if (!form.frequenciaVisitas)    { toast.error('Frequência de visitas é obrigatória'); return; }
+    if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro já exibido inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
     if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { toast.error('CPF inválido'); return; }
@@ -587,7 +605,7 @@ export default function CadastroProprietario() {
       mensalista:        form.mensalista,
       valorAssistencia:  form.mensalista && form.valorAssistencia ? parseMoeda(form.valorAssistencia) : null,
       frequenciaVisitas: form.frequenciaVisitas ? Number(form.frequenciaVisitas) : null,
-      diaVencimentoFatura: form.diaVencimentoFatura ? Number(form.diaVencimentoFatura) : null,
+      diaVencimentoFatura: Number(form.diaVencimentoFatura),
       cep:               form.cep         || null,
       endereco:          form.endereco    || null,
       complemento:       form.complemento || null,

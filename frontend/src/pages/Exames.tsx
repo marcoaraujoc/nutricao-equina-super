@@ -1,11 +1,11 @@
-﻿import { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+﻿import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { Eye, Download, Calendar, Edit, Trash2 } from 'lucide-react';
+import { Eye, Download, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
@@ -13,12 +13,16 @@ import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
 import ModalJustificativa from '../components/ModalJustificativa';
+import { setLaudosPendentes } from '../utils/laudoPendente';
 
 const Exames = () => {
   const { user } = useAuth();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
+  const [searchParams] = useSearchParams();
+  // Submenu do Sidebar (Resultado de Exame > Laboratorial | Imagem) — o título acompanha
+  const tipoExame = (searchParams.get('tipo') ?? '').toLowerCase();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeEditar  = isGestor || podeExecutar('atendimento.exames.editar');
   const podeDeletar = isGestor || podeExecutar('atendimento.exames.deletar');
@@ -39,6 +43,15 @@ const Exames = () => {
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
+  // Imagens armazenadas (página Resultado de Exame · Imagem)
+  const [imagensAnexos, setImagensAnexos] = useState<any[]>([]);
+  useEffect(() => {
+    if (loadingPerms || tipoExame !== 'imagem' || !effectiveAnimalId) { setImagensAnexos([]); return; }
+    api.get(`/exames/imagens/animal/${effectiveAnimalId}`)
+      .then(r => { if (r.data) setImagensAnexos(r.data.dados ?? []); })
+      .catch(() => setImagensAnexos([]));
+  }, [loadingPerms, tipoExame, effectiveAnimalId]);
+
   useEffect(() => {
     const loadNutrientes = async () => {
       try {
@@ -57,13 +70,19 @@ const Exames = () => {
       const res = await api.get('/animais');
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimaisDoProprietario(lista);
-      if (lista.length === 1 && !selectedAnimal) {
+      // Auto-seleciona um animal quando não há seleção (evita o falso "sem animais"
+      // para gestor/vet com vários pacientes)
+      if (lista.length > 0 && !selectedAnimal) {
+        const alvo = (animalId && lista.find((a: { id: number }) => String(a.id) === animalId)) || lista[0];
         setSelectedAnimal({
-          ...lista[0],
-          photoUrl:       lista[0].photoUrl       ?? undefined,
-          dataNascimento: lista[0].dataNascimento ?? undefined,
+          ...alvo,
+          photoUrl:       alvo.photoUrl       ?? undefined,
+          dataNascimento: alvo.dataNascimento ?? undefined,
         });
-        if (!animalId) navigate(`/exames/${lista[0].id}`, { replace: true });
+        if (!animalId) {
+          const qs = searchParams.toString();
+          navigate(`/exames/${alvo.id}${qs ? `?${qs}` : ''}`, { replace: true });
+        }
       }
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
@@ -88,8 +107,28 @@ const Exames = () => {
     Promise.all([loadAnimais(), loadExamesAndAnimal()]).finally(() => setLoading(false));
   }, [effectiveAnimalId, user?.id, loadingPerms]);
 
-  const handleNovoExame = () => {
-    if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo`);
+  // Carregar Resultado: abre o seletor de arquivo AQUI (clique direto do usuário)
+  // e, com o laudo escolhido, navega para a página de novo exame já processando.
+  const laudoInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCarregarResultado = () => {
+    if (effectiveAnimalId) laudoInputRef.current?.click();
+  };
+
+  // Preserva o tipo (laboratorial/imagem) para o Cancelar voltar à lista certa
+  const sufixoTipo = tipoExame ? `&tipo=${tipoExame}` : '';
+
+  const handleLaudoEscolhido = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ''; // permite escolher o mesmo arquivo de novo depois
+    if (files.length === 0 || !effectiveAnimalId) return;
+    setLaudosPendentes(files);
+    navigate(`/exames/${effectiveAnimalId}/novo?modo=upload${sufixoTipo}`);
+  };
+
+  // Preencher Manualmente: página de novo exame já com o formulário manual aberto
+  const handlePreencherManualmente = () => {
+    if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo?modo=manual${sufixoTipo}`);
   };
 
   const startEdit = (ex: any) => { setEditingId(ex.id); setEditValues({ ...ex }); };
@@ -176,6 +215,25 @@ const Exames = () => {
 
         <BotaoVoltar />
 
+        {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título por submenu */}
+        <div className="mt-2 flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            {tipoExame === 'laboratorial' ? <ClipboardList size={20} className="text-emerald-700" />
+              : tipoExame === 'imagem'    ? <Scan          size={20} className="text-emerald-700" />
+              :                             <Microscope    size={20} className="text-emerald-700" />}
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {tipoExame === 'laboratorial' ? 'Resultado de Exame · Laboratorial'
+                : tipoExame === 'imagem'    ? 'Resultado de Exame · Imagem'
+                :                             'Resultado de Exame'}
+            </h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Resultados de exames do paciente e comparação com os valores de referência.
+            </p>
+          </div>
+        </div>
+
         <SeletorAnimal
           animais={animaisDoProprietario}
           animalIdAtual={effectiveAnimalId}
@@ -184,12 +242,50 @@ const Exames = () => {
 
         {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
-        <button
-          onClick={handleNovoExame}
-          className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-3xl flex items-center justify-center gap-2 transition-colors"
-        >
-          Novo Exame Nutricional
-        </button>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <input
+            ref={laudoInputRef}
+            type="file"
+            accept=".pdf,image/*"
+            multiple={tipoExame === 'imagem'}
+            onChange={handleLaudoEscolhido}
+            className="hidden"
+          />
+          <button
+            onClick={handleCarregarResultado}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
+          >
+            {tipoExame === 'imagem' ? 'Carregar Laudo e Imagens' : 'Carregar Resultado'}
+          </button>
+          <button
+            onClick={handlePreencherManualmente}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+          >
+            Preencher Manualmente
+          </button>
+        </div>
+
+        {/* Imagens armazenadas — só na página de Imagem */}
+        {tipoExame === 'imagem' && imagensAnexos.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">
+              Imagens armazenadas ({imagensAnexos.length})
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {imagensAnexos.map((img: any) => (
+                <a key={img.id} href={img.arquivoUrl} target="_blank" rel="noreferrer"
+                  className="group border border-gray-100 rounded-xl overflow-hidden hover:border-emerald-300 transition-colors">
+                  <img src={img.arquivoUrl} alt={img.nome ?? 'Imagem de exame'}
+                    className="w-full h-28 object-cover bg-gray-50" loading="lazy" />
+                  <div className="px-2 py-1.5">
+                    <p className="text-[11px] text-gray-600 truncate">{img.nome ?? 'Imagem'}</p>
+                    <p className="text-[10px] text-gray-400">{formatDate(img.createdAt)}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">

@@ -218,6 +218,8 @@ app.use('/api/clinica/imagem-exames',  imagemExamesRoutes);
 app.use('/api/resenha',               resenhaRoutes);
 app.use('/api/animais/:animalId/resenha', resenhaGraficaRoutes);
 app.use('/api/clinica',               agendaRoutes); // /historico e /agendamentos
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+app.use('/api/webhooks',              require('./routes/webhooks')); // Evolution API (token via query)
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);
 app.use('/api/veterinarios',          veterinariosRoutes);
@@ -746,6 +748,18 @@ registrarJob('cancelar_agendamentos_nao_realizados', {
   nome: 'Cancelamento de agendamentos não realizados',
   exprPadrao: '30 23 * * *', // diariamente às 23:30
   fn: () => comAlerta('Cancelamento de agendamentos não realizados', cancelarAgendamentosNaoRealizados),
+});
+
+// ===================== CRON — CANCELAMENTO DE PRESCRIÇÕES NÃO EXECUTADAS =====================
+// Corporativo (todas as empresas). Grupos FINALIZADO cuja janela de tratamento de todos os
+// itens já passou: sem nenhuma execução → CANCELADO; execução parcial → CANCELADO_PARCIALMENTE
+// (itens não executados cancelados, executados/faturados preservados). Libera reservas de estoque.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { cancelarPrescricoesNaoExecutadas } = require('./services/prescricaoCronService');
+registrarJob('cancelar_prescricoes_nao_executadas', {
+  nome: 'Cancelamento de prescrições não executadas',
+  exprPadrao: '40 23 * * *', // diariamente às 23:40
+  fn: () => comAlerta('Cancelamento de prescrições não executadas', cancelarPrescricoesNaoExecutadas),
 });
 
 export default app;

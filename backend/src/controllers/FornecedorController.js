@@ -8,6 +8,7 @@ const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const TIPOS_SERVICO_VALIDOS = [
   'Cardiologista',
   'Dermatologista',
+  'Estagiário',
   'Farmácia',
   'Ferrador',
   'Fisioterapeuta',
@@ -15,6 +16,8 @@ const TIPOS_SERVICO_VALIDOS = [
   'Loja',
   'Quiroprata',
   'Radiologista',
+  'Secretária',
+  'Veterinário',
 ];
 
 const normalizarDigitos = v => (v ?? '').replace(/\D/g, '');
@@ -311,6 +314,10 @@ const FornecedorController = {
             skipDuplicates: true,
           });
         }
+      } else if (Array.isArray(especialidadeIds)) {
+        // Array VAZIO enviado explicitamente (ex.: trocou para tipo não-veterinário) —
+        // remove os vínculos de especialidade antigos
+        await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedor.id } });
       }
 
       res.json({ sucesso: true, dados: fornecedor });

@@ -36,6 +36,7 @@ interface Membro {
     cidade?:      string | null;
     estado?:      string | null;
     fornecedorPerfil?: { tipoServico?: string | null } | null;
+    especialidades?: Array<{ especialidadeId: number; especialidade?: { id: number; nome: string } }>;
   };
   equipe?: { nome: string };
 }
@@ -192,6 +193,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         diasTrabalho:       values.diasTrabalho ?? [],
         horaInicioTrabalho: values.horaInicioTrabalho ?? '',
         horaFimTrabalho:    values.horaFimTrabalho ?? '',
+        ...(values.especialidadeIds !== undefined && { especialidadeIds: values.especialidadeIds }),
       });
       if (equipeId) {
         await api.patch(`/equipes/${equipeId}/membros/${membroEditando.user.id}/cargos`, { cargos });
@@ -490,6 +492,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
       {showConvite && (
         <UsuarioFormModal
           titulo="Incluir Membro"
+          equipeId={equipeId}
           infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
           textoBotao="Incluir"
           comFornecedor
@@ -505,6 +508,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         <UsuarioFormModal
           titulo="Editar Membro"
           modoEdicao
+          equipeId={equipeId}
           permitirSenha={isGestor}
           ocultarPerfil
           comExpediente
@@ -530,6 +534,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               : [],
             horaInicioTrabalho: membroEditando.horaInicioTrabalho ?? '',
             horaFimTrabalho:    membroEditando.horaFimTrabalho    ?? '',
+            especialidadeIds:   (membroEditando.user.especialidades ?? []).map(e => e.especialidadeId),
           }}
         />
       )}

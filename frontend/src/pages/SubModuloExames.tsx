@@ -786,9 +786,28 @@ export default function SubModuloExames({
   const removeSelectedExam = (name: string) =>
     setSelectedExams(prev => prev.filter(e => e !== name));
 
+  // Exames já inseridos no pedido para o laboratório atualmente selecionado —
+  // não podem ser incluídos de novo (sem exames repetidos por laboratório)
+  const examesJaInseridosNoLab = useMemo(() => {
+    const lab = laboratorioNomeSalvo.trim().toLowerCase();
+    if (!lab) return new Set<string>();
+    return new Set(
+      pendingGroups
+        .filter(g => (g.laboratorio ?? '').trim().toLowerCase() === lab)
+        .flatMap(g => g.examsDisplay.map(n => n.trim().toLowerCase()))
+    );
+  }, [pendingGroups, laboratorioNomeSalvo]);
+
   const validateCurrentForm = (): boolean => {
     if (examesEfetivos.length === 0)                               { toast.error('Selecione ao menos um exame'); return false; }
     if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { toast.error('Selecione o laboratório de destino'); return false; }
+    if (mainTab === 'laboratorial') {
+      const repetidos = examesEfetivos.filter(n => examesJaInseridosNoLab.has(n.trim().toLowerCase()));
+      if (repetidos.length > 0) {
+        toast.error(`Exame(s) já incluído(s) para este laboratório: ${repetidos.join(', ')}`);
+        return false;
+      }
+    }
     return true;
   };
 
@@ -1285,7 +1304,10 @@ export default function SubModuloExames({
 
                     {/* Exames do grupo selecionado */}
                     {mainTab === 'laboratorial' && (() => {
-                      const examesFiltrados = examesCat;
+                      // Oculta exames já inseridos no pedido para o MESMO laboratório
+                      const examesFiltrados = examesCat.filter(
+                        e => !examesJaInseridosNoLab.has(e.nome.trim().toLowerCase())
+                      );
                       const totalDisp = examesFiltrados.length;
                       return (
                         <div className="space-y-1">

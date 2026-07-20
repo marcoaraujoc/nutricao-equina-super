@@ -40,6 +40,7 @@ export interface GrupoExecucao {
   numero:          number;
   numeroFormatado: string;
   status:          string;
+  motivoCancelamento?: string | null;
   finalizadoEm:    string | null;
   finalizadoPor:   { id: number; fullName: string } | null;
   executadoPor:    { id: number; fullName: string } | null;
@@ -451,7 +452,14 @@ export function ModalExecucao({
         )}
 
         <div className="px-4 pt-2 pb-4 border-t border-gray-100 flex-shrink-0">
-          {soVisualizacao ? (
+          {grupo.status === 'CANCELADO' ? (
+            <div className="py-2.5 px-3 rounded-xl text-sm font-semibold bg-red-50 border border-red-200 text-red-600 text-center">
+              <span className="inline-flex items-center gap-2"><Ban size={14} /> Prescrição cancelada</span>
+              {grupo.motivoCancelamento && (
+                <p className="text-xs font-normal text-red-500 mt-1">Motivo: {grupo.motivoCancelamento}</p>
+              )}
+            </div>
+          ) : soVisualizacao ? (
             <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 border border-amber-200 text-amber-700">
               <Calendar size={14} />
               Execução disponível apenas para hoje
@@ -789,6 +797,12 @@ function LinhaGrupo({
       </button>
 
       <div className="flex items-center gap-1.5 flex-shrink-0">
+        {g.status === 'CANCELADO' && (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
+            title={g.motivoCancelamento ?? undefined}>
+            <Ban size={11} /> Cancelada
+          </span>
+        )}
         {executada && (
           <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
             <CheckCircle2 size={11} /> Executada{horaExecucao ? ` às ${horaExecucao}` : ''}
@@ -908,9 +922,12 @@ export default function ExecucaoPrescricao() {
 
   // Pendentes: mesma regra de sempre — só aparecem no dia da execução.
   // Executadas (hoje): vão para o HISTÓRICO abaixo, somente leitura.
+  // Canceladas: sempre na lista principal, com badge "Cancelada" e execução bloqueada.
   const filtrados = aplicarBusca(grupos.filter(g =>
-    isHoje ? !foiExecutadoHoje(g) : g.status !== 'EXECUTADO'));
-  const executadasHoje = isHoje ? aplicarBusca(grupos.filter(foiExecutadoHoje)) : [];
+    g.status === 'CANCELADO' ? true : (isHoje ? !foiExecutadoHoje(g) : g.status !== 'EXECUTADO')));
+  const executadasHoje = isHoje
+    ? aplicarBusca(grupos.filter(g => g.status !== 'CANCELADO' && foiExecutadoHoje(g)))
+    : [];
 
   if (loadingPerm) return (
     <div className="flex items-center justify-center py-20">
@@ -1002,9 +1019,9 @@ export default function ExecucaoPrescricao() {
                     onExecutar={() => podeExecutarAcao ? setModal(g) : semPermissao('executar prescrição')}
                     onVer={() => setModal(g)}
                     onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
-                    podeExecutarAcao={podeExecutarAcao}
+                    podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
                     podeImprimir={podeImprimir}
-                    soVisualizacao={!isHoje}
+                    soVisualizacao={!isHoje || g.status === 'CANCELADO'}
                   />
                 ))}
               </div>
@@ -1048,7 +1065,7 @@ export default function ExecucaoPrescricao() {
         <ModalExecucao
           grupo={modal}
           onClose={() => { setModal(null); carregar(); }}
-          soVisualizacao={!isHoje || foiExecutadoHoje(modal)}
+          soVisualizacao={!isHoje || modal.status === 'CANCELADO' || foiExecutadoHoje(modal)}
         />
       )}
     </PageContainer>

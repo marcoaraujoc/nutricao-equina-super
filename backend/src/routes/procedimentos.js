@@ -7,6 +7,7 @@
 const express  = require('express');
 const router   = express.Router();
 const ctrl     = require('../controllers/ProcedimentoController');
+const cadastro = require('../controllers/ProcedimentoCadastroController');
 const { authenticate } = require('../middlewares/auth');
 
 const requireAdmin = (req, res, next) => {
@@ -15,6 +16,16 @@ const requireAdmin = (req, res, next) => {
   }
   next();
 };
+
+// ── Cadastro > Procedimentos (por especialidade + preços/combos da empresa) ──
+// Rotas literais ANTES de /:id (Express interpretaria como id).
+router.get('/especialidades-minhas',        authenticate, cadastro.especialidadesMinhas);
+router.get('/cadastro/lista',               authenticate, cadastro.listarComValores);
+router.put('/cadastro/valor/:procedimentoId', authenticate, cadastro.definirValor);
+router.get('/cadastro/combos',              authenticate, cadastro.listarCombos);
+router.post('/cadastro/combos',             authenticate, cadastro.criarCombo);
+router.put('/cadastro/combos/:id',          authenticate, cadastro.atualizarCombo);
+router.delete('/cadastro/combos/:id',       authenticate, cadastro.excluirCombo);
 
 router.get('/',    authenticate, ctrl.listar);
 router.get('/:id', authenticate, ctrl.obterPorId);

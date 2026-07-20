@@ -1,9 +1,9 @@
 // src/pages/Configuracoes.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Camera, Loader2, MessageCircle } from 'lucide-react';
+import { Camera, Loader2, MessageCircle, QrCode, Power, RefreshCw } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -79,8 +79,71 @@ export default function Configuracoes() {
 
   const [tipoSelecao,    setTipoSelecao]    = useState<TipoSelecao>('ULTIMO_DIA_MES');
   const [diaEspecifico,  setDiaEspecifico]  = useState('5');
+  const [erroDia,        setErroDia]        = useState<string | null>(null);
   const [nDiaUtil,       setNDiaUtil]       = useState('5');
   const [whatsapp,       setWhatsapp]       = useState('');
+
+  // ── Conexão WhatsApp (Evolution API — via backend; nada da Evolution chega aqui) ──
+  const [waStatus,     setWaStatus]     = useState<string>('CARREGANDO');
+  const [waDisponivel, setWaDisponivel] = useState(true);
+  const [waQr,         setWaQr]         = useState<string | null>(null);
+  const [waAcao,       setWaAcao]       = useState(false);
+  const waPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pararPollWa = useCallback(() => {
+    if (waPollRef.current) { clearInterval(waPollRef.current); waPollRef.current = null; }
+  }, []);
+
+  const carregarWaStatus = useCallback(async () => {
+    try {
+      const res = await api.get('/equipes/whatsapp/status');
+      if (!res.data) return;
+      setWaStatus(res.data?.dados?.status ?? 'DESCONECTADO');
+      setWaDisponivel(Boolean(res.data?.dados?.disponivel));
+    } catch { setWaDisponivel(false); setWaStatus('DESCONECTADO'); }
+  }, []);
+
+  useEffect(() => { carregarWaStatus(); return pararPollWa; }, [carregarWaStatus, pararPollWa]);
+
+  const handleWaConectar = async (reconectar = false) => {
+    setWaAcao(true);
+    try {
+      const res   = await api.post(`/equipes/whatsapp/${reconectar ? 'reconectar' : 'conectar'}`);
+      const dados = res.data?.dados;
+      setWaStatus(dados?.status ?? 'DESCONECTADO');
+      if (dados?.qrcodeBase64) {
+        setWaQr(dados.qrcodeBase64);
+        // Polling: quando o QR for lido, o status vira CONECTADO (webhook atualiza o banco)
+        pararPollWa();
+        waPollRef.current = setInterval(async () => {
+          try {
+            const s  = await api.get('/equipes/whatsapp/status');
+            const st = s.data?.dados?.status;
+            if (st) setWaStatus(st);
+            if (st === 'CONECTADO') { pararPollWa(); setWaQr(null); toast.success('WhatsApp conectado'); }
+          } catch { /* silencioso */ }
+        }, 4000);
+      } else if (dados?.status === 'CONECTADO') {
+        setWaQr(null);
+        toast.success('WhatsApp conectado');
+      }
+    } catch (err) {
+      const e = err as { response?: { data?: { mensagem?: string } } };
+      toast.error(e.response?.data?.mensagem ?? 'Falha ao conectar o WhatsApp');
+    } finally { setWaAcao(false); }
+  };
+
+  const handleWaDesconectar = async () => {
+    setWaAcao(true);
+    try {
+      await api.post('/equipes/whatsapp/desconectar');
+      pararPollWa(); setWaQr(null); setWaStatus('DESCONECTADO');
+      toast.success('WhatsApp desconectado');
+    } catch (err) {
+      const e = err as { response?: { data?: { mensagem?: string } } };
+      toast.error(e.response?.data?.mensagem ?? 'Falha ao desconectar');
+    } finally { setWaAcao(false); }
+  };
 
   // Expediente de atendimento
   const [diasAtend,  setDiasAtend]  = useState<number[]>([]);
@@ -192,13 +255,14 @@ export default function Configuracoes() {
       diaFechamentoFatura = n;
     } else {
       const n = Number(diaEspecifico);
-      if (!Number.isInteger(n) || n < 1 || n > 28) {
-        toast.error('O dia específico deve estar entre 1 e 28.');
+      if (diaEspecifico.trim() === '' || !Number.isInteger(n) || n < 1 || n > 28) {
+        setErroDia('Informe um dia entre 1 e 28.');
         return;
       }
       tipoFechamento = 'DIA_FIXO';
       diaFechamentoFatura = n;
     }
+    setErroDia(null);
 
     const whatsappDigitos = whatsapp.replace(/\D/g, '');
     if (whatsappDigitos !== '' && whatsappDigitos.length < 10) {
@@ -232,8 +296,9 @@ export default function Configuracoes() {
       if (dados) setLogoPreview(dados.logoUrl ?? null);
       setLogoFile(null);
       setLogoRemovido(false);
+      // Sidebar escuta este evento para atualizar a logomarca sem reload
+      window.dispatchEvent(new CustomEvent('s2vet:config-atualizada'));
       toast.success('Configurações salvas com sucesso!');
-      navigate('/mapa-atendimento'); // volta para o Mapa de atendimento após salvar
     } catch {
       // interceptor já trata isPermissionError silenciosamente
       toast.error('Erro ao salvar configurações.');
@@ -292,14 +357,14 @@ export default function Configuracoes() {
           )}
         </div>
 
-        <form onSubmit={handleSalvar} className="space-y-5">
+        <form onSubmit={handleSalvar} noValidate className="space-y-5">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
               Fechamento da fatura
             </label>
             <select
               value={tipoSelecao}
-              onChange={e => setTipoSelecao(e.target.value as TipoSelecao)}
+              onChange={e => { setTipoSelecao(e.target.value as TipoSelecao); setErroDia(null); }}
               className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
               <option value="ULTIMO_DIA_MES">Último dia do mês</option>
@@ -309,15 +374,20 @@ export default function Configuracoes() {
             </select>
 
             {tipoSelecao === 'DIA_ESPECIFICO' && (
-              <input
-                type="number"
-                min={1}
-                max={28}
-                value={diaEspecifico}
-                onChange={e => setDiaEspecifico(e.target.value)}
-                placeholder="Ex: 5 (1 a 28)"
-                className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm mt-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  value={diaEspecifico}
+                  onChange={e => { setDiaEspecifico(e.target.value); setErroDia(null); }}
+                  placeholder="Ex: 5 (1 a 28)"
+                  className={`w-full border rounded-2xl px-4 py-2.5 text-sm mt-2 focus:outline-none focus:ring-2 ${
+                    erroDia ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-emerald-500'
+                  }`}
+                />
+                {erroDia && <p className="text-xs text-red-600 mt-1">{erroDia}</p>}
+              </>
             )}
 
             {tipoSelecao === 'DIA_UTIL' && (
@@ -360,6 +430,60 @@ export default function Configuracoes() {
             <p className="text-xs text-gray-400 mt-1">
               Número usado para enviar e receber mensagens de WhatsApp. Deixe em branco para remover.
             </p>
+
+            {/* Conexão do WhatsApp da clínica (instância exclusiva — gerida pelo backend) */}
+            <div className="mt-3 border border-gray-200 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                    waStatus === 'CONECTADO'     ? 'bg-emerald-500' :
+                    waStatus === 'AGUARDANDO_QR' ? 'bg-amber-400 animate-pulse' : 'bg-gray-300'
+                  }`} />
+                  <span className="text-sm font-semibold text-gray-700">
+                    {waStatus === 'CARREGANDO'    ? 'Verificando conexão…'
+                      : waStatus === 'CONECTADO'     ? 'WhatsApp conectado'
+                      : waStatus === 'AGUARDANDO_QR' ? 'Aguardando leitura do QR Code'
+                      :                                'WhatsApp desconectado'}
+                  </span>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {waStatus !== 'CONECTADO' && (
+                    <button type="button" onClick={() => handleWaConectar(false)} disabled={waAcao || !waDisponivel}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-xs font-semibold transition-colors">
+                      {waAcao ? <Loader2 size={12} className="animate-spin" /> : <QrCode size={12} />}
+                      Conectar WhatsApp
+                    </button>
+                  )}
+                  <button type="button" onClick={() => handleWaConectar(true)} disabled={waAcao || !waDisponivel}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-700 rounded-xl text-xs font-semibold transition-colors">
+                    <RefreshCw size={12} /> Reconectar
+                  </button>
+                  {waStatus === 'CONECTADO' && (
+                    <button type="button" onClick={handleWaDesconectar} disabled={waAcao}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 hover:bg-red-50 disabled:opacity-50 text-red-600 rounded-xl text-xs font-semibold transition-colors">
+                      <Power size={12} /> Desconectar
+                    </button>
+                  )}
+                </div>
+              </div>
+              {!waDisponivel && (
+                <p className="text-[11px] text-amber-600 mt-2">
+                  Integração de WhatsApp não configurada no servidor — contate o administrador do sistema.
+                </p>
+              )}
+              {waQr && (
+                <div className="mt-3 flex flex-col items-center gap-2 border-t border-gray-100 pt-3">
+                  <img
+                    src={waQr.startsWith('data:') ? waQr : `data:image/png;base64,${waQr}`}
+                    alt="QR Code do WhatsApp"
+                    className="w-52 h-52 rounded-xl border border-gray-200"
+                  />
+                  <p className="text-xs text-gray-500 text-center">
+                    Abra o WhatsApp no celular da clínica → <b>Aparelhos conectados</b> → <b>Conectar aparelho</b> e leia o código.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Espécies atendidas pela empresa */}
@@ -432,13 +556,23 @@ export default function Configuracoes() {
             </p>
           </div>
 
-          <button
-            type="submit"
-            disabled={salvando}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-2xl py-3 transition-colors"
-          >
-            {salvando ? 'Salvando...' : 'Salvar'}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              disabled={salvando}
+              onClick={() => navigate(-1)}
+              className="flex-1 border border-gray-300 hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold rounded-2xl py-3 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={salvando}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-2xl py-3 transition-colors"
+            >
+              {salvando ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
         </form>
       </div>
     </PageContainer>

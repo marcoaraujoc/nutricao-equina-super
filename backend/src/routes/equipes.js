@@ -36,6 +36,14 @@ router.get('/meus-contextos', authenticate, EquipeController.meusContextos);
 // ─── Configurações (logotipo + dia de fechamento de fatura) ──────────────────
 router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
 router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);
+
+// WhatsApp da clínica (Evolution API) — GESTOR/dono do contexto ativo.
+// Antes de /:equipeId para o literal não virar parâmetro.
+const WhatsappController = require('../controllers/WhatsappController');
+router.get('/whatsapp/status',       authenticate, WhatsappController.status);
+router.post('/whatsapp/conectar',    authenticate, WhatsappController.conectar);
+router.post('/whatsapp/reconectar',  authenticate, WhatsappController.reconectar);
+router.post('/whatsapp/desconectar', authenticate, WhatsappController.desconectar);
 // Expediente de atendimento — leitura por qualquer membro (Agendamento)
 router.get('/horario-atendimento', authenticate, EquipeController.obterHorarioAtendimento);
 // Logotipo da empresa do contexto ativo — leitura por qualquer membro (Sidebar/branding)

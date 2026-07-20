@@ -126,6 +126,8 @@ interface UsuarioFormModalProps {
   ocultarPerfil?: boolean;
   /** Exibe a seção de expediente de trabalho (dias + horário) — usado em Equipe */
   comExpediente?: boolean;
+  /** Equipe gerenciada pela tela — filtra as especialidades pelas espécies dessa empresa */
+  equipeId?: number | null;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -138,7 +140,7 @@ interface UsuarioFormModalProps {
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
   comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
-  initial, salvando, textoBotao, onClose, onSubmit,
+  equipeId = null, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
   const [form, setForm] = useState<UsuarioFormValues>({
@@ -158,17 +160,18 @@ export default function UsuarioFormModal({
 
   const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
-  // Especialidades (catálogo por espécie) — VET e FORNECEDOR em novos membros.
-  const mostrarEspecialidades = !modoEdicao && (form.perfil === 'VETERINARIO' || form.perfil === 'FORNECEDOR');
+  // Especialidades (catálogo por espécie) — VET e FORNECEDOR, na inclusão E na edição.
+  const mostrarEspecialidades = form.perfil === 'VETERINARIO' || form.perfil === 'FORNECEDOR';
   const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
   useEffect(() => {
-    api.get('/equipes/especies-atendidas')
+    const url = equipeId ? `/equipes/especies-atendidas?equipeId=${equipeId}` : '/equipes/especies-atendidas';
+    api.get(url)
       .then(res => {
         const lista = res.data?.dados?.especiesAtendidas ?? [];
         setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
       })
       .catch(() => setEspeciesEmpresa([]));
-  }, []);
+  }, [equipeId]);
 
   useEffect(() => {
     if (!mostrarSeletorFornecedor || fornecedores.length > 0 || loadingFornecedores) return;
@@ -251,8 +254,8 @@ export default function UsuarioFormModal({
       if (erroSenha) { toast.error(erroSenha); return; }
     }
     const perfilFinal = cargosFinais[0];
-    const enviaEspec = !modoEdicao && (perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR');
-    if (enviaEspec && (form.especialidadeIds ?? []).length === 0) {
+    const enviaEspec = perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR';
+    if (enviaEspec && !modoEdicao && (form.especialidadeIds ?? []).length === 0) {
       toast.error('Selecione ao menos uma especialidade'); return;
     }
     onSubmit({

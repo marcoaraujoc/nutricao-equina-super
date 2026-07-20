@@ -570,9 +570,14 @@ const Dieta = () => {
     try {
       const res = await api.get('/animais');
       if (!res.data) return;
-      setAnimaisDoProprietario((res.data?.dados ?? res.data ?? []) as AnimalExtended[]);
+      const lista = (res.data?.dados ?? res.data ?? []) as AnimalExtended[];
+      setAnimaisDoProprietario(lista);
+      // Auto-seleciona um animal quando não há seleção (evita o falso "sem animais"
+      // para gestor/vet com vários pacientes ao entrar sem :animalId na URL)
+      if (lista.length > 0 && !animalId && !selectedAnimal) setSelectedAnimal(lista[0]);
     } catch { /* silencioso */ }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animalId, selectedAnimal]);
 
   const carregarAlimentos = useCallback(async () => {
     try {
@@ -906,19 +911,18 @@ const Dieta = () => {
         <BotaoVoltar />
 
         {/* Cabeçalho de página (mesmo conceito da tela de Fornecedores): título + descritivo */}
-        {planoSelecionado && (
-          <div className="mt-2 mb-4 flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-              <Utensils size={20} className="text-emerald-700" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Plano de Dieta</h1>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
-              </p>
-            </div>
+        {/* Cabeçalho fixo da página — não depende do plano carregado (persiste ao trocar de animal) */}
+        <div className="mt-2 mb-4 flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <Utensils size={20} className="text-emerald-700" />
           </div>
-        )}
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Plano de Dieta</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
+            </p>
+          </div>
+        </div>
 
         <SeletorAnimal
           animais={animaisDoProprietario}

@@ -105,12 +105,6 @@ export default function CadastroPessoal() {
       .catch(() => setEspeciesEmpresa([]));
   }, [loadingPerms]);
 
-  // Filtro de especialidades: convidado → espécies da empresa; cadastro direto →
-  // as espécies que o próprio veterinário atende. Vazio = mostra todas.
-  const especiesFiltroEspecialidade = (isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
-    ? especiesEmpresa
-    : form.especiesAtendidas;
-
   const [form, setForm] = useState({
     nomeCompleto:      '',
     telefone:          '',
@@ -130,6 +124,14 @@ export default function CadastroPessoal() {
     horaInicioAtend:   '',               // HH:MM
     horaFimAtend:      '',               // HH:MM
   });
+
+  // Filtro de especialidades: convidado → espécies da empresa; cadastro direto →
+  // as espécies que o próprio veterinário atende. Vazio = mostra todas.
+  // (Depois do useState do form — referenciar `form` antes da declaração causava
+  // "Cannot access 'form' before initialization".)
+  const especiesFiltroEspecialidade = (isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
+    ? especiesEmpresa
+    : form.especiesAtendidas;
 
   useEffect(() => {
     if (loadingPerms) return;

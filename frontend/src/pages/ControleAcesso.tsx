@@ -1127,10 +1127,12 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<AdminEmpresa[]>([]);
   const [loadingEmpresas,     setLoadingEmpresas]     = useState(false);
 
-  // Equipes de empresas sem CNPJ (espaço pessoal CPF) — modo CPF
+  // Empresas pessoais (sem CNPJ) — modo CPF. Label principal = nome da EMPRESA
+  // (não da equipe); a equipe aparece como subtítulo. O id segue sendo o da equipe
+  // (o backend recebe equipeId ao selecionar existente).
   const equipesAdmin = empresasDisponiveis
     .filter(e => e.cnpj == null)
-    .flatMap(e => e.equipes.map(eq => ({ id: eq.id, nome: eq.nome, empresaNome: e.nome })));
+    .flatMap(e => e.equipes.map(eq => ({ id: eq.id, nome: e.nome, empresaNome: `Equipe: ${eq.nome}` })));
   // Filtra por texto digitado; CNPJ mode mostra só empresas com CNPJ, CPF mode só sem CNPJ
   const comboOpcoes = conviteTipoDoc === 'CNPJ'
     ? empresasDisponiveis
@@ -1283,7 +1285,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
     }
 
     if (isAdmin) {
-      if (!comboInput.trim()) { setComboErro(conviteTipoDoc === 'CNPJ' ? 'Informe a empresa' : 'Informe a equipe'); hasError = true; }
+      if (!comboInput.trim()) { setComboErro('Informe o nome da empresa'); hasError = true; }
 
       if (conviteTipoDoc === 'CNPJ') {
         if (!conviteNome.trim()) { setConviteNomeErro('Nome do profissional é obrigatório'); hasError = true; }
@@ -1325,12 +1327,12 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
         } else {
           payload.cpf      = conviteDoc.trim();
           payload.fullName = conviteNome.trim();
-          payload.empresaNome = conviteNome.trim();
+          // Nome da EMPRESA pessoal vem do campo Empresa (não do nome do profissional)
+          payload.empresaNome = comboInput.trim();
           if (selecionadoId) {
             payload.equipeId = selecionadoId;
-          } else {
-            payload.nomeEquipe = comboInput.trim();
           }
+          // Sem seleção: backend cria a empresa pessoal com equipe padrão "Equipe Principal"
         }
         await api.post('/equipes/admin/convidar-gestor', payload);
       } else {
@@ -1834,7 +1836,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
                   {/* Combobox: Equipe (CPF) ou Empresa (CNPJ) */}
                   <div ref={comboRef} className="relative">
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      {conviteTipoDoc === 'CNPJ' ? 'Empresa' : 'Equipe'}
+                      Empresa <span className="text-red-500">*</span>
                       {selecionadoId ? (
                         <span className="ml-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">existente</span>
                       ) : criandoNovo ? (
@@ -1851,14 +1853,14 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
                       }}
                       onFocus={() => setShowComboDropdown(true)}
                       onBlur={() => setTimeout(() => setShowComboDropdown(false), 150)}
-                      placeholder={conviteTipoDoc === 'CNPJ' ? 'Selecione ou digite uma empresa...' : 'Selecione ou digite uma equipe...'}
+                      placeholder="Selecione ou digite o nome da empresa..."
                       className={inputErrCls(!!comboErro)}
                       autoComplete="off"
                     />
                     <FieldError message={comboErro} />
                     {criandoNovo && !comboErro && (
                       <p className="text-[11px] text-emerald-600 mt-1">
-                        {conviteTipoDoc === 'CNPJ' ? `Empresa "${comboInput}" será criada` : `Equipe "${comboInput}" será criada`}
+                        Empresa "{comboInput}" será criada
                       </p>
                     )}
 
@@ -1871,13 +1873,13 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
                           </div>
                         ) : comboOpcoes.length === 0 && !comboInput ? (
                           <div className="px-3 py-3 text-xs text-gray-400">
-                            Nenhum{conviteTipoDoc === 'CNPJ' ? 'a empresa' : 'a equipe'} cadastrada. Digite para criar.
+                            Nenhuma empresa cadastrada. Digite para criar.
                           </div>
                         ) : (
                           <>
                             {comboOpcoes.length > 0 && (
                               <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide bg-gray-50 border-b border-gray-100">
-                                Selecione a {conviteTipoDoc === 'CNPJ' ? 'Empresa' : 'Equipe'}
+                                Selecione a Empresa
                               </div>
                             )}
                             {comboOpcoes.map(item => (
@@ -2980,6 +2982,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       {showModal && (
         <UsuarioFormModal
           titulo="Incluir Membro"
+          equipeId={equipeId}
           infoNota="Fornecedor: incluído imediatamente. Veterinário/Estagiário: convite por e-mail."
           textoBotao="Incluir"
           comFornecedor

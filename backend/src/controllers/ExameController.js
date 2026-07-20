@@ -53,6 +53,71 @@ exports.create = async (req, res) => {
   }
 };
 
+// Normaliza e valida o resultado da LLM (laudo) — busca/cria nutrientes e filtra
+// duplicatas (animalId + nutrienteId + dataExame). Compartilhado por analisarLLM
+// (laboratorial, 1 arquivo) e analisarImagens (imagem, vários arquivos).
+async function montarExamesDoLaudo(resultado, animalId) {
+  // Normaliza campos: suporta o formato novo (nome/resultado/referencia_min) e o antigo (nomeNutriente/valorEncontrado/valorMinRef)
+  const examesNormalizados = (resultado.exames ?? []).map(exame => ({
+    nomeNutriente:  exame.nomeNutriente  ?? exame.nome      ?? '',
+    valorEncontrado: safeParseFloat(exame.valorEncontrado ?? exame.resultado),
+    unidade:        exame.unidade        ?? '',
+    valorMinRef:    safeParseFloat(exame.valorMinRef    ?? exame.referencia_min),
+    valorMaxRef:    safeParseFloat(exame.valorMaxRef    ?? exame.referencia_max),
+    observacao:     exame.observacao     ?? exame.metodo    ?? null,
+  }));
+
+  // Data segura — fallback para hoje se inválida ou ausente
+  const dataExameRaw = resultado.dataExame;
+  const dataExameParsed = dataExameRaw ? new Date(dataExameRaw) : null;
+  const dataExameValida = dataExameParsed && !isNaN(dataExameParsed.getTime())
+    ? dataExameParsed
+    : new Date();
+
+  const examesValidados = await Promise.all(
+    examesNormalizados.map(async (exame) => {
+      if (!exame.nomeNutriente) return null;
+
+      // Busca ou cria o nutriente
+      let nutriente = await prisma.nutriente.findFirst({
+        where: { nome: { contains: exame.nomeNutriente } }
+      });
+
+      if (!nutriente) {
+        nutriente = await prisma.nutriente.create({
+          data: {
+            nome: exame.nomeNutriente,
+            unidadePadrao: exame.unidade ? String(exame.unidade).trim() : '',
+            categoria: "Bioquímica"
+          }
+        });
+      }
+
+      // ✅ Verifica duplicidade (animalId + nutrienteId + dataExame)
+      const jaExiste = await prisma.exameNutricional.findFirst({
+        where: {
+          animalId: parseInt(animalId),
+          nutrienteId: nutriente.id,
+          dataExame: dataExameValida
+        }
+      });
+
+      return {
+        ...exame,
+        nutrienteId: nutriente.id,
+        nomeOficial: nutriente.nome,
+        encontrado: !jaExiste,
+        jaExiste: !!jaExiste
+      };
+    })
+  );
+
+  return {
+    dataExame: dataExameValida.toISOString().split('T')[0],
+    exames: examesValidados.filter(ex => ex && ex.encontrado),
+  };
+}
+
 // 🔥 ANÁLISE COM LLM + FILTRO DE DUPLICIDADE
 exports.analisarLLM = async (req, res) => {
   try {
@@ -62,73 +127,81 @@ exports.analisarLLM = async (req, res) => {
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
 
     const resultado = await processarExame(req.file.path);
+    const { dataExame, exames } = await montarExamesDoLaudo(resultado, animalId);
 
-    // Normaliza campos: suporta o formato novo (nome/resultado/referencia_min) e o antigo (nomeNutriente/valorEncontrado/valorMinRef)
-    const examesNormalizados = resultado.exames.map(exame => ({
-      nomeNutriente:  exame.nomeNutriente  ?? exame.nome      ?? '',
-      valorEncontrado: safeParseFloat(exame.valorEncontrado ?? exame.resultado),
-      unidade:        exame.unidade        ?? '',
-      valorMinRef:    safeParseFloat(exame.valorMinRef    ?? exame.referencia_min),
-      valorMaxRef:    safeParseFloat(exame.valorMaxRef    ?? exame.referencia_max),
-      observacao:     exame.observacao     ?? exame.metodo    ?? null,
-    }));
-
-    // Data segura — fallback para hoje se inválida ou ausente
-    const dataExameRaw = resultado.dataExame;
-    const dataExameParsed = dataExameRaw ? new Date(dataExameRaw) : null;
-    const dataExameValida = dataExameParsed && !isNaN(dataExameParsed.getTime())
-      ? dataExameParsed
-      : new Date();
-
-    const examesValidados = await Promise.all(
-      examesNormalizados.map(async (exame) => {
-        if (!exame.nomeNutriente) return null;
-
-        // Busca ou cria o nutriente
-        let nutriente = await prisma.nutriente.findFirst({
-          where: { nome: { contains: exame.nomeNutriente } }
-        });
-
-        if (!nutriente) {
-          nutriente = await prisma.nutriente.create({
-            data: {
-              nome: exame.nomeNutriente,
-              unidadePadrao: exame.unidade ? String(exame.unidade).trim() : '',
-              categoria: "Bioquímica"
-            }
-          });
-        }
-
-        // ✅ Verifica duplicidade (animalId + nutrienteId + dataExame)
-        const jaExiste = await prisma.exameNutricional.findFirst({
-          where: {
-            animalId: parseInt(animalId),
-            nutrienteId: nutriente.id,
-            dataExame: dataExameValida
-          }
-        });
-
-        return {
-          ...exame,
-          nutrienteId: nutriente.id,
-          nomeOficial: nutriente.nome,
-          encontrado: !jaExiste,
-          jaExiste: !!jaExiste
-        };
-      })
-    );
-
-    // Filtra entradas inválidas e duplicatas
-    const examesNovos = examesValidados.filter(ex => ex && ex.encontrado);
-
-    res.json({
-      dataExame: dataExameValida.toISOString().split('T')[0],
-      exames: examesNovos
-    });
-
+    res.json({ dataExame, exames });
   } catch (error) {
     console.error('Erro na análise LLM:', error);
     res.status(500).json({ error: error.message });
+  }
+};
+
+// 🔥 Laudo + Imagens (página Resultado de Exame · Imagem) — vários arquivos.
+// A LLM interpreta cada arquivo: se extraiu dados de exame → é LAUDO (as
+// informações são carregadas fielmente, mesmo fluxo do analisar-llm); se não
+// extraiu nada (radiografia, ultrassom, foto...) → é IMAGEM e é apenas
+// ARMAZENADA (ExameImagemAnexo), sem criar linhas de exame.
+exports.analisarImagens = async (req, res) => {
+  try {
+    const { animalId } = req.body;
+    const arquivos = req.files ?? [];
+
+    if (arquivos.length === 0) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    if (!animalId)             return res.status(400).json({ error: 'animalId é obrigatório' });
+
+    let dataExameFinal = null;
+    const examesTotais = [];
+    const imagens      = [];
+
+    for (const file of arquivos) {
+      let resultado = null;
+      try {
+        resultado = await processarExame(file.path);
+      } catch {
+        resultado = null; // LLM não conseguiu interpretar → trata como imagem
+      }
+
+      const ehLaudo = Array.isArray(resultado?.exames) && resultado.exames.length > 0;
+      if (ehLaudo) {
+        const { dataExame, exames } = await montarExamesDoLaudo(resultado, animalId);
+        if (!dataExameFinal) dataExameFinal = dataExame;
+        examesTotais.push(...exames);
+      } else {
+        const arquivoUrl = await storage.upload(file, 'exames-imagens');
+        const anexo = await prisma.exameImagemAnexo.create({
+          data: {
+            animalId:    Number(animalId),
+            nome:        file.originalname ?? null,
+            arquivoUrl,
+            criadoPorId: req.user?.id ?? null,
+          },
+        });
+        imagens.push({ id: anexo.id, nome: anexo.nome, arquivoUrl: anexo.arquivoUrl });
+      }
+    }
+
+    res.json({
+      dataExame: dataExameFinal ?? new Date().toISOString().split('T')[0],
+      exames:    examesTotais,
+      imagens,
+    });
+  } catch (error) {
+    console.error('Erro na análise de laudo/imagens:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// GET /exames/imagens/animal/:animalId — imagens armazenadas do animal
+exports.listarImagens = async (req, res) => {
+  try {
+    const imagens = await prisma.exameImagemAnexo.findMany({
+      where:   { animalId: Number(req.params.animalId), ativo: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ dados: imagens });
+  } catch (error) {
+    console.error('Erro ao listar imagens de exame:', error);
+    res.status(500).json({ error: 'Erro ao listar imagens' });
   }
 };
 

@@ -248,6 +248,8 @@ export default function MapaAtendimento() {
   const [resumo,        setResumo]        = useState<ResumoData | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [dataFiltro,    setDataFiltro]    = useState(() => new Date().toISOString().slice(0, 10));
+  // Fim do período livre no modo SEMANAL (início = dataFiltro)
+  const [dataFimFiltro, setDataFimFiltro] = useState(() => new Date().toISOString().slice(0, 10));
   const [granularidade, setGranularidade] = useState<'DIARIO' | 'SEMANAL' | 'MENSAL'>('DIARIO');
   const [localizacaoId, setLocalizacaoId] = useState('');
   const [veterinarioId, setVeterinarioId] = useState('');
@@ -291,6 +293,7 @@ export default function MapaAtendimento() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ data: dataFiltro, granularidade });
+      if (granularidade === 'SEMANAL') params.set('dataFim', dataFimFiltro);
       if (localizacaoId) params.set('localizacaoId', localizacaoId);
       if (veterinarioId) params.set('veterinarioId', veterinarioId);
       const res = await api.get(`/mapa-atendimento/resumo?${params}`);
@@ -298,7 +301,7 @@ export default function MapaAtendimento() {
     } finally {
       setLoading(false);
     }
-  }, [loadingPerms, podeExecutar, dataFiltro, granularidade, localizacaoId, veterinarioId]);
+  }, [loadingPerms, podeExecutar, dataFiltro, dataFimFiltro, granularidade, localizacaoId, veterinarioId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -373,10 +376,11 @@ export default function MapaAtendimento() {
     const d = new Date(dataFiltro + 'T12:00:00');
     if (granularidade === 'MENSAL') return d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
     if (granularidade === 'SEMANAL') {
-      const ini = new Date(d); ini.setDate(d.getDate() - d.getDay());
-      const fim = new Date(ini); fim.setDate(ini.getDate() + 6);
+      // Período livre escolhido pelo usuário (início/fim)
+      const ini = new Date(dataFiltro    + 'T12:00:00');
+      const fim = new Date(dataFimFiltro + 'T12:00:00');
       const f = (x: Date) => x.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' });
-      return `Semana de ${f(ini)} a ${f(fim)}`;
+      return `Período de ${f(ini)} a ${f(fim)}`;
     }
     return d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   })();
@@ -420,18 +424,60 @@ export default function MapaAtendimento() {
           <h1 className="text-xl font-bold text-gray-900">Mapa de Atendimento</h1>
           <p className="text-sm text-gray-500 capitalize mt-0.5">{dataLabel}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-gray-500">Período</span>
           <SimpleSelect
             options={PERIODO_OPCOES}
             value={granularidade}
-            onChange={v => setGranularidade(v as 'DIARIO' | 'SEMANAL' | 'MENSAL')}
+            onChange={v => {
+              const g = v as 'DIARIO' | 'SEMANAL' | 'MENSAL';
+              setGranularidade(g);
+              if (g === 'SEMANAL' && dataFimFiltro < dataFiltro) {
+                // Inicializa o fim com início + 6 dias (semana) quando inválido
+                const fim = new Date(dataFiltro + 'T12:00:00');
+                fim.setDate(fim.getDate() + 6);
+                setDataFimFiltro(fim.toISOString().slice(0, 10));
+              }
+            }}
           />
-          <input
-            type="date"
-            value={dataFiltro}
-            onChange={e => setDataFiltro(e.target.value)}
-            className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
+          {granularidade === 'DIARIO' && (
+            <input
+              type="date"
+              value={dataFiltro}
+              onChange={e => setDataFiltro(e.target.value)}
+              className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          )}
+          {granularidade === 'SEMANAL' && (
+            <>
+              <input
+                type="date"
+                value={dataFiltro}
+                max={dataFimFiltro || undefined}
+                onChange={e => setDataFiltro(e.target.value)}
+                aria-label="Início do período"
+                className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <span className="text-xs text-gray-400">a</span>
+              <input
+                type="date"
+                value={dataFimFiltro}
+                min={dataFiltro || undefined}
+                onChange={e => setDataFimFiltro(e.target.value)}
+                aria-label="Fim do período"
+                className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </>
+          )}
+          {granularidade === 'MENSAL' && (
+            <input
+              type="month"
+              value={dataFiltro.slice(0, 7)}
+              onChange={e => { if (e.target.value) setDataFiltro(`${e.target.value}-01`); }}
+              aria-label="Mês e ano"
+              className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          )}
           <button
             onClick={carregar}
             disabled={loading}

@@ -28,6 +28,9 @@ const uploadTemp = multer({
 router.get('/animal/:animalId', authenticate, checkPermission('atendimento.exames.ler',     'LEITURA'), exameController.getExamesByAnimal);
 router.post('/',                authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), upload.single('arquivo'), exameController.create);
 router.post('/analisar-llm',    authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), uploadTemp.single('arquivo'), exameController.analisarLLM);
+// Página Resultado de Exame · Imagem — vários arquivos; LLM decide laudo × imagem
+router.post('/analisar-imagens', authenticate, checkPermission('atendimento.exames.criar',  'PROPRIO'), uploadTemp.array('arquivos', 10), exameController.analisarImagens);
+router.get('/imagens/animal/:animalId', authenticate, checkPermission('atendimento.exames.ler', 'LEITURA'), exameController.listarImagens);
 router.delete('/:id',           authenticate, checkPermission('atendimento.exames.deletar', 'PROPRIO'), exameController.delete);
 router.put('/:id',              authenticate, checkPermission('atendimento.exames.editar',  'PROPRIO'), exameController.update);
 

@@ -5,6 +5,7 @@ import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDow
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import DateInput from '../components/DateInput';
+import { formatDate } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -96,7 +97,7 @@ function normalizeVia(via: string): string {
 }
 
 function imprimirVacina(v: VacinaClinica) {
-  const formatD = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
+  const formatD = formatDate;
   const vcNum   = formatVcNum(v.numero, v.tipoAtendimento);
   const status  = getStatus(v);
   const statusLabel = status === 'VIGENTE' ? 'Vigente' : status === 'VENCIDA' ? 'Vencida' : 'Inativa';
@@ -141,7 +142,6 @@ function imprimirVacina(v: VacinaClinica) {
 }
 
 const hoje = () => new Date().toISOString().slice(0, 10);
-const formatDate = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
 
 function montarTextoVacina(v: VacinaClinica): string {
   const vcNum = formatVcNum(v.numero, v.tipoAtendimento);
@@ -785,7 +785,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                   <p className="text-[11px] text-teal-600 mt-0.5">
                     {lotesDisponiveis[0].qtdDisponivel} doses disponíveis
                     {lotesDisponiveis[0].validade
-                      ? ` · Val: ${new Date(lotesDisponiveis[0].validade).toLocaleDateString('pt-BR')}`
+                      ? ` · Val: ${formatDate(lotesDisponiveis[0].validade)}`
                       : ''}
                   </p>
                 </div>
@@ -799,7 +799,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                   {lotesDisponiveis.map(l => (
                     <option key={l.id} value={l.id}>
                       {l.lote ?? 'S/N'} · {l.qtdDisponivel} doses
-                      {l.validade ? ` · Val: ${new Date(l.validade).toLocaleDateString('pt-BR')}` : ''}
+                      {l.validade ? ` · Val: ${formatDate(l.validade)}` : ''}
                     </option>
                   ))}
                 </select>

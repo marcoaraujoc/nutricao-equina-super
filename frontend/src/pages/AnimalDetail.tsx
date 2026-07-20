@@ -11,7 +11,7 @@ import {
   Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, X, Check, Trash2,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
-  Scan, Activity,
+  Scan, Activity, Sparkles,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -975,6 +975,34 @@ const AnimalDetail = () => {
     } catch { /* silencioso */ }
   }, [id]);
 
+  // ── Resumo de atendimentos por IA (persistido; append só com evento novo) ──
+  const [resumoIA,          setResumoIA]          = useState<{ resumo: string; atualizadoEm: string | null; desatualizado: boolean } | null>(null);
+  const [atualizandoResumo, setAtualizandoResumo] = useState(false);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelado = false;
+    (async () => {
+      try {
+        // 1) Exibe imediatamente o resumo salvo
+        const res = await api.get(`/clinica/resumo-atendimento/animal/${id}`);
+        if (cancelado || !res.data) return;
+        const dados = res.data?.dados ?? null;
+        setResumoIA(dados);
+        // 2) Havendo evento novo (procedimento, fatura manual etc.), apenda via IA
+        if (dados?.desatualizado) {
+          setAtualizandoResumo(true);
+          try {
+            const upd = await api.post(`/clinica/resumo-atendimento/animal/${id}/atualizar`);
+            if (!cancelado && upd.data?.dados) setResumoIA(upd.data.dados);
+          } catch { /* mantém o resumo salvo */ }
+          finally { if (!cancelado) setAtualizandoResumo(false); }
+        }
+      } catch { /* silencioso */ }
+    })();
+    return () => { cancelado = true; };
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     setLoading(true);
@@ -1147,6 +1175,39 @@ const AnimalDetail = () => {
                 onClickEvento={handleAbrirDetalhe}
               />
             ))}
+          </div>
+        </div>
+
+        {/* Resumo dos Atendimentos (IA) */}
+        <div className="w-full lg:w-80 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between px-4 py-4 border-b border-gray-50 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-violet-50 rounded-xl flex items-center justify-center">
+                <Sparkles size={15} className="text-violet-600" />
+              </div>
+              <h2 className="font-bold text-gray-900 text-sm">Resumo dos Atendimentos</h2>
+            </div>
+            {atualizandoResumo && <Loader2 size={14} className="animate-spin text-violet-500 flex-shrink-0" />}
+          </div>
+          <div className="p-4 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
+            {resumoIA?.resumo ? (
+              <>
+                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{resumoIA.resumo}</p>
+                <p className="text-[10px] text-gray-400 mt-3 pt-2 border-t border-gray-50 flex items-center gap-1">
+                  <Sparkles size={10} className="text-violet-400" />
+                  Gerado por IA
+                  {resumoIA.atualizadoEm && ` · atualizado em ${new Date(resumoIA.atualizadoEm).toLocaleDateString('pt-BR')}`}
+                  {atualizandoResumo && ' · atualizando…'}
+                </p>
+              </>
+            ) : atualizandoResumo ? (
+              <div className="text-center py-10">
+                <Loader2 size={18} className="animate-spin text-violet-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-400">Gerando resumo com IA…</p>
+              </div>
+            ) : (
+              <p className="text-center text-sm text-gray-300 py-10">Sem atendimentos para resumir</p>
+            )}
           </div>
         </div>
 

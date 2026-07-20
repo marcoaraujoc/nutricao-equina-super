@@ -1,6 +1,6 @@
 // frontend/src/pages/SubModuloPrescricao.tsx
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Pencil, Trash2, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
@@ -380,8 +380,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [savedGrupo,       setSavedGrupo]       = useState<{ id: number; numeroFormatado: string } | null>(null);
   const [showAddForm,      setShowAddForm]      = useState(openWithForm);
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
-  const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string }[]>([]);
+  const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string; especialidade: string | null; valor: number | null; combo?: boolean }[]>([]);
+  const [combosProc,       setCombosProc]       = useState<{ id: number; nome: string; valor: number | null }[]>([]);
   const [showProcDropdown, setShowProcDropdown] = useState(false);
+  const [procEspecialidade, setProcEspecialidade] = useState('');
   const [loadingMeds,      setLoadingMeds]      = useState(false);
   const [medBusca,         setMedBusca]         = useState('');
   const medComboboxRef = useRef<HTMLDivElement>(null);
@@ -445,17 +447,41 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     finally { setLoadingMeds(false); }
   }, [animalId]);
 
-  // Carrega o catálogo completo no mount
+  // Carrega o catálogo completo no mount — procedimentos com o valor da empresa
+  // (Cadastro > Procedimentos) e os combos da empresa ativa
   useEffect(() => {
     carregarMedicamentos();
-    api.get('/procedimentos?limit=500&ativo=true').then(r => {
-      const lista: { id: number; nome: string }[] = r.data.dados ?? [];
-      setProcedimentos(lista.map(p => ({ id: p.id, nome: p.nome })));
+    api.get('/procedimentos/cadastro/lista').then(r => {
+      const lista: { id: number; nome: string; especialidade: string | null; valorEmpresa: number | null; valorVenda: number | null }[] = r.data?.dados ?? [];
+      setProcedimentos(lista.map(p => ({
+        id: p.id, nome: p.nome, especialidade: p.especialidade ?? null,
+        valor: p.valorEmpresa ?? p.valorVenda ?? null,
+      })));
+    }).catch(() => {});
+    api.get('/procedimentos/cadastro/combos').then(r => {
+      const lista: { id: number; nome: string; valor: number | null }[] = r.data?.dados ?? [];
+      setCombosProc(lista.map(c => ({ id: c.id, nome: c.nome, valor: c.valor ?? null })));
     }).catch(() => {});
   }, [carregarMedicamentos]);
 
   // Cancela busca paralela ao desmontar
   useEffect(() => () => { searchAbortRef.current?.abort(); }, []);
+
+  // Especialidades presentes no catálogo de procedimentos (filtro do form PROCEDIMENTO)
+  const especialidadesProc = useMemo(() =>
+    [...new Set(procedimentos.map(p => p.especialidade).filter((e): e is string => Boolean(e)))]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR')),
+  [procedimentos]);
+  const procsPorEspecialidade = useMemo(() => {
+    const procs = procEspecialidade
+      ? procedimentos.filter(p => p.especialidade === procEspecialidade)
+      : procedimentos;
+    // Combos da empresa sempre visíveis (não têm especialidade), no topo da lista
+    const combos = combosProc.map(c => ({
+      id: -c.id, nome: c.nome, especialidade: null, valor: c.valor, combo: true,
+    }));
+    return [...combos, ...procs];
+  }, [procedimentos, combosProc, procEspecialidade]);
 
   // Filtro híbrido:
   //   - Lista completa carregada → filtra client-side (rápido, sem request)
@@ -955,8 +981,22 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                 ) : (
                   <>
-                  {/* Medicamento / Procedimento */}
-                  <div>
+                  {/* Medicamento / Procedimento (procedimento: Especialidade à esquerda na mesma linha) */}
+                  <div className={isMed ? '' : 'grid grid-cols-5 gap-3'}>
+                  {!isMed && (
+                    <div className="col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                        ESPECIALIDADE
+                      </label>
+                      <select value={procEspecialidade}
+                        onChange={e => setProcEspecialidade(e.target.value)}
+                        className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-sm bg-white focus:outline-none focus:border-emerald-500 ${!procEspecialidade ? 'text-gray-400' : 'text-gray-900'}`}>
+                        <option value="">Todas</option>
+                        {especialidadesProc.map(e => <option key={e} value={e} className="text-gray-900">{e}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div className={isMed ? '' : 'col-span-3'}>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                     {isMed ? 'MEDICAMENTO' : 'PROCEDIMENTO'} *
                   </label>
@@ -1007,7 +1047,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       />
                       {showProcDropdown && (
                         <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
-                          {procedimentos
+                          {procsPorEspecialidade
                             .filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase()))
                             .slice(0, 40)
                             .map(p => (
@@ -1015,15 +1055,27 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                                 onMouseDown={() => { set('medicamento', p.nome); setShowProcDropdown(false); }}
                                 className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
                                 <span className="font-medium">{p.nome}</span>
+                                {p.combo && (
+                                  <span className="ml-1.5 text-[9px] font-bold bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full align-middle">COMBO</span>
+                                )}
+                                {p.valor != null && (
+                                  <span className="ml-1.5 text-[10px] text-emerald-600 font-semibold">
+                                    R$ {p.valor.toFixed(2).replace('.', ',')}
+                                  </span>
+                                )}
+                                {!procEspecialidade && p.especialidade && (
+                                  <span className="block text-[10px] text-gray-400">{p.especialidade}</span>
+                                )}
                               </button>
                             ))}
-                          {procedimentos.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
+                          {procsPorEspecialidade.filter(p => p.nome.toLowerCase().includes(form.medicamento.toLowerCase())).length === 0 && (
                             <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum procedimento encontrado</p>
                           )}
                         </div>
                       )}
                     </div>
                   )}
+                  </div>
                 </div>
 
                 {/* Dosagem + Via */}

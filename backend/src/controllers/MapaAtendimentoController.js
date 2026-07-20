@@ -35,10 +35,19 @@ const MapaAtendimentoController = {
       // inicio/fim locais (mesma base do inicioDia/fimDia original).
       let inicio, fim;
       if (gran === 'SEMANAL') {
-        // Semana de domingo a sábado (mesma convenção dos Relatórios).
-        inicio = new Date(dataRef); inicio.setDate(dataRef.getDate() - dataRef.getDay());
-        inicio.setHours(0, 0, 0, 0);
-        fim = new Date(inicio); fim.setDate(inicio.getDate() + 6); fim.setHours(23, 59, 59, 999);
+        const dataFimQ = String(req.query.dataFim ?? '');
+        if (data && /^\d{4}-\d{2}-\d{2}$/.test(dataFimQ)) {
+          // Período livre escolhido pelo usuário: [data, dataFim] (inverte se vier trocado)
+          let iniStr = String(data), fimStrQ = dataFimQ;
+          if (fimStrQ < iniStr) [iniStr, fimStrQ] = [fimStrQ, iniStr];
+          inicio = new Date(iniStr + 'T00:00:00');
+          fim    = new Date(fimStrQ + 'T23:59:59.999');
+        } else {
+          // Semana de domingo a sábado (mesma convenção dos Relatórios).
+          inicio = new Date(dataRef); inicio.setDate(dataRef.getDate() - dataRef.getDay());
+          inicio.setHours(0, 0, 0, 0);
+          fim = new Date(inicio); fim.setDate(inicio.getDate() + 6); fim.setHours(23, 59, 59, 999);
+        }
       } else if (gran === 'MENSAL') {
         inicio = new Date(dataRef.getFullYear(), dataRef.getMonth(), 1, 0, 0, 0, 0);
         fim    = new Date(dataRef.getFullYear(), dataRef.getMonth() + 1, 0, 23, 59, 59, 999);

@@ -33,6 +33,16 @@ const TIPOS_SERVICO = [
 type TipoServico = typeof TIPOS_SERVICO[number];
 type TipoDoc     = 'cpf' | 'cnpj';
 
+// Tipo de fornecedor/profissional — especialidades só se aplicam a Veterinário
+const TIPOS_FORNECEDOR = [
+  'Veterinário',
+  'Estagiário',
+  'Farmácia',
+  'Laboratório',
+  'Secretária',
+] as const;
+type TipoFornecedor = typeof TIPOS_FORNECEDOR[number];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function validarCPF(cpf: string): boolean {
@@ -111,6 +121,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
+  tipoFornecedor: TipoFornecedor;
   tipoServico: TipoServico[];
   especialidadeIds: number[];
   cep:         string;
@@ -123,7 +134,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoServico: [], especialidadeIds: [],
+  tipoFornecedor: 'Veterinário', tipoServico: [], especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -308,15 +319,31 @@ function ModalFornecedor({
                   placeholder="Nome do profissional ou empresa" className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
-                <EspecialidadeSelector
-                  variant="dropdown"
-                  value={form.especialidadeIds}
-                  onChange={ids => onFormChange({ especialidadeIds: ids })}
-                  especieIds={especiesEmpresa}
-                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                />
+                <label className="block text-xs text-gray-500 mb-1">Tipo de fornecedor *</label>
+                <select
+                  value={form.tipoFornecedor}
+                  onChange={e => onFormChange({
+                    tipoFornecedor: e.target.value as TipoFornecedor,
+                    // Especialidades só se aplicam a Veterinário — limpa ao trocar
+                    ...(e.target.value !== 'Veterinário' ? { especialidadeIds: [] } : {}),
+                  })}
+                  className={inputCls}
+                >
+                  {TIPOS_FORNECEDOR.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
+              {form.tipoFornecedor === 'Veterinário' && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
+                  <EspecialidadeSelector
+                    variant="dropdown"
+                    value={form.especialidadeIds}
+                    onChange={ids => onFormChange({ especialidadeIds: ids })}
+                    especieIds={especiesEmpresa}
+                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                  />
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">E-mail</label>
@@ -473,6 +500,10 @@ export default function CadastroFornecedor() {
       cnpj:        f.cnpj ? mascaraCNPJ(f.cnpj.replace(/\D/g,'')) : '',
       telefone:    f.telefone ? mascaraTelefone(f.telefone.replace(/\D/g,'')) : '',
       email:       f.email ?? '',
+      // tipoServico exatamente igual a um tipo não-veterinário → é esse tipo; senão Veterinário
+      tipoFornecedor: (TIPOS_FORNECEDOR as readonly string[]).includes(f.tipoServico?.trim() ?? '') && f.tipoServico?.trim() !== 'Veterinário'
+        ? (f.tipoServico.trim() as TipoFornecedor)
+        : 'Veterinário',
       tipoServico: f.tipoServico
         ? (f.tipoServico.split(',').map(t => t.trim()).filter(t => (TIPOS_SERVICO as readonly string[]).includes(t)) as TipoServico[])
         : [],
@@ -501,7 +532,9 @@ export default function CadastroFornecedor() {
     if (editando && !podeEditar) { semPermissao('alterar fornecedor'); return; }
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
     if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
-    if (form.especialidadeIds.length === 0) { toast.error('Selecione ao menos uma especialidade'); return; }
+    if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
+      toast.error('Selecione ao menos uma especialidade'); return;
+    }
     if (form.email.trim() && !isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
@@ -520,7 +553,9 @@ export default function CadastroFornecedor() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-      especialidadeIds: form.especialidadeIds,
+      // Veterinário → especialidades do catálogo; demais tipos → tipoServico é o próprio tipo
+      especialidadeIds: form.tipoFornecedor === 'Veterinário' ? form.especialidadeIds : [],
+      ...(form.tipoFornecedor !== 'Veterinário' ? { tipoServico: form.tipoFornecedor } : {}),
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,

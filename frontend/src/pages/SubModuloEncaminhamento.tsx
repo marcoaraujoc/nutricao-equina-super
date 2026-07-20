@@ -3,7 +3,7 @@
 // ferrador) ou externo (texto livre). Encaminhar para prestador da equipe libera o
 // acesso dele a ESTE animal (DesignacaoPrestador); concluir/cancelar encerra o acesso.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -28,8 +28,14 @@ interface Prestador {
   email:       string;
   phone:       string | null;
   tipoServico: string | null;
+  /** Serviços/especialidades individuais (tipoServico legado + catálogo do usuário) */
+  servicos?:   string[];
   jaDesignado: boolean;
 }
+
+// Serviços do prestador como lista — usa `servicos` do backend; fallback: CSV do tipoServico
+const servicosDoPrestador = (p: Prestador): string[] =>
+  p.servicos ?? (p.tipoServico ? p.tipoServico.split(',').map(s => s.trim()).filter(Boolean) : []);
 
 interface Encaminhamento {
   id:                 number;
@@ -158,6 +164,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 }) {
   const [prestadores,         setPrestadores]         = useState<Prestador[]>([]);
   const [servicosDisponiveis, setServicosDisponiveis] = useState<string[]>([]);
+  const [especialidadesBanco, setEspecialidadesBanco] = useState<string[]>([]);
   const [loadingPrest,        setLoadingPrest]        = useState(true);
   const [destinoTipo,         setDestinoTipo]         = useState<DestinoTipo>('EQUIPE');
   const [filtroServico,       setFiltroServico]       = useState('');
@@ -183,13 +190,27 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       } catch { if (!cancelado) { setPrestadores([]); setServicosDisponiveis([]); } }
       finally { if (!cancelado) setLoadingPrest(false); }
     })();
+    // Catálogo de especialidades do banco (tb_especialidades) — alimenta o campo
+    // Especialidade além dos serviços dos prestadores da equipe
+    (async () => {
+      try {
+        const res = await api.get('/especialidades');
+        if (cancelado || !res.data) return;
+        const nomes = ((res.data?.dados ?? []) as { nome: string }[]).map(e => e.nome);
+        setEspecialidadesBanco([...new Set(nomes)]);
+      } catch { /* silencioso */ }
+    })();
     return () => { cancelado = true; };
   }, [animalId]);
 
-  const servicos = servicosDisponiveis; // vem do backend, já sem 'clínico'
+  // União: especialidades do catálogo (banco) + serviços dos prestadores da equipe
+  const servicos = useMemo(() =>
+    [...new Set([...servicosDisponiveis, ...especialidadesBanco])]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR')),
+  [servicosDisponiveis, especialidadesBanco]);
 
   const prestadoresFiltrados = filtroServico
-    ? prestadores.filter(p => p.tipoServico === filtroServico)
+    ? prestadores.filter(p => servicosDoPrestador(p).includes(filtroServico))
     : [];
 
   // Um único prestador disponível → pré-seleciona
@@ -202,7 +223,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
   const selecionarPrestador = (p: Prestador) => {
     setPrestadorSel(p);
-    if (p.tipoServico) setEspecialidade(p.tipoServico);
+    // Prioriza a especialidade filtrada; senão a primeira do prestador
+    const servs = servicosDoPrestador(p);
+    if (filtroServico && servs.includes(filtroServico)) setEspecialidade(filtroServico);
+    else if (servs.length > 0) setEspecialidade(servs[0]);
   };
 
   const handleSalvar = async () => {

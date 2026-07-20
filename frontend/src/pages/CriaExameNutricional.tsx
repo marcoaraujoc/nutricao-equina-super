@@ -1,17 +1,20 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import { Upload, Edit, Trash2, AlertCircle, X, FileText } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import { consumirLaudosPendentes } from '../utils/laudoPendente';
+import toast from 'react-hot-toast';
 
 const CriaExameNutricional = () => {
   const { user } = useAuth();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
+  const [searchParams] = useSearchParams();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const [resultadoIA, setResultadoIA] = useState<any>(null);
@@ -24,7 +27,35 @@ const CriaExameNutricional = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ?modo= vindo da tela de Exames:
+  //   'manual' → abre direto o formulário manual (Preencher Manualmente)
+  //   'upload' → os arquivos já foram escolhidos lá e chegam via laudoPendente —
+  //              tipo=imagem: vários arquivos, LLM decide laudo × imagem;
+  //              demais: 1 arquivo, fluxo de laudo laboratorial. Sem arquivo
+  //              pendente (URL direta/refresh), abre o seletor como fallback.
+  useEffect(() => {
+    const modo = searchParams.get('modo');
+    if (modo === 'manual') {
+      setShowManualForm(true);
+    } else if (modo === 'upload') {
+      const files = consumirLaudosPendentes();
+      if (files.length === 0) { setTimeout(() => fileInputRef.current?.click(), 150); return; }
+      if (searchParams.get('tipo') === 'imagem') processarLaudoEImagens(files);
+      else processarArquivo(files[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fluxo iniciado na tela de Exames (?modo=) → Cancelar volta para a lista de exames
+  const veioDaListaExames = !!searchParams.get('modo');
+  const voltarParaExames = () => {
+    const tipo = searchParams.get('tipo') || 'laboratorial';
+    if (animalId) navigate(`/exames/${animalId}?tipo=${tipo}`);
+    else navigate(-1);
+  };
+
   const cancelar = () => {
+    if (veioDaListaExames) { voltarParaExames(); return; }
     setResultadoIA(null);
     setFileName('');
     setProgress(0);
@@ -90,10 +121,7 @@ const CriaExameNutricional = () => {
     }
   }, [selectedAnimal]);
 
-  const handleFileChange = async (e: any) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processarArquivo = async (file: File) => {
     setFileName(file.name);
     setLoading(true);
     setProgress(0);
@@ -112,6 +140,49 @@ const CriaExameNutricional = () => {
       clearInterval(interval);
     } catch (err) {
       alert('Erro ao analisar o laudo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileChange = async (e: any) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processarArquivo(file);
+  };
+
+  // Página de IMAGEM: envia todos os arquivos — a LLM interpreta cada um.
+  // Laudo → dados carregados fielmente (tabela abaixo); imagem → só armazenada.
+  const processarLaudoEImagens = async (files: File[]) => {
+    setFileName(files.length === 1 ? files[0].name : `${files.length} arquivos`);
+    setLoading(true);
+    setProgress(0);
+
+    const formData = new FormData();
+    for (const f of files) formData.append('arquivos', f);
+    const idParaEnviar = animalId || selectedAnimal?.id?.toString();
+    if (idParaEnviar) formData.append('animalId', idParaEnviar);
+
+    try {
+      const interval = setInterval(() => setProgress(p => (p >= 95 ? 95 : p + 6)), 120);
+      const res = await api.post('/exames/analisar-imagens', formData);
+      clearInterval(interval);
+      setProgress(100);
+
+      const imagens: any[] = res.data?.imagens ?? [];
+      const exames:  any[] = res.data?.exames  ?? [];
+      if (imagens.length > 0) {
+        toast.success(`${imagens.length} imagem(ns) armazenada(s)`);
+      }
+      if (exames.length > 0) {
+        // Havia laudo(s) no meio dos arquivos → revisa/salva como no fluxo normal
+        setResultadoIA({ dataExame: res.data.dataExame, exames });
+      } else {
+        // Só imagens → nada a revisar; volta para a lista de exames
+        voltarParaExames();
+      }
+    } catch (err) {
+      toast.error('Erro ao analisar os arquivos');
     } finally {
       setLoading(false);
     }
@@ -471,7 +542,11 @@ const CriaExameNutricional = () => {
               </div>
 
               <div className="p-6 border-t flex gap-3">
-                <button onClick={() => setShowManualForm(false)} className="flex-1 py-3.5 border border-gray-300 rounded-3xl text-gray-700 font-medium hover:bg-gray-50">Cancelar</button>
+                <button
+                  onClick={() => veioDaListaExames ? voltarParaExames() : setShowManualForm(false)}
+                  className="flex-1 py-3.5 border border-gray-300 rounded-3xl text-gray-700 font-medium hover:bg-gray-50">
+                  Cancelar
+                </button>
                 <button onClick={saveManual} className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-3xl">Salvar todos os exames</button>
               </div>
             </div>

@@ -147,12 +147,14 @@ model Animal {
   examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
   faturas         Fatura[]               @relation("AnimalFaturas")
   faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
+  resumosIA       ResumoAtendimentoIA[]  @relation("AnimalResumosIA")
   solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
   reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
   designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
   agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
   resenha         ResenhaEquino?         @relation("AnimalResenha")
   resenhasGraficas ResenhaGrafica[]      @relation("ResenhaGraficaAnimal")
+  exameImagens    ExameImagemAnexo[]     @relation("AnimalExameImagens")
 
   @@index([especieId])
   @@index([racaId])
@@ -340,6 +342,25 @@ model ExameNutricional {
   @@index([animalId])
   @@index([nutrienteId])
   @@map("tb_exames_nutricionais")
+  @@schema("schs2vet")
+}
+
+// Anexos da página Resultado de Exame · Imagem — arquivo interpretado pela LLM:
+// laudo (dados extraídos) vira ExameNutricional; imagem é apenas ARMAZENADA aqui.
+model ExameImagemAnexo {
+  id          Int      @id @default(autoincrement())
+  animalId    Int
+  nome        String?  @db.Text
+  arquivoUrl  String   @db.Text
+  dataExame   DateTime @default(now())
+  criadoPorId Int?
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  animal Animal @relation("AnimalExameImagens", fields: [animalId], references: [id], onDelete: Cascade)
+
+  @@index([animalId])
+  @@map("tb_exame_imagem_anexos")
   @@schema("schs2vet")
 }
 
@@ -550,6 +571,9 @@ model ProcedimentoVeterinario {
   ativo            Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  valoresEmpresa ProcedimentoValorEmpresa[] @relation("ProcedimentoValoresEmpresa")
+  comboItens     ProcedimentoComboItem[]    @relation("ProcedimentoComboItens")
 
   @@index([ativo])
   @@index([categoria])
@@ -1001,6 +1025,84 @@ model VetAnimalSolicitacao {
 // EMPRESA E EQUIPES
 // =============================================================================
 
+// Resumo de atendimentos do animal gerado por IA (painel do AnimalDetail).
+// Um registro por (animal, empresa do contexto); append incremental via LLM
+// quando surgem eventos novos (clínicos ou itens manuais de fatura).
+// NOTA: acesso via raw SQL em resumoAtendimentoService enquanto o client não for regenerado.
+model ResumoAtendimentoIA {
+  id             Int       @id @default(autoincrement())
+  animalId       Int       @map("animal_id")
+  empresaId      Int?      @map("empresa_id")
+  resumo         String    @default("") @db.Text
+  ultimoEventoEm DateTime? @map("ultimo_evento_em")
+  totalEventos   Int       @default(0) @map("total_eventos")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  animal  Animal   @relation("AnimalResumosIA",  fields: [animalId],  references: [id], onDelete: Cascade)
+  empresa Empresa? @relation("EmpresaResumosIA", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([animalId, empresaId])
+  @@index([animalId])
+  @@map("tb_resumo_atendimento_ia")
+  @@schema("schs2vet")
+}
+
+// Valor de venda de um procedimento definido POR EMPRESA (sobrepõe o valorVenda
+// global do catálogo ADMIN). Gerenciado pelo GESTOR em Cadastro > Procedimentos.
+model ProcedimentoValorEmpresa {
+  id             Int      @id @default(autoincrement())
+  empresaId      Int      @map("empresa_id")
+  procedimentoId Int      @map("procedimento_id")
+  valor          Float
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  empresa      Empresa                 @relation("EmpresaProcedimentoValores", fields: [empresaId],      references: [id], onDelete: Cascade)
+  procedimento ProcedimentoVeterinario @relation("ProcedimentoValoresEmpresa", fields: [procedimentoId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, procedimentoId])
+  @@index([empresaId])
+  @@map("tb_procedimento_valores_empresa")
+  @@schema("schs2vet")
+}
+
+// Combo de procedimentos POR EMPRESA (pacote com valor próprio).
+// Somente o GESTOR da empresa cria/edita; procedimentos vêm do catálogo ADMIN.
+model ProcedimentoCombo {
+  id        Int      @id @default(autoincrement())
+  empresaId Int      @map("empresa_id")
+  nome      String   @db.VarChar(255)
+  descricao String?  @db.Text
+  valor     Float
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  empresa Empresa                 @relation("EmpresaProcedimentoCombos", fields: [empresaId], references: [id], onDelete: Cascade)
+  itens   ProcedimentoComboItem[]
+
+  @@unique([empresaId, nome])
+  @@index([empresaId])
+  @@index([ativo])
+  @@map("tb_procedimento_combos")
+  @@schema("schs2vet")
+}
+
+model ProcedimentoComboItem {
+  id             Int @id @default(autoincrement())
+  comboId        Int @map("combo_id")
+  procedimentoId Int @map("procedimento_id")
+
+  combo        ProcedimentoCombo       @relation(fields: [comboId],        references: [id], onDelete: Cascade)
+  procedimento ProcedimentoVeterinario @relation("ProcedimentoComboItens", fields: [procedimentoId], references: [id], onDelete: Cascade)
+
+  @@unique([comboId, procedimentoId])
+  @@index([comboId])
+  @@map("tb_procedimento_combo_itens")
+  @@schema("schs2vet")
+}
+
 model Empresa {
   id        Int      @id @default(autoincrement())
   nome      String
@@ -1018,6 +1120,9 @@ model Empresa {
   estoques    EstoqueClinica[] @relation("EmpresaEstoque")
   loteVacinas LoteVacina[]     @relation("LoteVacinaEmpresa")
   configuracoes   EmpresaConfiguracao[]
+  procedimentoValores ProcedimentoValorEmpresa[] @relation("EmpresaProcedimentoValores")
+  procedimentoCombos  ProcedimentoCombo[]        @relation("EmpresaProcedimentoCombos")
+  resumosIA           ResumoAtendimentoIA[]      @relation("EmpresaResumosIA")
 
   // Duplicidade: mesmo gestor (ownerId ≡ e-mail único) + mesmo nome + mesmo CNPJ é bloqueado.
   // cnpj NULL (empresa pessoal/CPF): Postgres trata NULLs como distintos — enforcement na aplicação.
@@ -1075,6 +1180,13 @@ model EmpresaConfiguracao {
   // Espécies que a empresa atende — CSV de IDs de Especie (ex: "1,2"). null/"" = todas.
   // Usado para filtrar as especialidades oferecidas no cadastro de membros/fornecedores.
   especiesAtendidas     String?  @map("especies_atendidas")
+  // Evolution API — instância exclusiva de WhatsApp da clínica (migration 20260718170000).
+  // waInstance: identificador da instância (nunca exposto ao frontend);
+  // waStatus: DESCONECTADO | AGUARDANDO_QR | CONECTADO | ERRO.
+  // NOTA: acessados via raw SQL nos services de WhatsApp enquanto o client não for regenerado.
+  waInstance            String?   @unique @map("wa_instance")
+  waStatus              String    @default("DESCONECTADO") @db.VarChar(30) @map("wa_status")
+  waStatusEm            DateTime? @map("wa_status_em")
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

@@ -258,15 +258,18 @@ const RelatorioNutricional = () => {
       const res   = await api.get('/animais');
       const lista = (res.data?.dados ?? res.data ?? []) as Animal[];
       setAnimaisDoProprietario(lista);
-      if (lista.length === 1 && !selectedAnimal) {
+      // Auto-seleciona um animal quando não há seleção (gestor/vet com N animais
+      // entrava no estado "sem animais" mesmo com pacientes sob responsabilidade)
+      if (lista.length > 0 && !selectedAnimal) {
+        const alvo = (paramAnimalId && lista.find(a => String(a.id) === paramAnimalId)) || lista[0];
         setSelectedAnimal({
-          ...lista[0],
-          photoUrl:      lista[0].photoUrl      ?? undefined,
-          idadeAnos:     lista[0].idadeAnos     ?? undefined,
-          peso:          lista[0].peso          ?? undefined,
-          tipoExercicio: lista[0].tipoExercicio ?? undefined,
+          ...alvo,
+          photoUrl:      alvo.photoUrl      ?? undefined,
+          idadeAnos:     alvo.idadeAnos     ?? undefined,
+          peso:          alvo.peso          ?? undefined,
+          tipoExercicio: alvo.tipoExercicio ?? undefined,
         });
-        if (!paramAnimalId) navigate(`/relatorio-nutricional/${lista[0].id}`, { replace: true });
+        if (!paramAnimalId) navigate(`/relatorio-nutricional/${alvo.id}`, { replace: true });
       }
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
@@ -490,22 +493,22 @@ const RelatorioNutricional = () => {
               >
                 <Download size={13} /> Exportar <ChevronDown size={12} />
               </button>
-                {showExportMenu && (
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[160px]">
-                    <button
-                      onClick={exportarPDF}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                    >
-                      <Printer size={14} /> PDF
-                    </button>
-                    <button
-                      onClick={exportarExcelRelatorio}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                    >
-                      <Download size={14} /> Excel (.xlsx)
-                    </button>
-                  </div>
-                )}
+              {showExportMenu && (
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[160px]">
+                  <button
+                    onClick={exportarPDF}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                  >
+                    <Printer size={14} /> PDF
+                  </button>
+                  <button
+                    onClick={exportarExcelRelatorio}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                  >
+                    <Download size={14} /> Excel (.xlsx)
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {snapshot?.geradoEm && (

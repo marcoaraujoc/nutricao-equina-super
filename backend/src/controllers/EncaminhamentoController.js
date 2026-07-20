@@ -147,7 +147,7 @@ const EncaminhamentoController = {
 
       const userIds = [...new Set(membros.map(m => m.user.id))];
 
-      const [fornecedores, designacoes] = await Promise.all([
+      const [fornecedores, designacoes, userEspecs] = await Promise.all([
         prisma.fornecedor.findMany({
           where:  { userId: { in: userIds } },
           select: { userId: true, tipoServico: true },
@@ -156,29 +156,57 @@ const EncaminhamentoController = {
           where:  { animalId: Number(animalId), prestadorId: { in: userIds }, ativo: true },
           select: { prestadorId: true },
         }),
+        // Especialidades do catálogo (UsuarioEspecialidade) — membro incluído na equipe
+        // com especialidade aparece mesmo sem/além do tipoServico do cadastro Fornecedor
+        prisma.usuarioEspecialidade.findMany({
+          where:  { userId: { in: userIds } },
+          select: { userId: true, especialidade: { select: { nome: true } } },
+        }),
       ]);
 
       const tipoPorUser  = new Map(fornecedores.map(f => [f.userId, f.tipoServico]));
       const designadoSet = new Set(designacoes.map(d => d.prestadorId));
+      const especPorUser = new Map();
+      for (const ue of userEspecs) {
+        const nome = ue.especialidade?.nome?.trim();
+        if (!nome) continue;
+        const arr = especPorUser.get(ue.userId) ?? [];
+        arr.push(nome);
+        especPorUser.set(ue.userId, arr);
+      }
 
       const vistos = new Set();
       const dados  = [];
       for (const m of membros) {
         if (vistos.has(m.user.id)) continue;
         vistos.add(m.user.id);
+        // Une tipoServico do cadastro Fornecedor (legado, pode ser CSV) com as
+        // especialidades do catálogo do usuário — sem duplicar nomes
+        const servicos = [...new Set([
+          ...String(tipoPorUser.get(m.user.id) ?? '').split(',').map(s => s.trim()).filter(Boolean),
+          ...(especPorUser.get(m.user.id) ?? []),
+        ])];
+        for (const s of servicos) {
+          if (!EXCLUIR_SERVICOS.has(normalizar(s))) servicosSet.add(s);
+        }
         dados.push({
           userId:      m.user.id,
           fullName:    m.user.fullName,
           email:       m.user.email,
           phone:       m.user.phone,
-          tipoServico: tipoPorUser.get(m.user.id) ?? null,
+          tipoServico: servicos.join(', ') || null,
+          servicos,
           equipeId:    m.equipeId,
           jaDesignado: designadoSet.has(m.user.id),
         });
       }
       dados.sort((a, b) => a.fullName.localeCompare(b.fullName));
 
-      res.json({ dados, servicosDisponiveis });
+      // Recalcula com os serviços dos prestadores incluídos
+      const servicosDisponiveisFinal = [...servicosSet]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+
+      res.json({ dados, servicosDisponiveis: servicosDisponiveisFinal });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ error: 'Erro ao listar prestadores' });

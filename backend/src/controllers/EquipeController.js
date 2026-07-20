@@ -329,6 +329,9 @@ const EquipeController = {
       const empresa = await prisma.empresa.create({
         data: { nome: nomeTrim, cnpj: cnpjNorm, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
       });
+      // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort,
+      // nunca bloqueia o cadastro; o Conectar da tela de Configurações cobre falhas.
+      require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
       res.status(201).json({ sucesso: true, dados: empresa });
     } catch (err) {
       console.error('Erro ao criar empresa:', err);
@@ -467,13 +470,50 @@ const EquipeController = {
   // (usado no Cadastro Pessoal do membro convidado para filtrar as especialidades).
   obterEspeciesAtendidas: async (req, res) => {
     try {
-      const escopo = await resolverEscopoConfiguracaoMembro(req);
+      // equipeId explícito (tela de gestão pode gerenciar equipe ≠ contexto ativo):
+      // usa o escopo da equipe informada, desde que o usuário tenha acesso a ela.
+      let escopo = null;
+      const equipeIdParam = req.query.equipeId ? Number(req.query.equipeId) : null;
+      if (equipeIdParam) {
+        const eq = await prisma.equipe.findUnique({
+          where:  { id: equipeIdParam },
+          select: { id: true, empresaId: true, empresa: { select: { cnpj: true } } },
+        });
+        if (eq) {
+          const acessoOk = eq.empresaId === req.empresaId
+            || !!(await getEmpresaDoGestor(req.user.id, eq.empresaId));
+          if (acessoOk) {
+            escopo = eq.empresa?.cnpj
+              ? { empresaId: eq.empresaId, equipeId: null }
+              : { empresaId: eq.empresaId, equipeId: eq.id };
+          }
+        }
+      }
+      if (!escopo) escopo = await resolverEscopoConfiguracaoMembro(req);
+      // Dono/gestor sem MembroEquipe (sem req.empresaId resolvido) — usa o escopo de gestor
+      if (!escopo) escopo = await resolverEscopoConfiguracao(req);
       if (!escopo) return res.json({ sucesso: true, dados: { especiesAtendidas: [] } });
       const config = await buscarConfiguracao(escopo);
-      return res.json({
-        sucesso: true,
-        dados: { especiesAtendidas: parseEspeciesAtendidas(config?.especiesAtendidas) },
-      });
+
+      let especies = parseEspeciesAtendidas(config?.especiesAtendidas);
+      if (especies.length === 0) {
+        // Sem configuração explícita em Configurações: usa as espécies escolhidas
+        // na CRIAÇÃO da empresa (perfil do dono — VetEspecie). Evita que o seletor
+        // de especialidades mostre TODAS as espécies do catálogo.
+        const emp = await prisma.empresa.findUnique({
+          where:  { id: escopo.empresaId },
+          select: { ownerId: true },
+        });
+        if (emp?.ownerId) {
+          const perfilDono = await prisma.vetPerfil.findUnique({
+            where:  { userId: emp.ownerId },
+            select: { especies: { select: { especieId: true } } },
+          });
+          especies = perfilDono?.especies.map(e => e.especieId) ?? [];
+        }
+      }
+
+      return res.json({ sucesso: true, dados: { especiesAtendidas: especies } });
     } catch (err) {
       console.error('Erro ao obter espécies atendidas:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
@@ -862,7 +902,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidade: { select: { nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -893,7 +933,7 @@ const EquipeController = {
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidade: { select: { nome: true } } } } } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -1150,7 +1190,7 @@ const EquipeController = {
   atualizarMembro: async (req, res) => {
     try {
       const { id } = req.params;
-      const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado } = req.body;
+      const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado, especialidadeIds } = req.body;
 
       const membro = await prisma.membroEquipe.findUnique({
         where:   { id: Number(id) },
@@ -1237,6 +1277,34 @@ const EquipeController = {
           await prisma.fornecedor.update({
             where: { id: fornecedorAlvo.id },
             data:  { ...dadosFornecedor, userId: membro.userId }, // estabelece o link se ainda não estava
+          });
+        }
+      }
+
+      // Especialidades (catálogo por espécie) — sincroniza quando enviadas (delete + insert).
+      if (Array.isArray(especialidadeIds)) {
+        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+        const rows = ids.length > 0
+          ? await prisma.especialidade.findMany({ where: { id: { in: ids }, ativo: true }, select: { id: true, nome: true } })
+          : [];
+        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: membro.userId } });
+        if (rows.length > 0) {
+          await prisma.usuarioEspecialidade.createMany({
+            data: rows.map(r => ({ userId: membro.userId, especialidadeId: r.id })),
+            skipDuplicates: true,
+          });
+        }
+        // Fornecedor vinculado: mantém o tipoServico legado e os vínculos em sincronia
+        const fornecedorEspec = await prisma.fornecedor.findFirst({ where: { userId: membro.userId } });
+        if (fornecedorEspec && rows.length > 0) {
+          await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedorEspec.id } });
+          await prisma.fornecedorEspecialidade.createMany({
+            data: rows.map(r => ({ fornecedorId: fornecedorEspec.id, especialidadeId: r.id })),
+            skipDuplicates: true,
+          });
+          await prisma.fornecedor.update({
+            where: { id: fornecedorEspec.id },
+            data:  { tipoServico: rows[0].nome.slice(0, 50) },
           });
         }
       }
@@ -1518,6 +1586,28 @@ const EquipeController = {
         }
       }
 
+      // ── Validações que podem falhar ANTES de qualquer gravação ─────────────
+      // (evita usuário/membro órfão quando a requisição é rejeitada no meio)
+
+      // Expediente de trabalho (dias/horários) — valida o formato já aqui
+      const expediente = parseExpedienteTrabalho(req.body);
+      if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
+
+      // Fornecedor selecionado já vinculado a OUTRA conta não pode ser reutilizado
+      if (fornecedorVinculo?.userId && (!usuarioCheck || fornecedorVinculo.userId !== usuarioCheck.id)) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Este fornecedor já está vinculado a outro usuário' });
+      }
+
+      // Reverso: o usuário (por e-mail) já pode estar vinculado a OUTRO cadastro de
+      // fornecedor. Como Fornecedor.userId é @unique, vincular/criar aqui violaria a
+      // constraint (Unique constraint on user_id). Bloqueia com mensagem clara.
+      if (cargo === 'FORNECEDOR' && usuarioCheck) {
+        const fornecedorDoUsuario = await prisma.fornecedor.findUnique({ where: { userId: usuarioCheck.id } });
+        if (fornecedorDoUsuario && (!fornecedorVinculo || fornecedorDoUsuario.id !== fornecedorVinculo.id)) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já está vinculado a outro cadastro de fornecedor.' });
+        }
+      }
+
       // Buscar dados do vet dono + espécies
       const vetUser = await prisma.user.findUnique({ where: { id: vetUserId }, select: { fullName: true } });
       const vetPerfilDono = await prisma.vetPerfil.findUnique({
@@ -1533,6 +1623,11 @@ const EquipeController = {
 
       let usuarioCriado = false;
       let usuario = await prisma.user.findUnique({ where: { email } });
+      // Rastreio p/ compensação em caso de falha no meio do fluxo (evita órfãos)
+      var usuarioCriadoId = null;
+      var membroCriadoId  = null;
+      var equipeIdCriacao = equipe.id;
+      var membroUserId    = null;
 
       if (!usuario) {
         const senhaHash = await bcrypt.hash(SENHA_INICIAL, 10);
@@ -1554,6 +1649,7 @@ const EquipeController = {
           },
         });
         usuarioCriado = true;
+        usuarioCriadoId = usuario.id;
       } else if (!usuario.fullName?.trim() || !usuario.phone?.trim()) {
         // Usuário pré-existente sem cadastro completo: preenche nome/telefone informados
         usuario = await prisma.user.update({
@@ -1565,29 +1661,14 @@ const EquipeController = {
         });
       }
 
-      // Fornecedor já vinculado a OUTRA conta não pode ser reutilizado
-      if (fornecedorVinculo?.userId && fornecedorVinculo.userId !== usuario.id) {
-        return res.status(409).json({ sucesso: false, mensagem: 'Este fornecedor já está vinculado a outro usuário' });
-      }
-
-      // Reverso: o usuário (por e-mail) já pode estar vinculado a OUTRO cadastro de
-      // fornecedor. Como Fornecedor.userId é @unique, vincular/criar aqui violaria a
-      // constraint (Unique constraint on user_id). Bloqueia com mensagem clara.
-      if (cargo === 'FORNECEDOR') {
-        const fornecedorDoUsuario = await prisma.fornecedor.findUnique({ where: { userId: usuario.id } });
-        if (fornecedorDoUsuario && (!fornecedorVinculo || fornecedorDoUsuario.id !== fornecedorVinculo.id)) {
-          return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já está vinculado a outro cadastro de fornecedor.' });
-        }
-      }
-
       // Adicionar à equipe diretamente
       const novoMembro = await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: usuario.id, cargo },
       });
+      membroCriadoId = novoMembro.id;
+      membroUserId   = usuario.id;
 
       // Expediente de trabalho do profissional (dias/horários) — via SQL raw
-      const expediente = parseExpedienteTrabalho(req.body);
-      if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
       await gravarExpedienteTrabalho(novoMembro.id, expediente);
 
       // Vincular/criar cadastro Fornecedor
@@ -1682,6 +1763,19 @@ const EquipeController = {
       res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!', dados: { userId: usuario.id, fullName: usuario.fullName } });
     } catch (err) {
       console.error('Erro ao incluir membro:', err);
+      // Compensação (melhor esforço): desfaz o que esta requisição criou para não
+      // deixar cadastro órfão — que causava "já existe" no retry e depois duplicata.
+      try {
+        if (membroCriadoId) {
+          await prisma.permissaoMembro.deleteMany({ where: { equipeId: equipeIdCriacao, userId: membroUserId } }).catch(() => {});
+          await prisma.membroEquipe.delete({ where: { id: membroCriadoId } }).catch(() => {});
+        }
+        if (usuarioCriadoId) {
+          await prisma.usuarioEspecialidade.deleteMany({ where: { userId: usuarioCriadoId } }).catch(() => {});
+          await prisma.fornecedor.updateMany({ where: { userId: usuarioCriadoId }, data: { userId: null } }).catch(() => {});
+          await prisma.user.delete({ where: { id: usuarioCriadoId } }).catch(() => {});
+        }
+      } catch { /* melhor esforço — não mascarar o erro original */ }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -1792,6 +1886,9 @@ const EquipeController = {
       const membro = await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: convidadoId, cargo: 'GESTOR' },
       });
+
+      // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort
+      require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
 
       try {
         await prisma.$executeRawUnsafe(`UPDATE schs2vet.users SET "isConvidado" = true WHERE id = $1`, convidadoId);
@@ -2744,3 +2841,6 @@ const EquipeController = {
 };
 
 module.exports = EquipeController;
+// Reuso do escopo de configuração (empresa CNPJ ou equipe de empresa pessoal)
+// por outros controllers — ex.: WhatsappController (Evolution API).
+module.exports.resolverEscopoConfiguracao = resolverEscopoConfiguracao;

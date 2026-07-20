@@ -7,6 +7,14 @@ const emailService = require('../services/emailService');
 const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 
+// Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
+// (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
+function validarDiaVencimento(valor) {
+  const n = Number(valor);
+  return valor !== undefined && valor !== null && valor !== '' &&
+    Number.isInteger(n) && n >= 1 && n <= 25;
+}
+
 const SELECT_PROPRIETARIO = {
   id: true, fullName: true, email: true, phone: true, phone2: true,
   role: true, userType: true, ativo: true, createdAt: true,
@@ -126,6 +134,9 @@ const ProprietarioController = {
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!email?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
     if (!phone?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
+    if (!validarDiaVencimento(diaVencimentoFatura)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura é obrigatório e deve ser entre 1 e 25' });
+    }
 
     try {
       const existente = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
@@ -154,7 +165,7 @@ const ProprietarioController = {
           mensalista:        Boolean(mensalista),
           valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
           frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null,
-          diaVencimentoFatura: diaVencimentoFatura ? Math.min(Math.max(Number(diaVencimentoFatura), 1), 28) : null,
+          diaVencimentoFatura: Number(diaVencimentoFatura),
           passwordHash,
           mustChangePassword: true,
           ativo:     true,
@@ -193,6 +204,9 @@ const ProprietarioController = {
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!email?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+    if (diaVencimentoFatura !== undefined && !validarDiaVencimento(diaVencimentoFatura)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura deve ser entre 1 e 25' });
+    }
 
     try {
       const isAdmin = req.user?.role === 'ADMIN';
@@ -227,7 +241,7 @@ const ProprietarioController = {
         mensalista:       mensalista !== undefined ? Boolean(mensalista) : existe.mensalista,
         valorAssistencia: valorAssistencia !== undefined ? (valorAssistencia ? Number(valorAssistencia) : null) : existe.valorAssistencia,
         frequenciaVisitas: frequenciaVisitas !== undefined ? (frequenciaVisitas ? Number(frequenciaVisitas) : null) : existe.frequenciaVisitas,
-        diaVencimentoFatura: diaVencimentoFatura !== undefined ? (diaVencimentoFatura ? Math.min(Math.max(Number(diaVencimentoFatura), 1), 28) : null) : existe.diaVencimentoFatura,
+        diaVencimentoFatura: diaVencimentoFatura !== undefined ? Number(diaVencimentoFatura) : existe.diaVencimentoFatura,
         ...(isAdmin && ativo !== undefined ? { ativo: Boolean(ativo) } : {}),
       };
 

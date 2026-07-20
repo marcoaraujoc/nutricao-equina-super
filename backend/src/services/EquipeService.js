@@ -52,7 +52,7 @@ async function criarEmpresaEEquipe({ userId, empresaNome, equipeName }) {
   });
   if (empresaDuplicada) throw new Error('Você já possui uma empresa com este nome.');
 
-  return prisma.$transaction(async (tx) => {
+  const resultado = await prisma.$transaction(async (tx) => {
     const empresa = await tx.empresa.create({
       data: { nome: empresaNome.trim(), ownerId: userId },
     });
@@ -71,6 +71,12 @@ async function criarEmpresaEEquipe({ userId, empresaNome, equipeName }) {
     // Gestores não têm entradas na matriz de permissões — têm bypass total
     return { empresa, equipe };
   });
+
+  // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort,
+  // fora da transaction e nunca bloqueia o cadastro.
+  require('./whatsappService').provisionarPorEmpresa(resultado.empresa.id).catch(() => {});
+
+  return resultado;
 }
 
 // =============================================================================

@@ -979,12 +979,11 @@ const cancelarNaExecucao = async (req, res) => {
         where: { grupoId, ativo: true, executadoEm: null },
         data:  { status: 'CANCELADA', ativo: false },
       });
+      // Cancelamento na execução é SEMPRE definitivo: status CANCELADO, execução
+      // bloqueada e prescrição imutável — itens já executados permanecem na fatura.
       await tx.prescricaoGrupo.update({
         where: { id: grupoId },
-        data:  {
-          status:             houveExecucao ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO',
-          motivoCancelamento: motivo,
-        },
+        data:  { status: 'CANCELADO', motivoCancelamento: motivo },
       });
       await registrarAuditoria(tx, req, {
         categoria:  'CANCELAMENTO',
@@ -1064,6 +1063,34 @@ function executadoHojeItem(item, hojeStr) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === hojeStr;
 }
 
+// Valor de um item PROCEDIMENTO na fatura, resolvido pelo NOME (o item guarda só o
+// nome): combo da empresa > valor da empresa p/ o procedimento (Cadastro >
+// Procedimentos) > valorVenda do catálogo > 0.
+async function resolverValorProcedimento(tx, empresaId, nome) {
+  const n = (nome ?? '').trim();
+  if (!n) return 0;
+  if (empresaId) {
+    const combo = await tx.procedimentoCombo.findFirst({
+      where:  { empresaId, ativo: true, nome: { equals: n, mode: 'insensitive' } },
+      select: { valor: true },
+    });
+    if (combo) return combo.valor ?? 0;
+  }
+  const proc = await tx.procedimentoVeterinario.findFirst({
+    where:  { nome: { equals: n, mode: 'insensitive' }, ativo: true },
+    select: { id: true, valorVenda: true },
+  });
+  if (!proc) return 0;
+  if (empresaId) {
+    const ve = await tx.procedimentoValorEmpresa.findFirst({
+      where:  { empresaId, procedimentoId: proc.id },
+      select: { valor: true },
+    });
+    if (ve) return ve.valor ?? 0;
+  }
+  return proc.valorVenda ?? 0;
+}
+
 const executar = async (req, res) => {
   try {
     const grupoId       = Number(req.params.id);
@@ -1131,7 +1158,10 @@ const executar = async (req, res) => {
       for (const item of itensHoje) {
         // precos já contém o valor proporcional da dose (regra de 3)
         // MEDICAMENTO sem estoque no sistema → valor 0 na fatura (lança para o financeiro saber)
-        const valorDaDose = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
+        // PROCEDIMENTO → valor do combo/valor da empresa/catálogo (Cadastro > Procedimentos)
+        const valorDaDose = item.tipo === 'PROCEDIMENTO'
+          ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
+          : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0);
         const dose = item.dosagem
           ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
           : item.frequencia;
@@ -1231,7 +1261,9 @@ const listarParaExecucao = async (req, res) => {
       // finalizada dentro da evolução) — NÃO depende mais de a evolução estar FINALIZADA.
       // (Premissa alterada 2026-07-16: antes exigia evolucao.status = 'FINALIZADA'.)
       // EXECUTADO incluído para o histórico do dia (executado no último dia da janela).
-      status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO'] },
+      // CANCELADO incluído para exibir com status "Cancelada" (execução bloqueada) as
+      // prescrições canceladas no meio da execução — filtradas abaixo (só com execução).
+      status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO', 'CANCELADO'] },
     };
     if (empresaId) whereGrupo.empresaId = Number(empresaId);
     if (animalId)  whereGrupo.animalId  = Number(animalId);
@@ -1271,9 +1303,12 @@ const listarParaExecucao = async (req, res) => {
       : hojeLocalStr();
     const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
-    // Mantém apenas grupos onde pelo menos um item cobre hoje
+    // Mantém apenas grupos onde pelo menos um item cobre hoje.
+    // CANCELADO só aparece quando teve execução (cancelada no meio do tratamento) —
+    // canceladas antes de qualquer execução não pertencem à tela de execução.
     const dentroJanela = grupos.filter(g =>
-      g.itens.some(item => janelaDoItem(item, hojeStr).dentro)
+      g.itens.some(item => janelaDoItem(item, hojeStr).dentro) &&
+      (g.status !== 'CANCELADO' || g.itens.some(i => i.executadoEm))
     );
 
     // Filtro de busca textual (nome animal, baia, nº prescrição, vet)

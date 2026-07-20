@@ -1,7 +1,9 @@
 // src/components/AnimalCard.tsx
-// Componente compartilhado — usado em Dieta, EvolucaoClinica, Exames
+// Componente compartilhado — usado em Dieta, EvolucaoClinica, Exames.
+// Clicar no card abre o Detalhamento do Animal (/animal/:id) quando `id` está presente.
 
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -13,6 +15,7 @@ interface Solicitacao {
 }
 
 interface AnimalCardAnimal {
+  id?:              number;
   nome:             string;
   photoUrl?:        string | null;
   dataNascimento?:  string | Date | null;
@@ -62,6 +65,11 @@ function calcularIdade(dataNascimento: string): string {
 
 export default function AnimalCard({ animal }: AnimalCardProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const abrirDetalhamento = () => {
+    if (animal.id) navigate(`/animal/${animal.id}`);
+  };
 
   // Resolve vet responsável:
   //   VINCULO ACEITO → vet ativo
@@ -89,7 +97,12 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
       : '-';
 
   return (
-    <div className="w-full bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4">
+    <div
+      onClick={abrirDetalhamento}
+      title={animal.id ? 'Abrir detalhamento do animal' : undefined}
+      className={`w-full bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex gap-4 mb-4 ${
+        animal.id ? 'cursor-pointer hover:border-emerald-200 hover:shadow-md transition-all' : ''
+      }`}>
 
       {/* Foto */}
       <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 
 interface AnimalOpcao {
@@ -40,6 +40,7 @@ export default function SeletorAnimal({
   className = '',
 }: SeletorAnimalProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { setSelectedAnimal } = useSelectedAnimal();
 
   const currentId = animalIdAtual ? String(animalIdAtual) : '';
@@ -58,7 +59,8 @@ export default function SeletorAnimal({
     const a = animais.find(x => String(x.id) === val);
     if (a) {
       setSelectedAnimal(toAnimal(a));
-      navigate(`${rotaBase}/${a.id}`);
+      // Preserva a query atual (ex.: ?tipo=laboratorial em Resultado de Exame)
+      navigate(`${rotaBase}/${a.id}${location.search}`);
     }
   };
 

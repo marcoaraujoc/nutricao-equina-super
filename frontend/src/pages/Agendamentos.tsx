@@ -2037,9 +2037,6 @@ export default function Agendamentos() {
                 <span className="font-bold">{conflitoConfirm.hora}</span> com{' '}
                 <span className="font-bold">{conflitoConfirm.vetNome}</span>.
               </p>
-              <p className="text-xs text-gray-500 mt-2">
-                Confirme que está ciente para criar um novo agendamento assim mesmo.
-              </p>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
               <button onClick={() => setConflitoConfirm(null)}
@@ -2050,7 +2047,7 @@ export default function Agendamentos() {
                 onClick={() => { const acao = conflitoConfirm.onConfirm; setConflitoConfirm(null); acao(); }}
                 className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5">
                 <Check size={14} />
-                Estou ciente, agendar
+                Agendar
               </button>
             </div>
           </div>
