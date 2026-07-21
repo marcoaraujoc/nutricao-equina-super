@@ -41,6 +41,33 @@ interface Membro {
   equipe?: { nome: string };
 }
 
+// Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
+const DIAS_SEMANA_LABEL: Record<number, string> = { 0: 'Dom', 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb' };
+
+// Especialidades do membro (catálogo por espécie) — fallback para tipoServico legado do Fornecedor
+function especialidadesDoMembro(m: Membro): string[] {
+  const espec = (m.user.especialidades ?? [])
+    .map(e => e.especialidade?.nome)
+    .filter((n): n is string => !!n);
+  if (espec.length > 0) return espec;
+  return m.user.fornecedorPerfil?.tipoServico
+    ? m.user.fornecedorPerfil.tipoServico.split(',').map(t => t.trim()).filter(Boolean)
+    : [];
+}
+
+// Expediente de trabalho do membro — null quando não configurado (herda da empresa)
+function expedienteDoMembro(m: Membro): string | null {
+  const dias = m.diasTrabalho
+    ? String(m.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6).sort((a, b) => a - b)
+    : [];
+  const diasLabel = dias.length > 0 ? dias.map(d => DIAS_SEMANA_LABEL[d]).join(', ') : null;
+  const horaLabel = m.horaInicioTrabalho && m.horaFimTrabalho
+    ? `${m.horaInicioTrabalho}–${m.horaFimTrabalho}`
+    : null;
+  if (!diasLabel && !horaLabel) return null;
+  return [diasLabel, horaLabel].filter(Boolean).join(' · ');
+}
+
 // Perfis de acesso atribuíveis a membros da equipe
 const CARGO_OPTIONS: { value: string; label: string }[] = [
   { value: 'VETERINARIO', label: 'Veterinário' },
@@ -95,6 +122,7 @@ export default function Equipe() {
   const [busca,         setBusca]                         = useState('');
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
+  const [erroSenhaEdicao,   setErroSenhaEdicao]            = useState('');
   const [nomeEquipe,        setNomeEquipe]                  = useState('');
   const [editandoNome,      setEditandoNome]                = useState(false);
   const [novoNome,          setNovoNome]                    = useState('');
@@ -175,6 +203,7 @@ export default function Equipe() {
 const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     if (!membroEditando) return;
     setSalvandoEdicao(true);
+    setErroSenhaEdicao('');
     try {
       const cargos = values.cargos?.length ? values.cargos : [values.perfil];
       await api.put(`/equipes/membros/${membroEditando.id}`, {
@@ -202,7 +231,9 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
       setMembroEditando(null);
       carregarMembros();
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao atualizar perfil');
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao atualizar perfil';
+      if (/senha/i.test(msg)) setErroSenhaEdicao(msg);
+      else toast.error(msg);
     } finally {
       setSalvandoEdicao(false);
     }
@@ -358,14 +389,17 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       {m.user.phone && (
                         <p className="text-xs text-gray-500 mt-0.5">{m.user.phone}</p>
                       )}
-                      {m.user.fornecedorPerfil?.tipoServico && (
+                      {especialidadesDoMembro(m).length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {m.user.fornecedorPerfil.tipoServico.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                          {especialidadesDoMembro(m).map(t => (
                             <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
                               {t}
                             </span>
                           ))}
                         </div>
+                      )}
+                      {expedienteDoMembro(m) && (
+                        <p className="text-[11px] text-gray-500 mt-1">🕒 {expedienteDoMembro(m)}</p>
                       )}
                       <div className="flex flex-wrap gap-1 mt-1">
                         {cargos.map(c => (
@@ -410,7 +444,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Serviço</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Expediente</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cargo</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   {(isGestor) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
@@ -433,8 +468,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
-                          {m.user.fornecedorPerfil?.tipoServico
-                            ? m.user.fornecedorPerfil.tipoServico.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                          {especialidadesDoMembro(m).length > 0
+                            ? especialidadesDoMembro(m).map(t => (
                                 <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
                                   {t}
                                 </span>
@@ -442,6 +477,11 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                             : <span className="text-gray-300 text-xs">—</span>
                           }
                         </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs text-gray-600">
+                          {expedienteDoMembro(m) ?? <span className="text-gray-300">Padrão da empresa</span>}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
@@ -510,11 +550,12 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           modoEdicao
           equipeId={equipeId}
           permitirSenha={isGestor}
+          erroSenhaServidor={erroSenhaEdicao}
           ocultarPerfil
           comExpediente
           textoBotao="Salvar"
           salvando={salvandoEdicao}
-          onClose={() => setMembroEditando(null)}
+          onClose={() => { setMembroEditando(null); setErroSenhaEdicao(''); }}
           onSubmit={handleSalvarEdicao}
           initial={{
             fullName:    membroEditando.user.fullName,

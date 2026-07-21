@@ -10,6 +10,10 @@ import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import type { AnimalInfo } from './SubModuloEvolucao';
+import {
+  imprimirPrescricao as imprimirPrescricaoPrint,
+  type PrintAnimalPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao,
+} from '../utils/PrescricaoPrint';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,49 +100,52 @@ function normalizeVia(via: string): string {
   return via;
 }
 
-function imprimirVacina(v: VacinaClinica) {
-  const formatD = formatDate;
+// Impressão da vacina reutiliza o MESMO gerador de HTML da prescrição
+// (gerarHtmlPrescricao/imprimirPrescricao em PrescricaoPrint.ts) — a vacina vira
+// um "grupo" de um único item, para sair com o mesmo layout/cabeçalho/rodapé.
+function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
   const vcNum   = formatVcNum(v.numero, v.tipoAtendimento);
   const status  = getStatus(v);
-  const statusLabel = status === 'VIGENTE' ? 'Vigente' : status === 'VENCIDA' ? 'Vencida' : 'Inativa';
-  const w = window.open('', '_blank', 'width=700,height=600');
-  if (!w) return;
-  w.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-    <title>Vacina${vcNum ? ' ' + vcNum : ''}</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 32px; color: #111; font-size: 13px; }
-      h1 { font-size: 16px; margin-bottom: 4px; }
-      .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; margin-left: 8px; }
-      .VIGENTE { background:#d1fae5; color:#065f46; }
-      .VENCIDA { background:#fee2e2; color:#991b1b; }
-      .INATIVA { background:#f3f4f6; color:#4b5563; }
-      .cliente-badge { background:#fef3c7; color:#92400e; padding: 2px 8px; border-radius: 4px; font-size:11px; font-weight:700; border:1px solid #fde68a; }
-      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-      td { padding: 6px 0; border-bottom: 1px solid #f3f4f6; }
-      td:first-child { color: #9ca3af; width: 140px; }
-      @media print { body { margin: 16px; } }
-    </style></head><body>
-    <h1>Registro de Vacinação${vcNum ? ` <span style="font-size:13px;color:#0d9488">${vcNum}</span>` : ''}
-      <span class="badge ${status}">${statusLabel}</span>
-      ${v.cliente ? '<span class="cliente-badge">CLIENTE</span>' : ''}
-    </h1>
-    <table>
-      <tr><td>Vacina</td><td><strong>${v.nome}</strong></td></tr>
-      ${v.fabricante ? `<tr><td>Fabricante</td><td>${v.fabricante}</td></tr>` : ''}
-      ${v.lote ? `<tr><td>Lote</td><td>${v.lote}</td></tr>` : ''}
-      ${v.loteVacina ? `<tr><td>Validade lote</td><td>${formatD(v.loteVacina.validade)}</td></tr>` : ''}
-      ${v.dose ? `<tr><td>Tipo dose</td><td>${v.dose}</td></tr>` : ''}
-      ${v.quantidade != null && v.quantidade > 1 ? `<tr><td>Qtd doses</td><td>${v.quantidade}</td></tr>` : ''}
-      ${v.via ? `<tr><td>Via</td><td>${v.via}</td></tr>` : ''}
-      <tr><td>Data aplicação</td><td>${formatD(v.dataAplicacao)}</td></tr>
-      ${v.dataReforco ? `<tr><td>Reforço</td><td>${formatD(v.dataReforco)}</td></tr>` : ''}
-      ${v.veterinario ? `<tr><td>Executor</td><td>${v.veterinario.fullName}</td></tr>` : ''}
-      ${v.observacao ? `<tr><td>Observação</td><td>${v.observacao}</td></tr>` : ''}
-      ${v.motivoInativacao ? `<tr><td>Motivo inativação</td><td>${v.motivoInativacao}</td></tr>` : ''}
-    </table>
-    <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }<\/script>
-    </body></html>`);
-  w.document.close();
+
+  const animalPrint: PrintAnimalPrescricao = {
+    nome:     animal?.nome ?? v.nome,
+    photoUrl: typeof animal?.photoUrl === 'string' ? animal.photoUrl : null,
+    peso:     null,
+    baia:     null,
+    especie:  null,
+    raca:     animal?.raca ?? null,
+    logoUrl:  animal?.logoUrl ?? null,
+  };
+
+  const item: PrintItemPrescricao = {
+    id:              v.id,
+    tipo:            'MEDICAMENTO',
+    medicamento:     v.nome,
+    dosagem:         v.dose,
+    unidade:         v.quantidade != null && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+    via:             v.via ?? '—',
+    frequencia:      v.dataReforco ? `Reforço em ${formatDate(v.dataReforco)}` : 'Dose única',
+    horaInicio:      null,
+    horariosGerados: null,
+    duracaoDias:     1,
+    observacao:      [v.fabricante ? `Fabricante: ${v.fabricante}` : null, v.lote ? `Lote: ${v.lote}` : null, v.observacao]
+      .filter(Boolean).join(' · ') || null,
+    dataInicio:      v.dataAplicacao,
+  };
+
+  const grupo: PrintGrupoPrescricao = {
+    numero:          v.numero ?? 0,
+    numeroFormatado: vcNum ?? `VC-${String(v.id).padStart(4, '0')}`,
+    status:          status === 'INATIVA' ? 'CANCELADA' : 'FINALIZADA',
+    finalizadoEm:    null,
+    finalizadoPor:   null,
+    executadoPor:    v.veterinario ? { fullName: v.veterinario.fullName } : null,
+    veterinario:     v.veterinario ? { fullName: v.veterinario.fullName } : { fullName: '—' },
+    animal:          animalPrint,
+    itens:           [item],
+  };
+
+  imprimirPrescricaoPrint(grupo);
 }
 
 const hoje = () => new Date().toISOString().slice(0, 10);
@@ -422,7 +429,7 @@ const FILTROS: { key: FiltroStatus; label: string }[] = [
   { key: 'INATIVA',  label: 'Inativas' },
 ];
 
-export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
+export default function SubModuloVacina({ animalId, animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -991,7 +998,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                       <Mail size={11} /> E-mail
                     </button>
                     {podeImprimir && (
-                      <button onClick={() => imprimirVacina(v)}
+                      <button onClick={() => imprimirVacina(v, animal)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                         <Printer size={11} /> Imprimir
                       </button>
@@ -1076,7 +1083,7 @@ export default function SubModuloVacina({ animalId, animal: _animal, evolucaoId,
                             <Eye size={14} />
                           </button>
                           {podeImprimir && (
-                            <button onClick={() => imprimirVacina(v)} title="Imprimir"
+                            <button onClick={() => imprimirVacina(v, animal)} title="Imprimir"
                               className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
                               <Printer size={14} />
                             </button>

@@ -206,23 +206,14 @@ const MapaAtendimentoController = {
       // ── KPIs ──────────────────────────────────────────────────────────
       // EM_ANDAMENTO conta como pendente (ainda não concluído); FINALIZADO conta
       // como concluído (equivalente a CONCLUIDO, mas veio do fluxo de evolução clínica).
-      const porStatus = { AGENDADO: 0, EM_ANDAMENTO: 0, CONCLUIDO: 0, FINALIZADO: 0, CANCELADO: 0 };
+      const porStatus = { AGENDADO: 0, EM_ANDAMENTO: 0, CONCLUIDO: 0, FINALIZADO: 0, CANCELADO: 0, ATRASADA: 0 };
       for (const ag of agendamentos) porStatus[ag.status] = (porStatus[ag.status] ?? 0) + 1;
-      const agendadoTotal  = porStatus.AGENDADO + porStatus.EM_ANDAMENTO;
+      // ATRASADA ainda não ocorreu (é uma variante de AGENDADO) — conta como pendente.
+      const agendadoTotal  = porStatus.AGENDADO + porStatus.EM_ANDAMENTO + porStatus.ATRASADA;
       const concluidoTotal = porStatus.CONCLUIDO + porStatus.FINALIZADO;
       const totalAgend   = agendadoTotal + concluidoTotal + porStatus.CANCELADO;
       const totalValidos = agendadoTotal + concluidoTotal;
       const progressoConsultas = totalValidos > 0 ? Math.round((concluidoTotal / totalValidos) * 100) : 0;
-
-      // Animais com qualquer atividade no dia
-      const animalIdsComAtiv = new Set([
-        ...agendamentos.map(ag => ag.animalId),
-        ...prescricoesDoDia.map(p => p.animalId),
-        ...vacinasDoDia.map(v => v.animalId),
-        ...examesDoDia.map(e => e.animalId),
-      ]);
-      const semAtendimento = animalIds.filter(id => !animalIdsComAtiv.has(id)).length;
-      const comAtendimento = animalIds.length - semAtendimento;
 
       // ── Montar cronograma ─────────────────────────────────────────────
 
@@ -257,7 +248,19 @@ const MapaAtendimentoController = {
         const jaExecutadoHoje = isDiario && itensDoDia.length > 0 && itensDoDia.every(i =>
           i.executadoEm && new Date(i.executadoEm).toISOString().split('T')[0] === dataStr
         );
-        const statusPresc = jaExecutadoHoje || g.status === 'EXECUTADO' ? 'EXECUTADO' : 'AGENDADO';
+        // Classificação para o relatório Prescrições/Dosagens: executada > cancelada
+        // (deixou de ser executada) > atrasada (dose prevista há mais de 30min e ainda
+        // não dada — mesma tolerância do status ATRASADA de AgendamentoClinico) > agendada.
+        let statusPresc;
+        if (jaExecutadoHoje || g.status === 'EXECUTADO') {
+          statusPresc = 'EXECUTADO';
+        } else if (g.status === 'CANCELADO' || g.status === 'CANCELADO_PARCIALMENTE') {
+          statusPresc = 'CANCELADO';
+        } else if (dataHora && (Date.now() - dataHora.getTime()) > 30 * 60 * 1000) {
+          statusPresc = 'ATRASADA';
+        } else {
+          statusPresc = 'AGENDADO';
+        }
 
         return {
           id:            `grupo-${g.id}`,
@@ -326,6 +329,19 @@ const MapaAtendimentoController = {
         responsavelId: e.veterinario?.id ?? null,
       }));
 
+      // Animais com atendimento CONCLUÍDO no dia — agendado/solicitado NÃO conta como
+      // atendido; só conta depois que o atendimento é efetivamente finalizado
+      // (agendamento CONCLUIDO/FINALIZADO, prescrição com dose EXECUTADA, vacina
+      // realmente aplicada — não o lembrete de reforço, exame CONCLUIDO).
+      const animalIdsComAtiv = new Set([
+        ...cronogramaAgend.filter(a => a.status === 'CONCLUIDO' || a.status === 'FINALIZADO').map(a => a.animal.id),
+        ...cronogramaPresc.filter(p => p.status === 'EXECUTADO').map(p => p.animal.id),
+        ...cronogramaVacina.filter(v => v.status === 'CONCLUIDO').map(v => v.animal.id),
+        ...cronogramaExame.filter(e => e.status === 'CONCLUIDO').map(e => e.animal.id),
+      ]);
+      const semAtendimento = animalIds.filter(id => !animalIdsComAtiv.has(id)).length;
+      const comAtendimento = animalIds.length - semAtendimento;
+
       // Animais sem nenhuma atividade
       const animalMap = new Map(todosAnimais.map(a => [a.id, a]));
       const semAtendimentoItems = animalIds
@@ -390,8 +406,11 @@ const MapaAtendimentoController = {
             progresso: progressoConsultas,
           },
           prescricoes: {
-            total:  prescricoesDoDia.length,
-            ativas: prescricoesDoDia.length,
+            total:      cronogramaPresc.length,
+            ativas:     prescricoesDoDia.length,
+            executadas: cronogramaPresc.filter(p => p.status === 'EXECUTADO').length,
+            // "deixaram de ser executadas" (canceladas) + atrasadas — agrupado conforme pedido
+            pendentesOuAtrasadas: cronogramaPresc.filter(p => p.status === 'CANCELADO' || p.status === 'ATRASADA').length,
           },
           animaisSemAtendimento: { semAtendimento, comAtendimento, total: animalIds.length },
           cronograma,

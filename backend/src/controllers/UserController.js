@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
+const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
 // Ex: "00123/SP" → "123/SP" | "13557/RJ" → "13557/RJ"
@@ -437,12 +438,17 @@ alterarSenha: async (req, res) => {
         }
       }
 
+      if (await senhaReutilizada(req.user.id, novaSenha, user.passwordHash)) {
+        return res.status(400).json({ sucesso: false, mensagem: MENSAGEM_SENHA_REUTILIZADA });
+      }
+
       const hash = await bcrypt.hash(novaSenha, 10);
 
       await prisma.user.update({
         where: { email: req.user.email },
         data:  { passwordHash: hash, mustChangePassword: false },
       });
+      await registrarTrocaSenha(req.user.id, user.passwordHash);
 
       return res.json({ sucesso: true, mensagem: 'Senha alterada com sucesso' });
     } catch (error) {

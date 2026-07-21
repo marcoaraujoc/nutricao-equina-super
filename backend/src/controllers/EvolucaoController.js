@@ -11,6 +11,7 @@ const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 const { PROMPTS }               = require('../ai/prompts');
 const { extrairResumoAtendimento } = require('../services/laudoEquinoExtracao.service');
+const { interpretarEvolucao }      = require('../services/clinicaLLMService');
 const { pintarLaudoEquino }         = require('../models/anatomia-equina/pintarLaudoEquino');
 const { carregarBaseInnerEquino }   = require('../models/anatomia-equina/equinoBaseLoader');
 const { pintarLaudoCasco, pintarLaudoDental } = require('../models/pintarLaudoRaster');
@@ -231,6 +232,18 @@ const EvolucaoController = {
         });
       }
 
+      // Título via IA gerado ANTES de criar e gravado na MESMA escrita (não um PATCH
+      // separado depois) — assim a evolução já nasce com título, sem depender de uma
+      // segunda chamada à IA no frontend. `acoes` (sugestões de encaminhamento) volta
+      // na resposta para o modal do frontend, sem persistir aqui.
+      let tituloIA = null;
+      let acoesIA  = [];
+      const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId)).catch(() => null);
+      if (resultadoIA) {
+        tituloIA = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
+        acoesIA  = resultadoIA.acoes ?? [];
+      }
+
       const evolucao = await prisma.$transaction(async (tx) => {
         let numero;
         let tipoAtendimento;
@@ -273,6 +286,7 @@ const EvolucaoController = {
             veterinarioId:   userId,
             especialidade,
             texto:           texto.trim(),
+            titulo:          tituloIA,
             status,
             dataInicio:      new Date(),
             dataFim:         status === 'FINALIZADA' ? new Date() : null,
@@ -303,6 +317,7 @@ const EvolucaoController = {
           ...evolucao,
           atendimentoNumero: formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero),
         },
+        acoesIA,
       });
     } catch (error) {
       if (error.statusCode) {
@@ -368,14 +383,30 @@ const EvolucaoController = {
 
       // Texto alterado → o mapa corporal do relatório fica desatualizado:
       // invalida o cache de extração IA para regenerar na próxima impressão.
-      const textoMudou = texto != null && texto.trim() !== existente.texto;
+      const textoMudou   = texto != null && texto.trim() !== existente.texto;
+      const textoEfetivo = texto?.trim() ?? existente.texto;
+
+      // Título via IA gerado ANTES de salvar e gravado na MESMA escrita — só quando
+      // ainda não existe título (evita reprocessar a cada "Salvar" de um rascunho já
+      // titulado, e nunca sobrescreve um título definido manualmente via PATCH /titulo).
+      // `acoes` (sugestões de encaminhamento) volta na resposta, sem persistir aqui.
+      let tituloParaSalvar = existente.titulo;
+      let acoesIA = [];
+      if (!existente.titulo?.trim() && textoEfetivo?.trim()) {
+        const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId).catch(() => null);
+        if (resultadoIA) {
+          tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
+          acoesIA = resultadoIA.acoes ?? [];
+        }
+      }
 
       const atualizada = await prisma.$transaction(async (tx) => {
         const upd = await tx.evolucaoClinica.update({
           where: { id: Number(id) },
           data: {
             especialidade:   especialidade ?? existente.especialidade,
-            texto:           texto?.trim() ?? existente.texto,
+            texto:           textoEfetivo,
+            titulo:          tituloParaSalvar,
             status:          status        ?? existente.status,
             veterinarioId:   novoVetId,
             modificadoPorId: userId,
@@ -407,7 +438,7 @@ const EvolucaoController = {
         `EVOLUCAO_EDITADA | id=${id} | animal=${existente.animalId} | status=${status ?? existente.status} | responsavelAnterior=${existente.veterinarioId} | responsavelNovo=${novoVetId}`
       );
 
-      res.json({ sucesso: true, dados: atualizada });
+      res.json({ sucesso: true, dados: atualizada, acoesIA });
 
       // Ao FINALIZAR a evolução, lança os exames dela na fatura com VALOR ZERADO
       // (idempotente — o financeiro define o preço depois). Fire-and-forget: não

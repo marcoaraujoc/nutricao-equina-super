@@ -1,10 +1,12 @@
 // src/pages/AlterarSenhaObrigatoria.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { KeyRound, Eye, EyeOff, Check, X } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 const REGRAS = [
   { label: 'Mínimo 8 caracteres',            ok: (s: string) => s.length >= 8 },
@@ -19,6 +21,7 @@ export default function AlterarSenhaObrigatoria() {
   const [salvando, setSalvando]                 = useState(false);
   const [mostrarNova, setMostrarNova]           = useState(false);
   const [mostrarConfirmar, setMostrarConfirmar] = useState(false);
+  const [erro, setErro]                         = useState('');
   const { refreshUser } = useAuth();
   const navigate = useNavigate();
 
@@ -27,8 +30,9 @@ export default function AlterarSenhaObrigatoria() {
   const podeSubmeter   = todasOk && senhasIguais;
 
   const handleSalvar = async () => {
-    if (!todasOk) return toast.error('A senha não atende aos requisitos');
-    if (!senhasIguais) return toast.error('As senhas não coincidem');
+    setErro('');
+    if (!todasOk) return setErro('A senha não atende aos requisitos');
+    if (!senhasIguais) return setErro('As senhas não coincidem');
     try {
       setSalvando(true);
       await api.patch('/users/me/senha', { novaSenha, obrigatoria: true });
@@ -36,8 +40,11 @@ export default function AlterarSenhaObrigatoria() {
       toast.success('Senha definida! Agora complete o seu cadastro pessoal.');
       localStorage.setItem('s2vet_ob', 'convite');
       navigate('/cadastro-pessoal');
-    } catch {
-      toast.error('Erro ao salvar senha. Tente novamente.');
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.mensagem ?? 'Não foi possível conectar ao servidor. Tente novamente.'
+        : 'Não foi possível conectar ao servidor. Tente novamente.';
+      setErro(msg);
     } finally {
       setSalvando(false);
     }
@@ -74,7 +81,7 @@ export default function AlterarSenhaObrigatoria() {
               <input
                 type={mostrarNova ? 'text' : 'password'}
                 value={novaSenha}
-                onChange={e => setNovaSenha(e.target.value)}
+                onChange={e => { setNovaSenha(e.target.value); setErro(''); }}
                 placeholder="Digite sua nova senha"
                 className="w-full border border-gray-300 rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
@@ -98,7 +105,7 @@ export default function AlterarSenhaObrigatoria() {
               <input
                 type={mostrarConfirmar ? 'text' : 'password'}
                 value={confirmar}
-                onChange={e => setConfirmar(e.target.value)}
+                onChange={e => { setConfirmar(e.target.value); setErro(''); }}
                 placeholder="Repita a senha"
                 className="w-full border border-gray-300 rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
@@ -139,6 +146,8 @@ export default function AlterarSenhaObrigatoria() {
               })}
             </ul>
           </div>
+
+          <InlineError message={erro} />
 
           <button
             onClick={handleSalvar}

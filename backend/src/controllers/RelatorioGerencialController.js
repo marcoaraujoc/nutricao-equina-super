@@ -120,29 +120,34 @@ async function blocoEmergencias(propWhere, periodo) {
 }
 
 async function blocoReceitaPorLocalidade(propWhere, periodo) {
+  // Só faturas PAGAS contam como receita — ABERTA/FECHADA ainda não foram
+  // recebidas, então não são "receita" (pedido do usuário: valores exibidos
+  // devem ser só os efetivamente pagos).
   const itens = await prisma.faturaItem.findMany({
     where:  {
       criadoEm: { gte: periodo.inicio, lte: periodo.fim },
-      fatura:   { status: { in: ['ABERTA', 'FECHADA', 'PAGA'] }, ...propWhere },
+      fatura:   { status: 'PAGA', ...propWhere },
     },
     select: {
       valor: true, quantidade: true,
-      fatura: { select: { status: true } },
+      // Local do item: usa o animal do PRÓPRIO item; quando o item não tem animalId
+      // (registro legado / cobrança genérica lançada na fatura), cai para o animal
+      // da FATURA (Fatura.animalId, legado) — sem isso, itens legados caíam todos
+      // em "Sem localização" mesmo quando a fatura tinha um animal/local conhecido.
       animal: { select: { local: true, localizacao: { select: { nome: true } } } },
+      fatura: { select: { status: true, animal: { select: { local: true, localizacao: { select: { nome: true } } } } } },
     },
   });
 
-  const porLocal = new Map(); // nome → { bruta, liquida }
+  const porLocal = new Map(); // nome → receita paga
   for (const item of itens) {
-    const chave = item.animal ? nomeLocalizacao(item.animal) : SEM_LOCALIZACAO;
+    const animalRef = item.animal ?? item.fatura.animal;
+    const chave = animalRef ? nomeLocalizacao(animalRef) : SEM_LOCALIZACAO;
     const valor = (item.valor ?? 0) * (item.quantidade ?? 1);
-    const atual = porLocal.get(chave) ?? { bruta: 0, liquida: 0 };
-    atual.bruta += valor;
-    if (item.fatura.status === 'PAGA') atual.liquida += valor;
-    porLocal.set(chave, atual);
+    porLocal.set(chave, (porLocal.get(chave) ?? 0) + valor);
   }
   return [...porLocal.entries()]
-    .map(([localizacao, v]) => ({ localizacao, receitaBruta: v.bruta, receitaLiquida: v.liquida }))
+    .map(([localizacao, receita]) => ({ localizacao, receitaBruta: receita, receitaLiquida: receita }))
     .sort((a, b) => b.receitaBruta - a.receitaBruta);
 }
 

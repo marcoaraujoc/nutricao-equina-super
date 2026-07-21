@@ -574,6 +574,7 @@ export default function CadastroFornecedor() {
         toast.success('Fornecedor cadastrado');
       }
       fecharModal();
+      setBusca(''); // volta a listar todos os fornecedores da empresa
       carregar();
     } catch (err: unknown) {
       const errData = (err as { response?: { data?: { mensagem?: string; inativo?: boolean } } })?.response?.data;

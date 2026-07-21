@@ -84,8 +84,11 @@ const EncaminhamentoController = {
   },
 
   // GET /clinica/encaminhamentos/prestadores/:animalId
-  // Fornecedores (cargo FORNECEDOR) das equipes do escopo do animal, com a
-  // especialidade (tipoServico) do cadastro Fornecedor vinculado ao login.
+  // Especialistas das equipes do escopo do animal para encaminhamento interno:
+  //  - FORNECEDOR (prestador externo): especialidade via cadastro Fornecedor + catálogo;
+  //    encaminhar cria/reativa DesignacaoPrestador (escopo de acesso ao animal).
+  //  - VETERINARIO: especialidade via catálogo (UsuarioEspecialidade); já tem acesso de
+  //    equipe, então encaminhar NÃO cria designação (precisaDesignacao=false).
   listarPrestadores: async (req, res) => {
     try {
       const { animalId } = req.params;
@@ -110,11 +113,16 @@ const EncaminhamentoController = {
           : prisma.membroEquipe.findMany({
               where: {
                 equipeId: { in: equipeIds },
-                OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
+                OR: [
+                  { cargo: 'FORNECEDOR' },  { cargos: { has: 'FORNECEDOR' } },
+                  { cargo: 'VETERINARIO' }, { cargos: { has: 'VETERINARIO' } },
+                ],
                 user: { ativo: true },
               },
               select: {
                 equipeId: true,
+                cargo:    true,
+                cargos:   true,
                 user: { select: { id: true, fullName: true, email: true, phone: true } },
               },
             }),
@@ -147,10 +155,10 @@ const EncaminhamentoController = {
 
       const userIds = [...new Set(membros.map(m => m.user.id))];
 
-      const [fornecedores, designacoes, userEspecs] = await Promise.all([
+      const [fornecedores, designacoes, userEspecs, fornecedorEspecs] = await Promise.all([
         prisma.fornecedor.findMany({
           where:  { userId: { in: userIds } },
-          select: { userId: true, tipoServico: true },
+          select: { id: true, userId: true, tipoServico: true },
         }),
         prisma.designacaoPrestador.findMany({
           where:  { animalId: Number(animalId), prestadorId: { in: userIds }, ativo: true },
@@ -162,18 +170,28 @@ const EncaminhamentoController = {
           where:  { userId: { in: userIds } },
           select: { userId: true, especialidade: { select: { nome: true } } },
         }),
+        // Especialidades gravadas no CADASTRO de Fornecedor (FornecedorEspecialidade,
+        // usado quando o cadastro foi feito por /cadastro/fornecedores) — sem isso, um
+        // prestador com 2+ especialidades cadastradas por lá só aparecia com a 1ª (a
+        // única que o campo legado Fornecedor.tipoServico armazena).
+        prisma.fornecedorEspecialidade.findMany({
+          where:  { fornecedor: { userId: { in: userIds } } },
+          select: { fornecedor: { select: { userId: true } }, especialidade: { select: { nome: true } } },
+        }),
       ]);
 
       const tipoPorUser  = new Map(fornecedores.map(f => [f.userId, f.tipoServico]));
       const designadoSet = new Set(designacoes.map(d => d.prestadorId));
       const especPorUser = new Map();
-      for (const ue of userEspecs) {
-        const nome = ue.especialidade?.nome?.trim();
-        if (!nome) continue;
-        const arr = especPorUser.get(ue.userId) ?? [];
+      const addEspec = (userId, nome) => {
+        nome = nome?.trim();
+        if (!userId || !nome) return;
+        const arr = especPorUser.get(userId) ?? [];
         arr.push(nome);
-        especPorUser.set(ue.userId, arr);
-      }
+        especPorUser.set(userId, arr);
+      };
+      for (const ue of userEspecs) addEspec(ue.userId, ue.especialidade?.nome);
+      for (const fe of fornecedorEspecs) addEspec(fe.fornecedor?.userId, fe.especialidade?.nome);
 
       const vistos = new Set();
       const dados  = [];
@@ -189,6 +207,13 @@ const EncaminhamentoController = {
         for (const s of servicos) {
           if (!EXCLUIR_SERVICOS.has(normalizar(s))) servicosSet.add(s);
         }
+        // FORNECEDOR precisa de designação (escopo de acesso ao animal); VETERINARIO
+        // já tem acesso de equipe — encaminhar não altera acesso.
+        const precisaDesignacao =
+          m.cargo === 'FORNECEDOR' || (m.cargos ?? []).includes('FORNECEDOR');
+        // Vet sem nenhuma especialidade não é "especialista" — não entra na lista
+        // (fornecedor entra mesmo sem, para não regredir o comportamento anterior).
+        if (!precisaDesignacao && servicos.length === 0) continue;
         dados.push({
           userId:      m.user.id,
           fullName:    m.user.fullName,
@@ -197,7 +222,8 @@ const EncaminhamentoController = {
           tipoServico: servicos.join(', ') || null,
           servicos,
           equipeId:    m.equipeId,
-          jaDesignado: designadoSet.has(m.user.id),
+          precisaDesignacao,
+          jaDesignado: precisaDesignacao && designadoSet.has(m.user.id),
         });
       }
       dados.sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -250,21 +276,31 @@ const EncaminhamentoController = {
         });
         const equipeIds = await getEquipeIdsDoAnimal(animal, req.equipeId);
 
+        // Aceita FORNECEDOR (prestador externo) ou VETERINARIO (especialista interno)
         const memberships = await prisma.membroEquipe.findMany({
           where: {
             userId:   Number(prestadorId),
             equipeId: { in: equipeIds.length ? equipeIds : [-1] },
-            OR: [{ cargo: 'FORNECEDOR' }, { cargos: { has: 'FORNECEDOR' } }],
+            OR: [
+              { cargo: 'FORNECEDOR' },  { cargos: { has: 'FORNECEDOR' } },
+              { cargo: 'VETERINARIO' }, { cargos: { has: 'VETERINARIO' } },
+            ],
           },
-          select: { equipeId: true },
+          select: { equipeId: true, cargo: true, cargos: true },
         });
         if (memberships.length === 0) {
-          return res.status(400).json({ error: 'Fornecedor não é membro FORNECEDOR de uma equipe deste animal' });
+          return res.status(400).json({ error: 'Destinatário não é membro de uma equipe deste animal' });
         }
-        // Preferir a equipe do animal quando o prestador pertence a ela
-        equipeDesignacao =
-          memberships.find(m => m.equipeId === animal.equipeId)?.equipeId
-          ?? memberships[0].equipeId;
+        // Designação de acesso só para FORNECEDOR — vet já tem acesso de equipe.
+        const fornecedorMemberships = memberships.filter(
+          m => m.cargo === 'FORNECEDOR' || (m.cargos ?? []).includes('FORNECEDOR'),
+        );
+        if (fornecedorMemberships.length > 0) {
+          // Preferir a equipe do animal quando o prestador pertence a ela
+          equipeDesignacao =
+            fornecedorMemberships.find(m => m.equipeId === animal.equipeId)?.equipeId
+            ?? fornecedorMemberships[0].equipeId;
+        }
       }
 
       const resultado = await prisma.$transaction(async (tx) => {

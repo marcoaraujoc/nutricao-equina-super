@@ -549,32 +549,13 @@ const Animal = () => {
       if (animal) {
         setAnimalEncontrado(animal);
 
-        // Pré-preenche TODOS os dados do animal encontrados (inclusive baia, local,
-        // tratador, resenha) para continuar o cadastro sem redigitar.
-        setFormData(prev => ({
-          ...prev,
-          especieId:       animal.especieId       ?? prev.especieId,
-          racaId:          animal.racaId          ?? prev.racaId,
-          peso:            animal.peso != null     ? String(animal.peso) : prev.peso,
-          dataNascimento:  animal.dataNascimento   ? animal.dataNascimento.split('T')[0] : prev.dataNascimento,
-          idadeAnos:       animal.dataNascimento   ? calcularIdadeAnos(animal.dataNascimento.split('T')[0])
-                            : (animal.idadeAnos != null ? String(animal.idadeAnos) : prev.idadeAnos),
-          sexo:            animal.sexo             ?? prev.sexo,
-          categoriaAnimal: animal.categoriaAnimal  ?? prev.categoriaAnimal,
-          tipoExercicio:   animal.tipoExercicio    ?? prev.tipoExercicio,
-          baia:               animal.baia               ?? prev.baia,
-          localizacaoId:      animal.localizacaoId      ?? prev.localizacaoId,
-          tratadorId:         animal.tratadorId         ?? prev.tratadorId,
-          pelagem:            animal.pelagem            ?? prev.pelagem,
-          altura:             animal.altura             ?? prev.altura,
-          registroPassaporte: animal.registroPassaporte ?? prev.registroPassaporte,
-          finalidades:        animal.finalidade ? animal.finalidade.split('|') : prev.finalidades,
-          seguradora:         animal.seguradora         ?? prev.seguradora,
-        }));
-        // Pré-preenche o texto dos comboboxes de localização e tratador
-        if (animal.localizacao?.nome) setLocBusca(animal.localizacao.nome);
-        if (animal.tratador?.nome)    setTratBusca(animal.tratador.nome);
-        if (animal.photoUrl) setPhotoPreview(animal.photoUrl);
+        // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
+        // registro para este veterinário — tratado como cadastro em branco.
+        // NÃO pré-preenche dados próprios do animal (peso, raça, local, tratador,
+        // foto etc.): eles pertencem ao registro do OUTRO vet/empresa e podem
+        // referenciar localização/tratador de outro escopo, causando erro ao
+        // salvar. Só os dados do PROPRIETÁRIO são reaproveitados (abaixo), pois
+        // são necessários para vincular o novo registro ao mesmo proprietário.
 
         if (!animal.temVet) {
           // Sem vet → pode vincular
@@ -584,6 +565,7 @@ const Animal = () => {
               nomeCompleto: animal.proprietario.fullName ?? '',
               email:        animal.proprietario.email    ?? '',
               telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
+              telefone2:    '',
             });
           }
         } else if (animal.vetDaMinhaEquipe) {
@@ -598,6 +580,7 @@ const Animal = () => {
               nomeCompleto: animal.proprietario.fullName ?? '',
               email:        animal.proprietario.email    ?? '',
               telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
+              telefone2:    '',
             });
           }
         }
@@ -799,10 +782,10 @@ const Animal = () => {
         // Vet criando animal novo (inclusive duplicado) → envia dados do proprietário
         ...(criandoNovoRegistro && {
           proprietario: {
-            fullName: formProp.nomeCompleto.trim(),
-            email:    formProp.email.trim(),
-            phone:    formProp.telefone.trim()  || null,
-            phone2:   formProp.telefone2.trim() || null,
+            fullName: (formProp.nomeCompleto ?? '').trim(),
+            email:    (formProp.email        ?? '').trim(),
+            phone:    (formProp.telefone     ?? '').trim() || null,
+            phone2:   (formProp.telefone2    ?? '').trim() || null,
           },
         }),
         // Informa o backend se o proprietário precisa aprovar ou vínculo é imediato
@@ -820,10 +803,10 @@ const Animal = () => {
         // proprietario é um objeto → precisa ser serializado manualmente
         if (criandoNovoRegistro) {
           fd.append('proprietario', JSON.stringify({
-            fullName: formProp.nomeCompleto.trim(),
-            email:    formProp.email.trim(),
-            phone:    formProp.telefone.trim()  || null,
-            phone2:   formProp.telefone2.trim() || null,
+            fullName: (formProp.nomeCompleto ?? '').trim(),
+            email:    (formProp.email        ?? '').trim(),
+            phone:    (formProp.telefone     ?? '').trim() || null,
+            phone2:   (formProp.telefone2    ?? '').trim() || null,
           }));
         }
         fd.append('foto', photoFile);
@@ -864,8 +847,21 @@ const Animal = () => {
         navigate(paginaPacientes);
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } })
-        .response?.data?.mensagem ?? 'Erro ao salvar animal';
+      // Log completo para diagnóstico — o toast abaixo mostra só a mensagem curta.
+      console.error('[Animal.tsx] Erro ao salvar animal:', err);
+      const isPermErr = (err as { isPermissionError?: boolean } | null)?.isPermissionError === true;
+      const resp = (err as {
+        response?: { data?: { mensagem?: string; error?: string; erros?: { campo: string; mensagem: string }[] } };
+      }).response;
+      // Fallback em cascata: mensagem do controller → erro de permissão (checkPermission
+      // usa a chave `error`, não `mensagem` — e o interceptor 403 zera o response de
+      // mutations) → 1º erro de validação (422) → texto genérico.
+      const msg = isPermErr
+        ? 'Sem permissão para realizar esta ação. Verifique com o responsável da equipe.'
+        : resp?.data?.mensagem
+          ?? resp?.data?.error
+          ?? resp?.data?.erros?.[0]?.mensagem
+          ?? 'Erro ao salvar animal';
       toast.error(msg);
     } finally {
       setSubmitting(false);
@@ -995,21 +991,6 @@ const Animal = () => {
                   </select>
                 </div>
               </div>
-
-              {/* Animal com vet de outra equipe — novo registro duplicado para este vet */}
-              {statusBuscaAnimal === 'com_vet' && (
-                <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
-                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                  <span>
-                    <strong>{formData.nome}</strong> já está sob cuidados de outro veterinário.
-                    Será criado um <strong>novo cadastro do animal</strong> tendo você como
-                    veterinário responsável — o registro do outro veterinário não é alterado.{' '}
-                    {pedirAutorizacao
-                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.'
-                      : 'Após salvar, o proprietário receberá um e-mail informativo.'}
-                  </span>
-                </div>
-              )}
 
               {/* Animal com vet da mesma equipe — informativo */}
               {statusBuscaAnimal === 'minha_equipe' && (

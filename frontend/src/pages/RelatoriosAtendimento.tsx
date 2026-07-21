@@ -2,17 +2,21 @@
 // Indicadores de Atendimento — GET /api/relatorios/atendimento.
 
 import { useState, useEffect } from 'react';
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, MapPin } from 'lucide-react';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
-import { StatTiles, CarregandoRelatorio, ErroRelatorio } from '../components/relatorios/RelatorioUI';
+import { StatTiles, CarregandoRelatorio, ErroRelatorio, Card, EmptyState } from '../components/relatorios/RelatorioUI';
+
+interface AtendimentoPorAnimal { animal: string; total: number }
+interface AtendimentoPorLocalidade { localizacao: string; total: number; animais: AtendimentoPorAnimal[] }
 
 interface Atendimento {
-  periodo: { agendadas: number; realizadas: number; atendimentos: number; canceladas: number; procedimentos: number; exames: number };
+  periodo: { agendadas: number; realizadas: number; canceladas: number; naoRealizadas: number; procedimentos: number; exames: number };
+  atendimentosPorLocalidade: AtendimentoPorLocalidade[];
 }
 
 export default function RelatoriosAtendimento() {
@@ -63,13 +67,43 @@ export default function RelatoriosAtendimento() {
         <div className="space-y-4">
           <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">No período</p>
           <StatTiles tiles={[
-            { label: 'Consultas agendadas',     valor: dados.periodo.agendadas },
-            { label: 'Consultas realizadas',    valor: dados.periodo.realizadas, tom: 'emerald' },
-            { label: 'Atendimentos',            valor: dados.periodo.atendimentos },
-            { label: 'Consultas canceladas',    valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray' },
+            { label: 'Consultas agendadas',      valor: dados.periodo.agendadas },
+            { label: 'Consultas realizadas',     valor: dados.periodo.realizadas, tom: 'emerald' },
+            { label: 'Consultas não realizadas', valor: dados.periodo.naoRealizadas, tom: dados.periodo.naoRealizadas > 0 ? 'amber' : 'gray' },
+            { label: 'Consultas canceladas',     valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray' },
+          ]} />
+          <StatTiles cols={2} tiles={[
             { label: 'Procedimentos realizados', valor: dados.periodo.procedimentos },
             { label: 'Exames solicitados',       valor: dados.periodo.exames },
           ]} />
+
+          {/* ── Atendimentos por animal e localidade ── */}
+          <Card icon={<MapPin size={16} />} titulo="Atendimentos por localidade"
+            subtitulo="Evoluções finalizadas no período, por local e animal">
+            {dados.atendimentosPorLocalidade.length === 0 ? (
+              <EmptyState texto="Nenhum atendimento finalizado no período" />
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {dados.atendimentosPorLocalidade.map(loc => (
+                  <div key={loc.localizacao} className="px-5 py-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-semibold text-gray-800">{loc.localizacao}</p>
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                        {loc.total} atendimento{loc.total !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {loc.animais.map(a => (
+                        <span key={a.animal} className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-full px-2.5 py-1">
+                          {a.animal} <span className="font-semibold text-gray-800">· {a.total}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
         </div>
       )}
     </PageContainer>

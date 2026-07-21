@@ -19,7 +19,7 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO';
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA';
 type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
 type ViewMode          = 'MES' | 'SEMANA';
 
@@ -32,6 +32,7 @@ interface AgendamentoGlobal {
   observacao:  string | null;
   status:      StatusAgendamento;
   veterinario: { id: number; fullName: string } | null;
+  criadoPor:   { id: number; fullName: string } | null;
   animal: {
     id:      number;
     nome:    string;
@@ -161,6 +162,7 @@ const STATUS_COR: Record<StatusAgendamento, string> = {
   CONCLUIDO:    'bg-green-100 text-green-700',
   FINALIZADO:   'bg-green-100 text-green-700',
   CANCELADO:    'bg-red-100 text-red-700',
+  ATRASADA:     'bg-orange-100 text-orange-700',
 };
 const STATUS_LABEL: Record<StatusAgendamento, string> = {
   AGENDADO:     'AGENDADO',
@@ -168,6 +170,7 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   CONCLUIDO:    'CONCLUÍDO',
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
+  ATRASADA:     'ATRASADA',
 };
 function formatarDataPT(dateStr: string) {
   const [a, m, d] = dateStr.split('-').map(Number);
@@ -450,6 +453,9 @@ export default function Agendamentos() {
   // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
   const [conflitoConfirm, setConflitoConfirm] = useState<{
     animalNome: string; quando: string; hora: string; vetNome: string; onConfirm: () => void;
+    // Fecha também o painel de origem (ex.: modal "Novo Agendamento") ao cancelar,
+    // para o usuário voltar à tela de agendamentos em vez de ficar preso no formulário.
+    onCancel?: () => void;
   } | null>(null);
 
   // ── Modal Voz/IA ────────────────────────────────────────────────────────────
@@ -960,6 +966,7 @@ export default function Agendamentos() {
         hora:       formatarHora(conflito.dataHora),
         vetNome:    conflito.veterinario?.fullName ?? booking.vetName,
         onConfirm:  () => executarConfirmarBooking(),
+        onCancel:   () => setBooking(null),
       });
       return;
     }
@@ -998,7 +1005,7 @@ export default function Agendamentos() {
       setTrocandoVetAg(null);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch { toast.error('Erro ao trocar profissional'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao trocar profissional')); }
     finally { setSavingTrocaAg(false); }
   }
 
@@ -1011,18 +1018,54 @@ export default function Agendamentos() {
         data: selectedDate, deVetId: Number(transDeVetId), paraVetId: Number(transParaVetId),
       });
       const transferidos = res.data?.dados?.transferidos ?? 0;
-      toast.success(`${transferidos} agendamento(s) transferido(s)`);
+      const bloqueados: { animalNome: string | null; hora: string }[] = res.data?.dados?.bloqueados ?? [];
+      if (transferidos > 0) toast.success(`${transferidos} agendamento(s) transferido(s)`);
+      if (bloqueados.length > 0) {
+        // Profissional de destino já ocupado nesses horários — não foram movidos
+        toast.error(
+          `${bloqueados.length} agendamento(s) NÃO transferido(s) — profissional de destino já ocupado: ` +
+          bloqueados.map(b => `${b.animalNome ?? 'paciente'} às ${formatarHora(b.hora)}`).join(', '),
+          { duration: 8000 },
+        );
+      }
+      if (transferidos === 0 && bloqueados.length === 0) toast('Nenhum agendamento para transferir neste dia', { icon: 'ℹ️' });
       setTransferindoDia(false);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch { toast.error('Erro ao transferir agenda do dia'); }
+    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao transferir agenda do dia')); }
     finally { setSavingTransf(false); }
+  }
+
+  // Expediente do vet do agendamento sendo reagendado — dia/horário de trabalho
+  // próprios (herdado da empresa quando o vet não tem expediente configurado é
+  // resolvido no backend; aqui só valida quando o vet TEM expediente próprio,
+  // para dar feedback imediato sem duplicar a lógica de herança).
+  const expedienteReagendando = reagendando
+    ? vets.find(v => v.userId === reagendando.veterinario?.id)
+    : undefined;
+
+  function foraDoExpediente(dataHoraLocal: string, vet: VetMembro | undefined): string | null {
+    if (!vet || (!vet.diasTrab && !vet.horaIni)) return null; // sem expediente próprio configurado
+    const d = new Date(dataHoraLocal);
+    if (isNaN(d.getTime())) return null;
+    if (vet.diasTrab && vet.diasTrab.length > 0 && !vet.diasTrab.includes(d.getDay())) {
+      return `${vet.fullName} não atende neste dia da semana.`;
+    }
+    if (vet.horaIni && vet.horaFim) {
+      const hhmm = dataHoraLocal.slice(11, 16);
+      if (hhmm < vet.horaIni || hhmm >= vet.horaFim) {
+        return `${vet.fullName} atende das ${vet.horaIni} às ${vet.horaFim}.`;
+      }
+    }
+    return null;
   }
 
   async function handleReagendar(e: React.FormEvent) {
     e.preventDefault();
     if (!reagendando || !novaDataHora) { toast.error('Informe a nova data/hora'); return; }
     if (novaDataHora === formatarDateInput(reagendando.dataHora)) { toast.error('A nova data deve ser diferente da atual'); return; }
+    const avisoExpediente = foraDoExpediente(novaDataHora, expedienteReagendando);
+    if (avisoExpediente) { toast.error(avisoExpediente); return; }
     setSalvandoReag(true);
     try {
       const novaData = new Date(novaDataHora);
@@ -1453,7 +1496,8 @@ export default function Agendamentos() {
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-gray-100">
               {listaFiltrada.map(ag => {
-                const isAgendado    = ag.status === 'AGENDADO';
+                // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
+                const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                 const isConcluido   = ag.status === 'CONCLUIDO';
                 const isCancelado   = ag.status === 'CANCELADO';
                 const isEmAndamento = ag.status === 'EM_ANDAMENTO';
@@ -1488,6 +1532,9 @@ export default function Agendamentos() {
                         : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                       {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
+                      {ag.criadoPor && ag.criadoPor.id !== ag.veterinario?.id && (
+                        <p className="text-xs text-gray-400">Agendado por: {ag.criadoPor.fullName}</p>
+                      )}
                       {isCancelado && ag.observacao && (
                         <p className="text-xs text-red-500 mt-0.5 italic">Motivo: {ag.observacao}</p>
                       )}
@@ -1550,7 +1597,8 @@ export default function Agendamentos() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {listaFiltrada.map(ag => {
-                    const isAgendado    = ag.status === 'AGENDADO';
+                    // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
+                const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                     const isConcluido   = ag.status === 'CONCLUIDO';
                     const isCancelado   = ag.status === 'CANCELADO';
                     const isEmAndamento = ag.status === 'EM_ANDAMENTO';
@@ -1578,6 +1626,9 @@ export default function Agendamentos() {
                           {ag.veterinario
                             ? <span className="flex items-center gap-1.5 text-xs text-gray-700"><UserIcon size={12} className="text-gray-400" />{ag.veterinario.fullName}</span>
                             : <span className="text-xs text-gray-400">Não atribuído</span>}
+                          {ag.criadoPor && ag.criadoPor.id !== ag.veterinario?.id && (
+                            <p className="text-[11px] text-gray-400 mt-0.5">Agendado por: {ag.criadoPor.fullName}</p>
+                          )}
                         </td>
                         <td className="py-3.5 px-4">
                           {isCancelado ? (
@@ -1791,12 +1842,26 @@ export default function Agendamentos() {
                 <label className="text-xs font-bold text-gray-700">Nova Data e Hora <span className="text-red-500">*</span></label>
                 <input type="datetime-local" value={novaDataHora} onChange={e => setNovaDataHora(e.target.value)}
                   className="text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+                {expedienteReagendando && (expedienteReagendando.diasTrab || expedienteReagendando.horaIni) && (
+                  <p className="text-[11px] text-gray-400">
+                    Expediente de {expedienteReagendando.fullName}:{' '}
+                    {expedienteReagendando.diasTrab && expedienteReagendando.diasTrab.length > 0
+                      ? expedienteReagendando.diasTrab.map(d => ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'][d]).join(', ')
+                      : 'todos os dias'}
+                    {expedienteReagendando.horaIni && expedienteReagendando.horaFim
+                      ? ` · ${expedienteReagendando.horaIni}–${expedienteReagendando.horaFim}`
+                      : ''}
+                  </p>
+                )}
+                {novaDataHora && foraDoExpediente(novaDataHora, expedienteReagendando) && (
+                  <p className="text-[11px] text-red-500 font-medium">{foraDoExpediente(novaDataHora, expedienteReagendando)}</p>
+                )}
               </div>
               <div className="bg-emerald-50 rounded-xl p-3 text-xs text-emerald-700">O horário anterior será liberado e um novo agendamento será criado.</div>
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
                 <button type="button" onClick={() => setReagendando(null)}
                   className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Fechar</button>
-                <button type="submit" disabled={salvandoReag}
+                <button type="submit" disabled={salvandoReag || !!(novaDataHora && foraDoExpediente(novaDataHora, expedienteReagendando))}
                   className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
                   {salvandoReag ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   Confirmar
@@ -2039,7 +2104,7 @@ export default function Agendamentos() {
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
-              <button onClick={() => setConflitoConfirm(null)}
+              <button onClick={() => { const onCancel = conflitoConfirm.onCancel; setConflitoConfirm(null); onCancel?.(); }}
                 className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
                 Cancelar
               </button>

@@ -30,6 +30,8 @@ interface Prestador {
   tipoServico: string | null;
   /** Serviços/especialidades individuais (tipoServico legado + catálogo do usuário) */
   servicos?:   string[];
+  /** FORNECEDOR (true) ganha acesso ao animal via designação; VETERINARIO (false) já tem acesso de equipe */
+  precisaDesignacao?: boolean;
   jaDesignado: boolean;
 }
 
@@ -76,22 +78,20 @@ const URGENCIA_BADGE: Record<Urgencia, { label: string; cls: string }> = {
 const formatData = (iso: string) =>
   new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-// ─── Item da lista ────────────────────────────────────────────────────────────
+// ─── Helpers de item ──────────────────────────────────────────────────────────
 
-function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
-  enc:         Encaminhamento;
-  podeEditar:  boolean;
-  onStatus:    (id: number, status: StatusEnc) => void;
-}) {
-  const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
-  const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
-  const interno  = !!enc.prestador;
-
+const getDestino = (enc: Encaminhamento): { destino: string; interno: boolean } => {
+  const interno = !!enc.prestador;
   const destino = interno
     ? enc.prestador!.fullName
     : [enc.veterinarioDestino, enc.clinicaDestino].filter(Boolean).join(' — ') || 'Não informado';
+  return { destino, interno };
+};
 
-  const textoCompart = [
+const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
+  const { destino, interno } = getDestino(enc);
+  const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
+  return [
     '*Encaminhamento*',
     `Especialidade: ${enc.especialidade}`,
     `Destino: ${destino}${interno ? ' (prestador da equipe)' : ' (externo)'}`,
@@ -101,6 +101,19 @@ function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
     enc.motivo ? `\nMotivo: ${enc.motivo}` : '',
     enc.observacao ? `Obs: ${enc.observacao}` : '',
   ].filter(Boolean).join('\n');
+};
+
+// ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
+
+function EncaminhamentoCard({ enc, podeEditar, onStatus }: {
+  enc:         Encaminhamento;
+  podeEditar:  boolean;
+  onStatus:    (id: number, status: StatusEnc) => void;
+}) {
+  const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
+  const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
+  const { destino, interno } = getDestino(enc);
+  const texto = montarTextoEncaminhamento(enc);
 
   return (
     <div className="px-4 py-3">
@@ -135,11 +148,11 @@ function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
       </p>
 
       <div className="flex flex-wrap gap-2 mt-2">
-        <button onClick={() => abrirWhatsApp(textoCompart)}
+        <button onClick={() => abrirWhatsApp(texto)}
           className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
           <MessageCircle size={11} /> WhatsApp
         </button>
-        <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, textoCompart)}
+        <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)}
           className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
           <Mail size={11} /> E-mail
         </button>
@@ -151,6 +164,71 @@ function EncaminhamentoItem({ enc, podeEditar, onStatus }: {
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Linha da tabela desktop (padrão do Histórico de Evolução Clínica) ─────────
+
+function EncaminhamentoRow({ enc, podeEditar, onStatus }: {
+  enc:         Encaminhamento;
+  podeEditar:  boolean;
+  onStatus:    (id: number, status: StatusEnc) => void;
+}) {
+  const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
+  const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
+  const { destino, interno } = getDestino(enc);
+  const texto = montarTextoEncaminhamento(enc);
+
+  return (
+    <tr className="hover:bg-gray-50 transition-colors">
+      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+        {formatData(enc.dataEncaminhamento)}
+      </td>
+      <td className="px-4 py-3 text-gray-800 max-w-xs">
+        <p className="text-xs font-medium text-gray-800 line-clamp-2">{enc.especialidade}</p>
+        {enc.urgencia !== 'NORMAL' && (
+          <span className={`inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${urgencia.cls}`}>
+            {urgencia.label}
+          </span>
+        )}
+        {enc.motivo && <p className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+      </td>
+      <td className="px-4 py-3 max-w-[180px]">
+        <p className="flex items-center gap-1.5 text-xs text-gray-700">
+          {interno
+            ? <UserCheck size={12} className="text-emerald-600 flex-shrink-0" />
+            : <ExternalLink size={12} className="text-gray-400 flex-shrink-0" />}
+          <span className="truncate">{destino}</span>
+        </p>
+        <span className="text-[10px] text-gray-400">{interno ? 'prestador da equipe' : 'externo'}</span>
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap">
+        <p className="text-xs font-medium text-gray-800">{enc.veterinario?.fullName ?? '—'}</p>
+      </td>
+      <td className="px-4 py-3">
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.cls}`}>
+          {status.label}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-start gap-1">
+          <button onClick={() => abrirWhatsApp(texto)} title="WhatsApp"
+            className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
+            <MessageCircle size={14} />
+          </button>
+          <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} title="E-mail"
+            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+            <Mail size={14} />
+          </button>
+          {enc.status === 'PENDENTE' && podeEditar && (
+            <button onClick={() => onStatus(enc.id, 'CANCELADO')} title="Cancelar"
+              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+              <Ban size={14} />
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -230,19 +308,23 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   };
 
   const handleSalvar = async () => {
-    if (!evolucaoId)           { toast.error('Inicie uma evolução antes de criar um encaminhamento.'); return; }
-    if (!motivo.trim())        { toast.error('Informe o motivo do encaminhamento'); return; }
-    if (!especialidade.trim()) { toast.error('Informe a especialidade'); return; }
+    if (!evolucaoId)    { toast.error('Inicie uma evolução antes de criar um encaminhamento.'); return; }
+    if (!motivo.trim()) { toast.error('Informe o motivo do encaminhamento'); return; }
     if (destinoTipo === 'EQUIPE' && !prestadorSel) {
       toast.error('Selecione o prestador da equipe'); return;
     }
+    // Para EQUIPE, a especialidade escolhida no filtro já conta como "informada" mesmo
+    // que `especialidade` (setada só ao clicar num prestador) ainda esteja vazia —
+    // evita o erro "Informe a especialidade" quando o usuário já selecionou no filtro.
+    const especialidadeEfetiva = especialidade.trim() || filtroServico.trim();
+    if (!especialidadeEfetiva) { toast.error('Informe a especialidade'); return; }
 
     setSalvando(true);
     try {
       await api.post('/clinica/encaminhamentos', {
         animalId,
         evolucaoId,
-        especialidade:      especialidade.trim(),
+        especialidade:      especialidadeEfetiva,
         motivo:             motivo.trim(),
         urgencia,
         observacao:         observacao.trim() || undefined,
@@ -250,9 +332,12 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
         veterinarioDestino: destinoTipo === 'EXTERNO' ? vetDestino.trim() || undefined : undefined,
         clinicaDestino:     destinoTipo === 'EXTERNO' ? clinicaDestino.trim() || undefined : undefined,
       });
-      toast.success(destinoTipo === 'EQUIPE'
-        ? `Encaminhado para ${prestadorSel?.fullName} — acesso ao paciente liberado`
-        : 'Encaminhamento registrado');
+      toast.success(
+        destinoTipo === 'EQUIPE'
+          ? (prestadorSel?.precisaDesignacao !== false
+              ? `Encaminhado para ${prestadorSel?.fullName} — acesso ao paciente liberado`
+              : `Encaminhado para ${prestadorSel?.fullName}`)
+          : 'Encaminhamento registrado');
       onCriado();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
@@ -303,8 +388,9 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
               <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
                 <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
                 <span>
-                  Nenhum prestador de {filtroServico} na equipe deste paciente.
-                  Inclua o fornecedor pela aba Equipe do Controle de Acesso e tente novamente.
+                  Nenhum profissional com a especialidade {filtroServico} na equipe deste paciente.
+                  Cadastre a especialidade no profissional (Cadastro Pessoal) ou inclua um
+                  fornecedor pela aba Equipe do Controle de Acesso e tente novamente.
                 </span>
               </div>
             ) : (
@@ -337,12 +423,21 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
             )
           )}
 
-          {prestadorSel && !prestadorSel.jaDesignado && (
+          {prestadorSel && prestadorSel.precisaDesignacao !== false && !prestadorSel.jaDesignado && (
             <div className="flex items-start gap-2 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
               <ShieldCheck size={13} className="flex-shrink-0 mt-0.5" />
               <span>
                 Ao salvar, <strong>{prestadorSel.fullName}</strong> passa a acessar somente este paciente.
                 O acesso é encerrado quando o encaminhamento for concluído ou cancelado.
+              </span>
+            </div>
+          )}
+
+          {prestadorSel && prestadorSel.precisaDesignacao === false && (
+            <div className="flex items-start gap-2 text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+              <UserCheck size={13} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+              <span>
+                <strong>{prestadorSel.fullName}</strong> é veterinário da equipe e já tem acesso a este paciente.
               </span>
             </div>
           )}
@@ -532,19 +627,19 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
         />
       )}
 
-      <div className="-mx-4 px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Encaminhamentos</p>
         <span className="text-xs text-gray-400">{encaminhamentos.length} registro{encaminhamentos.length !== 1 ? 's' : ''}</span>
       </div>
 
       {loading || loadingPerms ? (
-        <div className="flex justify-center py-12">
-          <Loader2 size={20} className="animate-spin text-emerald-600" />
+        <div className="flex items-center justify-center py-20">
+          <Loader2 size={24} className="animate-spin text-emerald-600" />
         </div>
       ) : encaminhamentos.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-gray-200">
-          <Share2 size={36} className="mb-3" />
-          <p className="text-sm font-medium text-gray-300">Nenhum encaminhamento</p>
+        <div className="flex flex-col items-center justify-center py-20 text-gray-300">
+          <Share2 size={40} className="mb-3" />
+          <p className="text-sm text-gray-400">Nenhum encaminhamento encontrado</p>
           {podeCriar && (
             <p className="text-xs text-gray-300 mt-1">
               Encaminhe o paciente a um prestador da equipe ou profissional externo.
@@ -553,11 +648,12 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
         </div>
       ) : (
         <>
-          <div className="space-y-2">
+          {/* Mobile — cards no padrão do Histórico de Evolução Clínica */}
+          <div className="md:hidden divide-y divide-gray-50">
             {pageItems.map(enc => {
               const eAutor = enc.veterinario?.id === (user?.id ?? 0);
               return (
-                <EncaminhamentoItem
+                <EncaminhamentoCard
                   key={enc.id}
                   enc={enc}
                   podeEditar={podeEditar && (!isFornecedor || eAutor)}
@@ -566,8 +662,38 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
               );
             })}
           </div>
+
+          {/* Desktop — tabela */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Destino</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {pageItems.map(enc => {
+                  const eAutor = enc.veterinario?.id === (user?.id ?? 0);
+                  return (
+                    <EncaminhamentoRow
+                      key={enc.id}
+                      enc={enc}
+                      podeEditar={podeEditar && (!isFornecedor || eAutor)}
+                      onStatus={handleStatus}
+                    />
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
           {totalPags > 1 && (
-            <div className="flex items-center justify-between px-1 py-3 border-t border-gray-50 mt-2">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
               <span className="text-xs text-gray-400">{encaminhamentos.length} registro{encaminhamentos.length !== 1 ? 's' : ''}</span>
               <div className="flex items-center gap-3">
                 <button disabled={pageAtual === 1} onClick={() => setPage(p => p - 1)}

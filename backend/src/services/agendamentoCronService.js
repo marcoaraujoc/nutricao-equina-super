@@ -11,9 +11,10 @@ const MOTIVO_CANCELAMENTO =
   'Cancelado automaticamente pelo sistema — agendamento não realizado no dia.';
 
 /**
- * Cancela todos os agendamentos ainda AGENDADO cujo horário já passou (não realizados).
- * "Realizado" = status CONCLUIDO; itens EM_ANDAMENTO (em atendimento) e futuros são
- * preservados. Grava o motivo em `observacao` (mesmo campo exibido no card do dia).
+ * Cancela todos os agendamentos ainda AGENDADO/ATRASADA cujo horário já passou (não
+ * realizados). "Realizado" = status CONCLUIDO; itens EM_ANDAMENTO (em atendimento) e
+ * futuros são preservados. Grava o motivo em `observacao` (mesmo campo exibido no
+ * card do dia).
  *
  * @returns ResultadoCron para o comAlerta/reportarCron (Monitoração + e-mail ADMIN).
  */
@@ -21,7 +22,7 @@ async function cancelarAgendamentosNaoRealizados() {
   const agora = new Date();
 
   const naoRealizados = await prisma.agendamentoClinico.findMany({
-    where:  { status: 'AGENDADO', ativo: true, dataHora: { lt: agora } },
+    where:  { status: { in: ['AGENDADO', 'ATRASADA'] }, ativo: true, dataHora: { lt: agora } },
     select: { id: true },
   });
 
@@ -39,4 +40,27 @@ async function cancelarAgendamentosNaoRealizados() {
   };
 }
 
-module.exports = { cancelarAgendamentosNaoRealizados, MOTIVO_CANCELAMENTO };
+const MINUTOS_TOLERANCIA_ATRASO = 30;
+
+/**
+ * Marca como ATRASADA todo agendamento ainda AGENDADO cujo horário + 30min já passou.
+ * Roda com frequência (a cada poucos minutos) — status intermediário, meramente
+ * informativo; o cancelamento definitivo continua sendo feito só no fechamento do dia
+ * (cancelarAgendamentosNaoRealizados, que agora também varre ATRASADA).
+ */
+async function marcarAgendamentosAtrasados() {
+  const limite = new Date(Date.now() - MINUTOS_TOLERANCIA_ATRASO * 60 * 1000);
+
+  const { count } = await prisma.agendamentoClinico.updateMany({
+    where: { status: 'AGENDADO', ativo: true, dataHora: { lt: limite } },
+    data:  { status: 'ATRASADA' },
+  });
+
+  return {
+    ok: true,
+    notificar: false, // status informativo — não precisa de e-mail a cada execução
+    resumo: count > 0 ? `${count} agendamento(s) marcado(s) como ATRASADA.` : undefined,
+  };
+}
+
+module.exports = { cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados, MOTIVO_CANCELAMENTO, MINUTOS_TOLERANCIA_ATRASO };

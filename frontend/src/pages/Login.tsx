@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
 import { AlertCircle, Eye, EyeOff } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 export default function Login() {
   const { login }  = useAuth();
@@ -18,6 +19,7 @@ export default function Login() {
   const [password,     setPassword]     = useState('');
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
+  const [googleError,  setGoogleError]  = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -38,6 +40,7 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setGoogleError('');
     try {
       const res  = await fetch('/api/auth/login', {
         method:      'POST',
@@ -63,6 +66,7 @@ export default function Login() {
 
   const loginComGoogle = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
+      setGoogleError('');
       try {
         const res  = await fetch('/api/auth/google', {
           method:      'POST',
@@ -76,14 +80,14 @@ export default function Login() {
           localStorage.removeItem('s2vet_ob');
           redirecionarAposLogin();
         } else {
-          alert(data.error || 'Erro no login Google');
+          setGoogleError(data.error || 'Erro no login Google');
         }
       } catch (err) {
         console.error('Erro ao processar login Google:', err);
-        alert('Erro de conexão com o servidor.');
+        setGoogleError('Erro de conexão com o servidor.');
       }
     },
-    onError: () => alert('Falha ao conectar com Google. Tente novamente.'),
+    onError: () => setGoogleError('Falha ao conectar com Google. Tente novamente.'),
     prompt: 'select_account',
     flow:   'implicit',
   });
@@ -182,9 +186,7 @@ export default function Login() {
             </div>
           </div>
 
-          {error && (
-            <p className="text-red-500 text-sm text-center font-medium">{error}</p>
-          )}
+          <InlineError message={error} className="mb-1" />
 
           <button
             type="submit"
@@ -228,6 +230,8 @@ export default function Login() {
           Entrar com Google
         </button>
 
+        <InlineError message={googleError} className="mt-3" />
+
         <p className="text-center text-gray-500 text-sm mt-4 sm:mt-6">
           Não tem uma conta?{' '}
           <Link to="/register" className="text-emerald-600 font-medium hover:underline">
@@ -256,9 +260,7 @@ export default function Login() {
                            focus:outline-none focus:border-emerald-500 text-sm"
                 required
               />
-              {forgotError && (
-                <p className="text-red-500 text-sm text-center mt-3">{forgotError}</p>
-              )}
+              <InlineError message={forgotError} className="mt-3" />
               {forgotSuccess && (
                 <p className="text-emerald-600 text-sm text-center mt-3">
                   Se o e-mail existir, será enviado um link de recuperação.

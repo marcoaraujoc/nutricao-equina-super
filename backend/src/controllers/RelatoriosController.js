@@ -15,6 +15,8 @@ const {
   resolverPeriodo,
   somaEmMapa,
   mapaParaLista,
+  nomeLocalizacao,
+  SEM_LOCALIZACAO,
 } = require('./RelatorioGerencialController');
 
 const receitaDoItem = (i) => (i.valor ?? 0) * (i.quantidade ?? 1);
@@ -204,18 +206,48 @@ const atendimento = async (req, res) => {
     const { inicio, fim } = resolverPeriodo(req);
     const escopoAnimal = empresaId ? { animal: { empresaId } } : {};
 
-    const [agendadas, realizadas, canceladas, atendimentos, procedimentos, exames] = await Promise.all([
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'AGENDADO',   dataHora:        { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.evolucaoClinica.count({    where: { ativo: true, status: 'FINALIZADA', dataFim:         { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'CANCELADO',  dataHora:        { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.evolucaoClinica.count({    where: { ativo: true, dataInicio:      { gte: inicio, lte: fim }, ...escopoAnimal } }),
+    // Todas as 4 métricas de consulta vêm de AgendamentoClinico (mesma fonte, mesma
+    // janela de dataHora) — evita misturar "agendadas" (agenda) com "realizadas"
+    // (evolução), que podiam divergir. "agendadas" = total marcado no período,
+    // qualquer status; os outros 3 são subconjuntos por status.
+    const [agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames] = await Promise.all([
+      prisma.agendamentoClinico.count({ where: { ativo: true, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: { in: ['CONCLUIDO', 'FINALIZADO'] }, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'CANCELADO', dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      // ATRASADA = já passou do horário (+30min) e ainda não foi concluída nem cancelada
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'ATRASADA', dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
       prisma.prescricao.count({         where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm:     { gte: inicio, lte: fim }, ...escopoAnimal } }),
       prisma.exameClinico.count({       where: { ativo: true, dataSolicitacao: { gte: inicio, lte: fim }, ...escopoAnimal } }),
     ]);
 
+    // Atendimentos por animal e localidade: um "atendimento" = uma evolução clínica
+    // FINALIZADA no período (mesmo critério de "atendido" usado no Mapa de
+    // Atendimento — agendado/em andamento não conta, só depois de finalizar).
+    // Ex.: na semana o Haras Centauro teve 5 atendimentos, 4 do Dentinho.
+    const evolucoesFinalizadas = await prisma.evolucaoClinica.findMany({
+      where: { ativo: true, status: 'FINALIZADA', dataFim: { gte: inicio, lte: fim }, ...escopoAnimal },
+      select: { animal: { select: { id: true, nome: true, local: true, localizacao: { select: { nome: true } } } } },
+    });
+    const porLocalAnimal = new Map(); // localizacao → Map(animalNome → total)
+    for (const ev of evolucoesFinalizadas) {
+      const localNome  = ev.animal ? nomeLocalizacao(ev.animal) : SEM_LOCALIZACAO;
+      const animalNome = ev.animal?.nome ?? 'Sem animal vinculado';
+      if (!porLocalAnimal.has(localNome)) porLocalAnimal.set(localNome, new Map());
+      const porAnimal = porLocalAnimal.get(localNome);
+      somaEmMapa(porAnimal, animalNome, 1);
+    }
+    const atendimentosPorLocalidade = [...porLocalAnimal.entries()]
+      .map(([localizacao, porAnimal]) => {
+        const animais = mapaParaLista(porAnimal, 'animal', 'total').sort((a, b) => b.total - a.total);
+        const total = animais.reduce((s, a) => s + a.total, 0);
+        return { localizacao, total, animais };
+      })
+      .sort((a, b) => b.total - a.total);
+
     return res.json({
       dados: {
-        periodo: { agendadas, realizadas, atendimentos, canceladas, procedimentos, exames },
+        periodo: { agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames },
+        atendimentosPorLocalidade,
       },
     });
   } catch (err) {

@@ -63,20 +63,13 @@ function detectSection(pathname: string): ActiveSection {
 
 export default function Sidebar() {
   const { user, logout }              = useAuth();
-  const { isNewUser, selectedAnimal, cadastroCompleto, perfilCarregado } = useSelectedAnimal();
+  // Redirecionamento para /cadastro-pessoal quando incompleto é responsabilidade
+  // do ProtectedRoute (fonte única — evita competir com o gate de troca de senha
+  // obrigatória e causar loop de mount/unmount do Sidebar, que gerava tempestade
+  // de requisições 429 nos hooks de polling abaixo).
+  const { isNewUser, selectedAnimal, cadastroCompleto, isGestorEmpresa, empresaConfigurada } = useSelectedAnimal();
   const location                      = useLocation();
   const navigate                      = useNavigate();
-
-  // Ao entrar na aplicação com o cadastro pessoal incompleto, leva direto para a
-  // tela de Cadastro Pessoal (uma vez por sessão — depois o usuário navega livre).
-  const redirecionouCadastroRef = useRef(false);
-  useEffect(() => {
-    if (!perfilCarregado || redirecionouCadastroRef.current) return;
-    if (isNewUser && !cadastroCompleto && location.pathname !== '/cadastro-pessoal') {
-      redirecionouCadastroRef.current = true;
-      navigate('/cadastro-pessoal');
-    }
-  }, [perfilCarregado, isNewUser, cadastroCompleto, location.pathname, navigate]);
   const pendentesCount                = useVetPendentes();
   const { opcoes: opcoesContexto, contextoAtivo, trocarContexto } = useEmpresa();
   useVetSolicitacaoMonitor();
@@ -164,6 +157,24 @@ export default function Sidebar() {
   // Permite que VETs sem nenhuma outra permissão ainda acessem seu próprio perfil.
   const podVerCadastroPessoal = !isEstagiario && !isProprietario;
 
+  // Bloqueio de módulos por cadastro incompleto — mensagem e destino variam conforme
+  // o que falta preencher. GESTOR de empresa precisa de Cadastro Pessoal E Configurações
+  // da empresa; demais perfis só de Cadastro Pessoal (proprietário tem sua própria regra).
+  const faltaCadastroPessoal = !cadastroCompleto;
+  const faltaConfigEmpresa   = isGestorEmpresa && !empresaConfigurada;
+  const destinoBloqueio = faltaCadastroPessoal
+    ? '/cadastro-pessoal'
+    : faltaConfigEmpresa
+      ? '/configuracoes'
+      : '/animais';
+  const mensagemBloqueio = isProprietario
+    ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
+    : faltaCadastroPessoal && faltaConfigEmpresa
+      ? 'Complete seu Cadastro Pessoal e a Configuração da Empresa para liberar os módulos.'
+      : faltaConfigEmpresa
+        ? 'Complete a Configuração da Empresa para liberar os módulos.'
+        : 'Complete seu Cadastro Pessoal para liberar os módulos.';
+
   // Itens visíveis no accordion Cadastro e na seção Geral
   const temAlgumCadastroItem =
     (temAcessoClinico && podeVerAnimais) ||
@@ -195,21 +206,9 @@ export default function Sidebar() {
   const isAdminActive          = (path: string) => activeSection === 'admin' && p.startsWith(path);
 
   // ── Estados dos menus ─────────────────────────────────────────────────────
+  // Seções-contêiner (cabeçalhos) — independentes.
   const [openGeral,         setOpenGeral]        = useState(true);
   const [openModulos,       setOpenModulos]       = useState(true);
-  const [openClinica,       setOpenClinica]       = useState(() => p.startsWith('/clinica'));
-  const [openEnfermagem,    setOpenEnfermagem]    = useState(() => p.startsWith('/execucao-prescricao'));
-  const [openEstoque,       setOpenEstoque]       = useState(() => p.startsWith('/estoque-vacina') || p.startsWith('/farmacia'));
-  const [openExames,        setOpenExames]        = useState(() => p.startsWith('/exames'));
-  const [openNutricional,   setOpenNutricional]   = useState(() =>
-    p.startsWith('/dieta') ||
-    p.startsWith('/relatorio-nutricional') ||
-    p.startsWith('/alimentos') ||
-    p.startsWith('/nutrientes') ||
-    p.startsWith('/composicao-alimentar'),
-  );
-  const [openCadastro,      setOpenCadastro]      = useState(() => p.startsWith('/cadastro/') || p === '/equipe');
-  const [openRelatorios,    setOpenRelatorios]    = useState(() => p.startsWith('/relatorios'));
   const [openAdministracao, setOpenAdministracao] = useState(() =>
     p.startsWith('/usuarios') ||
     p.startsWith('/equipe-manager') ||
@@ -221,7 +220,25 @@ export default function Sidebar() {
     p.startsWith('/configuracao-alertas') ||
     p.startsWith('/monitoracao'),
   );
-  const [openFinanceiro,    setOpenFinanceiro]    = useState(false);
+
+  // Accordion de grupos: no máximo UM grupo expansível aberto por vez em todo o
+  // sidebar. Abrir um fecha o anterior. Inicializa no grupo da rota ativa.
+  const [openGroup, setOpenGroup] = useState<string | null>(() => {
+    if (p.startsWith('/clinica'))                                    return 'atendimento';
+    if (p.startsWith('/execucao-prescricao'))                        return 'enfermagem';
+    if (p.startsWith('/estoque-vacina') || p.startsWith('/farmacia')) return 'estoque';
+    if (p.startsWith('/exames'))                                     return 'exames';
+    if (p.startsWith('/dieta') ||
+        p.startsWith('/relatorio-nutricional') ||
+        p.startsWith('/alimentos') ||
+        p.startsWith('/nutrientes') ||
+        p.startsWith('/composicao-alimentar'))                       return 'nutricional';
+    if (p.startsWith('/cadastro/') || p === '/equipe')               return 'cadastro';
+    if (p.startsWith('/relatorios'))                                 return 'relatorios';
+    return null;
+  });
+  const toggleGroup = (key: string) => setOpenGroup(cur => (cur === key ? null : key));
+
   const { open: isMobileMenuOpen, setOpen: setIsMobileMenuOpen } = useMobileMenu();
 
   const toggle      = (s: React.Dispatch<React.SetStateAction<boolean>>) => s(v => !v);
@@ -362,17 +379,17 @@ export default function Sidebar() {
                   {/* ── Cadastro sub-accordion ─────────────────────────────── */}
                   {temAlgumCadastroItem && (
                     <div>
-                      <button onClick={() => toggle(setOpenCadastro)}
+                      <button onClick={() => toggleGroup('cadastro')}
                         className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
                           activeSection === 'cadastro' || p.startsWith('/cadastro-pessoal') ||
                           p.startsWith('/animais-vet') || p.startsWith('/meus-animais')
                             ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                         }`}>
                         <span className="flex items-center gap-3"><FolderOpen size={20} /> Cadastro</span>
-                        <ChevronDown className={`w-4 h-4 transition-transform ${openCadastro ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openGroup === 'cadastro' ? 'rotate-180' : ''}`} />
                       </button>
 
-                      {openCadastro && (
+                      {openGroup === 'cadastro' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {temAcessoClinico
                             ? (podeVerAnimais && (
@@ -413,15 +430,11 @@ export default function Sidebar() {
           {isNewUser ? (
             <button
               type="button"
-              onClick={() => navigate(!cadastroCompleto ? '/cadastro-pessoal' : '/animais')}
+              onClick={() => navigate(destinoBloqueio)}
               className="block w-[calc(100%-1.5rem)] mx-3 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm text-left hover:bg-amber-100 transition-colors cursor-pointer"
             >
               <strong>Funcionalidades bloqueadas</strong><br />
-              <span className="underline underline-offset-2">
-                {isProprietario
-                  ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
-                  : 'Complete seu Cadastro Pessoal para liberar os módulos.'}
-              </span>
+              <span className="underline underline-offset-2">{mensagemBloqueio}</span>
             </button>
           ) : temAlgumModulo ? (
             <div>
@@ -437,8 +450,8 @@ export default function Sidebar() {
                   {/* ── Estoque ───────────────────────────────────────── */}
                   {(podeVerEstoqueVacina || podeVerFarmacia) && (
                     <div>
-                      {moduleButton('Estoque', <Package size={20} />, 'estoque', openEstoque, () => toggle(setOpenEstoque))}
-                      {openEstoque && (
+                      {moduleButton('Estoque', <Package size={20} />, 'estoque', openGroup === 'estoque', () => toggleGroup('estoque'))}
+                      {openGroup === 'estoque' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {podeVerEstoqueVacina && subLink('/estoque-vacina', <Syringe size={14} />, 'Vacina', isEstoqueSubActive('/estoque-vacina'))}
                           {podeVerFarmacia && subLink('/farmacia', <FlaskConical size={14} />, 'Farmácia', isEstoqueSubActive('/farmacia'))}
@@ -450,8 +463,8 @@ export default function Sidebar() {
                   {/* ── Resultado de Exame ───────────────────────────────── */}
                   {podeVerExames && (
                     <div>
-                      {moduleButton('Resultado de Exame', <Microscope size={20} />, 'exames', openExames, () => toggle(setOpenExames))}
-                      {openExames && (
+                      {moduleButton('Resultado de Exame', <Microscope size={20} />, 'exames', openGroup === 'exames', () => toggleGroup('exames'))}
+                      {openGroup === 'exames' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {subLink(
                             animalId ? `/exames/${animalId}?tipo=laboratorial` : '/exames?tipo=laboratorial',
@@ -484,8 +497,8 @@ export default function Sidebar() {
                   {/* ── Atendimento ──────────────────────────────────── */}
                   {temAcessoClinico && temAcessoAtendimento && (
                     <div>
-                      {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openClinica, () => toggle(setOpenClinica))}
-                      {openClinica && (
+                      {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openGroup === 'atendimento', () => toggleGroup('atendimento'))}
+                      {openGroup === 'atendimento' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {isVetOuSuperior && podeVerAgendamentos && subLink('/clinica/agenda', <CalendarDays size={14} />, 'Agenda', p.startsWith('/clinica/agenda'))}
                           {podeVerEvolucoes  && subLink(
@@ -521,8 +534,8 @@ export default function Sidebar() {
                   {/* ── Enfermagem ────────────────────────────────────── */}
                   {temAcessoClinico && podeVerPrescricoes && (
                     <div>
-                      {moduleButton('Enfermagem', <HeartPulse size={20} />, 'enfermagem', openEnfermagem, () => toggle(setOpenEnfermagem))}
-                      {openEnfermagem && (
+                      {moduleButton('Enfermagem', <HeartPulse size={20} />, 'enfermagem', openGroup === 'enfermagem', () => toggleGroup('enfermagem'))}
+                      {openGroup === 'enfermagem' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {subLink('/execucao-prescricao', <ClipboardCheck size={14} />, 'Execução de Prescrições', p.startsWith('/execucao-prescricao'))}
                         </div>
@@ -533,8 +546,8 @@ export default function Sidebar() {
                   {/* ── Nutricional ──────────────────────────────────────── */}
                   {temAcessoNutricional && (
                     <div>
-                      {moduleButton('Nutricional', <Carrot size={20} />, 'nutricional', openNutricional, () => toggle(setOpenNutricional))}
-                      {openNutricional && (
+                      {moduleButton('Nutricional', <Carrot size={20} />, 'nutricional', openGroup === 'nutricional', () => toggleGroup('nutricional'))}
+                      {openGroup === 'nutricional' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {podeVerDieta && subLink(
                             animalId ? `/dieta/${animalId}` : '/dieta',
@@ -557,12 +570,12 @@ export default function Sidebar() {
                   {/* ── Financeiro ───────────────────────────────────────── */}
                   {podeVerFaturas && (
                     <div>
-                      <button onClick={() => toggle(setOpenFinanceiro)}
+                      <button onClick={() => toggleGroup('financeiro')}
                         className="flex items-center justify-between w-full px-5 py-2.5 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl transition-colors">
                         <span className="flex items-center gap-3"><DollarSign size={20} /> Financeiro</span>
-                        <ChevronDown className={`w-4 h-4 transition-transform ${openFinanceiro ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openGroup === 'financeiro' ? 'rotate-180' : ''}`} />
                       </button>
-                      {openFinanceiro && (
+                      {openGroup === 'financeiro' && (
                         <div className="mt-1 space-y-0.5">
                           <Link
                             to="/faturamento"
@@ -582,12 +595,12 @@ export default function Sidebar() {
                   {/* ── Relatórios ───────────────────────────────────────── */}
                   {podeVerRelatorios && (
                     <div>
-                      <button onClick={() => toggle(setOpenRelatorios)}
+                      <button onClick={() => toggleGroup('relatorios')}
                         className="flex items-center justify-between w-full px-5 py-2.5 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-3xl transition-colors">
                         <span className="flex items-center gap-3"><ChartBar size={20} /> Relatórios</span>
-                        <ChevronDown className={`w-4 h-4 transition-transform ${openRelatorios ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openGroup === 'relatorios' ? 'rotate-180' : ''}`} />
                       </button>
-                      {openRelatorios && (
+                      {openGroup === 'relatorios' && (
                         <div className="mt-1 space-y-0.5">
                           {subLink('/relatorios',             <ChartBar size={16} />,      'Gestão',              p === '/relatorios')}
                           {subLink('/relatorios/financeiro',  <DollarSign size={16} />,    'Financeiro',          p.startsWith('/relatorios/financeiro'))}

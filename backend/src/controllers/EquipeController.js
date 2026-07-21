@@ -8,6 +8,7 @@ const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
+const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 const prisma = require('../lib/prisma').default;
 
@@ -450,6 +451,9 @@ const EquipeController = {
       res.json({
         sucesso: true,
         dados: {
+          // true = já existe registro salvo (gestor completou Configurações ao
+          // menos uma vez) — usado pelo ProtectedRoute no gate de primeiro acesso.
+          configurado:         !!config,
           logoUrl:             config?.logoUrl             ?? null,
           tipoFechamento:      tipoFechamentoEfetivo,
           diaFechamentoFatura: config?.diaFechamentoFatura  ?? null,
@@ -1230,6 +1234,9 @@ const EquipeController = {
         if (!/[A-Z]/.test(senha))        return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
         if (!/\d/.test(senha))           return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 número' });
         if (!/[^A-Za-z0-9]/.test(senha)) return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 caractere especial' });
+        if (await senhaReutilizada(membro.userId, senha, membro.user.passwordHash)) {
+          return res.status(400).json({ sucesso: false, mensagem: MENSAGEM_SENHA_REUTILIZADA });
+        }
       }
 
       if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
@@ -1254,6 +1261,7 @@ const EquipeController = {
       if (Object.keys(dadosUser).length > 0) {
         await prisma.user.update({ where: { id: membro.userId }, data: dadosUser });
       }
+      if (senha) await registrarTrocaSenha(membro.userId, membro.user.passwordHash);
 
       // Sincroniza com o cadastro Fornecedor vinculado (quando o membro é PRESTADOR)
       const dadosFornecedor = {};

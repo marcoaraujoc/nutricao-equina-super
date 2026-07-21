@@ -7,6 +7,7 @@ import { Camera, Loader2, MessageCircle, QrCode, Power, RefreshCw } from 'lucide
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 
 // ─── Utilitário de compressão (mesmo padrão de Animal.tsx) ───────────────────
 const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise<File> =>
@@ -69,7 +70,14 @@ const maskWhatsapp = (v: string) => {
 
 export default function Configuracoes() {
   const { isGestor, loading: loadingPerms } = usePermissoes();
+  const { empresaConfigurada, refreshSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
+
+  // Capturado uma única vez, no primeiro render: se a empresa AINDA não estava
+  // configurada quando a página abriu, este acesso é o gate de primeiro login do
+  // gestor (ProtectedRoute redirecionou para cá) — ao salvar, leva para dentro do
+  // app. Se o gestor só veio editar Configurações depois, não navega para lugar nenhum.
+  const [completandoPrimeiroAcesso] = useState(() => !empresaConfigurada);
 
   const [loading,      setLoading]      = useState(true);
   const [salvando,     setSalvando]     = useState(false);
@@ -299,6 +307,14 @@ export default function Configuracoes() {
       // Sidebar escuta este evento para atualizar a logomarca sem reload
       window.dispatchEvent(new CustomEvent('s2vet:config-atualizada'));
       toast.success('Configurações salvas com sucesso!');
+
+      // Recarrega cadastroCompleto/empresaConfigurada no contexto — sem isso o
+      // Sidebar continua mostrando "Funcionalidades bloqueadas" e o ProtectedRoute
+      // continua redirecionando para cá até um F5 manual.
+      await refreshSelectedAnimal();
+      if (completandoPrimeiroAcesso) {
+        navigate('/mapa-atendimento');
+      }
     } catch {
       // interceptor já trata isPermissionError silenciosamente
       toast.error('Erro ao salvar configurações.');

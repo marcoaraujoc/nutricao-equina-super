@@ -213,15 +213,14 @@ export default function Relatorios() {
 
           {/* ── Receita por localidade ── */}
           <Card icon={<DollarSign size={16} />} titulo="Receita por localidade"
-            subtitulo="Bruta = total faturado · Líquida = recebido (faturas pagas)">
+            subtitulo="Somente faturas pagas">
             {dados.receitaPorLocalidade.length === 0 ? (
-              <EmptyState texto="Nenhuma receita registrada" />
+              <EmptyState texto="Nenhuma receita paga no período" />
             ) : (
-              <Tabela colunas={['Localização', 'Receita bruta', 'Receita líquida']}>
+              <Tabela colunas={['Localização', 'Receita recebida']}>
                 {dados.receitaPorLocalidade.map(r => (
                   <tr key={r.localizacao}>
                     <td className="px-4 py-2.5 text-xs text-gray-800">{r.localizacao}</td>
-                    <td className="px-4 py-2.5 text-xs text-gray-800 text-right font-semibold whitespace-nowrap">{formatBRL(r.receitaBruta)}</td>
                     <td className="px-4 py-2.5 text-xs text-emerald-700 text-right font-semibold whitespace-nowrap">{formatBRL(r.receitaLiquida)}</td>
                   </tr>
                 ))}

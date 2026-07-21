@@ -145,6 +145,7 @@ const Usuarios = () => {
   const [modalAberto, setModalAberto] = useState(false);
   const [editando,    setEditando]    = useState<Usuario | null>(null);
   const [salvando,    setSalvando]    = useState(false);
+  const [erroSenha,   setErroSenha]   = useState('');
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
@@ -191,12 +192,14 @@ const Usuarios = () => {
   const fecharModal = () => {
     setModalAberto(false);
     setEditando(null);
+    setErroSenha('');
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
   const handleSubmit = async (values: UsuarioFormValues) => {
     setSalvando(true);
+    setErroSenha('');
     try {
       // Sem senha na criação: o backend aplica a padrão (Inicial_001)
       // com troca obrigatória no primeiro acesso.
@@ -229,7 +232,8 @@ const Usuarios = () => {
       const msg = axios.isAxiosError(err)
         ? err.response?.data?.mensagem ?? 'Erro ao salvar'
         : 'Erro inesperado';
-      toast.error(msg);
+      if (/senha/i.test(msg)) setErroSenha(msg);
+      else toast.error(msg);
     } finally {
       setSalvando(false);
     }
@@ -392,6 +396,7 @@ const Usuarios = () => {
           titulo={editando ? 'Editar Usuário' : 'Novo Usuário'}
           modoEdicao={!!editando}
           permitirSenha={!!editando}
+          erroSenhaServidor={erroSenha}
           salvando={salvando}
           onClose={fecharModal}
           onSubmit={handleSubmit}

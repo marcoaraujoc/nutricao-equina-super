@@ -58,7 +58,7 @@ const HistoricoController = {
         }),
         prisma.vacinaClinica.findMany({
           where: { ...whereAtivo, AND: [escopoFilho], ...(buscando ? { OR: [{ nome: like }, { fabricante: like }, { lote: like }, { observacao: like }] } : {}) },
-          select: { id: true, nome: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
+          select: { id: true, nome: true, numero: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
@@ -67,7 +67,10 @@ const HistoricoController = {
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho], ...(buscando ? { OR: [{ especialidade: like }, { motivo: like }] } : {}) },
+          // PENDENTE incluído: o encaminhamento deve aparecer no Histórico assim que
+          // criado (ao fechar a evolução), não só depois de marcado CONCLUIDO — mesmo
+          // padrão de exames (SOLICITADO+CONCLUIDO) e evoluções (EM_ANDAMENTO+FINALIZADA).
+          where: { ...whereAtivo, status: { in: ['PENDENTE', 'CONCLUIDO'] }, AND: [escopoFilho], ...(buscando ? { OR: [{ especialidade: like }, { motivo: like }] } : {}) },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, evolucaoId: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
@@ -75,7 +78,7 @@ const HistoricoController = {
           where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc], ...(buscando ? { OR: [{ itens: { some: { ativo: true, medicamento: like } } }] } : {}) },
           select: {
             id: true, numero: true, status: true, createdAt: true, evolucaoId: true, veterinario: VET_SELECT,
-            itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },
+            itens: { where: { ativo: true }, select: { medicamento: true, tipo: true }, take: 20 },
           },
           orderBy: { createdAt: 'desc' }, take: limit,
         }),
@@ -99,7 +102,7 @@ const HistoricoController = {
           id:          `vacina-${v.id}`,
           origem:      'VACINA',
           data:        v.dataAplicacao,
-          titulo:      v.nome,
+          titulo:      v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} - ${v.nome}` : v.nome,
           badge:       'Vacina',
           status:      null,
           responsavel: v.veterinario?.fullName ?? null,
@@ -154,17 +157,33 @@ const HistoricoController = {
           resumo:      en.prestador ? `Para ${en.prestador.fullName}. ${en.motivo}` : en.motivo,
           evolucaoId:  en.evolucaoId,
         })),
-        ...grupos.map(g => ({
-          id:          `prescricao-${g.id}`,
-          origem:      'PRESCRICAO',
-          data:        g.createdAt,
-          titulo:      `Prescrição nº ${String(g.numero).padStart(3, '0')}`,
-          badge:       'Prescrição',
-          status:      g.status,
-          responsavel: g.veterinario?.fullName ?? null,
-          resumo:      g.itens.map(i => i.medicamento).join(', '),
-          evolucaoId:  g.evolucaoId,
-        })),
+        // Uma entrada POR TIPO presente no grupo (Medicamento, Procedimento, ...) — uma
+        // prescrição com itens de tipos diferentes aparece como N entradas separadas
+        // no Histórico, cada uma só com os itens do seu tipo.
+        ...grupos.flatMap(g => {
+          const numeroFmt = String(g.numero).padStart(3, '0');
+          const porTipo = new Map();
+          for (const item of g.itens) {
+            const tipo = item.tipo || 'MEDICAMENTO';
+            if (!porTipo.has(tipo)) porTipo.set(tipo, []);
+            porTipo.get(tipo).push(item.medicamento);
+          }
+          const tipos = [...porTipo.keys()];
+          const tipoLabel = { MEDICAMENTO: 'Medicamento', PROCEDIMENTO: 'Procedimento' };
+          return tipos.map(tipo => ({
+            id:          `prescricao-${g.id}-${tipo}`,
+            origem:      'PRESCRICAO',
+            data:        g.createdAt,
+            titulo:      tipos.length > 1
+              ? `Prescrição nº ${numeroFmt} — ${tipoLabel[tipo] ?? tipo}`
+              : `Prescrição nº ${numeroFmt}`,
+            badge:       'Prescrição',
+            status:      g.status,
+            responsavel: g.veterinario?.fullName ?? null,
+            resumo:      porTipo.get(tipo).join(', '),
+            evolucaoId:  g.evolucaoId,
+          }));
+        }),
       ];
 
       eventos.sort((a, b) => new Date(b.data) - new Date(a.data));
@@ -201,7 +220,7 @@ const HistoricoController = {
         }),
         prisma.vacinaClinica.findMany({
           where: { ...whereAtivo, AND: [escopoFilho] },
-          select: { id: true, nome: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, veterinario: VET_SELECT },
+          select: { id: true, nome: true, numero: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
@@ -210,7 +229,7 @@ const HistoricoController = {
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
         prisma.encaminhamentoClinico.findMany({
-          where: { ...whereAtivo, status: 'CONCLUIDO', AND: [escopoFilho] },
+          where: { ...whereAtivo, status: { in: ['PENDENTE', 'CONCLUIDO'] }, AND: [escopoFilho] },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
@@ -218,7 +237,7 @@ const HistoricoController = {
           where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc] },
           select: {
             id: true, numero: true, status: true, createdAt: true, veterinario: VET_SELECT,
-            itens: { where: { ativo: true }, select: { medicamento: true }, take: 5 },
+            itens: { where: { ativo: true }, select: { medicamento: true, tipo: true }, take: 20 },
           },
           orderBy: { createdAt: 'desc' }, take: limit,
         }),
@@ -236,7 +255,7 @@ const HistoricoController = {
           id:      `vacina-${v.id}`,
           origem:  'VACINA',
           data:    v.dataAplicacao,
-          titulo:  v.nome,
+          titulo:  v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} - ${v.nome}` : v.nome,
           resumo:  [v.fabricante ? `Fabricante: ${v.fabricante}` : null, v.observacao].filter(Boolean).join('. '),
         })),
         ...exames.map(x => {
@@ -273,13 +292,26 @@ const HistoricoController = {
           titulo:  `Encaminhamento — ${en.especialidade}`,
           resumo:  en.prestador ? `Para ${en.prestador.fullName}. ${en.motivo}` : en.motivo,
         })),
-        ...grupos.map(g => ({
-          id:      `prescricao-${g.id}`,
-          origem:  'PRESCRICAO',
-          data:    g.createdAt,
-          titulo:  `Prescrição nº ${String(g.numero).padStart(3, '0')}`,
-          resumo:  g.itens.map(i => i.medicamento).join(', '),
-        })),
+        ...grupos.flatMap(g => {
+          const numeroFmt = String(g.numero).padStart(3, '0');
+          const porTipo = new Map();
+          for (const item of g.itens) {
+            const tipo = item.tipo || 'MEDICAMENTO';
+            if (!porTipo.has(tipo)) porTipo.set(tipo, []);
+            porTipo.get(tipo).push(item.medicamento);
+          }
+          const tipos = [...porTipo.keys()];
+          const tipoLabel = { MEDICAMENTO: 'Medicamento', PROCEDIMENTO: 'Procedimento' };
+          return tipos.map(tipo => ({
+            id:     `prescricao-${g.id}-${tipo}`,
+            origem: 'PRESCRICAO',
+            data:   g.createdAt,
+            titulo: tipos.length > 1
+              ? `Prescrição nº ${numeroFmt} — ${tipoLabel[tipo] ?? tipo}`
+              : `Prescrição nº ${numeroFmt}`,
+            resumo: porTipo.get(tipo).join(', '),
+          }));
+        }),
       ];
 
       eventos.sort((a, b) => new Date(b.data) - new Date(a.data));

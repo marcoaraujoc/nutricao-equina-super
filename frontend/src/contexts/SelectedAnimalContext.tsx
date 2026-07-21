@@ -35,6 +35,10 @@ interface SelectedAnimalContextType {
   cadastroCompleto: boolean;
   /** true depois que o perfil (/users/me) foi carregado — evita redirect prematuro. */
   perfilCarregado: boolean;
+  /** Usuário é dono/gestor de alguma empresa (escopo de /equipes/configuracoes). */
+  isGestorEmpresa: boolean;
+  /** Gestor já salvou Configurações da empresa ao menos uma vez. */
+  empresaConfigurada: boolean;
 }
 
 const SelectedAnimalContext = createContext<SelectedAnimalContextType | undefined>(undefined);
@@ -48,6 +52,8 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
   const [cadastroCompleto, setCadastroCompleto] = useState(false);
   const [isProprietario, setIsProprietario] = useState(false);
   const [perfilCarregado, setPerfilCarregado] = useState(false);
+  const [isGestorEmpresa, setIsGestorEmpresa] = useState(false);
+  const [empresaConfigurada, setEmpresaConfigurada] = useState(true); // otimista até saber que é gestor
 
   const loadAnimais = useCallback(async () => {
     if (!user?.id) return;
@@ -56,9 +62,13 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
     if (user.pendingInvite) return;
 
     try {
-      const [animaisRes, perfilRes] = await Promise.allSettled([
+      const [animaisRes, perfilRes, configRes] = await Promise.allSettled([
         api.get('/animais'),
-        api.get('/users/me')
+        api.get('/users/me'),
+        // 404 é o resultado NORMAL para quem não é gestor/dono de empresa
+        // (resolverEscopoConfiguracao só resolve para ownerId/cargo GESTOR) —
+        // não é um erro a logar, só o sinal de "não é gestor".
+        api.get('/equipes/configuracoes'),
       ]);
 
       // Animais
@@ -88,6 +98,17 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
         console.warn('Não foi possível carregar cadastro pessoal:', perfilRes.reason);
         setCadastroCompleto(false);
       }
+
+      // Escopo de gestor: sucesso = é dono/gestor de alguma empresa (404 = não é,
+      // caso comum e esperado — não loga como erro).
+      if (configRes.status === 'fulfilled') {
+        setIsGestorEmpresa(true);
+        setEmpresaConfigurada(!!configRes.value.data?.dados?.configurado);
+      } else {
+        setIsGestorEmpresa(false);
+        setEmpresaConfigurada(true); // não-gestor nunca é bloqueado por este gate
+      }
+
       setPerfilCarregado(true);
 
       if (animais.length === 0) {
@@ -155,10 +176,17 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
         hasAnimals,
         hasSingleAnimal,
         // PROPRIETÁRIO: precisa de cadastro completo + ao menos um animal.
-        // Demais perfis (vet, gestor, fornecedor): apenas cadastro completo.
-        isNewUser: isProprietario ? (!hasAnimals || !cadastroCompleto) : !cadastroCompleto,
+        // GESTOR de empresa: cadastro completo + Configurações da empresa preenchidas.
+        // Demais perfis (vet, fornecedor): apenas cadastro completo.
+        isNewUser: isProprietario
+          ? (!hasAnimals || !cadastroCompleto)
+          : isGestorEmpresa
+            ? (!cadastroCompleto || !empresaConfigurada)
+            : !cadastroCompleto,
         cadastroCompleto,
         perfilCarregado,
+        isGestorEmpresa,
+        empresaConfigurada,
       }}
     >
       {children}

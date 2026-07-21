@@ -22,12 +22,73 @@ async function isGestorDaEmpresa(userId, empresaId) {
   return Boolean(membro);
 }
 
+// Espécies que a empresa atende (mesma resolução de EquipeController.obterEspeciesAtendidas):
+// EmpresaConfiguracao.especiesAtendidas explícito > fallback nas espécies do dono (VetEspecie).
+// [] = sem restrição configurada (não filtra — evita esconder tudo por falta de configuração).
+async function especiesAtendidasDaEmpresa(req) {
+  if (!req.empresaId) return [];
+  const config = await prisma.empresaConfiguracao.findFirst({
+    where: { empresaId: req.empresaId, ...(req.equipeId ? { equipeId: req.equipeId } : {}) },
+  });
+  let especies = config?.especiesAtendidas
+    ? String(config.especiesAtendidas).split(',').map(Number).filter(Number.isInteger)
+    : [];
+  if (especies.length === 0) {
+    const emp = await prisma.empresa.findUnique({ where: { id: req.empresaId }, select: { ownerId: true } });
+    if (emp?.ownerId) {
+      const perfil = await prisma.vetPerfil.findUnique({
+        where:  { userId: emp.ownerId },
+        select: { especies: { select: { especieId: true } } },
+      });
+      especies = perfil?.especies.map(e => e.especieId) ?? [];
+    }
+  }
+  return especies;
+}
+
+// Nomes de especialidade (catálogo tb_especialidades) que a empresa atende — usado para
+// restringir tanto a lista principal de procedimentos quanto os combos ao que a empresa
+// efetivamente cuida. null = sem restrição (nenhuma espécie configurada em lugar nenhum).
+async function nomesEspecialidadesPermitidas(req) {
+  const especies = await especiesAtendidasDaEmpresa(req);
+  if (especies.length === 0) return null;
+  const rows = await prisma.especialidade.findMany({
+    where:  { especieId: { in: especies }, ativo: true },
+    select: { nome: true },
+  });
+  return new Set(rows.map(r => r.nome));
+}
+
+// Nomes (lowercase) das espécies que a empresa atende. null = sem restrição.
+// Usado para filtrar procedimentos pela ESPÉCIE (campo ProcedimentoVeterinario.especie)
+// — evita trazer procedimentos de espécies que a empresa não trabalha (ex: Bovino).
+async function nomesEspeciesDaEmpresa(req) {
+  const ids = await especiesAtendidasDaEmpresa(req);
+  if (ids.length === 0) return null;
+  const rows = await prisma.especie.findMany({ where: { id: { in: ids } }, select: { nome: true } });
+  return new Set(rows.map(r => r.nome.trim().toLowerCase()).filter(Boolean));
+}
+
+// Procedimento é compatível com as espécies da empresa?
+// especie null / "Ambas"/"Ambos" = genérico (serve a todas). Campo pode listar
+// várias ("Bovino e Equino") → basta uma das espécies da empresa aparecer.
+function procedimentoDaEmpresa(especieProc, especiesEmpresa) {
+  if (!especiesEmpresa) return true;              // sem restrição configurada
+  if (!especieProc) return true;                   // genérico
+  const e = especieProc.trim().toLowerCase();
+  if (e === 'ambas' || e === 'ambos') return true;
+  for (const nome of especiesEmpresa) if (e.includes(nome)) return true;
+  return false;
+}
+
 // GET /api/procedimentos/especialidades-minhas
 // Nomes de especialidade para o seletor da tela. { dados: [nome], gestor: bool }
 const especialidadesMinhas = async (req, res) => {
   try {
     const isAdmin = req.user.userType === 'ADMIN';
     const gestor  = isAdmin || await isGestorDaEmpresa(req.user.id, req.empresaId);
+
+    const permitidas = await nomesEspecialidadesPermitidas(req);
 
     let nomes;
     if (gestor) {
@@ -43,6 +104,10 @@ const especialidadesMinhas = async (req, res) => {
       nomes = rows.map(r => r.especialidade.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     }
 
+    // Restringe às especialidades que a empresa efetivamente atende (Configurações /
+    // espécies do dono) — vale tanto para gestor quanto para membro comum.
+    if (permitidas) nomes = nomes.filter(n => permitidas.has(n));
+
     return res.json({ dados: [...new Set(nomes)], gestor });
   } catch (err) {
     console.error('ProcedimentoCadastroController.especialidadesMinhas:', err);
@@ -50,11 +115,11 @@ const especialidadesMinhas = async (req, res) => {
   }
 };
 
-// GET /api/procedimentos/cadastro/lista?especialidade=NOME&busca=
+// GET /api/procedimentos/cadastro/lista?especialidade=NOME&busca=&especie=NOME
 // Procedimentos ativos da especialidade + valor da empresa ativa (quando houver).
 const listarComValores = async (req, res) => {
   try {
-    const { especialidade, busca } = req.query;
+    const { especialidade, busca, especie } = req.query;
     const where = { ativo: true };
     if (especialidade) where.especialidade = { equals: String(especialidade), mode: 'insensitive' };
     if (busca) {
@@ -65,14 +130,35 @@ const listarComValores = async (req, res) => {
       ];
     }
 
-    const procedimentos = await prisma.procedimentoVeterinario.findMany({
+    let procedimentos = await prisma.procedimentoVeterinario.findMany({
       where,
       orderBy: [{ categoria: 'asc' }, { nome: 'asc' }],
       select: {
         id: true, nome: true, nomeAbreviado: true, categoria: true, subcategoria: true,
-        especialidade: true, tipoProcedimento: true, duracao: true, valorVenda: true, descricao: true,
+        especialidade: true, especie: true, tipoProcedimento: true, duracao: true, valorVenda: true, descricao: true,
       },
     });
+
+    // Só os procedimentos das especialidades que a empresa atende.
+    const permitidas = await nomesEspecialidadesPermitidas(req);
+    if (permitidas) procedimentos = procedimentos.filter(p => permitidas.has(p.especialidade));
+
+    // Só os procedimentos das ESPÉCIES que a empresa trabalha (evita Bovino etc.
+    // numa empresa que só atende Equinos). Aplica-se sempre, independente do
+    // parâmetro `especie` (que ainda restringe à espécie do animal em atendimento).
+    const especiesEmpresa = await nomesEspeciesDaEmpresa(req);
+    procedimentos = procedimentos.filter(p => procedimentoDaEmpresa(p.especie, especiesEmpresa));
+
+    // Só os procedimentos da espécie do animal em atendimento (ex: "Acupuntura" tem
+    // procedimentos catalogados por espécie — Equino, Bovino, Canino... — o mesmo nome
+    // de especialidade não deve misturar espécies diferentes). "Ambas"/sem espécie
+    // definida = procedimento genérico, aparece para qualquer espécie.
+    if (especie) {
+      const especieNorm = String(especie).trim().toLowerCase();
+      procedimentos = procedimentos.filter(p =>
+        !p.especie || p.especie.toLowerCase() === 'ambas' || p.especie.toLowerCase() === especieNorm
+      );
+    }
 
     let valores = new Map();
     if (req.empresaId && procedimentos.length > 0) {
@@ -138,11 +224,18 @@ const COMBO_INCLUDE = {
 const listarCombos = async (req, res) => {
   try {
     if (!req.empresaId) return res.json({ dados: [] });
-    const combos = await prisma.procedimentoCombo.findMany({
+    let combos = await prisma.procedimentoCombo.findMany({
       where:   { empresaId: req.empresaId, ativo: true },
       include: COMBO_INCLUDE,
       orderBy: { nome: 'asc' },
     });
+
+    // Só combos cujos itens são TODOS de especialidades que a empresa atende.
+    const permitidas = await nomesEspecialidadesPermitidas(req);
+    if (permitidas) {
+      combos = combos.filter(c => c.itens.every(it => permitidas.has(it.procedimento.especialidade)));
+    }
+
     return res.json({ dados: combos });
   } catch (err) {
     console.error('ProcedimentoCadastroController.listarCombos:', err);
@@ -151,15 +244,30 @@ const listarCombos = async (req, res) => {
 };
 
 function validarComboBody(body) {
-  const nome  = body?.nome?.trim();
-  const valor = Number(body?.valor);
-  const ids   = Array.isArray(body?.procedimentoIds)
+  const nome          = body?.nome?.trim();
+  const valor         = Number(body?.valor);
+  const especialidade = body?.especialidade?.trim();
+  const ids           = Array.isArray(body?.procedimentoIds)
     ? [...new Set(body.procedimentoIds.map(Number).filter(Number.isInteger))]
     : [];
   if (!nome)                          return { erro: 'Nome do combo é obrigatório.' };
+  if (!especialidade)                 return { erro: 'Selecione a especialidade do combo.' };
   if (!Number.isFinite(valor) || valor <= 0) return { erro: 'Informe o valor do combo (maior que zero).' };
   if (ids.length < 2)                 return { erro: 'Um combo precisa de pelo menos 2 procedimentos.' };
-  return { nome, valor, ids, descricao: body?.descricao?.trim() || null };
+  return { nome, valor, ids, especialidade, descricao: body?.descricao?.trim() || null };
+}
+
+// Verifica que todos os procedimentos existem, estão ativos e são da especialidade do combo.
+async function validarProcedimentosDoCombo(ids, especialidade) {
+  const procs = await prisma.procedimentoVeterinario.findMany({
+    where:  { id: { in: ids }, ativo: true },
+    select: { id: true, especialidade: true },
+  });
+  if (procs.length !== ids.length) return 'Procedimento inválido no combo.';
+  const alvo = especialidade.trim().toLowerCase();
+  const foraDaEspecialidade = procs.some(p => (p.especialidade ?? '').trim().toLowerCase() !== alvo);
+  if (foraDaEspecialidade) return `Todos os procedimentos do combo devem ser da especialidade "${especialidade}".`;
+  return null;
 }
 
 // POST /api/procedimentos/cadastro/combos — GESTOR
@@ -173,16 +281,17 @@ const criarCombo = async (req, res) => {
     const v = validarComboBody(req.body);
     if (v.erro) return res.status(400).json({ error: v.erro });
 
-    const existentes = await prisma.procedimentoVeterinario.count({ where: { id: { in: v.ids }, ativo: true } });
-    if (existentes !== v.ids.length) return res.status(400).json({ error: 'Procedimento inválido no combo.' });
+    const erroProcs = await validarProcedimentosDoCombo(v.ids, v.especialidade);
+    if (erroProcs) return res.status(400).json({ error: erroProcs });
 
     const combo = await prisma.procedimentoCombo.create({
       data: {
-        empresaId: req.empresaId,
-        nome:      v.nome,
-        descricao: v.descricao,
-        valor:     v.valor,
-        itens:     { create: v.ids.map(id => ({ procedimentoId: id })) },
+        empresaId:     req.empresaId,
+        nome:          v.nome,
+        descricao:     v.descricao,
+        especialidade: v.especialidade,
+        valor:         v.valor,
+        itens:         { create: v.ids.map(id => ({ procedimentoId: id })) },
       },
       include: COMBO_INCLUDE,
     });
@@ -207,18 +316,19 @@ const atualizarCombo = async (req, res) => {
     const v = validarComboBody(req.body);
     if (v.erro) return res.status(400).json({ error: v.erro });
 
-    const existentes = await prisma.procedimentoVeterinario.count({ where: { id: { in: v.ids }, ativo: true } });
-    if (existentes !== v.ids.length) return res.status(400).json({ error: 'Procedimento inválido no combo.' });
+    const erroProcs = await validarProcedimentosDoCombo(v.ids, v.especialidade);
+    if (erroProcs) return res.status(400).json({ error: erroProcs });
 
     const atualizado = await prisma.$transaction(async (tx) => {
       await tx.procedimentoComboItem.deleteMany({ where: { comboId: id } });
       return tx.procedimentoCombo.update({
         where: { id },
         data: {
-          nome:      v.nome,
-          descricao: v.descricao,
-          valor:     v.valor,
-          itens:     { create: v.ids.map(pid => ({ procedimentoId: pid })) },
+          nome:          v.nome,
+          descricao:     v.descricao,
+          especialidade: v.especialidade,
+          valor:         v.valor,
+          itens:         { create: v.ids.map(pid => ({ procedimentoId: pid })) },
         },
         include: COMBO_INCLUDE,
       });

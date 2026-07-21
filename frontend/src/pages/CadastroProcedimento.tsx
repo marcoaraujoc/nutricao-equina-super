@@ -37,11 +37,12 @@ interface ComboItem {
 }
 
 interface Combo {
-  id:        number;
-  nome:      string;
-  descricao: string | null;
-  valor:     number;
-  itens:     ComboItem[];
+  id:            number;
+  nome:          string;
+  descricao:     string | null;
+  especialidade: string | null;
+  valor:         number;
+  itens:         ComboItem[];
 }
 
 interface FormNovoProc {
@@ -98,6 +99,7 @@ export default function CadastroProcedimento() {
   const [showCombo,     setShowCombo]     = useState(false);
   const [comboEditando, setComboEditando] = useState<Combo | null>(null);
   const [comboNome,     setComboNome]     = useState('');
+  const [comboEsp,      setComboEsp]      = useState('');
   const [comboValor,    setComboValor]    = useState('');
   const [comboDesc,     setComboDesc]     = useState('');
   const [comboIds,      setComboIds]      = useState<number[]>([]);
@@ -212,7 +214,7 @@ export default function CadastroProcedimento() {
 
   const abrirNovoCombo = async () => {
     setComboEditando(null);
-    setComboNome(''); setComboValor(''); setComboDesc(''); setComboIds([]); setComboBusca('');
+    setComboNome(''); setComboEsp(''); setComboValor(''); setComboDesc(''); setComboIds([]); setComboBusca('');
     setShowCombo(true);
     if (todosProcs.length === 0) {
       try {
@@ -225,6 +227,7 @@ export default function CadastroProcedimento() {
   const abrirEdicaoCombo = async (c: Combo) => {
     setComboEditando(c);
     setComboNome(c.nome);
+    setComboEsp(c.especialidade ?? '');
     setComboValor(numToMask(c.valor));
     setComboDesc(c.descricao ?? '');
     setComboIds(c.itens.map(i => i.procedimento.id));
@@ -240,12 +243,13 @@ export default function CadastroProcedimento() {
 
   const salvarCombo = async () => {
     if (!comboNome.trim())            { toast.error('Nome do combo é obrigatório'); return; }
+    if (!comboEsp.trim())             { toast.error('Selecione a especialidade do combo'); return; }
     const valorNum = parseBRL(comboValor);
     if (!valorNum || valorNum <= 0)   { toast.error('Informe o valor do combo'); return; }
     if (comboIds.length < 2)          { toast.error('Selecione pelo menos 2 procedimentos'); return; }
     setSalvandoCombo(true);
     try {
-      const payload = { nome: comboNome.trim(), valor: valorNum, descricao: comboDesc.trim() || undefined, procedimentoIds: comboIds };
+      const payload = { nome: comboNome.trim(), especialidade: comboEsp.trim(), valor: valorNum, descricao: comboDesc.trim() || undefined, procedimentoIds: comboIds };
       if (comboEditando) await api.put(`/procedimentos/cadastro/combos/${comboEditando.id}`, payload);
       else               await api.post('/procedimentos/cadastro/combos', payload);
       toast.success(comboEditando ? 'Combo atualizado' : 'Combo criado');
@@ -276,12 +280,15 @@ export default function CadastroProcedimento() {
   [todosProcs, comboIds]);
 
   const procsCombo = useMemo(() => {
+    // Só os procedimentos da especialidade escolhida para o combo
+    if (!comboEsp) return [];
     const q = comboBusca.trim().toLowerCase();
+    const daEsp = todosProcs.filter(p => (p.especialidade ?? '') === comboEsp);
     const base = q
-      ? todosProcs.filter(p => p.nome.toLowerCase().includes(q) || (p.especialidade ?? '').toLowerCase().includes(q))
-      : todosProcs;
+      ? daEsp.filter(p => p.nome.toLowerCase().includes(q))
+      : daEsp;
     return base.slice(0, 60);
-  }, [todosProcs, comboBusca]);
+  }, [todosProcs, comboBusca, comboEsp]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -476,6 +483,11 @@ export default function CadastroProcedimento() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-bold text-gray-900 text-sm truncate">{c.nome}</p>
+                      {c.especialidade && (
+                        <span className="inline-block mt-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                          {c.especialidade}
+                        </span>
+                      )}
                       {c.descricao && <p className="text-[11px] text-gray-400 mt-0.5">{c.descricao}</p>}
                     </div>
                     <span className="text-sm font-bold text-emerald-700 flex-shrink-0">{brl(c.valor)}</span>
@@ -569,6 +581,22 @@ export default function CadastroProcedimento() {
                   <input value={comboNome} onChange={e => setComboNome(e.target.value)} className={inputCls} />
                 </div>
                 <div>
+                  <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
+                  <select value={comboEsp}
+                    onChange={e => {
+                      // Troca de especialidade limpa os itens selecionados (combo é por especialidade)
+                      setComboEsp(e.target.value);
+                      setComboIds([]);
+                      setComboBusca('');
+                    }}
+                    className={inputCls}>
+                    <option value="">— Selecionar —</option>
+                    {especialidades.map(e => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
                   <label className="block text-xs text-gray-500 mb-1">Valor do combo *</label>
                   <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={comboValor}
                     onChange={e => setComboValor(maskBRL(e.target.value))} className={inputCls} />
@@ -576,10 +604,10 @@ export default function CadastroProcedimento() {
                     <p className="text-[10px] text-gray-400 mt-1">Soma dos itens avulsos: {brl(somaItensCombo)}</p>
                   )}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Descrição</label>
-                <input value={comboDesc} onChange={e => setComboDesc(e.target.value)} className={inputCls} />
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Descrição</label>
+                  <input value={comboDesc} onChange={e => setComboDesc(e.target.value)} className={inputCls} />
+                </div>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">
@@ -588,11 +616,15 @@ export default function CadastroProcedimento() {
                 <div className="relative mb-2">
                   <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
                   <input type="text" value={comboBusca} onChange={e => setComboBusca(e.target.value)}
-                    placeholder="Buscar procedimento..." className={`${inputCls} pl-8`} />
+                    disabled={!comboEsp}
+                    placeholder={comboEsp ? 'Buscar procedimento...' : 'Selecione a especialidade primeiro'}
+                    className={`${inputCls} pl-8 ${!comboEsp ? 'bg-gray-50 cursor-not-allowed' : ''}`} />
                 </div>
                 <div className="border border-gray-200 rounded-xl max-h-52 overflow-y-auto divide-y divide-gray-50">
-                  {procsCombo.length === 0 ? (
-                    <p className="text-xs text-gray-400 p-3">Nenhum procedimento encontrado.</p>
+                  {!comboEsp ? (
+                    <p className="text-xs text-gray-400 p-3">Selecione a especialidade para listar os procedimentos.</p>
+                  ) : procsCombo.length === 0 ? (
+                    <p className="text-xs text-gray-400 p-3">Nenhum procedimento encontrado para {comboEsp}.</p>
                   ) : procsCombo.map(p => {
                     const sel = comboIds.includes(p.id);
                     return (
@@ -604,7 +636,7 @@ export default function CadastroProcedimento() {
                         </span>
                         <span className="flex-1 min-w-0">
                           <span className="block text-sm text-gray-900 truncate">{p.nome}</span>
-                          <span className="block text-[10px] text-gray-400">{p.especialidade ?? p.categoria} · {brl(p.valorEmpresa ?? p.valorVenda)}</span>
+                          <span className="block text-[10px] text-gray-400">{p.categoria} · {brl(p.valorEmpresa ?? p.valorVenda)}</span>
                         </span>
                       </button>
                     );

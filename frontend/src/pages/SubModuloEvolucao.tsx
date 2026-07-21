@@ -1164,6 +1164,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         localStorage.removeItem(rascunhoKey);
         toast.success('Evolução registrada');
       }
+      // O backend já gera e grava o título via IA na mesma escrita (quando ainda
+      // não existe um) — não precisa de uma segunda chamada/PATCH aqui.
       if (arquivosModal.length > 0) await uploadMidias(evolucaoId, arquivosModal);
       fecharModal();
       carregarEvolucoes();
@@ -1185,17 +1187,21 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       return;
     }
     setSavingEv(true);
-    const textoParaLLM = form.texto;
     let evolucaoId: number | undefined = editingEv?.id;
 
     try {
+      // O backend já gera o título via IA e grava na mesma escrita (quando ainda não
+      // existe um) e devolve `acoesIA` (sugestões de encaminhamento) na resposta —
+      // uma chamada só à IA, sem PATCH nem /interpretar separados depois.
+      let acoesIA: AcaoLLM[] = [];
       if (editingEv) {
-        await api.put(`/clinica/evolucoes/${editingEv.id}`, {
+        const putRes = await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
           texto:         form.texto,
           status:        'FINALIZADA',
         });
         evolucaoId = editingEv.id;
+        acoesIA = putRes.data?.acoesIA ?? [];
       } else {
         const createRes = await api.post('/clinica/evolucoes', {
           animalId,
@@ -1205,6 +1211,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           agendamentoId:  agendamentoSelecionadoId,
         });
         evolucaoId = createRes.data.dados?.id as number | undefined;
+        acoesIA = createRes.data?.acoesIA ?? [];
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
         onEvolucaoChange?.(null);
@@ -1214,31 +1221,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
       toast.success('Evolução finalizada!');
       fecharModal();
-      setSavingEv(false);
       carregarEvolucoes();
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
 
-      setInterpretando(true);
-      try {
-        const llmRes = await api.post('/clinica/evolucoes/interpretar', { texto: textoParaLLM });
-        const { acoes, titulo } = llmRes.data.dados as { acoes: AcaoLLM[]; titulo?: string };
-
-        if (titulo && evolucaoId) {
-          api.patch(`/clinica/evolucoes/${evolucaoId}/titulo`, { titulo })
-            .then(() => { carregarEvolucoes(); onSalvo?.(); })
-            .catch(() => {});
-        }
-
-        const encaminhamentos = acoes.filter(a => a.tipo === 'ENCAMINHAMENTO');
-        if (encaminhamentos.length > 0) {
-          setAcoesLLM(encaminhamentos.map(a => ({ ...a, selecionada: true })));
-          setShowLLM(true);
-        }
-      } catch (err) {
-        console.error('LLM (não-crítico):', err);
-      } finally { setInterpretando(false); }
-      return;
-
+      const encaminhamentos = acoesIA.filter(a => a.tipo === 'ENCAMINHAMENTO');
+      if (encaminhamentos.length > 0) {
+        setAcoesLLM(encaminhamentos.map(a => ({ ...a, selecionada: true })));
+        setShowLLM(true);
+      }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       toast.error(msg ?? 'Erro ao finalizar evolução');

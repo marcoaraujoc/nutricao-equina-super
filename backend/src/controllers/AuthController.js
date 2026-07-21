@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require('../lib/authCookies');
+const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -143,6 +144,10 @@ const AuthController = {
         return res.status(400).json({ error: 'Token inválido ou expirado' });
       }
 
+      if (await senhaReutilizada(user.id, newPassword, user.passwordHash)) {
+        return res.status(400).json({ error: MENSAGEM_SENHA_REUTILIZADA });
+      }
+
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       await prisma.user.update({
@@ -153,6 +158,7 @@ const AuthController = {
           resetPasswordExpires: null,
         },
       });
+      await registrarTrocaSenha(user.id, user.passwordHash);
 
       res.json({ success: true, message: 'Senha alterada com sucesso' });
     } catch (err) {

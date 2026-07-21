@@ -551,7 +551,16 @@ const obterPorId = async (req, res) => {
   }
 };
 
-// ─── Criar grupo com itens ────────────────────────────────────────────────────
+// ─── Criar grupo(s) com itens ─────────────────────────────────────────────────
+// Itens de tipos diferentes geram PRESCRIÇÕES SEPARADAS (uma por categoria), pois
+// legalmente são documentos distintos:
+//   CONTROLADO   → medicamento com Medicamento.controlado = true (receituário de controle especial)
+//   NORMAL       → medicamento comum (controlado = false / sem catálogo)
+//   PROCEDIMENTO → itens tipo PROCEDIMENTO
+// Se todos os itens forem da mesma categoria, cria uma única prescrição.
+// Retorna SEMPRE um array em `dados` (1 ou mais grupos), ordenado por número.
+
+const ORDEM_CATEGORIAS = ['CONTROLADO', 'NORMAL', 'PROCEDIMENTO'];
 
 const criar = async (req, res) => {
   try {
@@ -570,52 +579,136 @@ const criar = async (req, res) => {
     });
     if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal.', code: 'EVOLUCAO_NOT_FOUND' });
 
-    const grupo = await prisma.$transaction(async (tx) => {
-      const numero = await proximoNumero(tx, Number(animalId));
-
-      const grp = await tx.prescricaoGrupo.create({
-        data: {
-          numero,
-          animalId:     Number(animalId),
-          veterinarioId,
-          evolucaoId:   Number(evolucaoId),
-          empresaId:    empresaId ? Number(empresaId) : (req.empresaId ?? null),
-          status:       'SALVO',
-        },
+    // Resolve o flag `controlado` de cada medicamento do catálogo (1 query)
+    const catIds = [...new Set(
+      itens
+        .filter(i => (i.tipo ?? 'MEDICAMENTO') === 'MEDICAMENTO' && i.medicamentoCatId)
+        .map(i => Number(i.medicamentoCatId)),
+    )];
+    const controladoPorId = new Map();
+    if (catIds.length > 0) {
+      const meds = await prisma.medicamento.findMany({
+        where:  { id: { in: catIds } },
+        select: { id: true, controlado: true },
       });
+      for (const m of meds) controladoPorId.set(m.id, m.controlado);
+    }
 
-      for (const item of itens) {
-        await tx.prescricao.create({
+    const categoriaDoItem = (item) => {
+      if ((item.tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'PROCEDIMENTO';
+      const controlado = item.medicamentoCatId
+        ? controladoPorId.get(Number(item.medicamentoCatId)) === true
+        : false;
+      return controlado ? 'CONTROLADO' : 'NORMAL';
+    };
+
+    // Agrupa preservando a ordem original dentro de cada categoria
+    const buckets = { CONTROLADO: [], NORMAL: [], PROCEDIMENTO: [] };
+    for (const item of itens) buckets[categoriaDoItem(item)].push(item);
+    const categoriasComItens = ORDEM_CATEGORIAS.filter(c => buckets[c].length > 0);
+
+    const gruposCriados = await prisma.$transaction(async (tx) => {
+      let numero = await proximoNumero(tx, Number(animalId));
+      const idsCriados = [];
+
+      for (const categoria of categoriasComItens) {
+        const grp = await tx.prescricaoGrupo.create({
           data: {
-            animalId:           Number(animalId),
+            numero,
+            animalId:     Number(animalId),
             veterinarioId,
-            grupoId:            grp.id,
-            medicamentoCatId:   item.medicamentoCatId ? Number(item.medicamentoCatId) : null,
-            tipo:               item.tipo             ?? 'MEDICAMENTO',
-            medicamento:        String(item.medicamento ?? ''),
-            dosagem:            item.dosagem           ?? null,
-            unidade:            item.unidade           ?? null,
-            via:                item.via               ?? 'Oral',
-            frequencia:         item.frequencia        ?? '',
-            duracaoDias:        Number(item.duracaoDias ?? 1),
-            horaInicio:         item.horaInicio        ?? null,
-            observacao:         item.observacao        ?? null,
-            dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
-            status:             'RASCUNHO',
-            medicamentoCliente: item.medicamentoCliente === true,
+            evolucaoId:   Number(evolucaoId),
+            empresaId:    empresaId ? Number(empresaId) : (req.empresaId ?? null),
+            status:       'SALVO',
           },
         });
+
+        for (const item of buckets[categoria]) {
+          await tx.prescricao.create({
+            data: {
+              animalId:           Number(animalId),
+              veterinarioId,
+              grupoId:            grp.id,
+              medicamentoCatId:   item.medicamentoCatId ? Number(item.medicamentoCatId) : null,
+              tipo:               item.tipo             ?? 'MEDICAMENTO',
+              medicamento:        String(item.medicamento ?? ''),
+              dosagem:            item.dosagem           ?? null,
+              unidade:            item.unidade           ?? null,
+              via:                item.via               ?? 'Oral',
+              frequencia:         item.frequencia        ?? '',
+              duracaoDias:        Number(item.duracaoDias ?? 1),
+              horaInicio:         item.horaInicio        ?? null,
+              observacao:         item.observacao        ?? null,
+              dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
+              status:             'RASCUNHO',
+              medicamentoCliente: item.medicamentoCliente === true,
+            },
+          });
+        }
+
+        idsCriados.push(grp.id);
+        numero += 1;
       }
 
-      return tx.prescricaoGrupo.findUnique({ where: { id: grp.id }, include: GRUPO_INCLUDE });
+      return tx.prescricaoGrupo.findMany({
+        where:   { id: { in: idsCriados } },
+        include: GRUPO_INCLUDE,
+        orderBy: { numero: 'asc' },
+      });
     });
 
-    return res.status(201).json({ dados: { ...grupo, numeroFormatado: formatNumero(grupo.numero) } });
+    return res.status(201).json({
+      dados: gruposCriados.map(g => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
+    });
   } catch (err) {
     console.error('PrescricaoGrupoController.criar:', err);
     return res.status(500).json({ error: 'Erro ao criar prescrição.' });
   }
 };
+
+// ─── Helpers de categoria (split por tipo também na edição) ───────────────────
+
+// Categoria homogênea de uma lista de itens (cada item com medicamentoCat.controlado
+// carregado): null = vazio | 'MISTO' = categorias diferentes | senão a categoria única.
+function categoriaDeItens(itens) {
+  const cats = new Set(itens.map(i =>
+    (i.tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO'
+      ? 'PROCEDIMENTO'
+      : (i.medicamentoCat?.controlado ? 'CONTROLADO' : 'NORMAL'),
+  ));
+  if (cats.size === 0) return null;
+  if (cats.size === 1) return [...cats][0];
+  return 'MISTO';
+}
+
+// Categoria de um item a partir do body/estado (consulta o flag controlado quando med).
+async function categoriaDoItem(client, { tipo, medicamentoCatId }) {
+  if ((tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'PROCEDIMENTO';
+  if (!medicamentoCatId) return 'NORMAL';
+  const med = await client.medicamento.findUnique({
+    where:  { id: Number(medicamentoCatId) },
+    select: { controlado: true },
+  });
+  return med?.controlado ? 'CONTROLADO' : 'NORMAL';
+}
+
+// Encontra um grupo SALVO irmão (mesma evolução/animal) da categoria alvo, ou cria
+// um novo. Retorna { id, numero, novo }. Usado ao editar uma prescrição e inserir/
+// alterar um item de categoria diferente — mantém cada prescrição homogênea.
+async function resolverGrupoDestino(tx, { animalId, evolucaoId, empresaId, veterinarioId, excluirGrupoId, categoriaAlvo }) {
+  const irmaos = await tx.prescricaoGrupo.findMany({
+    where: { animalId, evolucaoId, status: 'SALVO', id: { not: excluirGrupoId } },
+    include: { itens: { where: { ativo: true }, include: { medicamentoCat: { select: { controlado: true } } } } },
+  });
+  const irmao = irmaos.find(g => categoriaDeItens(g.itens) === categoriaAlvo);
+  if (irmao) return { id: irmao.id, numero: irmao.numero, novo: false };
+
+  const numero = await proximoNumero(tx, animalId);
+  const novo = await tx.prescricaoGrupo.create({
+    data: { numero, animalId, veterinarioId, evolucaoId, empresaId: empresaId ?? null, status: 'SALVO' },
+  });
+  return { id: novo.id, numero: novo.numero, novo: true };
+}
 
 // ─── Adicionar item ao grupo ──────────────────────────────────────────────────
 
@@ -624,7 +717,10 @@ const adicionarItem = async (req, res) => {
     const grupoId      = Number(req.params.id);
     const veterinarioId = req.user.id;
 
-    const grupo = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId } });
+    const grupo = await prisma.prescricaoGrupo.findUnique({
+      where:   { id: grupoId },
+      include: { itens: { where: { ativo: true }, include: { medicamentoCat: { select: { controlado: true } } } } },
+    });
     if (!grupo)               return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível adicionar itens em prescrições com status SALVO.' });
 
@@ -632,35 +728,62 @@ const adicionarItem = async (req, res) => {
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
 
-    const item = await prisma.prescricao.create({
-      data: {
-        animalId:          grupo.animalId,
-        veterinarioId,
-        grupoId,
-        medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
-        tipo:              tipo              ?? 'MEDICAMENTO',
-        medicamento:       String(medicamento),
-        dosagem:           dosagem           ?? null,
-        unidade:           unidade           ?? null,
-        via:               via               ?? 'Oral',
-        frequencia:        frequencia        ?? '',
-        duracaoDias:       Number(duracaoDias ?? 1),
-        horaInicio:        horaInicio        ?? null,
-        observacao:        observacao        ?? null,
-        dataInicio:        dataInicio ? new Date(dataInicio) : new Date(),
-        status:            'RASCUNHO',
-        medicamentoCliente: medicamentoCliente === true,
-      },
-      include: {
-        veterinario:    { select: { id: true, fullName: true } },
-        medicamentoCat: { select: { id: true, nome: true } },
-      },
+    // Split na edição: se o item é de categoria diferente de um grupo homogêneo,
+    // vai para uma prescrição irmã (ou nova) da categoria correta.
+    const catItem  = await categoriaDoItem(prisma, { tipo, medicamentoCatId });
+    const catGrupo = categoriaDeItens(grupo.itens);
+
+    const resultado = await prisma.$transaction(async (tx) => {
+      let destinoId   = grupoId;
+      let destinoInfo = null;
+      if (catGrupo && catGrupo !== 'MISTO' && catGrupo !== catItem) {
+        destinoInfo = await resolverGrupoDestino(tx, {
+          animalId:       grupo.animalId,
+          evolucaoId:     grupo.evolucaoId,
+          empresaId:      grupo.empresaId,
+          veterinarioId,
+          excluirGrupoId: grupoId,
+          categoriaAlvo:  catItem,
+        });
+        destinoId = destinoInfo.id;
+      }
+
+      const novoItem = await tx.prescricao.create({
+        data: {
+          animalId:          grupo.animalId,
+          veterinarioId,
+          grupoId:           destinoId,
+          medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
+          tipo:              tipo              ?? 'MEDICAMENTO',
+          medicamento:       String(medicamento),
+          dosagem:           dosagem           ?? null,
+          unidade:           unidade           ?? null,
+          via:               via               ?? 'Oral',
+          frequencia:        frequencia        ?? '',
+          duracaoDias:       Number(duracaoDias ?? 1),
+          horaInicio:        horaInicio        ?? null,
+          observacao:        observacao        ?? null,
+          dataInicio:        dataInicio ? new Date(dataInicio) : new Date(),
+          status:            'RASCUNHO',
+          medicamentoCliente: medicamentoCliente === true,
+        },
+        include: {
+          veterinario:    { select: { id: true, fullName: true } },
+          medicamentoCat: { select: { id: true, nome: true } },
+        },
+      });
+
+      // Responsável passa a ser quem adicionou (no grupo de destino)
+      await tx.prescricaoGrupo.update({ where: { id: destinoId }, data: { veterinarioId } });
+      return { item: novoItem, destinoInfo };
     });
 
-    // Atualiza veterinarioId do grupo para quem adicionou
-    await prisma.prescricaoGrupo.update({ where: { id: grupoId }, data: { veterinarioId } });
-
-    return res.status(201).json({ dados: item });
+    return res.status(201).json({
+      dados:        resultado.item,
+      grupoDestino: resultado.destinoInfo
+        ? { id: resultado.destinoInfo.id, numeroFormatado: formatNumero(resultado.destinoInfo.numero), novo: resultado.destinoInfo.novo }
+        : null,
+    });
   } catch (err) {
     console.error('PrescricaoGrupoController.adicionarItem:', err);
     return res.status(500).json({ error: 'Erro ao adicionar item.' });
@@ -703,19 +826,56 @@ const atualizarItem = async (req, res) => {
     if (medicamentoCliente !== undefined) data.medicamentoCliente = medicamentoCliente === true;
     data.veterinarioId = veterinarioId;
 
-    const updated = await prisma.prescricao.update({
-      where: { id: itemId },
-      data,
-      include: {
-        veterinario:    { select: { id: true, fullName: true } },
-        medicamentoCat: { select: { id: true, nome: true } },
-      },
+    // Split na edição: se a alteração muda a categoria do item e o grupo tem OUTROS
+    // itens de categoria diferente (ficaria misto), move o item para uma prescrição
+    // irmã (ou nova) da categoria correta. Sem outros itens (ou já misto/legado) →
+    // altera no lugar (o grupo só acompanha a nova categoria).
+    const tipoFinal  = tipo             !== undefined ? tipo             : item.tipo;
+    const catIdFinal = medicamentoCatId !== undefined ? medicamentoCatId : item.medicamentoCatId;
+    const catItem    = await categoriaDoItem(prisma, { tipo: tipoFinal, medicamentoCatId: catIdFinal });
+
+    const outros = await prisma.prescricao.findMany({
+      where:   { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
+      include: { medicamentoCat: { select: { controlado: true } } },
+    });
+    const catOutros    = categoriaDeItens(outros);
+    const precisaRotear = outros.length > 0 && catOutros !== 'MISTO' && catOutros !== catItem;
+
+    const resultado = await prisma.$transaction(async (tx) => {
+      let destinoInfo = null;
+      if (precisaRotear) {
+        destinoInfo = await resolverGrupoDestino(tx, {
+          animalId:       item.animalId,
+          evolucaoId:     item.grupo.evolucaoId,
+          empresaId:      item.grupo.empresaId,
+          veterinarioId,
+          excluirGrupoId: item.grupoId,
+          categoriaAlvo:  catItem,
+        });
+        data.grupoId = destinoInfo.id;
+        await tx.prescricaoGrupo.update({ where: { id: destinoInfo.id }, data: { veterinarioId } });
+      }
+
+      const updated = await tx.prescricao.update({
+        where: { id: itemId },
+        data,
+        include: {
+          veterinario:    { select: { id: true, fullName: true } },
+          medicamentoCat: { select: { id: true, nome: true } },
+        },
+      });
+
+      // Responsável passa a ser quem editou (grupo de origem)
+      await tx.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId } });
+      return { updated, destinoInfo };
     });
 
-    // Responsável passa a ser quem editou
-    await prisma.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId } });
-
-    return res.json({ dados: updated });
+    return res.json({
+      dados:        resultado.updated,
+      grupoDestino: resultado.destinoInfo
+        ? { id: resultado.destinoInfo.id, numeroFormatado: formatNumero(resultado.destinoInfo.numero), novo: resultado.destinoInfo.novo }
+        : null,
+    });
   } catch (err) {
     console.error('PrescricaoGrupoController.atualizarItem:', err);
     return res.status(500).json({ error: 'Erro ao atualizar item.' });

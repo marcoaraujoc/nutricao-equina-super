@@ -86,8 +86,26 @@ model User {
   agendamentosCriados      AgendamentoClinico[]    @relation("AgendamentoCriadoPor")
   resenhasCriadas          ResenhaEquino[]         @relation("ResenhasCriadas")
   resenhasGraficasCriadas  ResenhaGrafica[]        @relation("ResenhaGraficaCriadaPor")
+  passwordHistory          PasswordHistory[]
   @@index([equipeId])
   @@map("users")
+  @@schema("schs2vet")
+}
+
+// Guarda os hashes das senhas anteriores do usuário para impedir reuso (regra: a nova
+// senha não pode repetir nenhuma das últimas 6 — a atual em User.passwordHash + as
+// últimas 5 aqui). Populado no momento da troca (o hash ANTIGO, prestes a ser
+// substituído, é inserido aqui); podado para manter só os 5 mais recentes por usuário.
+model PasswordHistory {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("tb_password_history")
   @@schema("schs2vet")
 }
 
@@ -686,8 +704,11 @@ model AgendamentoClinico {
   empresaId     Int?     @map("empresa_id")
   equipeId      Int?     @map("equipe_id")
   // Controle de idempotência dos lembretes por WhatsApp (D-1 e 2h antes)
-  lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")
-  lembreteWa2hEnviadoEm   DateTime? @map("lembrete_wa_2h_em")
+  lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")   // legado — não usado mais
+  lembreteWa2hEnviadoEm   DateTime? @map("lembrete_wa_2h_em")     // legado — não usado mais
+  // Lembretes 1h / 15min antes (proprietário + veterinário) — idempotência por flag.
+  lembreteWa1hEnviadoEm    DateTime? @map("lembrete_wa_1h_em")
+  lembreteWa15minEnviadoEm DateTime? @map("lembrete_wa_15min_em")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt      @map("updated_at")
 
@@ -1070,14 +1091,17 @@ model ProcedimentoValorEmpresa {
 // Combo de procedimentos POR EMPRESA (pacote com valor próprio).
 // Somente o GESTOR da empresa cria/edita; procedimentos vêm do catálogo ADMIN.
 model ProcedimentoCombo {
-  id        Int      @id @default(autoincrement())
-  empresaId Int      @map("empresa_id")
-  nome      String   @db.VarChar(255)
-  descricao String?  @db.Text
-  valor     Float
-  ativo     Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            Int      @id @default(autoincrement())
+  empresaId     Int      @map("empresa_id")
+  nome          String   @db.VarChar(255)
+  descricao     String?  @db.Text
+  // Especialidade do combo — todos os procedimentos do combo são dela.
+  // Usada para filtrar os combos por especialidade na prescrição. null = legado.
+  especialidade String?  @db.VarChar(100)
+  valor         Float
+  ativo         Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   empresa Empresa                 @relation("EmpresaProcedimentoCombos", fields: [empresaId], references: [id], onDelete: Cascade)
   itens   ProcedimentoComboItem[]

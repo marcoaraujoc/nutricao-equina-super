@@ -16,6 +16,7 @@ import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from './ModalNovoFornecedor';
 import EspecialidadeSelector from './EspecialidadeSelector';
+import InlineError from './InlineError';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,8 @@ interface UsuarioFormModalProps {
   comExpediente?: boolean;
   /** Equipe gerenciada pela tela — filtra as especialidades pelas espécies dessa empresa */
   equipeId?: number | null;
+  /** Erro de senha vindo do backend (ex.: reuso das últimas 6 senhas) — exibido inline sob o campo. */
+  erroSenhaServidor?: string;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -140,7 +143,7 @@ interface UsuarioFormModalProps {
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
   comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
-  equipeId = null, initial, salvando, textoBotao, onClose, onSubmit,
+  equipeId = null, erroSenhaServidor, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
   const [form, setForm] = useState<UsuarioFormValues>({
@@ -150,6 +153,7 @@ export default function UsuarioFormModal({
     perfil: initCargos[0],
   });
   const [mostrarSenha, setMostrarSenha] = useState(false);
+  const [erroSenhaLocal, setErroSenhaLocal] = useState('');
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
 
   // Seletor de fornecedor existente
@@ -240,6 +244,7 @@ export default function UsuarioFormModal({
   };
 
   const handleSubmit = () => {
+    setErroSenhaLocal('');
     if (!form.fullName.trim())     { toast.error('Informe o nome');           return; }
     if (!form.email.trim())        { toast.error('Informe o e-mail');         return; }
     if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
@@ -251,7 +256,7 @@ export default function UsuarioFormModal({
     }
     if (permitirSenha && form.senha) {
       const erroSenha = validarSenha(form.senha);
-      if (erroSenha) { toast.error(erroSenha); return; }
+      if (erroSenha) { setErroSenhaLocal(erroSenha); return; }
     }
     const perfilFinal = cargosFinais[0];
     const enviaEspec = perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR';
@@ -358,19 +363,6 @@ export default function UsuarioFormModal({
                 </div>
               )}
 
-              {mostrarEspecialidades && (
-                <div className="sm:col-span-2">
-                  <label className={labelCls}>Especialidade *</label>
-                  <EspecialidadeSelector
-                    variant="dropdown"
-                    value={form.especialidadeIds ?? []}
-                    onChange={ids => setForm(prev => ({ ...prev, especialidadeIds: ids }))}
-                    especieIds={especiesEmpresa}
-                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                  />
-                </div>
-              )}
-
               <>
                   <div className="sm:col-span-2">
                     <label className={labelCls}>Nome completo *</label>
@@ -401,7 +393,7 @@ export default function UsuarioFormModal({
                       <label className={labelCls}>Nova senha (em branco para manter)</label>
                       <div className="relative">
                         <input type={mostrarSenha ? 'text' : 'password'} value={form.senha}
-                          onChange={e => set('senha', e.target.value)}
+                          onChange={e => { set('senha', e.target.value); setErroSenhaLocal(''); }}
                           placeholder="Nova senha..."
                           autoComplete="new-password"
                           className={`${inputCls} pr-10`} />
@@ -411,10 +403,27 @@ export default function UsuarioFormModal({
                           {mostrarSenha ? <EyeOff size={14} /> : <Eye size={14} />}
                         </button>
                       </div>
-                      <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
-                        <AlertCircle size={11} />
-                        Mín. 8 caracteres, com maiúscula, número e especial.
-                      </div>
+                      {(erroSenhaLocal || erroSenhaServidor) ? (
+                        <InlineError message={erroSenhaLocal || erroSenhaServidor} className="mt-1.5" />
+                      ) : (
+                        <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
+                          <AlertCircle size={11} />
+                          Mín. 8 caracteres, com maiúscula, número e especial.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {mostrarEspecialidades && (
+                    <div className="sm:col-span-2">
+                      <label className={labelCls}>Especialidade *</label>
+                      <EspecialidadeSelector
+                        variant="dropdown"
+                        value={form.especialidadeIds ?? []}
+                        onChange={ids => setForm(prev => ({ ...prev, especialidadeIds: ids }))}
+                        especieIds={especiesEmpresa}
+                        emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
+                      />
                     </div>
                   )}
 

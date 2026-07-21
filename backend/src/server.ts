@@ -570,22 +570,26 @@ registrarJob('lembrete_d1_email', {
 });
 
 
-// ===================== CRON — LEMBRETES POR WHATSAPP (D-1 e 2h antes) =====================
-// Base pronta: o envio real é abstraído por messaging/whatsappProvider (noop por
-// padrão — apenas loga). Plugar um provedor via env WHATSAPP_PROVIDER quando houver
-// credenciais. Requer a migration 20260713010000 + `npx prisma generate` para as
-// colunas de idempotência existirem no client.
+// ===================== CRON — LEMBRETES POR WHATSAPP (1h e 15min antes) =====================
+// Enviados a proprietário E veterinário. Idempotência por flag (lembreteWa1hEnviadoEm /
+// lembreteWa15minEnviadoEm — migration 20260721000000): cada tier dispara no máximo
+// uma vez. O envio real é abstraído por messaging/whatsappProvider (noop por padrão —
+// apenas loga). Plugar um provedor via env WHATSAPP_PROVIDER quando houver credenciais.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { enviarLembretesWhatsapp } = require('./services/lembreteAgendamentoService');
 
 registrarJob('lembrete_whatsapp', {
-  nome: 'Lembretes de agendamento por WhatsApp (2h/D-1)',
-  exprPadrao: '*/15 * * * *', // a cada 15 minutos
-  fn: () => comAlerta('Lembretes de agendamento por WhatsApp (2h/D-1)', async () => {
+  nome: 'Lembretes de agendamento por WhatsApp (1h/15min)',
+  exprPadrao: '*/5 * * * *', // a cada 5 minutos — granularidade fina para o tier de 15min
+  fn: () => comAlerta('Lembretes de agendamento por WhatsApp (1h/15min)', async () => {
     const r = await enviarLembretesWhatsapp();
     if (r.enviados > 0) logger.info(`[Lembrete-WA] ${r.enviados} lembrete(s) enviado(s) de ${r.verificados} agendamento(s) na janela`);
-    // Só alerta o admin quando de fato enviou algo (roda a cada 15 min → evita spam)
-    return { ok: true, notificar: r.enviados > 0, resumo: `${r.enviados} lembrete(s) de WhatsApp enviado(s) de ${r.verificados} agendamento(s) na janela.` };
+    // Resumo detalhado (para quem + o que foi enviado) — visível ao clicar na
+    // execução na tela de Monitoração.
+    const cabecalho = `${r.enviados} lembrete(s) de WhatsApp enviado(s) de ${r.verificados} agendamento(s) na janela.`;
+    const resumo = r.detalhes?.length > 0 ? `${cabecalho}\n\n${r.detalhes.join('\n\n')}` : cabecalho;
+    // Só alerta o admin quando de fato enviou algo (roda a cada 5 min → evita spam)
+    return { ok: true, notificar: r.enviados > 0, resumo };
   }),
 });
 
@@ -743,11 +747,20 @@ registrarJob('marcar_faturas_atrasadas', {
 // na tela de Configuração (CronAgenda). Cancela os agendamentos ainda AGENDADO cujo
 // horário já passou (não realizados/CONCLUIDO), preservando os EM_ANDAMENTO e futuros.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { cancelarAgendamentosNaoRealizados } = require('./services/agendamentoCronService');
+const { cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados } = require('./services/agendamentoCronService');
 registrarJob('cancelar_agendamentos_nao_realizados', {
   nome: 'Cancelamento de agendamentos não realizados',
   exprPadrao: '30 23 * * *', // diariamente às 23:30
   fn: () => comAlerta('Cancelamento de agendamentos não realizados', cancelarAgendamentosNaoRealizados),
+});
+
+// Marca como ATRASADA o agendamento AGENDADO cujo horário + 30min já passou (status
+// meramente informativo — Agendamentos e Mapa de Atendimento exibem o badge).
+// Roda a cada 10 minutos: granularidade suficiente para a tolerância de 30min.
+registrarJob('marcar_agendamentos_atrasados', {
+  nome: 'Marcação de agendamentos atrasados',
+  exprPadrao: '*/10 * * * *',
+  fn: () => comAlerta('Marcação de agendamentos atrasados', marcarAgendamentosAtrasados),
 });
 
 // ===================== CRON — CANCELAMENTO DE PRESCRIÇÕES NÃO EXECUTADAS =====================

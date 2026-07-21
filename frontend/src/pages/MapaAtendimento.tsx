@@ -124,7 +124,10 @@ function DonutChart({
         onMouseLeave={() => onHover?.(null)}
         onClick={() => onClick?.(seg.id ?? i)}
         onTouchStart={(e) => { e.preventDefault(); onClick?.(seg.id ?? i); }}
-      />
+      >
+        {/* Nome completo no tooltip nativo — o rótulo no centro do gráfico é truncado por espaço */}
+        <title>{seg.label} — {seg.value}</title>
+      </circle>
     );
     offset += frac;
     return path;
@@ -176,6 +179,11 @@ function StatusBadge({ status }: { status: string }) {
       <AlertCircle size={11} /> Sem atendimento
     </span>
   );
+  if (status === 'ATRASADA') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
+      <AlertCircle size={11} /> Atrasada
+    </span>
+  );
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
       <Clock size={11} /> Agendado
@@ -191,6 +199,7 @@ const STATUS_LABELS: Record<string, string> = {
   EXECUTADO:       'Executado',
   CANCELADO:       'Cancelado',
   SEM_ATENDIMENTO: 'Sem atendimento',
+  ATRASADA:        'Atrasada',
 };
 
 // ── Tipo badge ────────────────────────────────────────────────────────────────
@@ -409,7 +418,7 @@ export default function MapaAtendimento() {
   const STATUS_LABELS: Record<string, string> = {
     AGENDADO: 'Agendado', EM_ANDAMENTO: 'Em andamento', CONCLUIDO: 'Concluído',
     FINALIZADO: 'Finalizado', EXECUTADO: 'Executado', CANCELADO: 'Cancelado',
-    SEM_ATENDIMENTO: 'Sem atendimento',
+    SEM_ATENDIMENTO: 'Sem atendimento', ATRASADA: 'Atrasada',
   };
   const statusUnicos = [...new Set((resumo?.cronograma ?? []).map(c => c.status))];
   const statusOpcoes: SelectOption[] = statusUnicos
@@ -557,15 +566,15 @@ export default function MapaAtendimento() {
               <button
                 key={seg.id}
                 onClick={() => handleHarasClick(seg.id ?? null)}
-                className={`w-full flex items-center justify-between text-xs rounded-lg px-2 py-1 transition-colors ${
+                className={`w-full flex items-start justify-between gap-2 text-xs rounded-lg px-2 py-1 transition-colors ${
                   activeHaras === seg.id ? 'bg-indigo-50 font-semibold' : 'hover:bg-gray-50'
                 }`}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: HARAS_COLORS[i % HARAS_COLORS.length] }} />
-                  <span className="truncate max-w-[120px] text-left">{seg.label}</span>
+                <span className="flex items-start gap-1.5 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5" style={{ background: HARAS_COLORS[i % HARAS_COLORS.length] }} />
+                  <span className="text-left break-words" title={seg.label}>{seg.label}</span>
                 </span>
-                <span className="font-semibold text-gray-700">{seg.value}</span>
+                <span className="font-semibold text-gray-700 flex-shrink-0">{seg.value}</span>
               </button>
             ))}
             {harasSegments.length === 0 && <p className="text-xs text-gray-400 text-center py-2">Sem dados</p>}
@@ -606,13 +615,14 @@ export default function MapaAtendimento() {
         </div>
 
         {/* Card 3 — Prescrições/Dosagens */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <button type="button" onClick={() => { setTipoFiltro('PRESCRICAO'); setActiveStatus(null); setActiveHaras(null); scrollToCronograma(); }}
+          className="text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:border-indigo-200 transition-colors">
           <h2 className="text-sm font-semibold text-gray-700 mb-3">Prescrições / Dosagens</h2>
           <div className="flex items-center justify-center mb-3">
             <DonutChart
               segments={[
-                { value: resumo?.prescricoes.ativas ?? 0, label: 'Ativas', color: '#6366f1', id: 'ATIVAS' },
-                { value: Math.max(0, (resumo?.animaisSemAtendimento.total ?? 0) - (resumo?.prescricoes.ativas ?? 0)), label: 'Sem prescrição', color: '#e5e7eb', id: 'SEM' },
+                { value: resumo?.prescricoes.executadas ?? 0, label: 'Executadas', color: '#10b981', id: 'EXECUTADO' },
+                { value: resumo?.prescricoes.pendentesOuAtrasadas ?? 0, label: 'Não executadas / Atrasadas', color: '#f43f5e', id: 'PENDENTE' },
               ]}
               centerLabel={String(resumo?.prescricoes.total ?? 0)}
               centerSub="prescrições"
@@ -620,9 +630,12 @@ export default function MapaAtendimento() {
             />
           </div>
           <div className="mt-3 text-center">
-            <p className="text-xs text-gray-500">Prescrições com protocolo ativo no dia</p>
+            <p className="text-xs text-gray-500">
+              {resumo?.prescricoes.executadas ?? 0} executada(s) · {resumo?.prescricoes.pendentesOuAtrasadas ?? 0} não executada(s)/atrasada(s)
+            </p>
+            <p className="text-[11px] text-indigo-500 mt-1 underline">Ver prescrições do dia</p>
           </div>
-        </div>
+        </button>
 
         {/* Card 4 — Animais sem Atendimento */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

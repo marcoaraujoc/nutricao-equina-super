@@ -58,6 +58,7 @@ interface ItemGrupo {
   veterinario:       { id: number; fullName: string };
   medicamentoCliente: boolean;
   executadoEm:       string | null;
+  medicamentoCat?:   { controlado: boolean } | null;
 }
 
 interface PrescricaoGrupo {
@@ -141,6 +142,28 @@ const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   CANCELADO:            { label: 'Cancelado',           cls: 'bg-red-100 text-red-700'        },
   CANCELADO_PARCIALMENTE: { label: 'Cancel. Parcial',  cls: 'bg-orange-100 text-orange-700'  },
 };
+
+// Categoria de uma prescrição a partir dos seus itens. Como a criação separa por
+// categoria, normalmente cada grupo é homogêneo; 'Misto' cobre grupos legados/editados.
+type CategoriaPresc = 'Controlado' | 'Normal' | 'Procedimento' | 'Misto';
+
+const CATEGORIA_BADGE: Record<CategoriaPresc, string> = {
+  Controlado:   'bg-red-100 text-red-700',
+  Normal:       'bg-blue-100 text-blue-700',
+  Procedimento: 'bg-emerald-100 text-emerald-700',
+  Misto:        'bg-gray-100 text-gray-600',
+};
+
+function categoriaGrupo(g: PrescricaoGrupo): CategoriaPresc {
+  const cats = new Set<CategoriaPresc>(
+    g.itens.map(i =>
+      i.tipo === 'PROCEDIMENTO' ? 'Procedimento'
+        : i.medicamentoCat?.controlado ? 'Controlado'
+        : 'Normal',
+    ),
+  );
+  return cats.size === 1 ? [...cats][0] : 'Misto';
+}
 
 const FORM_VAZIO = (): FormItem => ({
   tipo: 'MEDICAMENTO', medicamento: '', medicamentoCatId: null,
@@ -377,11 +400,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [saving,           setSaving]           = useState(false);
   const [finalizing,       setFinalizing]       = useState(false);
   const [alertaEstoque,    setAlertaEstoque]    = useState<AlertaEstoque[] | null>(null);
-  const [savedGrupo,       setSavedGrupo]       = useState<{ id: number; numeroFormatado: string } | null>(null);
+  // Itens de tipos diferentes viram prescrições separadas (Controlado/Normal/
+  // Procedimento) — por isso é um array. Uma única categoria = 1 prescrição.
+  const [savedGrupos,      setSavedGrupos]      = useState<{ id: number; numeroFormatado: string }[] | null>(null);
+  // IDs ainda pendentes de finalização (retry após alerta de estoque) — evita
+  // re-finalizar grupos já finalizados (que retornariam 400 "não está SALVO").
+  const pendingFinalizeRef = useRef<number[] | null>(null);
   const [showAddForm,      setShowAddForm]      = useState(openWithForm);
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
   const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string; especialidade: string | null; valor: number | null; combo?: boolean }[]>([]);
-  const [combosProc,       setCombosProc]       = useState<{ id: number; nome: string; valor: number | null }[]>([]);
+  const [combosProc,       setCombosProc]       = useState<{ id: number; nome: string; valor: number | null; especialidade: string | null }[]>([]);
   const [showProcDropdown, setShowProcDropdown] = useState(false);
   const [procEspecialidade, setProcEspecialidade] = useState('');
   const [loadingMeds,      setLoadingMeds]      = useState(false);
@@ -451,7 +479,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // (Cadastro > Procedimentos) e os combos da empresa ativa
   useEffect(() => {
     carregarMedicamentos();
-    api.get('/procedimentos/cadastro/lista').then(r => {
+    api.get('/procedimentos/cadastro/lista', {
+      params: animal?.especie?.nome ? { especie: animal.especie.nome } : undefined,
+    }).then(r => {
       const lista: { id: number; nome: string; especialidade: string | null; valorEmpresa: number | null; valorVenda: number | null }[] = r.data?.dados ?? [];
       setProcedimentos(lista.map(p => ({
         id: p.id, nome: p.nome, especialidade: p.especialidade ?? null,
@@ -459,10 +489,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       })));
     }).catch(() => {});
     api.get('/procedimentos/cadastro/combos').then(r => {
-      const lista: { id: number; nome: string; valor: number | null }[] = r.data?.dados ?? [];
-      setCombosProc(lista.map(c => ({ id: c.id, nome: c.nome, valor: c.valor ?? null })));
+      const lista: { id: number; nome: string; valor: number | null; especialidade: string | null }[] = r.data?.dados ?? [];
+      setCombosProc(lista.map(c => ({ id: c.id, nome: c.nome, valor: c.valor ?? null, especialidade: c.especialidade ?? null })));
     }).catch(() => {});
-  }, [carregarMedicamentos]);
+  }, [carregarMedicamentos, animal?.especie?.nome]);
 
   // Cancela busca paralela ao desmontar
   useEffect(() => () => { searchAbortRef.current?.abort(); }, []);
@@ -476,10 +506,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     const procs = procEspecialidade
       ? procedimentos.filter(p => p.especialidade === procEspecialidade)
       : procedimentos;
-    // Combos da empresa sempre visíveis (não têm especialidade), no topo da lista
-    const combos = combosProc.map(c => ({
-      id: -c.id, nome: c.nome, especialidade: null, valor: c.valor, combo: true,
-    }));
+    // Combos filtrados pela especialidade selecionada (combo legado sem
+    // especialidade continua sempre visível). Ficam no topo da lista.
+    const combos = combosProc
+      .filter(c => !procEspecialidade || !c.especialidade || c.especialidade === procEspecialidade)
+      .map(c => ({ id: -c.id, nome: c.nome, especialidade: c.especialidade ?? null, valor: c.valor, combo: true }));
     return [...combos, ...procs];
   }, [procedimentos, combosProc, procEspecialidade]);
 
@@ -572,7 +603,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (!form.frequencia.trim()) {
       toast.error('Frequência é obrigatória'); return false;
     }
-    if (!form.duracaoDias || Number(form.duracaoDias) < 1) {
+    // Dose única ("Agora") não exige duração em dias
+    if (form.frequencia !== 'agora' && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
       toast.error('Duração (dias) é obrigatória'); return false;
     }
     if (!form.dataInicio.trim()) {
@@ -616,13 +648,32 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     try {
       if (editingServerId !== null) {
         const res = await api.put(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${editingServerId}`, form);
-        setServerItens(prev => prev.map(it => it.id === editingServerId ? res.data.dados : it));
+        const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
+        if (destino) {
+          // Categoria mudou → o item foi movido para outra prescrição
+          setServerItens(prev => prev.filter(it => it.id !== editingServerId));
+          toast.success(destino.novo
+            ? `Item movido para a nova prescrição #${destino.numeroFormatado} (categoria diferente)`
+            : `Item movido para a prescrição #${destino.numeroFormatado}`);
+          onSaved();
+        } else {
+          setServerItens(prev => prev.map(it => it.id === editingServerId ? res.data.dados : it));
+          toast.success('Item atualizado');
+        }
         setEditingServerId(null);
-        toast.success('Item atualizado');
       } else {
         const res = await api.post(`/clinica/prescricoes/grupos/${grupo!.id}/itens`, form);
-        setServerItens(prev => [...prev, res.data.dados]);
-        toast.success('Item adicionado');
+        const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
+        if (destino) {
+          // Categoria diferente do grupo → foi para uma prescrição separada
+          toast.success(destino.novo
+            ? `Item de categoria diferente movido para a nova prescrição #${destino.numeroFormatado}`
+            : `Item movido para a prescrição #${destino.numeroFormatado} (mesma categoria)`);
+          onSaved();
+        } else {
+          setServerItens(prev => [...prev, res.data.dados]);
+          toast.success('Item adicionado');
+        }
         setShowAddForm(false);
       }
       clearCurrentType();
@@ -699,12 +750,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     setSaving(true);
     try {
       const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
-      const dados = res.data.dados;
-      toast.success('Prescrição salva');
+      const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
+      toast.success(grupos.length > 1 ? `${grupos.length} prescrições salvas` : 'Prescrição salva');
       clearDraft();
       setLocalItens([]);
       resetForm();
-      setSavedGrupo({ id: dados.id, numeroFormatado: dados.numeroFormatado });
+      setSavedGrupos(grupos);
       onSaved();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -717,30 +768,63 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const executarFinalizacao = async (forcar = false) => {
     setFinalizing(true);
     try {
-      let grupoId = savedGrupo?.id ?? grupo?.id;
-      if (isCreate && !savedGrupo) {
+      // Determina os IDs a finalizar. Numa nova tentativa (após alerta de estoque),
+      // usa só os grupos que ainda faltam — os já finalizados não são retocados.
+      let ids: number[];
+      if (pendingFinalizeRef.current) {
+        ids = pendingFinalizeRef.current;
+      } else if (isCreate && !savedGrupos) {
         const itens = formEstaVazio() ? localItens : [...localItens, form];
         if (itens.length === 0) { toast.error('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
         const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
-        grupoId = res.data.dados.id;
-        // Registra o grupo criado — se a finalização falhar (ex: alerta de estoque),
-        // a nova tentativa reutiliza este grupo em vez de criar um duplicado
-        setSavedGrupo({ id: res.data.dados.id, numeroFormatado: res.data.dados.numeroFormatado });
+        const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
+        // Registra os grupos criados — se a finalização falhar (ex: alerta de
+        // estoque), a nova tentativa os reutiliza em vez de criar duplicados
+        setSavedGrupos(grupos);
+        ids = grupos.map(g => g.id);
+      } else if (savedGrupos) {
+        ids = savedGrupos.map(g => g.id);
+      } else if (grupo) {
+        ids = [grupo.id];
+      } else {
+        ids = [];
       }
-      await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`, { forcarFinalizacao: forcar });
+
+      // Finaliza cada prescrição; agrega alertas de estoque das que faltarem
+      const alertasAgg:     AlertaEstoque[] = [];
+      const aindaPendentes: number[]        = [];
+      for (const id of ids) {
+        try {
+          await api.post(`/clinica/prescricoes/grupos/${id}/finalizar`, { forcarFinalizacao: forcar });
+        } catch (err: unknown) {
+          const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
+          if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
+            alertasAgg.push(...(resp.data.alertas ?? []));
+            aindaPendentes.push(id);
+          } else {
+            toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+            pendingFinalizeRef.current = aindaPendentes.length ? aindaPendentes : null;
+            return;
+          }
+        }
+      }
+
+      if (alertasAgg.length > 0) {
+        pendingFinalizeRef.current = aindaPendentes;
+        setAlertaEstoque(alertasAgg);
+        return;
+      }
+
+      pendingFinalizeRef.current = null;
       setAlertaEstoque(null);
-      setSavedGrupo(null);
-      toast.success('Prescrição finalizada com sucesso');
+      setSavedGrupos(null);
+      toast.success(ids.length > 1 ? `${ids.length} prescrições finalizadas com sucesso` : 'Prescrição finalizada com sucesso');
       clearDraft();
       onSaved(); onClose();
     } catch (err: unknown) {
-      const resp = (err as { response?: { data?: { erro?: string; alertas?: AlertaEstoque[]; error?: string } } })?.response;
-      if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
-        setAlertaEstoque(resp.data.alertas ?? []);
-      } else {
-        toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
-      }
+      const resp = (err as { response?: { data?: { error?: string } } })?.response;
+      toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
     } finally { setFinalizing(false); }
   };
 
@@ -820,6 +904,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   };
 
   const isMed           = form.tipo === 'MEDICAMENTO';
+  // Dose única ("Agora"): não faz sentido pedir duração em dias
+  const isDoseUnica     = form.frequencia === 'agora';
   const medCatalogo     = form.medicamentoCatId
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
@@ -831,7 +917,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
   // Em modo edição: formulário aparece ao editar item existente ou ao clicar "Inserir item"
-  const showItemForm  = canEdit && !isReadOnly && !savedGrupo && (isCreate || editandoItem || showAddForm);
+  const showItemForm  = canEdit && !isReadOnly && !savedGrupos && (isCreate || editandoItem || showAddForm);
 
   return (
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
@@ -1120,7 +1206,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
                   <div className="col-span-2 sm:col-span-3">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">FREQUÊNCIA *</label>
-                    <select value={form.frequencia} onChange={e => set('frequencia', e.target.value)}
+                    <select value={form.frequencia}
+                      onChange={e => {
+                        const v = e.target.value;
+                        set('frequencia', v);
+                        // Dose única: força duração = 1 (o back ignora dias em "agora")
+                        if (v === 'agora') set('duracaoDias', 1);
+                      }}
                       className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
                       <option value="">— Selecionar —</option>
                       {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
@@ -1132,12 +1224,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS) *</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS){!isDoseUnica && ' *'}</label>
                     <input type="number" min="1"
-                      value={form.duracaoDias}
+                      value={isDoseUnica ? '' : form.duracaoDias}
+                      disabled={isDoseUnica}
                       onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
-                      placeholder="Ex: 7"
-                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
+                      placeholder={isDoseUnica ? 'Dose única' : 'Ex: 7'}
+                      className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${isDoseUnica ? 'bg-gray-50 text-gray-400 cursor-not-allowed placeholder:text-gray-400' : ''}`} />
                   </div>
                   <div className="col-span-2 sm:col-span-2">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA INÍCIO</label>
@@ -1178,16 +1271,20 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
             )}
 
             {/* Confirmação após Salvar em modo criação */}
-            {isCreate && savedGrupo && (
+            {isCreate && savedGrupos && (
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <CheckCircle2 size={28} className="mb-2 text-emerald-500" />
-                <p className="font-semibold text-sm text-gray-800">Prescrição #{savedGrupo.numeroFormatado} salva</p>
+                <p className="font-semibold text-sm text-gray-800">
+                  {savedGrupos.length > 1
+                    ? `${savedGrupos.length} prescrições salvas (${savedGrupos.map(g => `#${g.numeroFormatado}`).join(', ')})`
+                    : `Prescrição #${savedGrupos[0].numeroFormatado} salva`}
+                </p>
                 <p className="text-xs text-gray-400 mt-1">Salve para ativar ou crie uma nova prescrição</p>
               </div>
             )}
 
             {/* Lista de itens — empty state só aparece quando o form está fechado */}
-            {!showItemForm && !savedGrupo && itensExibidos.length === 0 ? (
+            {!showItemForm && !savedGrupos && itensExibidos.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-gray-300">
                 <FileText size={28} className="mb-2" />
                 <p className="text-sm text-gray-400">Nenhum item adicionado</p>
@@ -1269,14 +1366,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         <div className={`flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-wrap ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
           <div className="flex items-center gap-2 ml-auto flex-wrap">
 
-            {/* Estado "recém-salvo": prescrição salva aguardando finalização */}
-            {isCreate && savedGrupo ? (
+            {/* Estado "recém-salvo": prescrição(ões) salva(s) aguardando finalização */}
+            {isCreate && savedGrupos ? (
               <>
                 <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1 flex-shrink-0">
-                  <CheckCircle2 size={12} /> #{savedGrupo.numeroFormatado} salva
+                  <CheckCircle2 size={12} /> {savedGrupos.length > 1 ? `${savedGrupos.length} salvas` : `#${savedGrupos[0].numeroFormatado} salva`}
                 </span>
                 <button
-                  onClick={() => { setSavedGrupo(null); clearDraft(); onClose(); }}
+                  onClick={() => { setSavedGrupos(null); pendingFinalizeRef.current = null; clearDraft(); onClose(); }}
                   className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                   Nova Prescrição
                 </button>
@@ -1397,7 +1494,8 @@ function ItemRow({
 }) {
   const podeRemover = canRemove ?? canEdit;
   const isMed  = tipo === 'MEDICAMENTO';
-  const dtFim  = dataInicio && duracaoDias ? calcDataFim(dataInicio, duracaoDias) : '';
+  const isDoseUnicaRow = frequencia === 'agora';
+  const dtFim  = !isDoseUnicaRow && dataInicio && duracaoDias ? calcDataFim(dataInicio, duracaoDias) : '';
   const dtIni  = dataInicio ? formatarData(dataInicio) : '';
 
   return (
@@ -1445,7 +1543,7 @@ function ItemRow({
         {isMed && via    && <InfoChip label="Via:" value={via} />}
         <InfoChip label="Freq:" value={labelPosologia(frequencia)} />
         {horaInicio      && <InfoChip label="Hora:" value={horaInicio} />}
-        {duracaoDias     && <InfoChip label="Dur:" value={`${duracaoDias}d`} />}
+        {!isDoseUnicaRow && duracaoDias && <InfoChip label="Dur:" value={`${duracaoDias}d`} />}
         {dtIni           && <InfoChip label="Início:" value={dtIni} />}
         {dtFim           && <InfoChip label="Fim:" value={dtFim} />}
         {observacao      && <InfoChip label="Obs:" value={observacao} />}
@@ -1880,7 +1978,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             <tr className="bg-gray-50 border-b border-gray-100">
               <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº Prescrição</th>
               <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Itens</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo / Itens</th>
               <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Veterinário</th>
               <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 <span className="flex items-center justify-center gap-1"><Calendar size={11} /> Data</span>
@@ -1908,11 +2006,16 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className="text-xs text-gray-600 font-medium">{g.itens.length}</span>
-                    <span className="text-[10px] text-gray-400 ml-1">
-                      {g.itens.filter(i => i.tipo === 'MEDICAMENTO').length}M{' '}
-                      {g.itens.filter(i => i.tipo === 'PROCEDIMENTO').length}P
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${CATEGORIA_BADGE[categoriaGrupo(g)]}`}>
+                      {categoriaGrupo(g)}
                     </span>
+                    <div className="mt-0.5">
+                      <span className="text-xs text-gray-600 font-medium">{g.itens.length}</span>
+                      <span className="text-[10px] text-gray-400 ml-1">
+                        {g.itens.filter(i => i.tipo === 'MEDICAMENTO').length}M{' '}
+                        {g.itens.filter(i => i.tipo === 'PROCEDIMENTO').length}P
+                      </span>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     <p className="text-xs font-medium text-gray-800 whitespace-nowrap">{g.veterinario.fullName}</p>
@@ -1967,11 +2070,16 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
-              <button onClick={() => abrirVisualizacao(g)}
-                className="font-mono font-bold text-emerald-700 hover:underline text-sm">
-                #{g.numeroFormatado}
-              </button>
-              <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_GRUPO[g.status].cls}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <button onClick={() => abrirVisualizacao(g)}
+                  className="font-mono font-bold text-emerald-700 hover:underline text-sm flex-shrink-0">
+                  #{g.numeroFormatado}
+                </button>
+                <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${CATEGORIA_BADGE[categoriaGrupo(g)]}`}>
+                  {categoriaGrupo(g)}
+                </span>
+              </div>
+              <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium flex-shrink-0 ${STATUS_GRUPO[g.status].cls}`}>
                 {STATUS_GRUPO[g.status].label}
               </span>
             </div>

@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 
 const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
+const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {
@@ -188,8 +189,16 @@ const UserAdminController = {
         ativo:       ativo !== undefined ? Boolean(ativo) : existe.ativo,
       };
 
-      if (senha?.trim()) {
-        data.passwordHash = await bcrypt.hash(senha.trim(), 10);
+      const novaSenha = senha?.trim();
+      if (novaSenha) {
+        if (novaSenha.length < 8)            return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 8 caracteres' });
+        if (!/[A-Z]/.test(novaSenha))        return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
+        if (!/\d/.test(novaSenha))           return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 número' });
+        if (!/[^A-Za-z0-9]/.test(novaSenha)) return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 caractere especial' });
+        if (await senhaReutilizada(existe.id, novaSenha, existe.passwordHash)) {
+          return res.status(400).json({ sucesso: false, mensagem: MENSAGEM_SENHA_REUTILIZADA });
+        }
+        data.passwordHash = await bcrypt.hash(novaSenha, 10);
       }
 
       const usuario = await prisma.user.update({
@@ -197,6 +206,7 @@ const UserAdminController = {
         data,
         select: SELECT_SEGURO,
       });
+      if (novaSenha) await registrarTrocaSenha(existe.id, existe.passwordHash);
       res.json({ sucesso: true, dados: usuario });
     } catch (err) {
       if (err.code === 'P2025') return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
