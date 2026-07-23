@@ -14,6 +14,7 @@ import {
   ChevronDown, FlaskConical, Eye, ArrowUpDown,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
+import InlineError from '../components/InlineError';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ export default function EstoqueVacina() {
   const podeDeletar = isGestor || podeExecutar('vacina.estoque.deletar');
   const podeAjustar = isGestor || podeExecutar('vacina.estoque.ajustar');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [lotes,        setLotes]        = useState<LoteVacina[]>([]);
   const [fabricantes,  setFabricantes]  = useState<string[]>([]);
@@ -106,6 +107,8 @@ export default function EstoqueVacina() {
   const [ajusteLoteId,         setAjusteLoteId]         = useState<number | null>(null);
   const [buscaAjuste,          setBuscaAjuste]          = useState('');
   const [dropdownAjusteAberto, setDropdownAjusteAberto] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [ajusteQtd,            setAjusteQtd]            = useState<number | ''>('');
   const [ajusteMotivo,         setAjusteMotivo]         = useState('');
   const [ajustando,            setAjustando]            = useState(false);
@@ -203,7 +206,7 @@ export default function EstoqueVacina() {
       setLotes(lotesRes.data.dados ?? []);
       setMeta(lotesRes.data.meta ?? { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0 });
       if (fabRes.data) setFabricantes(fabRes.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar estoque de vacinas.'); }
+    } catch { setErroInline('Erro ao carregar estoque de vacinas.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
@@ -327,11 +330,11 @@ export default function EstoqueVacina() {
     if (editandoId && !podeEditar)  { semPermissao('editar lote'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de vacina'); return; }
 
-    if (!form.medicamentoCatId) return toast.error('Selecione a vacina.');
-    if (!editandoId && !form.validade) return toast.error('Informe a validade do lote.');
-    if (form.validade && !editandoId && form.validade < hoje) return toast.error('Validade não pode ser anterior à data de hoje.');
-    if (form.dataRecebimento && form.dataRecebimento > hoje) return toast.error('Data de recebimento não pode ser futura.');
-    if (Number(form.qtdFrascos) <= 0 && !editandoId) return toast.error('Quantidade de frascos deve ser maior que zero.');
+    if (!form.medicamentoCatId) return setErroInline('Selecione a vacina.');
+    if (!editandoId && !form.validade) return setErroInline('Informe a validade do lote.');
+    if (form.validade && !editandoId && form.validade < hoje) return setErroInline('Validade não pode ser anterior à data de hoje.');
+    if (form.dataRecebimento && form.dataRecebimento > hoje) return setErroInline('Data de recebimento não pode ser futura.');
+    if (Number(form.qtdFrascos) <= 0 && !editandoId) return setErroInline('Quantidade de frascos deve ser maior que zero.');
 
     setSalvando(true);
     try {
@@ -360,7 +363,7 @@ export default function EstoqueVacina() {
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar.');
+      setErroInline(msg ?? 'Erro ao salvar.');
     } finally { setSalvando(false); }
   };
 
@@ -374,7 +377,7 @@ export default function EstoqueVacina() {
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao inativar.');
+      setErroInline(msg ?? 'Erro ao inativar.');
     }
   };
 
@@ -399,12 +402,12 @@ export default function EstoqueVacina() {
 
   const confirmarAjuste = async () => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
-    if (!loteAjuste)          return toast.error('Selecione um lote de vacina.');
-    if (ajusteQtd === '')     return toast.error('Informe a quantidade de doses.');
+    if (!loteAjuste)          return setErroInline('Selecione um lote de vacina.');
+    if (ajusteQtd === '')     return setErroInline('Informe a quantidade de doses.');
     const qtd = Number(ajusteQtd);
-    if (qtd < 0)              return toast.error('Quantidade não pode ser negativa.');
-    if (!ajusteMotivo.trim()) return toast.error('Informe o motivo do ajuste.');
-    if (qtd === loteAjuste.qtdDisponivel) return toast.error('A quantidade informada é igual ao estoque atual.');
+    if (qtd < 0)              return setErroInline('Quantidade não pode ser negativa.');
+    if (!ajusteMotivo.trim()) return setErroInline('Informe o motivo do ajuste.');
+    if (qtd === loteAjuste.qtdDisponivel) return setErroInline('A quantidade informada é igual ao estoque atual.');
 
     setAjustando(true);
     try {
@@ -417,7 +420,7 @@ export default function EstoqueVacina() {
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao ajustar estoque.');
+      setErroInline(msg ?? 'Erro ao ajustar estoque.');
     } finally { setAjustando(false); }
   };
 
@@ -433,6 +436,8 @@ export default function EstoqueVacina() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         <BotaoVoltar className="mb-6" />

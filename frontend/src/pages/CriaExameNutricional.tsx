@@ -8,6 +8,8 @@ import { Upload, Edit, Trash2, AlertCircle, X, FileText } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { consumirLaudosPendentes } from '../utils/laudoPendente';
 import toast from 'react-hot-toast';
+import InlineError from '../components/InlineError';
+
 
 const CriaExameNutricional = () => {
   const { user } = useAuth();
@@ -18,6 +20,8 @@ const CriaExameNutricional = () => {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const [resultadoIA, setResultadoIA] = useState<any>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -138,8 +142,8 @@ const CriaExameNutricional = () => {
       setResultadoIA(res.data);
       setProgress(100);
       clearInterval(interval);
-    } catch (err) {
-      alert('Erro ao analisar o laudo');
+    } catch {
+      setErroInline('Erro ao analisar o laudo');
     } finally {
       setLoading(false);
     }
@@ -182,7 +186,7 @@ const CriaExameNutricional = () => {
         voltarParaExames();
       }
     } catch (err) {
-      toast.error('Erro ao analisar os arquivos');
+      setErroInline('Erro ao analisar os arquivos');
     } finally {
       setLoading(false);
     }
@@ -213,11 +217,11 @@ const CriaExameNutricional = () => {
 
   const saveManual = async () => {
     if (!isGestor && !podeExecutar('atendimento.exames.criar')) {
-      alert('Sem permissão para criar exames. Verifique com o responsável da equipe.');
+      setErroInline('Sem permissão para criar exames. Verifique com o responsável da equipe.');
       return;
     }
     const validos = manualExames.filter(e => e.nutrienteId && e.valorEncontrado);
-    if (validos.length === 0) return alert('Preencha Nutriente e Valor.');
+    if (validos.length === 0) { setErroInline('Preencha Nutriente e Valor.'); return; }
 
     try {
       await Promise.all(validos.map(e =>
@@ -232,24 +236,24 @@ const CriaExameNutricional = () => {
           observacao: e.observacao
         })
       ));
-      alert(`${validos.length} exames salvos!`);
+      toast.success(`${validos.length} exames salvos!`);
       setShowManualForm(false);
       setManualExames([{ nutrienteId: '', nomeOficial: '', valorEncontrado: '', unidade: '', valorMinRef: '', valorMaxRef: '', observacao: '' }]);
       navigate(`/exames/${animalId || selectedAnimal?.id}`);
     } catch (err) {
-      alert('Erro ao salvar');
+      setErroInline('Erro ao salvar');
       console.error(err);
     }
   };
 
   const salvarTodos = async () => {
     if (!isGestor && !podeExecutar('atendimento.exames.criar')) {
-      alert('Sem permissão para criar exames. Verifique com o responsável da equipe.');
+      setErroInline('Sem permissão para criar exames. Verifique com o responsável da equipe.');
       return;
     }
     if (!resultadoIA || submitting) return;
     const validos = resultadoIA.exames.filter((e: any) => e.encontrado);
-    if (validos.length === 0) { alert('Nenhum exame válido.'); return; }
+    if (validos.length === 0) { setErroInline('Nenhum exame válido.'); return; }
 
     setSubmitting(true);
     try {
@@ -267,10 +271,10 @@ const CriaExameNutricional = () => {
           })
         )
       );
-      alert(`${validos.length} exames salvos com sucesso!`);
+      toast.success(`${validos.length} exames salvos com sucesso!`);
       navigate(`/exames/${animalId || selectedAnimal?.id}`);
-    } catch (err) {
-      alert('Erro ao salvar os exames');
+    } catch {
+      setErroInline('Erro ao salvar os exames');
     } finally {
       setSubmitting(false);
     }
@@ -278,7 +282,7 @@ const CriaExameNutricional = () => {
 
   const adicionarTodosFaltantes = () => {
     const faltantes = resultadoIA.exames.filter((e: any) => !e.encontrado);
-    alert(`Adicionando ${faltantes.length} nutrientes ao catálogo:\n\n` + faltantes.map((e: any) => `- ${e.nomeOficial}`).join('\n'));
+    toast.success(`Adicionando ${faltantes.length} nutriente(s) ao catálogo: ` + faltantes.map((e: any) => e.nomeOficial).join(', '));
     setShowModal(false);
   };
 
@@ -298,6 +302,8 @@ const CriaExameNutricional = () => {
       <div className="max-w-4xl mx-auto px-4">
 
         <BotaoVoltar className="mb-4" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         {selectedAnimal ? (
           <div className="bg-white rounded-3xl shadow p-4 flex gap-4 mb-6">

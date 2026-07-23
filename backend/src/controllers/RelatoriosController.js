@@ -19,7 +19,11 @@ const {
   SEM_LOCALIZACAO,
 } = require('./RelatorioGerencialController');
 
-const receitaDoItem = (i) => (i.valor ?? 0) * (i.quantidade ?? 1);
+const { valorLiquidoItem } = require('../lib/faturaUtils');
+
+// Receita = valor líquido do item (bruto − desconto). Toda query que alimenta este
+// helper precisa trazer descontoTipo/descontoValor no select.
+const receitaDoItem = (i) => valorLiquidoItem(i);
 
 // ── FINANCEIRO ──────────────────────────────────────────────────────────────
 
@@ -91,12 +95,12 @@ const financeiro = async (req, res) => {
     const [itensAno, itensPeriodo, evolucoesPeriodo, faturasReceber] = await Promise.all([
       prisma.faturaItem.findMany({
         where:  { criadoEm: { gte: anoInicio, lte: anoFim }, fatura: faturaAtiva },
-        select: { valor: true, quantidade: true, criadoEm: true },
+        select: { valor: true, quantidade: true, descontoTipo: true, descontoValor: true, criadoEm: true },
       }),
       prisma.faturaItem.findMany({
         where:  { criadoEm: { gte: inicio, lte: fim }, fatura: faturaAtiva },
         select: {
-          id: true, valor: true, quantidade: true, tipo: true,
+          id: true, valor: true, quantidade: true, descontoTipo: true, descontoValor: true, tipo: true,
           exameClinicoId: true, prescricaoId: true, vacinaClinicaId: true, encaminhamentoClinicoId: true,
           fatura: { select: { proprietarioId: true } },
         },
@@ -406,4 +410,74 @@ const farmacia = async (req, res) => {
   }
 };
 
-module.exports = { financeiro, atendimento, cadastro, farmacia };
+// ── Orçamentos ────────────────────────────────────────────────────────────────
+// Orçamentos por status (aprovado / parcial / rejeitado), com quebra por
+// proprietário e por animal, no período. Escopo pela empresa ativa.
+const orcamentos = async (req, res) => {
+  try {
+    const { empresaId } = await resolverEscopo(req);
+    const { inicio, fim } = resolverPeriodo(req);
+
+    const lista = await prisma.orcamento.findMany({
+      where: {
+        ativo: true,
+        ...(empresaId ? { empresaId } : {}),
+        createdAt: { gte: inicio, lte: fim },
+      },
+      select: {
+        id: true, numero: true, status: true, createdAt: true,
+        proprietario: { select: { id: true, fullName: true } },
+        itens: { select: { valorTotal: true, statusItem: true, animal: { select: { nome: true } } } },
+      },
+    });
+
+    const contagem = { RASCUNHO: 0, APROVADO: 0, APROVADO_PARCIALMENTE: 0, REJEITADO: 0 };
+    let valorTotal = 0, valorAprovado = 0;
+    const porProp   = new Map(); // id → { nome, quantidade, total, aceito }
+    const porAnimal = new Map(); // nome → { nome, total, aceito }
+
+    for (const o of lista) {
+      const total  = o.itens.reduce((s, i) => s + (i.valorTotal ?? 0), 0);
+      const aceito = o.itens.filter(i => i.statusItem === 'ACEITO').reduce((s, i) => s + (i.valorTotal ?? 0), 0);
+      contagem[o.status] = (contagem[o.status] ?? 0) + 1;
+      valorTotal    += total;
+      valorAprovado += aceito;
+
+      const p = porProp.get(o.proprietario.id) ?? { nome: o.proprietario.fullName, quantidade: 0, total: 0, aceito: 0 };
+      p.quantidade++; p.total += total; p.aceito += aceito;
+      porProp.set(o.proprietario.id, p);
+
+      for (const i of o.itens) {
+        const nome = i.animal?.nome ?? 'Proprietário (sem animal)';
+        const a = porAnimal.get(nome) ?? { nome, total: 0, aceito: 0 };
+        a.total += (i.valorTotal ?? 0);
+        if (i.statusItem === 'ACEITO') a.aceito += (i.valorTotal ?? 0);
+        porAnimal.set(nome, a);
+      }
+    }
+
+    return res.json({ dados: {
+      resumo: {
+        total:       lista.length,
+        aprovados:   contagem.APROVADO,
+        parciais:    contagem.APROVADO_PARCIALMENTE,
+        rejeitados:  contagem.REJEITADO,
+        rascunhos:   contagem.RASCUNHO,
+        valorTotal, valorAprovado,
+      },
+      porStatus: [
+        { status: 'Aprovado',              quantidade: contagem.APROVADO },
+        { status: 'Aprovado parcialmente', quantidade: contagem.APROVADO_PARCIALMENTE },
+        { status: 'Rejeitado',             quantidade: contagem.REJEITADO },
+        { status: 'Rascunho',              quantidade: contagem.RASCUNHO },
+      ],
+      porProprietario: [...porProp.values()].sort((a, b) => b.total - a.total),
+      porAnimal:       [...porAnimal.values()].sort((a, b) => b.total - a.total),
+    }});
+  } catch (err) {
+    console.error('RelatoriosController.orcamentos:', err);
+    return res.status(500).json({ error: 'Erro ao gerar relatório de orçamentos.' });
+  }
+};
+
+module.exports = { financeiro, atendimento, cadastro, farmacia, orcamentos };

@@ -82,9 +82,11 @@ async function isGestor(userId, equipeId) {
  * Animais legados sem equipeId caem no escopo de todas as equipes da empresa
  * (comportamento anterior, até serem revinculados/backfilled).
  */
-async function getEquipeIdsDoProprietario(userId) {
+async function getEquipeIdsDoProprietario(userId, empresaId = null) {
   const animais = await prisma.animal.findMany({
-    where:  { userId, empresaId: { not: null } },
+    // Com empresa ATIVA (seletor do portal do proprietário) o escopo é só ela:
+    // o que a empresa A liberou não vale quando ele está olhando a empresa B.
+    where:  { userId, empresaId: empresaId ? Number(empresaId) : { not: null } },
     select: { empresaId: true, equipeId: true },
   });
 
@@ -108,11 +110,17 @@ async function getEquipeIdsDoProprietario(userId) {
 
 /**
  * Resolve o nível de permissão de um PROPRIETARIO para um módulo via MatrizPerfil.
+ *
+ * ESCOPO: com `empresaId` (empresa escolhida no seletor do portal do proprietário),
+ * só as equipes DAQUELA empresa entram na conta — é o que garante que "a empresa A
+ * liberou a fatura e a B não" resulte em ver a fatura apenas dentro da empresa A.
+ * Sem empresa ativa, cai no comportamento antigo (todas as equipes vinculadas).
+ *
  * Política: NEGADO vence sobre qualquer nível positivo (deny-wins entre equipes).
  * Retorna 'NENHUM' se o proprietário não tiver animais vinculados a nenhuma equipe.
  */
-async function getNivelPermissaoProprietario(userId, moduloSlug) {
-  const equipeIds = await getEquipeIdsDoProprietario(userId);
+async function getNivelPermissaoProprietario(userId, moduloSlug, empresaId = null) {
+  const equipeIds = await getEquipeIdsDoProprietario(userId, empresaId);
   if (equipeIds.length === 0) return 'NENHUM';
 
   const matrizes = await prisma.matrizPerfil.findMany({
@@ -217,7 +225,7 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
           // NEGADO de PROPRIETARIO não bloqueia quem tem cargo de equipe ativo.
           let nivelAtual = nivelEquipe;
           if (req.user.userType === 'PROPRIETARIO') {
-            const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+            const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
             if (nivelProp !== 'NEGADO') {
               const ordProp   = NIVEL_ORDINAL[nivelProp]   ?? 0;
               const ordEquipe = NIVEL_ORDINAL[nivelEquipe] ?? 0;
@@ -290,7 +298,7 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
       // Chegou aqui: sem MembroEquipe válido (ou não era membro de nenhuma equipe).
       // Verifica MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas via animais.
       if (req.user.userType === 'PROPRIETARIO') {
-        const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+        const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
 
         if (nivelAtual === 'NEGADO') {
           return res.status(403).json({
@@ -395,13 +403,13 @@ async function getNivelEfetivo(req, moduloSlug) {
   if (req.membroCargo === 'GESTOR') return 'FULL';
 
   if (req.membroCargo === 'PROPRIETARIO') {
-    return getNivelPermissaoProprietario(req.user.id, moduloSlug);
+    return getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
   }
 
   if (req.equipeId && req.membroCargo) {
     let nivel = await getNivelPermissao(req.user.id, req.equipeId, moduloSlug, req.membroCargo);
     if (req.user.userType === 'PROPRIETARIO' && nivel !== 'NEGADO') {
-      const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug);
+      const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
       if (nivelProp !== 'NEGADO' && (NIVEL_ORDINAL[nivelProp] ?? 0) > (NIVEL_ORDINAL[nivel] ?? 0)) {
         nivel = nivelProp;
       }
@@ -410,7 +418,7 @@ async function getNivelEfetivo(req, moduloSlug) {
   }
 
   if (req.user?.userType === 'PROPRIETARIO') {
-    return getNivelPermissaoProprietario(req.user.id, moduloSlug);
+    return getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
   }
   if (req.user?.userType === 'VETERINARIO') return 'PROPRIO';
   return 'NENHUM';

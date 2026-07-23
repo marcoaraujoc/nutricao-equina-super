@@ -5,7 +5,7 @@ import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, 
 import PageContainer from '../components/PageContainer';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
-import toast from 'react-hot-toast';
+import InlineError from '../components/InlineError';
 import { ModalExecucao, localToday } from './ExecucaoPrescricao';
 import type { GrupoExecucao } from './ExecucaoPrescricao';
 
@@ -272,11 +272,13 @@ export default function MapaAtendimento() {
   // Modal de execução de prescrição
   const [execModal,      setExecModal]      = useState<GrupoExecucao | null>(null);
   const [loadingModal,   setLoadingModal]   = useState(false);
+  const [erroInline,     setErroInline]     = useState<string | null>(null);
 
   const isHoje = dataFiltro === localToday();
 
   const abrirExecucaoPrescricao = async (item: CronogramaItem) => {
-    if (!item.grupoId) { toast.error('Prescrição sem grupo associado'); return; }
+    if (!item.grupoId) { setErroInline('Prescrição sem grupo associado'); return; }
+    setErroInline(null);
     setLoadingModal(true);
     try {
       const res = await api.get('/clinica/prescricoes/grupos/execucao', {
@@ -287,10 +289,10 @@ export default function MapaAtendimento() {
       if (grupo) {
         setExecModal(grupo);
       } else {
-        toast.error('Prescrição não disponível para execução neste dia');
+        setErroInline('Prescrição não disponível para execução neste dia');
       }
     } catch {
-      toast.error('Erro ao carregar prescrição');
+      setErroInline('Erro ao carregar prescrição');
     } finally {
       setLoadingModal(false);
     }
@@ -427,6 +429,8 @@ export default function MapaAtendimento() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>

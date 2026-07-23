@@ -6,6 +6,8 @@ const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
 const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
+const perfilProp = require('../lib/proprietarioPerfil');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -61,6 +63,7 @@ const ProprietarioController = {
     try {
       const { busca } = req.query;
       const isAdmin   = req.user?.role === 'ADMIN';
+      const termo     = busca?.trim() ?? '';
 
       const where = { userType: 'PROPRIETARIO', AND: [] };
 
@@ -73,14 +76,18 @@ const ProprietarioController = {
         where.AND.push(whereProprietarioNoEscopo(req.empresaId, equipeScope));
       }
 
-      if (busca?.trim()) {
+      // ADMIN global (sem empresa ativa) não tem perfil por empresa para mesclar —
+      // filtra direto no banco. Com empresa ativa, os campos pesquisáveis vêm do
+      // PERFIL da empresa, então o filtro roda depois do merge (lista pequena).
+      const filtrarNoBanco = !req.empresaId;
+      if (termo && filtrarNoBanco) {
         where.AND.push({
           OR: [
-            { fullName: { contains: busca.trim(), mode: 'insensitive' } },
-            { email:    { contains: busca.trim(), mode: 'insensitive' } },
-            { cpf:      { contains: busca.trim(), mode: 'insensitive' } },
-            { cnpj:     { contains: busca.trim(), mode: 'insensitive' } },
-            { cidade:   { contains: busca.trim(), mode: 'insensitive' } },
+            { fullName: { contains: termo, mode: 'insensitive' } },
+            { email:    { contains: termo, mode: 'insensitive' } },
+            { cpf:      { contains: termo, mode: 'insensitive' } },
+            { cnpj:     { contains: termo, mode: 'insensitive' } },
+            { cidade:   { contains: termo, mode: 'insensitive' } },
           ],
         });
       }
@@ -88,11 +95,23 @@ const ProprietarioController = {
       // Remove o AND vazio se não há filtros (ADMIN sem busca)
       if (where.AND.length === 0) delete where.AND;
 
-      const proprietarios = await prisma.user.findMany({
+      const encontrados = await prisma.user.findMany({
         where,
         orderBy: { fullName: 'asc' },
         select:  SELECT_PROPRIETARIO,
       });
+
+      // Cadastro que ESTA empresa mantém sobre o cliente (isolado das demais)
+      let proprietarios = await perfilProp.aplicarPerfilEmLista(encontrados, req.empresaId);
+
+      if (termo && !filtrarNoBanco) {
+        const alvo = termo.toLowerCase();
+        const bate = (v) => String(v ?? '').toLowerCase().includes(alvo);
+        proprietarios = proprietarios.filter(p =>
+          bate(p.fullName) || bate(p.email) || bate(p.cpf) || bate(p.cnpj) || bate(p.cidade));
+      }
+      // Reordena pelo nome da empresa ativa (o merge pode ter trocado o fullName)
+      proprietarios.sort((a, b) => String(a.fullName ?? '').localeCompare(String(b.fullName ?? ''), 'pt-BR'));
 
       res.json({ sucesso: true, dados: proprietarios });
     } catch (err) {
@@ -117,7 +136,7 @@ const ProprietarioController = {
         if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado' });
       }
 
-      res.json({ sucesso: true, dados: proprietario });
+      res.json({ sucesso: true, dados: await perfilProp.aplicarPerfil(proprietario, req.empresaId) });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
     }
@@ -138,48 +157,103 @@ const ProprietarioController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura é obrigatório e deve ser entre 1 e 25' });
     }
 
+    // Dados que pertencem à EMPRESA (viram o perfil isolado), não ao login
+    const dadosDaEmpresa = {
+      fullName:          fullName.trim(),
+      phone:             phone?.trim()       || null,
+      phone2:            phone2?.trim()      || null,
+      cep:               cep?.trim()         || null,
+      endereco:          endereco?.trim()    || null,
+      complemento:       complemento?.trim() || null,
+      bairro:            bairro?.trim()      || null,
+      cidade:            cidade?.trim()      || null,
+      estado:            estado?.trim()      || null,
+      cpf:               cpf?.trim()         || null,
+      cnpj:              cnpj?.trim()        || null,
+      mensalista:        Boolean(mensalista),
+      valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
+      frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null,
+      diaVencimentoFatura: Number(diaVencimentoFatura),
+    };
+
     try {
-      const existente = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
-      if (existente) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
+      const emailNorm = normalizeEmail(email);
+      const existente = await findUserByEmail(prisma, emailNorm, {
+        select: { id: true, userType: true, empresaId: true, equipeId: true },
+      });
+
+      // Cliente que JÁ EXISTE no sistema (atendido por outra clínica): não é erro.
+      // O login é um só (e-mail único); esta empresa ganha o PRÓPRIO cadastro dele,
+      // preenchido com o que o gestor digitou — sem herdar nem alterar o da outra.
+      if (existente) {
+        if (existente.userType !== 'PROPRIETARIO') {
+          return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
+        }
+        if (!req.empresaId) {
+          return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
+        }
+        const jaTemPerfil = await prisma.proprietarioPerfil.findUnique({
+          where:  { userId_empresaId: { userId: existente.id, empresaId: req.empresaId } },
+          select: { id: true },
+        });
+        if (jaTemPerfil) {
+          return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado nesta empresa' });
+        }
+
+        await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+
+        // Proprietário legado sem empresa de origem: adota a atual (não sobrescreve)
+        if (!existente.empresaId) {
+          const ctx = await getContextoDoVet(req.user.id, req.empresaId, req.equipeId);
+          await prisma.user.update({
+            where: { id: existente.id },
+            data:  { empresaId: req.empresaId, equipeId: ctx.equipeId ?? null },
+          });
+        }
+
+        const base = await prisma.user.findUnique({ where: { id: existente.id }, select: SELECT_PROPRIETARIO });
+        return res.status(201).json({
+          sucesso: true,
+          dados:   await perfilProp.aplicarPerfil(base, req.empresaId),
+          mensagem: 'Cliente já possuía acesso ao sistema — foi criado o cadastro desta empresa.',
+        });
+      }
 
       // Sem senha no payload → padrão do sistema, com troca obrigatória no primeiro acesso
       const senhaEfetiva = senha || 'Inicial_001';
       const passwordHash = await bcrypt.hash(senhaEfetiva, 10);
       const criadoPor = req.user?.fullName ?? 'sua clínica';
-      const proprietario = await prisma.user.create({
-        data: {
-          fullName:          fullName.trim(),
-          email:             email.trim().toLowerCase(),
-          phone:             phone?.trim()       || null,
-          phone2:            phone2?.trim()      || null,
-          role:              'USER',
-          userType:          'PROPRIETARIO',
-          cep:               cep?.trim()         || null,
-          endereco:          endereco?.trim()    || null,
-          complemento:       complemento?.trim() || null,
-          bairro:            bairro?.trim()      || null,
-          cidade:            cidade?.trim()      || null,
-          estado:            estado?.trim()      || null,
-          cpf:               cpf?.trim()         || null,
-          cnpj:              cnpj?.trim()        || null,
-          mensalista:        Boolean(mensalista),
-          valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
-          frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null,
-          diaVencimentoFatura: Number(diaVencimentoFatura),
-          passwordHash,
-          mustChangePassword: true,
-          ativo:     true,
-          empresaId: req.empresaId || null,
-          // Equipe do contexto ativo do gestor — segrega o proprietário por equipe
-          equipeId:  req.empresaId
-            ? (await getContextoDoVet(req.user.id, req.empresaId, req.equipeId)).equipeId
-            : null,
-        },
-        select: SELECT_PROPRIETARIO,
+      const equipeDoContexto = req.empresaId
+        ? (await getContextoDoVet(req.user.id, req.empresaId, req.equipeId)).equipeId
+        : null;
+
+      // O User guarda a identidade + uma cópia inicial dos dados (compatibilidade com
+      // leituras legadas e com o ADMIN global). O cadastro que vale para a clínica é o
+      // PERFIL da empresa, criado logo abaixo na mesma transação.
+      const proprietario = await prisma.$transaction(async (tx) => {
+        const criado = await tx.user.create({
+          data: {
+            ...dadosDaEmpresa,
+            email:             emailNorm,
+            role:              'USER',
+            userType:          'PROPRIETARIO',
+            passwordHash,
+            mustChangePassword: true,
+            ativo:     true,
+            empresaId: req.empresaId || null,
+            // Equipe do contexto ativo do gestor — segrega o proprietário por equipe
+            equipeId:  equipeDoContexto,
+          },
+          select: SELECT_PROPRIETARIO,
+        });
+        if (req.empresaId) {
+          await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+        }
+        return criado;
       });
 
       emailService.enviarBoasVindasProprietario({
-        destinatarioEmail: email.trim().toLowerCase(),
+        destinatarioEmail: emailNorm,
         destinatarioNome:  fullName.trim(),
         criadoPorNome:     criadoPor,
         senhaInicial:      senhaEfetiva,
@@ -219,15 +293,16 @@ const ProprietarioController = {
         if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado' });
       }
 
-      const emailNovo = email.trim().toLowerCase();
-      if (emailNovo !== existe.email) {
-        const duplicado = await prisma.user.findUnique({ where: { email: emailNovo } });
+      const emailNovo = normalizeEmail(email);
+      if (emailNovo !== (existe.email ?? '').toLowerCase()) {
+        const duplicado = await prisma.user.findFirst({ where: { ...whereEmailInsensitive(emailNovo), id: { not: Number(id) } }, select: { id: true } });
         if (duplicado) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já está em uso' });
       }
 
-      const data = {
+      // Dados cadastrais → PERFIL DA EMPRESA ATIVA. É isto que impede que a edição
+      // feita na empresa A altere o cadastro que a empresa B mantém do mesmo cliente.
+      const dadosDaEmpresa = {
         fullName:         fullName.trim(),
-        email:            emailNovo,
         phone:            phone?.trim()       || null,
         phone2:           phone2?.trim()      || null,
         cep:              cep?.trim()         || null,
@@ -238,22 +313,36 @@ const ProprietarioController = {
         estado:           estado?.trim()      || null,
         cpf:              cpf?.trim()         || null,
         cnpj:             cnpj?.trim()        || null,
-        mensalista:       mensalista !== undefined ? Boolean(mensalista) : existe.mensalista,
-        valorAssistencia: valorAssistencia !== undefined ? (valorAssistencia ? Number(valorAssistencia) : null) : existe.valorAssistencia,
-        frequenciaVisitas: frequenciaVisitas !== undefined ? (frequenciaVisitas ? Number(frequenciaVisitas) : null) : existe.frequenciaVisitas,
-        diaVencimentoFatura: diaVencimentoFatura !== undefined ? Number(diaVencimentoFatura) : existe.diaVencimentoFatura,
-        ...(isAdmin && ativo !== undefined ? { ativo: Boolean(ativo) } : {}),
+        ...(mensalista        !== undefined ? { mensalista: Boolean(mensalista) } : {}),
+        ...(valorAssistencia  !== undefined ? { valorAssistencia:  valorAssistencia  ? Number(valorAssistencia)  : null } : {}),
+        ...(frequenciaVisitas !== undefined ? { frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null } : {}),
+        ...(diaVencimentoFatura !== undefined ? { diaVencimentoFatura: Number(diaVencimentoFatura) } : {}),
       };
 
-      if (senha?.trim()) {
-        data.passwordHash = await bcrypt.hash(senha.trim(), 10);
-      }
+      // Identidade (compartilhada entre as empresas): só e-mail, senha e ativo global.
+      const dataUser = { email: emailNovo };
+      if (senha?.trim()) dataUser.passwordHash = await bcrypt.hash(senha.trim(), 10);
+      if (isAdmin && ativo !== undefined) dataUser.ativo = Boolean(ativo);
 
-      const proprietario = await prisma.user.update({
-        where:  { id: Number(id) },
-        data,
-        select: SELECT_PROPRIETARIO,
+      const proprietario = await prisma.$transaction(async (tx) => {
+        // Sem empresa ativa (ADMIN global) não há perfil a gravar: mantém o
+        // comportamento antigo, escrevendo os dados no próprio User.
+        if (!req.empresaId) {
+          return tx.user.update({
+            where:  { id: Number(id) },
+            data:   { ...dataUser, ...dadosDaEmpresa },
+            select: SELECT_PROPRIETARIO,
+          });
+        }
+        const base = await tx.user.update({
+          where:  { id: Number(id) },
+          data:   dataUser,
+          select: SELECT_PROPRIETARIO,
+        });
+        const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
+        return perfilProp.mesclar(base, perfil);
       });
+
       res.json({ sucesso: true, dados: proprietario });
     } catch (err) {
       if (err.code === 'P2025') return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
@@ -333,6 +422,11 @@ const ProprietarioController = {
           },
           data: { ativo: false, empresaId: null, equipeId: null },
         });
+        // Inativa o cadastro DESTA empresa (o das outras e o login global ficam intactos)
+        await tx.proprietarioPerfil.updateMany({
+          where: { userId: Number(id), empresaId: req.empresaId },
+          data:  { ativo: false },
+        });
         await registrarAuditoria(tx, req, {
           categoria:  'EXCLUSAO',
           entidade:   'PROPRIETARIO',
@@ -356,3 +450,7 @@ const ProprietarioController = {
 };
 
 module.exports = ProprietarioController;
+
+// Exportado para reuso por outros controllers (ex.: busca de proprietário por
+// e-mail no cadastro de animal) — mantém um critério ÚNICO de escopo de empresa.
+module.exports.whereProprietarioNoEscopo = whereProprietarioNoEscopo;

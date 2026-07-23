@@ -10,6 +10,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
 import { imprimirExameCompra, abrirLaudoExameCompra } from '../utils/ExameCompraPrint';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -294,6 +295,8 @@ export default function ExameCompra() {
 
   const [animais,        setAnimais]        = useState<AnimalSimples[]>([]);
   const [loadingAnimais, setLoadingAnimais] = useState(true);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [abaAtiva,       setAbaAtiva]       = useState<Tab>('clinico-geral');
   const [dataSolicitacao,setDataSolicitacao]= useState(hoje());
   const [saving,         setSaving]         = useState(false);
@@ -408,7 +411,7 @@ export default function ExameCompra() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEditar = (ex: ExameCompraItem, silent = false) => {
     let laudo = parseLaudo(ex.observacao);
-    if (!laudo) { toast.error('Não foi possível carregar os dados do exame.'); return; }
+    if (!laudo) { setErroInline('Não foi possível carregar os dados do exame.'); return; }
 
     // Fallback para exames salvos no formato antigo (antes da correção do controller):
     // - formato create: laudo estava em grupos[0].laudoCompra
@@ -539,12 +542,12 @@ export default function ExameCompra() {
   }
 
   const handleSalvar = async () => {
-    if (!podeCriar) { toast.error('Sem permissão para registrar exames.'); return; }
-    if (!selectedAnimal) { toast.error('Selecione um paciente.'); return; }
-    if (!dataSolicitacao) { toast.error('Informe a data do exame.'); return; }
+    if (!podeCriar) { setErroInline('Sem permissão para registrar exames.'); return; }
+    if (!selectedAnimal) { setErroInline('Selecione um paciente.'); return; }
+    if (!dataSolicitacao) { setErroInline('Informe a data do exame.'); return; }
     const isEditing = editingId !== null;
     if (isEditing && !justificativa.trim()) {
-      toast.error('Preencha a justificativa da alteração antes de salvar.');
+      setErroInline('Preencha a justificativa da alteração antes de salvar.');
       return;
     }
     setSaving(true);
@@ -589,7 +592,7 @@ export default function ExameCompra() {
       if (selectedAnimal?.id) carregarHistoricoCompra(selectedAnimal.id);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao registrar exame');
+      setErroInline(msg ?? 'Erro ao registrar exame');
     } finally { setSaving(false); }
   };
 
@@ -922,6 +925,8 @@ export default function ExameCompra() {
 
   return (
     <PageContainer maxWidth="5xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         {/* Header */}

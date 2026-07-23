@@ -16,6 +16,7 @@ import {
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
 const ESPECIE_EMOJI: Record<string, string> = {
@@ -856,13 +857,15 @@ function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
   const [data,       setData]       = useState('');
   const [hora,       setHora]       = useState('09:00');
   const [observacao, setObservacao] = useState('');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [salvando,   setSalvando]   = useState(false);
 
   const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500';
 
   const handleSalvar = async () => {
-    if (!titulo.trim()) { toast.error('Informe a descrição do agendamento'); return; }
-    if (!data)          { toast.error('Informe a data'); return; }
+    if (!titulo.trim()) { setErroInline('Informe a descrição do agendamento'); return; }
+    if (!data)          { setErroInline('Informe a data'); return; }
     setSalvando(true);
     try {
       await api.post('/clinica/agendamentos', {
@@ -875,7 +878,7 @@ function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
       onCriado();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao criar agendamento');
+      if (!e.isPermissionError) setErroInline('Erro ao criar agendamento');
     } finally { setSalvando(false); }
   };
 
@@ -915,6 +918,8 @@ function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
               placeholder="Opcional" className={inputCls} />
           </div>
         </div>
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onFechar} disabled={salvando}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50">
@@ -959,6 +964,8 @@ const AnimalDetail = () => {
   const [loading,      setLoading]      = useState(true);
   const [busca,        setBusca]        = useState('');
   const [expandidos,   setExpandidos]   = useState<Set<string>>(new Set());
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,   setErroInline]   = useState<string | null>(null);
 
   // Detalhe
   const [detalheEv,      setDetalheEv]      = useState<EventoHistorico | null>(null);
@@ -1024,7 +1031,7 @@ const AnimalDetail = () => {
       carregarAgendamentos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao concluir agendamento');
+      if (!e.isPermissionError) setErroInline('Erro ao concluir agendamento');
     }
   };
 
@@ -1038,7 +1045,7 @@ const AnimalDetail = () => {
       carregarAgendamentos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao excluir agendamento');
+      if (!e.isPermissionError) setErroInline('Erro ao excluir agendamento');
     }
   };
 
@@ -1056,7 +1063,7 @@ const AnimalDetail = () => {
       const tipoDetalhe = (parsed.origem.startsWith('EXAME') ? 'EXAME' : parsed.origem) as DetalheRecord['tipo'];
       setDetalheRecord({ tipo: tipoDetalhe, dados } as DetalheRecord);
     } catch {
-      toast.error('Não foi possível carregar os dados do registro.');
+      setErroInline('Não foi possível carregar os dados do registro.');
     } finally {
       setDetalheLoading(false);
     }
@@ -1132,6 +1139,8 @@ const AnimalDetail = () => {
 
       {/* ── Header — mesmo layout de Meus Pacientes (AnimaisVet) ─────────── */}
       <BotaoVoltar />
+
+      <InlineError message={erroInline} />
       <div className="flex items-center justify-between gap-3 mt-2">
         <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
           <span className="text-[22px] leading-none">{emojiEspecie(animal.especie?.nome)}</span>

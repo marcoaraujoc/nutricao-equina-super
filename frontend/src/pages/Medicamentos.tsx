@@ -12,6 +12,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -213,6 +214,8 @@ function MedicamentoModal({
         }
       : FORM_INICIAL,
   );
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const set = <K extends keyof FormMedicamento>(k: K, v: FormMedicamento[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
@@ -227,10 +230,10 @@ function MedicamentoModal({
   };
 
   const handleSalvar = async () => {
-    if (!form.nome.trim())              { toast.error('Nome é obrigatório'); return; }
-    if (!form.formaFarmaceutica.trim()) { toast.error('Forma farmacêutica é obrigatória'); return; }
-    if (!form.unidade.trim())           { toast.error('Unidade é obrigatória'); return; }
-    if (!form.apresentacao.trim())      { toast.error('Apresentação é obrigatória'); return; }
+    if (!form.nome.trim())              { setErroInline('Nome é obrigatório'); return; }
+    if (!form.formaFarmaceutica.trim()) { setErroInline('Forma farmacêutica é obrigatória'); return; }
+    if (!form.unidade.trim())           { setErroInline('Unidade é obrigatória'); return; }
+    if (!form.apresentacao.trim())      { setErroInline('Apresentação é obrigatória'); return; }
     await onSalvar(form);
   };
 
@@ -340,6 +343,8 @@ function MedicamentoModal({
         </div>
 
         {/* Footer */}
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onFechar} disabled={saving}
             className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
@@ -380,6 +385,8 @@ export default function Medicamentos() {
   const [editando,      setEditando]      = useState<Medicamento | null>(null);
   const [saving,        setSaving]        = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     const version = ++loadVersion.current;
@@ -416,7 +423,7 @@ export default function Medicamentos() {
       }
     } catch {
       if (loadVersion.current === version) {
-        toast.error('Erro ao carregar catálogo');
+        setErroInline('Erro ao carregar catálogo');
         setLoading(false);
       }
     }
@@ -442,7 +449,7 @@ export default function Medicamentos() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar');
+      setErroInline(msg ?? 'Erro ao salvar');
     } finally { setSaving(false); }
   };
 
@@ -453,7 +460,7 @@ export default function Medicamentos() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao excluir');
+      setErroInline(msg ?? 'Erro ao excluir');
     } finally { setConfirmDelete(null); }
   };
 
@@ -470,6 +477,8 @@ export default function Medicamentos() {
     <PageContainer maxWidth="7xl">
 
       <BotaoVoltar className="mb-6" />
+
+      <InlineError message={erroInline} className="mb-4" />
 
       {/* Header */}
       <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">

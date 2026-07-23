@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isValidEmail } from '../utils/validators';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,8 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
   onRemoverMembro: (membroId: number) => Promise<void>;
 }) {
   const [expandida, setExpandida] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [membros,   setMembros]   = useState<Membro[]>([]);
   const [convites,  setConvites]  = useState<ConvitePendente[]>([]);
   const [loadingM,  setLoadingM]  = useState(false);
@@ -63,7 +66,7 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
       const res = await api.get(`/equipes/${equipe.id}/membros`);
       setMembros(res.data.dados.membros    ?? []);
       setConvites(res.data.dados.convitesPendentes ?? []);
-    } catch { toast.error('Erro ao carregar membros'); }
+    } catch { setErroInline('Erro ao carregar membros'); }
     finally  { setLoadingM(false); }
   };
 
@@ -73,8 +76,8 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
   };
 
   const handleConvidar = async () => {
-    if (!email.trim()) { toast.error('Informe um e-mail'); return; }
-    if (!isValidEmail(email)) { toast.error('Informe um e-mail válido'); return; }
+    if (!email.trim()) { setErroInline('Informe um e-mail'); return; }
+    if (!isValidEmail(email)) { setErroInline('Informe um e-mail válido'); return; }
     setSending(true);
     try {
       await onConvidar(equipe.id, email.trim(), cargo);
@@ -85,6 +88,8 @@ function EquipePanel({ equipe, onConvidar, onRemoverMembro }: {
 
   return (
     <div className="border border-gray-100 rounded-2xl overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       {/* Header da equipe */}
       <button
         onClick={handleExpand}
@@ -182,20 +187,22 @@ export default function EquipeManager() {
   const [showEqForm,    setShowEqForm]    = useState<number | null>(null); // empresaId
   const [eqNome,        setEqNome]        = useState('');
   const [savingEq,      setSavingEq]      = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = async () => {
     setLoading(true);
     try {
       const res = await api.get('/equipes/empresas');
       setEmpresas(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar empresas'); }
+    } catch { setErroInline('Erro ao carregar empresas'); }
     finally  { setLoading(false); }
   };
 
   useEffect(() => { carregar(); }, []);
 
   const handleCriarEmpresa = async () => {
-    if (!empNome.trim()) { toast.error('Nome da empresa é obrigatório'); return; }
+    if (!empNome.trim()) { setErroInline('Nome da empresa é obrigatório'); return; }
     setSavingEmp(true);
     try {
       await api.post('/equipes/empresas', { nome: empNome.trim(), cnpj: empCnpj || undefined, telefone: empTel || undefined });
@@ -204,12 +211,12 @@ export default function EquipeManager() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar empresa';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setSavingEmp(false); }
   };
 
   const handleCriarEquipe = async (empresaId: number) => {
-    if (!eqNome.trim()) { toast.error('Nome da equipe é obrigatório'); return; }
+    if (!eqNome.trim()) { setErroInline('Nome da equipe é obrigatório'); return; }
     setSavingEq(true);
     try {
       await api.post('/equipes', { nome: eqNome.trim(), empresaId });
@@ -218,7 +225,7 @@ export default function EquipeManager() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar equipe';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setSavingEq(false); }
   };
 
@@ -228,7 +235,7 @@ export default function EquipeManager() {
       toast.success(`Convite enviado para ${email}`);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
-      toast.error(msg);
+      setErroInline(msg);
       throw err;
     }
   };
@@ -237,7 +244,7 @@ export default function EquipeManager() {
     try {
       await api.delete(`/equipes/membros/${membroId}`);
       toast.success('Membro removido');
-    } catch { toast.error('Erro ao remover membro'); throw new Error(); }
+    } catch { setErroInline('Erro ao remover membro'); throw new Error(); }
   };
 
   return (
@@ -245,6 +252,8 @@ export default function EquipeManager() {
       <div className="max-w-3xl mx-auto px-4">
 
         <BotaoVoltar className="mb-4 mt-6" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         <div className="flex items-center justify-between mb-6">
           <div>

@@ -10,6 +10,8 @@ import { Pencil, Unlink, Search, CheckCircle2, XCircle, Clock, UserPlus, X, Shie
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
+import InlineError from '../components/InlineError';
+
 
 interface Solicitacao {
   id:               number;
@@ -248,6 +250,8 @@ const AnimaisVet = () => {
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
   const [showBuscarModal,  setShowBuscarModal]  = useState(false);
   const [buscaAnimal,      setBuscaAnimal]      = useState('');
@@ -265,7 +269,7 @@ const AnimaisVet = () => {
       setAnimais(animaisRes.data?.dados ?? animaisRes.data ?? []);
       setSolicitacoes(solRes.data?.dados ?? solRes.data ?? []);
     } catch {
-      toast.error('Erro ao carregar pacientes');
+      setErroInline('Erro ao carregar pacientes');
     } finally {
       setLoading(false);
     }
@@ -335,7 +339,7 @@ const AnimaisVet = () => {
       }
       loadAnimais();
     } catch {
-      toast.error('Erro ao responder solicitação');
+      setErroInline('Erro ao responder solicitação');
     }
   };
 
@@ -349,7 +353,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success(`Solicitação de desvinculação enviada ao proprietário de ${animalToUnlink.nome}`);
     } catch {
-      toast.error('Erro ao desvincular');
+      setErroInline('Erro ao desvincular');
     } finally {
       setUnlinking(false);
     }
@@ -378,7 +382,7 @@ const AnimaisVet = () => {
       }
       loadAnimais();
     } catch {
-      toast.error('Erro ao responder solicitação');
+      setErroInline('Erro ao responder solicitação');
     }
   };
 
@@ -391,7 +395,7 @@ const AnimaisVet = () => {
       const res = await api.get(`/animais/buscar-por-nome?nome=${encodeURIComponent(buscaAnimal.trim())}`);
       setResultadoBusca(res.data?.dados ?? null);
     } catch {
-      toast.error('Erro ao buscar animal');
+      setErroInline('Erro ao buscar animal');
     } finally {
       setBuscando(false);
       setBuscaFeita(true);
@@ -409,7 +413,7 @@ const AnimaisVet = () => {
       setResultadoBusca(null);
       loadAnimais();
     } catch (err: any) {
-      toast.error(err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo');
+      setErroInline(err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo');
     } finally {
       setSolicitando(false);
     }
@@ -447,6 +451,8 @@ const AnimaisVet = () => {
         />
       )}
       <PageContainer maxWidth="7xl">
+        <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         {/* ── Header ────────────────────────────────────────────────────── */}

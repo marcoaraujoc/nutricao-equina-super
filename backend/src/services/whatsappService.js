@@ -180,32 +180,72 @@ async function reconectar(empresaId, equipeId = null) {
 }
 
 /**
+ * Resolve instância + número para envio, aplicando os mesmos pré-requisitos a
+ * qualquer tipo de mensagem (texto ou mídia): escopo da clínica, provisionamento,
+ * conexão ativa e telefone válido.
+ * @returns {Promise<{ok:true, instancia:string, numero:string, empresaId:number}
+ *                  | {ok:false, erro:string, status?:string}>}
+ */
+async function prepararEnvio(clinic, phone) {
+  const empresaId  = typeof clinic === 'object' ? clinic.empresaId : clinic;
+  const equipeIdIn = typeof clinic === 'object' ? (clinic.equipeId ?? null) : null;
+
+  const escopo = await resolverEscopoClinica(empresaId, equipeIdIn);
+  if (!escopo) return { ok: false, erro: 'CLINICA_NAO_ENCONTRADA' };
+
+  const config = await buscarConfigDoEscopo(escopo.empresaId, escopo.equipeId);
+  if (!config?.waInstance) return { ok: false, erro: 'WHATSAPP_NAO_PROVISIONADO' };
+
+  const { status } = await obterStatus(escopo.empresaId, escopo.equipeId);
+  if (status !== 'CONECTADO') return { ok: false, erro: 'WHATSAPP_DESCONECTADO', status };
+
+  const numero = formatPhone(phone);
+  if (numero.length < 12) return { ok: false, erro: 'TELEFONE_INVALIDO' };
+
+  return { ok: true, instancia: config.waInstance, numero, empresaId };
+}
+
+/**
  * Envio de texto — API para o restante da aplicação.
  * @param {{empresaId:number, equipeId?:number}|number} clinic
  * @param {string} phone   — qualquer formato; normalizado internamente
  * @param {string} message
  */
 async function sendMessage(clinic, phone, message) {
-  const empresaId  = typeof clinic === 'object' ? clinic.empresaId : clinic;
-  const equipeIdIn = typeof clinic === 'object' ? (clinic.equipeId ?? null) : null;
-
-  const escopo = await resolverEscopoClinica(empresaId, equipeIdIn);
-  if (!escopo) return { sucesso: false, erro: 'CLINICA_NAO_ENCONTRADA' };
-
-  const config = await buscarConfigDoEscopo(escopo.empresaId, escopo.equipeId);
-  if (!config?.waInstance) return { sucesso: false, erro: 'WHATSAPP_NAO_PROVISIONADO' };
-
-  const { status } = await obterStatus(escopo.empresaId, escopo.equipeId);
-  if (status !== 'CONECTADO') return { sucesso: false, erro: 'WHATSAPP_DESCONECTADO', status };
-
-  const numero = formatPhone(phone);
-  if (numero.length < 12) return { sucesso: false, erro: 'TELEFONE_INVALIDO' };
+  const pronto = await prepararEnvio(clinic, phone);
+  if (!pronto.ok) return { sucesso: false, erro: pronto.erro, ...(pronto.status ? { status: pronto.status } : {}) };
 
   try {
-    const res = await EvolutionService.sendText(config.waInstance, numero, message);
+    const res = await EvolutionService.sendText(pronto.instancia, pronto.numero, message);
     return { sucesso: true, id: res?.key?.id ?? null };
   } catch (err) {
-    logger.error(`[WhatsappService] Falha no envio (empresa ${empresaId}): ${err.message}`);
+    logger.error(`[WhatsappService] Falha no envio (empresa ${pronto.empresaId}): ${err.message}`);
+    return { sucesso: false, erro: err.code ?? 'ERRO_ENVIO' };
+  }
+}
+
+/**
+ * Envio de MÍDIA (documento/imagem) — API para o restante da aplicação.
+ * @param {{empresaId:number, equipeId?:number}|number} clinic
+ * @param {string} phone
+ * @param {{ base64:string, nomeArquivo?:string, legenda?:string, tipo?:'document'|'image' }} midia
+ *   base64 — conteúdo do arquivo SEM o prefixo data:; a Evolution aceita base64 puro
+ */
+async function sendMedia(clinic, phone, midia) {
+  const { base64, nomeArquivo = 'documento.pdf', legenda = '', tipo = 'document' } = midia ?? {};
+  if (!base64) return { sucesso: false, erro: 'ARQUIVO_VAZIO' };
+
+  const pronto = await prepararEnvio(clinic, phone);
+  if (!pronto.ok) return { sucesso: false, erro: pronto.erro, ...(pronto.status ? { status: pronto.status } : {}) };
+
+  try {
+    const res = tipo === 'image'
+      ? await EvolutionService.sendImage(pronto.instancia, pronto.numero, base64, legenda)
+      : await EvolutionService.sendDocument(pronto.instancia, pronto.numero, base64, nomeArquivo, legenda);
+    logger.info(`[WhatsappService] Mídia enviada (empresa ${pronto.empresaId}) → ${pronto.numero} :: ${nomeArquivo}`);
+    return { sucesso: true, id: res?.key?.id ?? null };
+  } catch (err) {
+    logger.error(`[WhatsappService] Falha no envio de mídia (empresa ${pronto.empresaId}): ${err.message}`);
     return { sucesso: false, erro: err.code ?? 'ERRO_ENVIO' };
   }
 }
@@ -294,6 +334,7 @@ module.exports = {
   desconectar,
   reconectar,
   sendMessage,
+  sendMedia,
   atualizarStatusPorInstancia,
   mapearEstado,
   // Legado (Z-API global) — não remover: AgendamentoController depende

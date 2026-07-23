@@ -26,6 +26,8 @@ import SubModuloExames from './SubModuloExames';
 import SubModuloEncaminhamento from './SubModuloEncaminhamento';
 import SubModuloMinhaAgenda from './SubModuloMinhaAgenda';
 import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem } from '../utils/AtendimentoPrint';
+import InlineError from '../components/InlineError';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -576,6 +578,8 @@ const Atendimento = () => {
   // renderizam o MESMO componente <Atendimento />, então navegar entre eles (ex: botão
   // "Iniciar" da agenda) não remonta o componente, só troca a rota.
   const [agendamentoIdFromUrl, setAgendamentoIdFromUrl] = useState<number | undefined>();
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   useEffect(() => {
     const fromUrl = new URLSearchParams(location.search).get('agendamentoId');
@@ -623,13 +627,13 @@ const Atendimento = () => {
     try {
       const res = await api.get(`/clinica/evolucoes/${evolucaoId}`);
       const ev = res.data?.dados as { especialidade: string; texto: string | null; veterinarioId: number } | undefined;
-      if (!ev) { toast.error('Não foi possível carregar a evolução do atendimento'); return; }
+      if (!ev) { setErroInline('Não foi possível carregar a evolução do atendimento'); return; }
       if (isFornecedor && ev.veterinarioId !== (user?.id ?? 0)) {
-        toast.error('Sem permissão para finalizar evolução de outro profissional. Verifique com o responsável da equipe.');
+        setErroInline('Sem permissão para finalizar evolução de outro profissional. Verifique com o responsável da equipe.');
         return;
       }
       if (!ev.texto?.trim()) {
-        toast.error('O texto da evolução é obrigatório. Preencha a evolução antes de finalizar o atendimento.');
+        setErroInline('O texto da evolução é obrigatório. Preencha a evolução antes de finalizar o atendimento.');
         return;
       }
       await api.put(`/clinica/evolucoes/${evolucaoId}`, {
@@ -653,7 +657,7 @@ const Atendimento = () => {
         .catch(() => { /* não-crítico */ });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao finalizar atendimento');
+      setErroInline(msg ?? 'Erro ao finalizar atendimento');
     } finally { setFinalizandoAt(false); }
   };
 
@@ -907,6 +911,8 @@ const Atendimento = () => {
     <PageContainer>
 
       <BotaoVoltar className="mb-4" />
+
+      <InlineError message={erroInline} className="mb-4" />
 
       {/* Cabeçalho — título acompanha o submódulo ativo */}
       <div className="mt-2 mb-4 flex items-center gap-3">

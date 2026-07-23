@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Pencil, Trash2, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Calendar, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail,
+  Clock, Calendar, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -15,6 +15,9 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
+import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
+import InlineError from '../components/InlineError';
+
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -86,6 +89,10 @@ interface FormItem {
   dataInicio:         string;
   observacao:         string;
   medicamentoCliente: boolean;
+  /** Item de orçamento de origem — só marcado como importado APÓS salvar. Removido do payload. */
+  orcamentoItemId?:   number | null;
+  /** Especialidade do procedimento (vem do orçamento). Só front — removida do payload. */
+  especialidade?:     string | null;
 }
 
 interface Props {
@@ -380,6 +387,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     return FORM_VAZIO();
   });
 
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
+
   const [localItens, setLocalItens] = useState<FormItem[]>(() => {
     if (!draftKey) return [];
     try {
@@ -423,6 +433,39 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const searchAbortRef    = useRef<AbortController | null>(null);
   const [allMedsLoaded,       setAllMedsLoaded]       = useState(false);
   const [backgroundSearching, setBackgroundSearching] = useState(false);
+  const [showImportOrc,       setShowImportOrc]       = useState(false);
+
+  // Importa itens ACEITO de orçamento → localItens (medicamento e procedimento/combo)
+  const importarDoOrcamento = (itensOrc: OrcamentoItemImport[]) => {
+    const novos: FormItem[] = itensOrc.map(i => ({
+      ...FORM_VAZIO(),
+      tipo:             i.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+      medicamento:      i.descricao,
+      medicamentoCatId: i.tipo === 'MEDICAMENTO' ? i.refId : null,
+      unidade:          i.unidade ?? '',
+      // Posologia orçada volta preenchida (só medicamento tem dias/frequência)
+      frequencia:       i.frequencia ?? '',
+      duracaoDias:      i.dias ?? '',
+      observacao:       'Importado do orçamento',
+      orcamentoItemId:  i.id,
+      especialidade:    i.especialidade ?? null,
+    }));
+    setLocalItens(prev => [...prev, ...novos]);
+
+    // A especialidade é obrigatória no orçamento — traz junto na importação e já
+    // posiciona o filtro do formulário de procedimento na especialidade importada.
+    const espImportada = itensOrc.find(i => i.tipo !== 'MEDICAMENTO' && i.especialidade)?.especialidade;
+    if (espImportada) setProcEspecialidade(espImportada);
+  };
+
+  // Remove os campos que só existem no front antes de enviar
+  // (o backend não conhece orcamentoItemId nem especialidade do item).
+  const semRastreio = (itens: FormItem[]) =>
+    itens.map(i => { const c = { ...i }; delete c.orcamentoItemId; delete c.especialidade; return c; });
+
+  // Marca no orçamento os itens que foram efetivamente salvos (chamar após o POST).
+  const marcarOrcamentoSalvo = (itens: FormItem[]) =>
+    marcarOrcamentoImportado(itens.map(i => i.orcamentoItemId).filter((n): n is number => !!n));
 
   const set = <K extends keyof FormItem>(k: K, v: FormItem[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
@@ -588,27 +631,27 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const validarForm = () => {
     const isMed = form.tipo === 'MEDICAMENTO';
     if (!form.medicamento.trim()) {
-      toast.error(`${isMed ? 'Medicamento' : 'Procedimento'} é obrigatório`);
+      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} é obrigatório`);
       return false;
     }
     if (isMed && !form.dosagem.toString().trim()) {
-      toast.error('Dosagem é obrigatória'); return false;
+      setErroInline('Dosagem é obrigatória'); return false;
     }
     if (isMed && !form.unidade.trim()) {
-      toast.error('Unidade é obrigatória'); return false;
+      setErroInline('Unidade é obrigatória'); return false;
     }
     if (isMed && !form.via.trim()) {
-      toast.error('Via de administração é obrigatória'); return false;
+      setErroInline('Via de administração é obrigatória'); return false;
     }
     if (!form.frequencia.trim()) {
-      toast.error('Frequência é obrigatória'); return false;
+      setErroInline('Frequência é obrigatória'); return false;
     }
     // Dose única ("Agora") não exige duração em dias
     if (form.frequencia !== 'agora' && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
-      toast.error('Duração (dias) é obrigatória'); return false;
+      setErroInline('Duração (dias) é obrigatória'); return false;
     }
     if (!form.dataInicio.trim()) {
-      toast.error('Data de início é obrigatória'); return false;
+      setErroInline('Data de início é obrigatória'); return false;
     }
     // Duplicata — mesmo nome e mesmo tipo já existe na prescrição
     const nomeNorm = form.medicamento.trim().toLowerCase();
@@ -619,7 +662,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       return it.medicamento.toLowerCase() === nomeNorm && it.tipo === form.tipo;
     });
     if (duplicado) {
-      toast.error(`${isMed ? 'Medicamento' : 'Procedimento'} já adicionado nesta prescrição`);
+      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} já adicionado nesta prescrição`);
       return false;
     }
     return true;
@@ -680,7 +723,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       ok = true;
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar item');
+      setErroInline(msg ?? 'Erro ao salvar item');
     } finally {
       setSaving(false);
     }
@@ -688,7 +731,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   };
 
   const handleEditarLocal = (idx: number) => {
-    setForm(localItens[idx]);
+    const item = localItens[idx];
+    setForm(item);
+    // Reposiciona o filtro de especialidade no valor do item (importado do orçamento)
+    if (item.especialidade) setProcEspecialidade(item.especialidade);
     setEditingLocalIdx(idx);
   };
 
@@ -732,7 +778,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       if (editingServerId === itemId) { resetForm(); setEditingServerId(null); }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao remover item');
+      setErroInline(msg ?? 'Erro ao remover item');
     } finally {
       setRemovendoItemId(null);
     }
@@ -743,14 +789,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const handleSalvar = async () => {
     const itens = formEstaVazio() ? localItens : [...localItens, form];
     if (itens.length === 0) {
-      toast.error('Adicione ao menos um item na prescrição');
+      setErroInline('Adicione ao menos um item na prescrição');
       return;
     }
     if (!formEstaVazio() && !validarForm()) return;
     setSaving(true);
     try {
-      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
+      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
       const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
+      // Salvou → só agora marca os itens de orçamento como importados
+      await marcarOrcamentoSalvo(itens);
       toast.success(grupos.length > 1 ? `${grupos.length} prescrições salvas` : 'Prescrição salva');
       clearDraft();
       setLocalItens([]);
@@ -759,7 +807,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       onSaved();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar prescrição');
+      setErroInline(msg ?? 'Erro ao salvar prescrição');
     } finally { setSaving(false); }
   };
 
@@ -775,10 +823,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         ids = pendingFinalizeRef.current;
       } else if (isCreate && !savedGrupos) {
         const itens = formEstaVazio() ? localItens : [...localItens, form];
-        if (itens.length === 0) { toast.error('Adicione ao menos um item'); return; }
+        if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
-        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens });
+        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
         const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
+        // Grupos criados (persistidos) → marca os itens de orçamento como importados
+        await marcarOrcamentoSalvo(itens);
         // Registra os grupos criados — se a finalização falhar (ex: alerta de
         // estoque), a nova tentativa os reutiliza em vez de criar duplicados
         setSavedGrupos(grupos);
@@ -803,7 +853,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
             alertasAgg.push(...(resp.data.alertas ?? []));
             aindaPendentes.push(id);
           } else {
-            toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+            setErroInline(resp?.data?.error ?? 'Erro ao finalizar prescrição');
             pendingFinalizeRef.current = aindaPendentes.length ? aindaPendentes : null;
             return;
           }
@@ -824,7 +874,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       onSaved(); onClose();
     } catch (err: unknown) {
       const resp = (err as { response?: { data?: { error?: string } } })?.response;
-      toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+      setErroInline(resp?.data?.error ?? 'Erro ao finalizar prescrição');
     } finally { setFinalizing(false); }
   };
 
@@ -923,6 +973,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
       <div className={isInline ? 'w-full' : 'bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-3xl max-h-[95vh] flex flex-col border border-gray-100'}>
 
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         {/* Header — modal only */}
         {!isInline && (
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
@@ -947,6 +999,22 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
         <div className={isInline ? '' : 'flex-1 overflow-y-auto'}>
           <div className="px-5 py-3 space-y-3">
+
+            {/* Importar orçamento (opcional) — só na criação */}
+            {isCreate && !savedGrupos && (
+              <button onClick={() => setShowImportOrc(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
+                <Receipt size={13} /> Importar orçamento
+              </button>
+            )}
+            {showImportOrc && (
+              <ImportarOrcamentoModal
+                animalId={animalId}
+                tipos={['MEDICAMENTO', 'PROCEDIMENTO', 'COMBO']}
+                onFechar={() => setShowImportOrc(false)}
+                onImportar={importarDoOrcamento}
+              />
+            )}
 
             {/* Formulário de item — dentro da área de itens */}
             {showItemForm && (
@@ -1715,7 +1783,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [grupos,             setGrupos]             = useState<PrescricaoGrupo[]>([]);
   const [loading,            setLoading]            = useState(false);
@@ -1740,7 +1808,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       setGrupos(res.data.dados ?? []);
       setTotal(res.data.total ?? 0);
       setSalvos(res.data.salvos ?? 0);
-    } catch { toast.error('Erro ao carregar prescrições'); }
+    } catch { setErroInline('Erro ao carregar prescrições'); }
     finally { setLoading(false); }
   }, [animalId, page, limit]);
 
@@ -1766,6 +1834,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // (volta para rascunho e libera reservas) antes de editar.
   const [reabrindo,        setReabrindo]        = useState<PrescricaoGrupo | null>(null);
   const [reabrindoLoading, setReabrindoLoading] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const handleAlterar = (g: PrescricaoGrupo) => {
     if (g.status === 'SALVO') { abrirEdicao(g); return; }
@@ -1783,7 +1853,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       carregar();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error ?? 'Erro ao reabrir prescrição');
+      setErroInline(e?.response?.data?.error ?? 'Erro ao reabrir prescrição');
     } finally {
       setReabrindoLoading(false);
     }
@@ -1834,7 +1904,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
         setAlertaDireto({ grupoId, alertas: resp.data.alertas ?? [] });
       } else {
-        toast.error(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+        setErroInline(resp?.data?.error ?? 'Erro ao finalizar prescrição');
       }
     }
   };
@@ -1851,7 +1921,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao finalizar prescrição');
+      setErroInline(msg ?? 'Erro ao finalizar prescrição');
     } finally {
       setLoadingForceDireto(false);
     }
@@ -1869,9 +1939,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     } catch (err: unknown) {
       const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
       if (data?.code === 'EXECUTADO') {
-        toast.error('Esta prescrição já foi executada e não pode ser alterada ou cancelada.');
+        setErroInline('Esta prescrição já foi executada e não pode ser alterada ou cancelada.');
       } else {
-        toast.error(data?.error ?? 'Erro ao cancelar prescrição');
+        setErroInline(data?.error ?? 'Erro ao cancelar prescrição');
       }
     } finally { setDeletingId(null); }
   };
@@ -1892,6 +1962,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   return (
     <>
       <div ref={viewTopRef} />
+
+      <InlineError message={erroInline} className="mx-5 mt-4" />
 
       {/* Visualização inline (Histórico de Evolução Clínica): campos da
           prescrição populados no formulário da página, somente leitura */}

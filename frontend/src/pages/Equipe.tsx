@@ -11,6 +11,7 @@ import {
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
+import InlineError from '../components/InlineError';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -19,9 +20,16 @@ interface Membro {
   cargo:     string;
   cargos?:   string[];
   createdAt: string;
-  diasTrabalho?:       string | null;  // CSV 0-6
+  diasTrabalho?:       string | null;  // CSV 0-6 (agregado — Agenda)
   horaInicioTrabalho?: string | null;  // HH:MM
   horaFimTrabalho?:    string | null;  // HH:MM
+  locaisTrabalho?: Array<{
+    localizacaoId:      number;
+    localizacaoNome:    string | null;
+    diasTrabalho:       string | null;
+    horaInicioTrabalho: string | null;
+    horaFimTrabalho:    string | null;
+  }>;
   user: {
     id:       number;
     fullName: string;
@@ -43,6 +51,18 @@ interface Membro {
 
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
 const DIAS_SEMANA_LABEL: Record<number, string> = { 0: 'Dom', 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb' };
+
+// Converte os locais do formulário para o payload do backend (dias como array).
+type LocalTrabalhoValue = NonNullable<UsuarioFormValues['locaisTrabalho']>[number];
+const mapLocaisParaPayload = (locais?: LocalTrabalhoValue[]) =>
+  (locais ?? [])
+    .filter(l => l.localizacaoId)
+    .map(l => ({
+      localizacaoId:      l.localizacaoId,
+      diasTrabalho:       l.diasTrabalho,
+      horaInicioTrabalho: l.horaInicioTrabalho || '',
+      horaFimTrabalho:    l.horaFimTrabalho || '',
+    }));
 
 // Especialidades do membro (catálogo por espécie) — fallback para tipoServico legado do Fornecedor
 function especialidadesDoMembro(m: Membro): string[] {
@@ -112,6 +132,8 @@ const badgeCargo = (cargo: string): string => ({
 export default function Equipe() {
   const { user }                                          = useAuth();
   const [membros,       setMembros]                       = useState<Membro[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [equipeId,      setEquipeId]                      = useState<number | null>(null);
   const [isGestor,       setIsGestor]                       = useState(false);
   const [loading,       setLoading]                       = useState(true);
@@ -154,7 +176,7 @@ export default function Equipe() {
       setEditandoNome(false);
       toast.success('Nome da equipe atualizado');
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao renomear equipe');
+      setErroInline((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao renomear equipe');
     } finally { setSalvandoNome(false); }
   };
 
@@ -177,16 +199,14 @@ export default function Equipe() {
         fornecedorId: values.fornecedorId ?? null,
         tipoServico:  values.tipoServico  ?? null,
         especialidadeIds:   values.especialidadeIds ?? [],
-        diasTrabalho:       values.diasTrabalho ?? [],
-        horaInicioTrabalho: values.horaInicioTrabalho ?? '',
-        horaFimTrabalho:    values.horaFimTrabalho ?? '',
+        locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
         equipeId,  // inclui na equipe gerenciada nesta tela (não na do contexto ativo)
       });
       toast.success('Membro incluído com sucesso!');
       setShowConvite(false);
       carregarMembros();
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro');
+      setErroInline((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro');
     } finally { setEnviando(false); }
   };
 
@@ -196,7 +216,7 @@ export default function Equipe() {
       await api.patch(`/equipes/membros/${membro.id}/toggle`);
       toast.success(`${membro.user.fullName} ${membro.user.ativo === false ? 'ativado' : 'desativado'}`);
       carregarMembros();
-    } catch { toast.error('Erro ao alterar status'); }
+    } catch { setErroInline('Erro ao alterar status'); }
     finally { setTogglingId(null); }
   };
 
@@ -219,9 +239,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         bairro:      values.bairro.trim()      || null,
         cidade:      values.cidade.trim()      || null,
         estado:      values.estado.trim()      || null,
-        diasTrabalho:       values.diasTrabalho ?? [],
-        horaInicioTrabalho: values.horaInicioTrabalho ?? '',
-        horaFimTrabalho:    values.horaFimTrabalho ?? '',
+        locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
         ...(values.especialidadeIds !== undefined && { especialidadeIds: values.especialidadeIds }),
       });
       if (equipeId) {
@@ -233,7 +251,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao atualizar perfil';
       if (/senha/i.test(msg)) setErroSenhaEdicao(msg);
-      else toast.error(msg);
+      else setErroInline(msg);
     } finally {
       setSalvandoEdicao(false);
     }
@@ -258,6 +276,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
   return (
     <PageContainer maxWidth="7xl">
       <BotaoVoltar />
+
+      <InlineError message={erroInline} className="mt-3" />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-2 mb-4">
@@ -570,11 +590,15 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
             bairro:      membroEditando.user.bairro      ?? '',
             cidade:      membroEditando.user.cidade      ?? '',
             estado:      membroEditando.user.estado      ?? '',
-            diasTrabalho:       membroEditando.diasTrabalho
-              ? String(membroEditando.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
-              : [],
-            horaInicioTrabalho: membroEditando.horaInicioTrabalho ?? '',
-            horaFimTrabalho:    membroEditando.horaFimTrabalho    ?? '',
+            locaisTrabalho: (membroEditando.locaisTrabalho ?? []).map(l => ({
+              localizacaoId:      l.localizacaoId,
+              localizacaoNome:    l.localizacaoNome ?? '',
+              diasTrabalho:       l.diasTrabalho
+                ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+                : [],
+              horaInicioTrabalho: l.horaInicioTrabalho ?? '',
+              horaFimTrabalho:    l.horaFimTrabalho    ?? '',
+            })),
             especialidadeIds:   (membroEditando.user.especialidades ?? []).map(e => e.especialidadeId),
           }}
         />

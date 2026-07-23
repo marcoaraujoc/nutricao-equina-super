@@ -15,6 +15,7 @@ import api from '../services/api';
 import { imprimirPrescricao } from '../utils/PrescricaoPrint';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import InlineError from '../components/InlineError';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -190,6 +191,8 @@ export function ModalExecucao({
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
   const [erroEstoque, setErroEstoque] = useState<AlertaEstoque[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [showCancel,  setShowCancel]  = useState(false);
   const [cancelando,  setCancelando]  = useState(false);
 
@@ -238,7 +241,7 @@ export function ModalExecucao({
     if (e?.response?.status === 409 && e?.response?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
       setErroEstoque(e.response.data?.alertas ?? []);
     } else {
-      toast.error(e?.response?.data?.error ?? fallback);
+      setErroInline(e?.response?.data?.error ?? fallback);
     }
   };
 
@@ -301,7 +304,7 @@ export function ModalExecucao({
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error ?? 'Erro ao cancelar prescrição');
+      setErroInline(e?.response?.data?.error ?? 'Erro ao cancelar prescrição');
     } finally {
       setCancelando(false);
     }
@@ -314,6 +317,8 @@ export function ModalExecucao({
     <>
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col max-h-[92vh]">
+
+        <InlineError message={erroInline} className="mx-4 mt-3 flex-shrink-0" />
 
         <div className="flex items-start gap-3 px-4 pt-4 pb-3 border-b border-gray-100 flex-shrink-0">
           <AnimalAvatar animal={animal} size="lg" />
@@ -840,13 +845,15 @@ export default function ExecucaoPrescricao() {
   const podeExecutarAcao = isGestor || podeExecutar('enfermagem.prescricao.executar');
   const podeImprimir     = isGestor || podeExecutar('enfermagem.prescricao.imprimir');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [grupos,   setGrupos]   = useState<GrupoExecucao[]>([]);
   const [loading,  setLoading]  = useState(false);
   const [busca,    setBusca]    = useState('');
   const [modal,    setModal]    = useState<GrupoExecucao | null>(null);
   const [dataSel,  setDataSel]  = useState(localToday());
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const isHoje = dataSel === localToday();
 
@@ -875,7 +882,7 @@ export default function ExecucaoPrescricao() {
       const res = await api.get('/clinica/prescricoes/grupos/execucao', { params: { data: dataSel } });
       setGrupos(res.data.dados ?? []);
     } catch {
-      toast.error('Erro ao carregar prescrições');
+      setErroInline('Erro ao carregar prescrições');
     } finally {
       setLoading(false);
     }
@@ -942,6 +949,8 @@ export default function ExecucaoPrescricao() {
       <div className="space-y-5">
 
         <BotaoVoltar className="mb-6" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
           <div className="flex items-center gap-3">

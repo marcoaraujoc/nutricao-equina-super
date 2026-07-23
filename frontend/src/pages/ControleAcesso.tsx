@@ -33,6 +33,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import FieldError, { inputErrCls } from '../components/FieldError';
 import ConfirmModal from '../components/ConfirmModal';
+import InlineError from '../components/InlineError';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -599,6 +600,8 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
   const [saving,      setSaving]      = useState(false);
   const [confirmExcluir, setConfirmExcluir] = useState<string | null>(null);
   const [excluindo,   setExcluindo]   = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregarMatriz = useCallback(async (cargo: string) => {
     setLoadMatriz(true);
@@ -606,7 +609,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
     try {
       const res = await api.get(`/equipes/${equipeId}/perfis/${cargo}`);
       setMatriz(res.data.dados?.matriz ?? {});
-    } catch { toast.error('Erro ao carregar matriz'); }
+    } catch { setErroInline('Erro ao carregar matriz'); }
     finally  { setLoadMatriz(false); }
   }, [equipeId]);
 
@@ -620,7 +623,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
         setCargoSel(lista[0].cargo);
         carregarMatriz(lista[0].cargo);
       }
-    } catch { toast.error('Erro ao carregar perfis'); }
+    } catch { setErroInline('Erro ao carregar perfis'); }
     finally  { setLoadPerfis(false); }
   }, [equipeId, carregarMatriz]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -676,7 +679,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
       carregarPerfis();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao salvar';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setSaving(false); }
   };
 
@@ -691,7 +694,7 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
       carregarPerfis();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover perfil';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setExcluindo(false); }
   };
 
@@ -706,6 +709,8 @@ function TabMatriz({ equipeId }: { equipeId: number }) {
 
   return (
     <div className="flex gap-4 h-full min-h-[520px]">
+      <InlineError message={erroInline} className="m-3" />
+
       {/* Painel esquerdo — lista de cargos */}
       <div className="w-72 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-2">
@@ -886,6 +891,8 @@ function TabPermissoesGlobais() {
   const [loadMatriz,   setLoadMatriz]   = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [configExiste, setConfigExiste] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregarMatriz = useCallback(async (ut: UserTypeGerenciado) => {
     setLoadMatriz(true);
@@ -894,7 +901,7 @@ function TabPermissoesGlobais() {
       const res = await api.get(`/equipes/admin/global/usertype/${ut}`);
       setMatriz(res.data.dados?.matriz ?? {});
       setConfigExiste(res.data.dados?.configuracaoExistente ?? false);
-    } catch { toast.error('Erro ao carregar matriz global'); }
+    } catch { setErroInline('Erro ao carregar matriz global'); }
     finally  { setLoadMatriz(false); }
   }, []);
 
@@ -955,7 +962,7 @@ function TabPermissoesGlobais() {
       setConfigExiste(true);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao salvar';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setSaving(false); }
   };
 
@@ -964,6 +971,8 @@ function TabPermissoesGlobais() {
 
   return (
     <div className="flex gap-4 h-full min-h-[520px]">
+      <InlineError message={erroInline} className="m-3" />
+
       {/* Painel esquerdo — UserTypes */}
       <div className="w-72 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100">
@@ -1178,6 +1187,8 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
 
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
   const [adminEmpresas,    setAdminEmpresas]    = useState<AdminEmpresa[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -1199,7 +1210,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
           } catch { /* silencioso */ }
         }
       }
-    } catch { toast.error('Erro ao carregar membros'); }
+    } catch { setErroInline('Erro ao carregar membros'); }
     finally  { setLoading(false); }
 
     if (isAdmin || isGestor) {
@@ -1300,7 +1311,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
         if (!conviteNome.trim()) { setConviteNomeErro('Nome é obrigatório'); hasError = true; }
       }
       if (!selecionadoId && conviteEspecies.length === 0) {
-        toast.error('Selecione ao menos uma espécie atendida');
+        setErroInline('Selecione ao menos uma espécie atendida');
         hasError = true;
       }
     }
@@ -1349,7 +1360,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       onEmpresasChange?.(); // atualiza o seletor de empresas do topo (ADMIN) sem reload da página
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setEnviandoConvite(false); }
   };
 
@@ -1359,7 +1370,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: novoCargo });
       toast.success('Cargo atualizado');
       carregar();
-    } catch { toast.error('Erro ao alterar cargo'); }
+    } catch { setErroInline('Erro ao alterar cargo'); }
     finally  { setAlterandoCargo(null); }
   };
 
@@ -1371,7 +1382,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       toast.success('Perfis atualizados');
       setEditandoCargos(null);
       carregar();
-    } catch { toast.error('Erro ao atualizar perfis'); }
+    } catch { setErroInline('Erro ao atualizar perfis'); }
     finally  { setAlterandoCargo(null); }
   };
 
@@ -1390,7 +1401,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover membro';
-      toast.error(msg);
+      setErroInline(msg);
     }
     finally  { setRemovendo(null); }
   };
@@ -1409,7 +1420,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover gestor';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setRemovendo(null); }
   };
 
@@ -1422,7 +1433,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
         ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
         : mb));
       toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
-    } catch { toast.error('Erro ao alterar status'); }
+    } catch { setErroInline('Erro ao alterar status'); }
     finally  { setTogglingId(null); }
   };
 
@@ -1436,6 +1447,8 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <p className="font-bold text-gray-900">Gerenciamento de Profissionais ({membros.length})</p>
@@ -2201,6 +2214,8 @@ function EditarCargosModal({
   onFechar:           () => void;
 }) {
   const [selecionados, setSelecionados] = useState<string[]>(atual);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const toggle = (slug: string) =>
     setSelecionados(prev => prev.includes(slug) ? prev.filter(c => c !== slug) : [...prev, slug]);
 
@@ -2214,6 +2229,8 @@ function EditarCargosModal({
           </button>
         </div>
         <p className="text-xs text-gray-400 mb-4">Selecione um ou mais perfis. As permissões serão a combinação de todos os selecionados.</p>
+
+        <InlineError message={erroInline} className="mb-4" />
         <div className="space-y-2 max-h-60 overflow-y-auto mb-5">
           {(perfisDisponiveis.length > 0 ? perfisDisponiveis : Object.entries(CARGO_INFO).filter(([c]) => c !== 'GESTOR' && c !== 'PROPRIETARIO').map(([slug, info]) => ({ slug, label: info.label }))).map(p => (
             <label key={p.slug} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors ${selecionados.includes(p.slug) ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 hover:bg-gray-50'}`}>
@@ -2227,7 +2244,7 @@ function EditarCargosModal({
             Cancelar
           </button>
           <button
-            onClick={() => { if (selecionados.length > 0) onSalvar(selecionados); else toast.error('Selecione ao menos um perfil'); }}
+            onClick={() => { if (selecionados.length > 0) onSalvar(selecionados); else setErroInline('Selecione ao menos um perfil'); }}
             disabled={selecionados.length === 0}
             className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-2xl text-sm font-semibold">
             Salvar
@@ -2319,6 +2336,8 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
   const [loading,  setLoading]  = useState(true);
   const [page,     setPage]     = useState(1);
   const [total,    setTotal]    = useState(0);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const LIMIT = 30;
 
   const carregar = useCallback(async (p: number) => {
@@ -2327,7 +2346,7 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
       const res = await api.get(`/equipes/${equipeId}/auditoria?page=${p}&limit=${LIMIT}`);
       setLogs(res.data?.registros ?? []);
       setTotal(res.data?.total ?? 0);
-    } catch { toast.error('Erro ao carregar logs'); }
+    } catch { setErroInline('Erro ao carregar logs'); }
     finally  { setLoading(false); }
   }, [equipeId]);
 
@@ -2338,6 +2357,8 @@ function TabAuditoria({ equipeId }: { equipeId: number }) {
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <p className="font-bold text-gray-900">Registro de Auditoria de Segurança</p>
@@ -2460,6 +2481,8 @@ function GerenciarAcessoPrestadorModal({
   const [motivo,             setMotivo]             = useState('');
 
   const [confirmRemover, setConfirmRemover] = useState<{ animalId: number; nomeAnimal: string } | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2467,14 +2490,14 @@ function GerenciarAcessoPrestadorModal({
       const res = await api.get(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`);
       setDesignacoes(res.data?.dados?.designacoes ?? []);
       setAnimaisDisponiveis(res.data?.dados?.animaisDisponiveis ?? []);
-    } catch { toast.error('Erro ao carregar designações'); }
+    } catch { setErroInline('Erro ao carregar designações'); }
     finally  { setLoading(false); }
   }, [equipeId, prestadorUserId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
   const handleAdicionarAnimal = async () => {
-    if (!animalSel) { toast.error('Selecione um animal'); return; }
+    if (!animalSel) { setErroInline('Selecione um animal'); return; }
     setSalvando(true);
     try {
       await api.post(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`, {
@@ -2483,7 +2506,7 @@ function GerenciarAcessoPrestadorModal({
       toast.success('Acesso ao animal concedido');
       setAnimalSel(''); setMotivo('');
       carregar();
-    } catch { toast.error('Erro ao conceder acesso'); }
+    } catch { setErroInline('Erro ao conceder acesso'); }
     finally  { setSalvando(false); }
   };
 
@@ -2499,7 +2522,7 @@ function GerenciarAcessoPrestadorModal({
       await api.delete(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes/${animalId}`);
       toast.success('Acesso removido');
       carregar();
-    } catch { toast.error('Erro ao remover acesso'); }
+    } catch { setErroInline('Erro ao remover acesso'); }
   };
 
   const ativas  = designacoes.filter(d => d.ativo);
@@ -2508,6 +2531,8 @@ function GerenciarAcessoPrestadorModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+
+        <InlineError message={erroInline} className="mx-6 mt-4 flex-shrink-0" />
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
@@ -2665,6 +2690,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   // Modal de inclusão
   const [showModal,  setShowModal]  = useState(false);
   const [enviando,   setEnviando]   = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2673,7 +2700,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       // Filtra PROPRIETARIO e ADMIN — exibe só profissionais da equipe
       const todos: Membro[] = res.data?.dados ?? [];
       setMembros(todos.filter(m => m.cargo !== 'PROPRIETARIO' && m.user.userType !== 'ADMIN' && m.user.userType !== 'PROPRIETARIO'));
-    } catch { toast.error('Erro ao carregar membros'); }
+    } catch { setErroInline('Erro ao carregar membros'); }
     finally  { setLoading(false); }
   }, [equipeId]);
 
@@ -2721,7 +2748,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setEnviando(false); }
   };
 
@@ -2731,7 +2758,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: novoCargo });
       toast.success('Cargo atualizado');
       carregar();
-    } catch { toast.error('Erro ao alterar cargo'); }
+    } catch { setErroInline('Erro ao alterar cargo'); }
     finally  { setAlterandoCargo(null); }
   };
 
@@ -2743,7 +2770,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       toast.success('Perfis atualizados');
       setEditandoCargos(null);
       carregar();
-    } catch { toast.error('Erro ao atualizar perfis'); }
+    } catch { setErroInline('Erro ao atualizar perfis'); }
     finally  { setAlterandoCargo(null); }
   };
 
@@ -2757,7 +2784,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao remover';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setRemovendo(null); }
   };
 
@@ -2770,7 +2797,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
         ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
         : mb));
       toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
-    } catch { toast.error('Erro ao alterar status'); }
+    } catch { setErroInline('Erro ao alterar status'); }
     finally  { setTogglingId(null); }
   };
 
@@ -2784,6 +2811,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <p className="font-bold text-gray-900">Equipe ({membros.length})</p>
@@ -3032,13 +3061,15 @@ function TabProprietarios({ equipeId }: { equipeId: number }) {
   const [proprietarios, setProprietarios] = useState<ProprietarioEquipe[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [busca,         setBusca]         = useState('');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get(`/equipes/${equipeId}/proprietarios`);
       setProprietarios(res.data?.dados ?? []);
-    } catch { toast.error('Erro ao carregar proprietários'); }
+    } catch { setErroInline('Erro ao carregar proprietários'); }
     finally  { setLoading(false); }
   }, [equipeId]);
 
@@ -3050,6 +3081,8 @@ function TabProprietarios({ equipeId }: { equipeId: number }) {
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <p className="font-bold text-gray-900">Proprietários ({proprietarios.length})</p>
@@ -3117,13 +3150,15 @@ function TabConvites({ equipeId, isGestor }: { equipeId: number; isGestor: boole
   const [convites,  setConvites]  = useState<ConviteItem[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [cancelando, setCancelando] = useState<number | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get('/equipes/convites');
       setConvites(res.data?.dados ?? []);
-    } catch { toast.error('Erro ao carregar convites'); }
+    } catch { setErroInline('Erro ao carregar convites'); }
     finally  { setLoading(false); }
   }, []);
 
@@ -3135,12 +3170,14 @@ function TabConvites({ equipeId, isGestor }: { equipeId: number; isGestor: boole
       await api.delete(`/equipes/${equipeId}/convites/${conviteId}`);
       toast.success('Convite cancelado');
       carregar();
-    } catch { toast.error('Erro ao cancelar convite'); }
+    } catch { setErroInline('Erro ao cancelar convite'); }
     finally  { setCancelando(null); }
   };
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <InlineError message={erroInline} className="m-3" />
+
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <p className="font-bold text-gray-900">Convites Enviados</p>

@@ -10,6 +10,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import InlineError from '../components/InlineError';
 
 interface Agenda { chave: string; nome: string; expr: string; exprPadrao: string; ativo: boolean }
 
@@ -34,6 +35,8 @@ export default function ConfiguracaoAlerta() {
 
   const [loading,  setLoading]  = useState(true);
   const [salvando, setSalvando] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const [emails,           setEmails]           = useState('');
   const [notificarSucesso, setNotificarSucesso] = useState(true);
@@ -57,7 +60,7 @@ export default function ConfiguracaoAlerta() {
       }
       if (ag.data?.dados) setAgendas(ag.data.dados as Agenda[]);
     } catch {
-      toast.error('Erro ao carregar configuração de alertas.');
+      setErroInline('Erro ao carregar configuração de alertas.');
     } finally {
       setLoading(false);
     }
@@ -83,7 +86,7 @@ export default function ConfiguracaoAlerta() {
       navigate('/monitoracao');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar configuração de alertas.');
+      setErroInline(msg ?? 'Erro ao salvar configuração de alertas.');
     } finally {
       setSalvando(false);
     }
@@ -100,7 +103,7 @@ export default function ConfiguracaoAlerta() {
       toast.success(`"${a.nome}" reagendada.`);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao reagendar tarefa.');
+      setErroInline(msg ?? 'Erro ao reagendar tarefa.');
     } finally {
       setSavingChave(null);
     }
@@ -127,6 +130,8 @@ export default function ConfiguracaoAlerta() {
 
   return (
     <PageContainer maxWidth="3xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <BotaoVoltar className="mb-4" />
 
       <div className="flex items-center gap-2 mb-1">

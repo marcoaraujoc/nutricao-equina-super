@@ -12,6 +12,7 @@ import PageContainer from '../components/PageContainer';
 import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -269,6 +270,8 @@ function CatalogoVacinasTab() {
   const [editando,      setEditando]      = useState<MedVacina | null>(null);
   const [saving,        setSaving]        = useState(false);
   const [confirmVacina, setConfirmVacina] = useState<MedVacina | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,    setErroInline]    = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -280,7 +283,7 @@ function CatalogoVacinasTab() {
       setVacinas(resV.data?.dados ?? []);
       setEspecies(resE.data?.dados ?? []);
     } catch {
-      toast.error('Erro ao carregar catálogo de vacinas');
+      setErroInline('Erro ao carregar catálogo de vacinas');
     } finally {
       setLoading(false);
     }
@@ -317,7 +320,7 @@ function CatalogoVacinasTab() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar vacina');
+      setErroInline(msg ?? 'Erro ao salvar vacina');
     } finally {
       setSaving(false);
     }
@@ -329,7 +332,7 @@ function CatalogoVacinasTab() {
       toast.success(v.ativo ? 'Vacina inativada' : 'Vacina reativada');
       carregar();
     } catch {
-      toast.error('Erro ao alterar status');
+      setErroInline('Erro ao alterar status');
     }
   };
 
@@ -344,7 +347,7 @@ function CatalogoVacinasTab() {
       toast.success('Vacina excluída');
       carregar();
     } catch {
-      toast.error('Erro ao excluir vacina');
+      setErroInline('Erro ao excluir vacina');
     }
   };
 
@@ -356,6 +359,8 @@ function CatalogoVacinasTab() {
 
   return (
     <>
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
@@ -671,6 +676,8 @@ export default function CadastroVacina() {
   const [loadingLegado,   setLoadingLegado]   = useState(false);
   const [buscaLegado,     setBuscaLegado]     = useState('');
   const [expandido,       setExpandido]       = useState<number | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,      setErroInline]      = useState<string | null>(null);
   const [showVacinaModal, setShowVacinaModal] = useState(false);
   const [editandoVacina,  setEditandoVacina]  = useState<VacinaLegada | null>(null);
   const [showLoteModal,   setShowLoteModal]   = useState(false);
@@ -689,7 +696,7 @@ export default function CadastroVacina() {
       setVacinas(resVacinas.data?.dados ?? []);
       setEmpresas(resEmpresas.data?.dados ?? []);
     } catch {
-      toast.error('Erro ao carregar vacinas');
+      setErroInline('Erro ao carregar vacinas');
     } finally {
       setLoadingLegado(false);
     }
@@ -728,7 +735,7 @@ export default function CadastroVacina() {
       setEditandoVacina(null);
       carregarLegado();
     } catch {
-      toast.error('Erro ao salvar vacina');
+      setErroInline('Erro ao salvar vacina');
     } finally {
       setSavingLegado(false);
     }
@@ -740,7 +747,7 @@ export default function CadastroVacina() {
       toast.success(v.ativo ? 'Vacina inativada' : 'Vacina reativada');
       carregarLegado();
     } catch {
-      toast.error('Erro ao alterar status');
+      setErroInline('Erro ao alterar status');
     }
   };
 
@@ -768,7 +775,7 @@ export default function CadastroVacina() {
       carregarLegado();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar lote');
+      setErroInline(msg ?? 'Erro ao salvar lote');
     } finally {
       setSavingLegado(false);
     }
@@ -785,7 +792,7 @@ export default function CadastroVacina() {
       toast.success('Lote inativado');
       carregarLegado();
     } catch {
-      toast.error('Erro ao inativar lote');
+      setErroInline('Erro ao inativar lote');
     }
   };
 
@@ -793,6 +800,8 @@ export default function CadastroVacina() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 bg-teal-100 rounded-2xl flex items-center justify-center">

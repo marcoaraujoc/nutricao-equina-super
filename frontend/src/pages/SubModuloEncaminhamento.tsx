@@ -15,6 +15,8 @@ import api from '../services/api';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -242,6 +244,8 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 }) {
   const [prestadores,         setPrestadores]         = useState<Prestador[]>([]);
   const [servicosDisponiveis, setServicosDisponiveis] = useState<string[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [especialidadesBanco, setEspecialidadesBanco] = useState<string[]>([]);
   const [loadingPrest,        setLoadingPrest]        = useState(true);
   const [destinoTipo,         setDestinoTipo]         = useState<DestinoTipo>('EQUIPE');
@@ -308,16 +312,16 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   };
 
   const handleSalvar = async () => {
-    if (!evolucaoId)    { toast.error('Inicie uma evolução antes de criar um encaminhamento.'); return; }
-    if (!motivo.trim()) { toast.error('Informe o motivo do encaminhamento'); return; }
+    if (!evolucaoId)    { setErroInline('Inicie uma evolução antes de criar um encaminhamento.'); return; }
+    if (!motivo.trim()) { setErroInline('Informe o motivo do encaminhamento'); return; }
     if (destinoTipo === 'EQUIPE' && !prestadorSel) {
-      toast.error('Selecione o prestador da equipe'); return;
+      setErroInline('Selecione o prestador da equipe'); return;
     }
     // Para EQUIPE, a especialidade escolhida no filtro já conta como "informada" mesmo
     // que `especialidade` (setada só ao clicar num prestador) ainda esteja vazia —
     // evita o erro "Informe a especialidade" quando o usuário já selecionou no filtro.
     const especialidadeEfetiva = especialidade.trim() || filtroServico.trim();
-    if (!especialidadeEfetiva) { toast.error('Informe a especialidade'); return; }
+    if (!especialidadeEfetiva) { setErroInline('Informe a especialidade'); return; }
 
     setSalvando(true);
     try {
@@ -341,7 +345,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       onCriado();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao criar encaminhamento');
+      if (!e.isPermissionError) setErroInline('Erro ao criar encaminhamento');
     } finally { setSalvando(false); }
   };
 
@@ -349,6 +353,8 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
     <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
 
       <div className="p-5 space-y-4">
+
+      <InlineError message={erroInline} />
 
       {/* Tipo de destino */}
       <div className="flex gap-2">
@@ -534,9 +540,11 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
   const [formKey,          setFormKey]         = useState(0);
   const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
   const [page,             setPage]            = useState(1);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -576,7 +584,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
       carregar();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao atualizar encaminhamento');
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao atualizar encaminhamento');
     } finally {
       setCancelandoId(null);
     }
@@ -616,6 +624,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
   return (
     <div className="p-4 space-y-4">
 
+      <InlineError message={erroInline} />
 
       {podeCriar && (
         <FormNovoEncaminhamento

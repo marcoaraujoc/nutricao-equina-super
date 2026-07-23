@@ -1,6 +1,8 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import InlineError from '../components/InlineError';
 
 export default function Register() {
   const location = useLocation();
@@ -90,7 +92,7 @@ export default function Register() {
       const data = await res.json();
 
       if (res.ok) {
-        alert('✅ Cadastro realizado com sucesso!');
+        toast.success('Cadastro realizado com sucesso!');
         if (googleData.fromGoogle) {
           const loginRes = await fetch('/api/auth/login', {
             method:      'POST',
@@ -236,7 +238,7 @@ export default function Register() {
             </div>
           </div>
 
-          {error && <p className="text-red-500 text-sm text-center font-medium">{error}</p>}
+          <InlineError message={error} />
 
           <button
             type="submit"

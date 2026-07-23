@@ -12,6 +12,11 @@ const PERMISSOES_PADRAO = {
 
   // Gestor — acesso total irrestrito a todos os módulos (incluindo catálogos admin-only)
   GESTOR: {
+    'orcamento.orcamentos.ler':     'FULL',
+    'orcamento.orcamentos.criar':   'FULL',
+    'orcamento.orcamentos.editar':  'FULL',
+    'orcamento.orcamentos.aprovar': 'FULL',
+    'orcamento.orcamentos.deletar': 'FULL',
     'relatorios.gerencial.ler': 'FULL',
     'cadastro.proprietario.ler':     'FULL',
     'cadastro.proprietario.criar':   'FULL',
@@ -164,6 +169,12 @@ const PERMISSOES_PADRAO = {
 
   // Veterinário — acesso completo às operações clínicas e nutricionais
   VETERINARIO: {
+    // Orçamento — vet monta e aprova os próprios
+    'orcamento.orcamentos.ler':     'EQUIPE',
+    'orcamento.orcamentos.criar':   'PROPRIO',
+    'orcamento.orcamentos.editar':  'PROPRIO',
+    'orcamento.orcamentos.aprovar': 'PROPRIO',
+    'orcamento.orcamentos.deletar': 'PROPRIO',
     // Relatórios gerenciais — restrito a GESTOR/FINANCEIRO por padrão
     'relatorios.gerencial.ler': 'NENHUM',
     // Cadastro
@@ -723,6 +734,11 @@ const PERMISSOES_PADRAO = {
 
   // Secretaria — recepção, agendamentos, cadastros e financeiro básico
   SECRETARIA: {
+    'orcamento.orcamentos.ler':     'EQUIPE',
+    'orcamento.orcamentos.criar':   'EQUIPE',
+    'orcamento.orcamentos.editar':  'EQUIPE',
+    'orcamento.orcamentos.aprovar': 'EQUIPE',
+    'orcamento.orcamentos.deletar': 'NENHUM',
     'relatorios.gerencial.ler': 'NENHUM',
     'cadastro.proprietario.ler':     'EQUIPE',
     'cadastro.proprietario.criar':   'PROPRIO',
@@ -874,6 +890,11 @@ const PERMISSOES_PADRAO = {
 
   // Financeiro — acesso ao módulo financeiro e visualização de clientes
   FINANCEIRO: {
+    'orcamento.orcamentos.ler':     'EQUIPE',
+    'orcamento.orcamentos.criar':   'EQUIPE',
+    'orcamento.orcamentos.editar':  'EQUIPE',
+    'orcamento.orcamentos.aprovar': 'EQUIPE',
+    'orcamento.orcamentos.deletar': 'NENHUM',
     // Relatórios gerenciais — indicadores financeiros e operacionais da empresa
     'relatorios.gerencial.ler': 'EQUIPE',
     'cadastro.proprietario.ler':     'EQUIPE',
@@ -1358,6 +1379,13 @@ const MODULOS_SISTEMA = [
 
   // ── Relatórios — Gerencial ──────────────────────────────────────────────────
   { slug: 'relatorios.gerencial.ler', modulo: 'relatorios', submodulo: 'gerencial', acao: 'ler', label: 'Relatórios — Visualizar', ordemExib: 105 },
+
+  // ── Orçamento ───────────────────────────────────────────────────────────────
+  { slug: 'orcamento.orcamentos.ler',     modulo: 'orcamento', submodulo: 'orcamentos', acao: 'ler',     label: 'Orçamento — Visualizar', ordemExib: 66 },
+  { slug: 'orcamento.orcamentos.criar',   modulo: 'orcamento', submodulo: 'orcamentos', acao: 'criar',   label: 'Orçamento — Criar',      ordemExib: 67 },
+  { slug: 'orcamento.orcamentos.editar',  modulo: 'orcamento', submodulo: 'orcamentos', acao: 'editar',  label: 'Orçamento — Editar',     ordemExib: 68 },
+  { slug: 'orcamento.orcamentos.aprovar', modulo: 'orcamento', submodulo: 'orcamentos', acao: 'aprovar', label: 'Orçamento — Aprovar/Rejeitar', ordemExib: 68.5 },
+  { slug: 'orcamento.orcamentos.deletar', modulo: 'orcamento', submodulo: 'orcamentos', acao: 'deletar', label: 'Orçamento — Excluir',    ordemExib: 69 },
 ];
 
 module.exports = { PERMISSOES_PADRAO, MODULOS_SISTEMA };

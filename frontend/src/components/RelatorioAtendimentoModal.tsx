@@ -25,6 +25,7 @@ import {
   type RomItem,
   type TreinoItem,
 } from '../utils/RelatorioAtendimento';
+import InlineError from './InlineError';
 
 interface Props {
   dadosIniciais:     RelatorioAtendimentoDados;
@@ -41,6 +42,8 @@ export default function RelatorioAtendimentoModal({ dadosIniciais, podeEditar, o
   const [dados,    setDados]    = useState<RelatorioAtendimentoDados>(dadosIniciais);
   const [modo,     setModo]     = useState<'preview' | 'editar'>('preview');
   const [salvando, setSalvando] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   // ── Form (inicializado ao entrar no modo edição) ───────────────────────────
   const [claudicacao, setClaudicacao] = useState('');
@@ -88,7 +91,7 @@ export default function RelatorioAtendimentoModal({ dadosIniciais, podeEditar, o
       toast.success('Relatório atualizado');
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) toast.error('Erro ao salvar o relatório');
+      if (!e.isPermissionError) setErroInline('Erro ao salvar o relatório');
     } finally { setSalvando(false); }
   };
 
@@ -258,7 +261,9 @@ export default function RelatorioAtendimentoModal({ dadosIniciais, podeEditar, o
                 className={`${INPUT} resize-none`} />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+            <InlineError message={erroInline} className="mt-2" />
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
               <button onClick={() => setModo('preview')} disabled={salvando}
                 className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
                 Cancelar

@@ -15,6 +15,7 @@ import {
   Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
   CheckCircle2, AlertCircle, UserCheck, CalendarDays,
 } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -390,6 +391,9 @@ export default function Agendamentos() {
   const podeDeletarAgendamento                      = podeExecutar('atendimento.agendamentos.deletar');
   const podeGerenciar                               = podeCriarAgendamento || podeEditarAgendamento || podeDeletarAgendamento;
 
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline]             = useState<string | null>(null);
+
   // ── Animal / Proprietário ────────────────────────────────────────────────────
   const [animais, setAnimais]                   = useState<AnimalOption[]>([]);
   const [loadingAnimais, setLoadingAnimais]     = useState(false);
@@ -609,7 +613,7 @@ export default function Agendamentos() {
       const res = await api.get('/clinica/agendamentos', { params: { data: date } });
       if (!res.data) { setAgendamentos([]); return; }
       setAgendamentos(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar agendamentos'); }
+    } catch { setErroInline('Erro ao carregar agendamentos'); }
     finally { setLoading(false); }
   }, []);
 
@@ -809,7 +813,7 @@ export default function Agendamentos() {
       toast.success(`Consulta agendada às ${hora}`);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao criar agendamento')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -918,8 +922,8 @@ export default function Agendamentos() {
       ?? (vozContexto ? new Date(`${selectedDate}T${vozContexto.hora}`).toISOString() : null);
     const animalNome = vozResultado.animal?.nome ?? selectedAnimal?.nome ?? 'Animal';
 
-    if (!animalId) { toast.error('Animal não identificado pela IA'); return; }
-    if (!dataHora) { toast.error('Data/hora não identificada'); return; }
+    if (!animalId) { setErroInline('Animal não identificado pela IA'); return; }
+    if (!dataHora) { setErroInline('Data/hora não identificada'); return; }
 
     setSalvando(true);
     try {
@@ -931,7 +935,7 @@ export default function Agendamentos() {
       });
       toast.success('Agendamento confirmado!');
       resetVoz(); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -948,14 +952,14 @@ export default function Agendamentos() {
       });
       toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao criar agendamento')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
   async function handleConfirmarBooking(e: React.FormEvent) {
     e.preventDefault();
     if (!booking) return;
-    if (!bookingForm.animalId) { toast.error('Selecione um animal'); return; }
+    if (!bookingForm.animalId) { setErroInline('Selecione um animal'); return; }
     const conflito = findConflictAnimal(Number(bookingForm.animalId));
     if (conflito) {
       const nomeAnimal = animais.find(a => String(a.id) === bookingForm.animalId)?.nome ?? 'este animal';
@@ -983,18 +987,18 @@ export default function Agendamentos() {
           ? { ...a, status: novoStatus as StatusAgendamento, observacao: novoStatus === 'CANCELADO' && motivo ? motivo : a.observacao }
           : a
       ));
-    } catch { toast.error('Erro ao atualizar'); }
+    } catch { setErroInline('Erro ao atualizar'); }
   }
 
   function handleIniciarAtendimento(ag: AgendamentoGlobal) {
-    if (!ag.animal?.id) { toast.error('Animal não identificado no agendamento'); return; }
+    if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   }
 
   async function handleTrocarVetAg() {
-    if (!trocandoVetAg || !trocandoVetIdAg) { toast.error('Selecione um profissional'); return; }
+    if (!trocandoVetAg || !trocandoVetIdAg) { setErroInline('Selecione um profissional'); return; }
     if (trocandoVetIdAg === String(trocandoVetAg.veterinario?.id)) {
-      toast.error('O profissional já é o responsável por este agendamento');
+      setErroInline('O profissional já é o responsável por este agendamento');
       return;
     }
     setSavingTrocaAg(true);
@@ -1005,13 +1009,13 @@ export default function Agendamentos() {
       setTrocandoVetAg(null);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao trocar profissional')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao trocar profissional')); }
     finally { setSavingTrocaAg(false); }
   }
 
   async function handleTransferirDia() {
-    if (!transDeVetId || !transParaVetId) { toast.error('Selecione os profissionais'); return; }
-    if (transDeVetId === transParaVetId) { toast.error('Origem e destino devem ser diferentes'); return; }
+    if (!transDeVetId || !transParaVetId) { setErroInline('Selecione os profissionais'); return; }
+    if (transDeVetId === transParaVetId) { setErroInline('Origem e destino devem ser diferentes'); return; }
     setSavingTransf(true);
     try {
       const res = await api.patch('/clinica/agendamentos/transferir-dia', {
@@ -1022,17 +1026,16 @@ export default function Agendamentos() {
       if (transferidos > 0) toast.success(`${transferidos} agendamento(s) transferido(s)`);
       if (bloqueados.length > 0) {
         // Profissional de destino já ocupado nesses horários — não foram movidos
-        toast.error(
+        setErroInline(
           `${bloqueados.length} agendamento(s) NÃO transferido(s) — profissional de destino já ocupado: ` +
           bloqueados.map(b => `${b.animalNome ?? 'paciente'} às ${formatarHora(b.hora)}`).join(', '),
-          { duration: 8000 },
         );
       }
       if (transferidos === 0 && bloqueados.length === 0) toast('Nenhum agendamento para transferir neste dia', { icon: 'ℹ️' });
       setTransferindoDia(false);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao transferir agenda do dia')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao transferir agenda do dia')); }
     finally { setSavingTransf(false); }
   }
 
@@ -1062,10 +1065,10 @@ export default function Agendamentos() {
 
   async function handleReagendar(e: React.FormEvent) {
     e.preventDefault();
-    if (!reagendando || !novaDataHora) { toast.error('Informe a nova data/hora'); return; }
-    if (novaDataHora === formatarDateInput(reagendando.dataHora)) { toast.error('A nova data deve ser diferente da atual'); return; }
+    if (!reagendando || !novaDataHora) { setErroInline('Informe a nova data/hora'); return; }
+    if (novaDataHora === formatarDateInput(reagendando.dataHora)) { setErroInline('A nova data deve ser diferente da atual'); return; }
     const avisoExpediente = foraDoExpediente(novaDataHora, expedienteReagendando);
-    if (avisoExpediente) { toast.error(avisoExpediente); return; }
+    if (avisoExpediente) { setErroInline(avisoExpediente); return; }
     setSalvandoReag(true);
     try {
       const novaData = new Date(novaDataHora);
@@ -1081,7 +1084,7 @@ export default function Agendamentos() {
       });
       toast.success('Reagendado');
       setReagendando(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { toast.error(msgErroAgenda(err, 'Erro ao reagendar')); }
+    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao reagendar')); }
     finally { setSalvandoReag(false); }
   }
 
@@ -1090,6 +1093,8 @@ export default function Agendamentos() {
     <PageContainer maxWidth="7xl">
 
       <BotaoVoltar className="mb-6" />
+
+      <InlineError message={erroInline} className="mb-4" />
 
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">

@@ -2,9 +2,24 @@
 
 const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
-const { recalcularTotal: recalcularTotalCompartilhado, registrarCorrecaoFatura } = require('../lib/faturaUtils');
+const {
+  recalcularTotal: recalcularTotalCompartilhado,
+  registrarCorrecaoFatura,
+  normalizarDesconto,
+} = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
+const {
+  aplicarPerfil: aplicarPerfilProprietario,
+  aplicarPerfilEmLista: aplicarPerfilProprietarioEmLista,
+} = require('../lib/proprietarioPerfil');
+
+// Aplica à fatura o cadastro que a EMPRESA ATIVA mantém do proprietário
+// (nome, telefone e condição comercial são por empresa — ver lib/proprietarioPerfil).
+async function comPerfilDaEmpresa(fatura, empresaId) {
+  if (!fatura?.proprietario || !empresaId) return fatura;
+  return { ...fatura, proprietario: await aplicarPerfilProprietario(fatura.proprietario, empresaId) };
+}
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -178,7 +193,10 @@ const FaturaController = {
         return acc;
       }, {});
 
-      const dados = proprietarios.map(p => ({
+      // Nome/telefone/condição comercial conforme o cadastro DESTA empresa
+      const comPerfil = await aplicarPerfilProprietarioEmLista(proprietarios, req.empresaId);
+
+      const dados = comPerfil.map(p => ({
         ...p,
         faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
         faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
@@ -218,7 +236,7 @@ const FaturaController = {
           include: FATURA_INCLUDE,
           orderBy: { criadoEm: 'desc' },
         });
-        return res.json({ dados: fatura ?? null, meses });
+        return res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId) ?? null, meses });
       }
 
       if (faturaId) {
@@ -227,7 +245,7 @@ const FaturaController = {
           include: FATURA_INCLUDE,
         });
         if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
-        return res.json({ dados: fatura, meses });
+        return res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId), meses });
       }
 
       let fatura = await prisma.fatura.findFirst({
@@ -253,7 +271,7 @@ const FaturaController = {
       if (fatura && !meses.some(m => m.id === fatura.id)) {
         meses.unshift({ id: fatura.id, mesReferencia: fatura.mesReferencia, status: fatura.status });
       }
-      res.json({ dados: fatura, meses });
+      res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId), meses });
     } catch (err) {
       console.error('Erro ao obter fatura do proprietário:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -276,11 +294,18 @@ const FaturaController = {
   // POST /:faturaId/itens
   adicionarItem: async (req, res) => {
     const { faturaId }  = req.params;
-    const { tipo, descricao, valor, quantidade = 1, animalId } = req.body;
+    const { tipo, descricao, valor, quantidade = 1, animalId, descontoTipo, descontoValor } = req.body;
     const veterinarioId = req.user.id;
 
     if (!tipo || !descricao || valor === undefined || valor === null) {
       return res.status(400).json({ error: 'tipo, descricao e valor são obrigatórios' });
+    }
+
+    let desconto;
+    try {
+      desconto = normalizarDesconto(descontoTipo, descontoValor);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
     }
 
     try {
@@ -299,6 +324,7 @@ const FaturaController = {
           valor:        Number(valor),
           quantidade:   Number(quantidade),
           veterinarioId,
+          ...desconto,
         },
         include: ITEM_INCLUDE,
       });
@@ -314,7 +340,19 @@ const FaturaController = {
   // PUT /itens/:itemId
   atualizarItem: async (req, res) => {
     const { itemId } = req.params;
-    const { tipo, descricao, valor, quantidade } = req.body;
+    const { tipo, descricao, valor, quantidade, descontoTipo, descontoValor } = req.body;
+
+    // O desconto só é tocado quando o request menciona algum dos dois campos —
+    // assim um PATCH parcial (ex: só a descrição) não zera um desconto existente.
+    const mexeuNoDesconto = descontoTipo !== undefined || descontoValor !== undefined;
+    let desconto = null;
+    if (mexeuNoDesconto) {
+      try {
+        desconto = normalizarDesconto(descontoTipo, descontoValor);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
 
     try {
       const item = await prisma.faturaItem.findUnique({
@@ -333,6 +371,7 @@ const FaturaController = {
           ...(descricao  !== undefined && { descricao }),
           ...(valor      !== undefined && { valor: Number(valor) }),
           ...(quantidade !== undefined && { quantidade: Number(quantidade) }),
+          ...(desconto ?? {}),
         },
         include: ITEM_INCLUDE,
       });
@@ -402,7 +441,7 @@ const FaturaController = {
         data:    { status },
         include: FATURA_INCLUDE,
       });
-      res.json({ dados: fatura });
+      res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId) });
     } catch (err) {
       console.error('Erro ao atualizar status:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -434,7 +473,7 @@ const FaturaController = {
         include: FATURA_INCLUDE,
       });
 
-      res.json({ dados: faturaFechada });
+      res.json({ dados: await comPerfilDaEmpresa(faturaFechada, req.empresaId) });
     } catch (err) {
       console.error('Erro ao fechar fatura:', err);
       res.status(500).json({ error: 'Erro interno' });

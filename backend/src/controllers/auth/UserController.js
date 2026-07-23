@@ -6,6 +6,7 @@ const crypto  = require('crypto');
 
 const prisma = require('../../lib/prisma').default;
 const { setAuthCookies } = require('../../lib/authCookies');
+const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const SECRET          = process.env.JWT_SECRET;
 const REFRESH_SECRET  = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -24,7 +25,8 @@ class UserController {
   async register(req, res) {
     console.log('📥 [Register] Recebido:', req.body);
     const { fullName, email: emailRaw, password, phone, userType } = req.body;
-    const email = (emailRaw ?? '').trim().toLowerCase();
+    const email = normalizeEmail(emailRaw);
+    if (!email) return res.status(400).json({ error: 'E-mail inválido' });
 
     // Cadastro direto nunca pode auto-atribuir papel privilegiado. Apenas PROPRIETARIO
     // ou VETERINARIO são aceitos; qualquer outro valor cai no padrão PROPRIETARIO.
@@ -32,7 +34,8 @@ class UserController {
     const userTypeSeguro = TIPOS_PERMITIDOS.includes(userType) ? userType : 'PROPRIETARIO';
 
     try {
-      const existing = await prisma.user.findUnique({ where: { email } });
+      // Duplicidade case-insensitive (bloqueia "Karina@" se já existir "karina@")
+      const existing = await findUserByEmail(prisma, email, { select: { id: true } });
       if (existing) return res.status(400).json({ error: 'E-mail já cadastrado' });
 
       const passwordHash = await bcrypt.hash(password, 10);
@@ -51,12 +54,12 @@ class UserController {
 
   async login(req, res) {
     const { email: emailRaw, password } = req.body;
-    const email = (emailRaw ?? '').trim().toLowerCase();
+    const email = normalizeEmail(emailRaw);
     console.log('📥 [Login] Tentativa:', { email });
 
     try {
-      const user = await prisma.user.findUnique({
-        where:  { email },
+      // Busca case-insensitive — funciona mesmo para cadastros antigos com e-mail em maiúsculas
+      const user = await findUserByEmail(prisma, email, {
         select: {
           id:                 true,
           email:              true,

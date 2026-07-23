@@ -12,6 +12,7 @@ import {
 import BotaoVoltar from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import { formatDate as formatarDataBR } from '../utils/dateUtils';
+import InlineError from '../components/InlineError';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -142,6 +143,8 @@ const Usuarios = () => {
   const [loading,     setLoading]     = useState(true);
   const [search,      setSearch]      = useState('');
   const [filtroAtivo, setFiltroAtivo] = useState<'todos' | 'ativos' | 'inativos'>('todos');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [modalAberto, setModalAberto] = useState(false);
   const [editando,    setEditando]    = useState<Usuario | null>(null);
   const [salvando,    setSalvando]    = useState(false);
@@ -157,7 +160,7 @@ const Usuarios = () => {
       setUsuarios(res.data?.dados ?? res.data ?? []);
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao carregar usuários');
+      setErroInline('Erro ao carregar usuários');
     } finally {
       setLoading(false);
     }
@@ -233,7 +236,7 @@ const Usuarios = () => {
         ? err.response?.data?.mensagem ?? 'Erro ao salvar'
         : 'Erro inesperado';
       if (/senha/i.test(msg)) setErroSenha(msg);
-      else toast.error(msg);
+      else setErroInline(msg);
     } finally {
       setSalvando(false);
     }
@@ -247,7 +250,7 @@ const Usuarios = () => {
       toast.success(u.ativo ? 'Usuário inativado' : 'Usuário ativado');
       carregarUsuarios();
     } catch {
-      toast.error('Erro ao alterar status');
+      setErroInline('Erro ao alterar status');
     }
   };
 
@@ -261,7 +264,7 @@ const Usuarios = () => {
       setParaExcluir(null);
       carregarUsuarios();
     } catch {
-      toast.error('Erro ao excluir usuário');
+      setErroInline('Erro ao excluir usuário');
     }
   };
 
@@ -272,6 +275,8 @@ const Usuarios = () => {
       <div className="max-w-7xl mx-auto px-4">
 
         <BotaoVoltar className="mb-6" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">

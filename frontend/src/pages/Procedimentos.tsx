@@ -12,6 +12,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,13 +109,15 @@ function ProcedimentoModal({
     } : { ...FORM_VAZIO }
   );
   const [saving, setSaving] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
 
   const handleSalvar = async () => {
-    if (!form.nome.trim())     { toast.error('Nome é obrigatório'); return; }
-    if (!form.categoria.trim()) { toast.error('Categoria é obrigatória'); return; }
+    if (!form.nome.trim())     { setErroInline('Nome é obrigatório'); return; }
+    if (!form.categoria.trim()) { setErroInline('Categoria é obrigatória'); return; }
     setSaving(true);
     try {
       const payload = {
@@ -134,7 +137,7 @@ function ProcedimentoModal({
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error ?? 'Erro ao salvar');
+      setErroInline(e?.response?.data?.error ?? 'Erro ao salvar');
     } finally {
       setSaving(false);
     }
@@ -272,6 +275,8 @@ function ProcedimentoModal({
         </div>
 
         {/* Footer */}
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
@@ -303,6 +308,8 @@ export default function Procedimentos() {
   const [showModal,     setShowModal]     = useState(false);
   const [inativandoId,  setInativandoId]  = useState<number | null>(null);
   const [editingItem,   setEditingItem]   = useState<Procedimento | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const totalPaginas = Math.ceil(total / limit);
 
@@ -316,7 +323,7 @@ export default function Procedimentos() {
       setProcedimentos(res.data.dados ?? []);
       setTotal(res.data.meta?.total ?? res.data.dados?.length ?? 0);
     } catch {
-      toast.error('Erro ao carregar procedimentos');
+      setErroInline('Erro ao carregar procedimentos');
     } finally {
       setLoading(false);
     }
@@ -335,7 +342,7 @@ export default function Procedimentos() {
       carregar();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error ?? 'Erro ao inativar');
+      setErroInline(e?.response?.data?.error ?? 'Erro ao inativar');
     } finally {
       setInativandoId(null);
     }
@@ -354,6 +361,8 @@ export default function Procedimentos() {
     <PageContainer maxWidth="7xl">
 
       <BotaoVoltar className="mb-6" />
+
+      <InlineError message={erroInline} className="mb-4" />
 
       {/* Header */}
       <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">

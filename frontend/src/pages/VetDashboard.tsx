@@ -20,6 +20,8 @@ import {
   PointElement, Title, Tooltip, Legend, Filler,
 } from 'chart.js';
 import { Bar, Line } from 'react-chartjs-2';
+import InlineError from '../components/InlineError';
+
 
 ChartJS.register(
   CategoryScale, LinearScale, BarElement, LineElement,
@@ -305,6 +307,8 @@ export default function VetDashboard() {
   const [busca,          setBusca]          = useState('');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [animalToUnlink, setAnimalToUnlink] = useState<AnimalResumido | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
 
   const carregar = async () => {
@@ -327,7 +331,7 @@ export default function VetDashboard() {
       setSolicitacoes(solicitacoesFiltradas);
       if (statsRes.data?.dados) setStats(statsRes.data.dados);
     } catch {
-      toast.error('Erro ao carregar dados');
+      setErroInline('Erro ao carregar dados');
     } finally {
       setLoading(false);
     }
@@ -358,7 +362,7 @@ export default function VetDashboard() {
       }
       carregar();
     } catch {
-      toast.error('Erro ao responder solicitação');
+      setErroInline('Erro ao responder solicitação');
     }
   };
 
@@ -376,7 +380,7 @@ export default function VetDashboard() {
       toast.success(`${animalToUnlink.nome} removido da sua lista`);
       carregar();
     } catch {
-      toast.error('Erro ao desvincular');
+      setErroInline('Erro ao desvincular');
     } finally {
       setUnlinking(false);
     }
@@ -425,7 +429,7 @@ export default function VetDashboard() {
       }
       carregar();
     } catch {
-      toast.error('Erro ao responder solicitação');
+      setErroInline('Erro ao responder solicitação');
     }
   };
 
@@ -440,6 +444,8 @@ export default function VetDashboard() {
         />
       )}
       <PageContainer maxWidth="7xl">
+        <InlineError message={erroInline} className="mb-4" />
+
       <BotaoVoltar className="mb-6" />
       <div className="space-y-5">
 

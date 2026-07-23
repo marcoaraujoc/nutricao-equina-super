@@ -7,8 +7,8 @@
 // Definições adotadas:
 // - Atendimento emergencial: FaturaItem cuja descrição contém "emergen"
 //   (lançamento "Atd. Emergencial" do Faturamento), em fatura não cancelada.
-// - Receita bruta  = soma de valor×qtd dos itens em faturas ABERTA/FECHADA/PAGA (faturado).
-// - Receita líquida = soma de valor×qtd dos itens em faturas PAGA (efetivamente recebido).
+// - Receita bruta  = soma do valor líquido (valor×qtd − desconto do item) em faturas ABERTA/FECHADA/PAGA (faturado).
+// - Receita líquida = mesma soma, restrita a faturas PAGA (efetivamente recebido).
 // - Devedor: proprietário com fatura ABERTA/FECHADA de mês anterior ao atual;
 //   meses em atraso = distância em meses do mês devido mais antigo até o mês atual.
 // - Fatura corrigida: qtdCorrecoes > 0 (item existente alterado/removido — ver faturaUtils).
@@ -17,7 +17,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
-const { formatAtendimentoNum } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, valorLiquidoItem } = require('../lib/faturaUtils');
 
 const SEM_LOCALIZACAO = 'Sem localização';
 
@@ -129,7 +129,7 @@ async function blocoReceitaPorLocalidade(propWhere, periodo) {
       fatura:   { status: 'PAGA', ...propWhere },
     },
     select: {
-      valor: true, quantidade: true,
+      valor: true, quantidade: true, descontoTipo: true, descontoValor: true,
       // Local do item: usa o animal do PRÓPRIO item; quando o item não tem animalId
       // (registro legado / cobrança genérica lançada na fatura), cai para o animal
       // da FATURA (Fatura.animalId, legado) — sem isso, itens legados caíam todos
@@ -143,7 +143,7 @@ async function blocoReceitaPorLocalidade(propWhere, periodo) {
   for (const item of itens) {
     const animalRef = item.animal ?? item.fatura.animal;
     const chave = animalRef ? nomeLocalizacao(animalRef) : SEM_LOCALIZACAO;
-    const valor = (item.valor ?? 0) * (item.quantidade ?? 1);
+    const valor = valorLiquidoItem(item); // já descontado
     porLocal.set(chave, (porLocal.get(chave) ?? 0) + valor);
   }
   return [...porLocal.entries()]

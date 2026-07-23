@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import InlineError from './InlineError';
 import { X, Loader2, ShieldCheck } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -71,6 +72,8 @@ export default function PermissoesModal({ equipeId, membroId, membroNome, onClos
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState<Record<string, Nivel>>({});
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -78,7 +81,7 @@ export default function PermissoesModal({ equipeId, membroId, membroNome, onClos
       const res = await api.get(`/equipes/${equipeId}/permissoes/${membroId}`);
       setMatriz(res.data.dados ?? {});
     } catch {
-      toast.error('Erro ao carregar permissões');
+      setErroInline('Erro ao carregar permissões');
     } finally {
       setLoading(false);
     }
@@ -111,7 +114,7 @@ export default function PermissoesModal({ equipeId, membroId, membroNome, onClos
       onClose();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao salvar';
-      toast.error(msg);
+      setErroInline(msg);
     } finally {
       setSaving(false);
     }
@@ -200,6 +203,8 @@ export default function PermissoesModal({ equipeId, membroId, membroNome, onClos
         </div>
 
         {/* Footer */}
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="px-5 py-3 border-t border-gray-100 flex-shrink-0 flex items-center justify-between">
           <p className="text-xs text-gray-400">
             {Object.keys(dirty).length > 0

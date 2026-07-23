@@ -11,6 +11,7 @@ import {
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
 import EspecialidadeSelector from './EspecialidadeSelector';
+import InlineError from './InlineError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,8 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
   const [buscandoCEP,    setBuscandoCEP]    = useState(false);
   const [docError,       setDocError]       = useState('');
   const [dupInativoInfo, setDupInativoInfo] = useState<{ mensagem: string } | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const cnpjTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Espécies atendidas pela empresa — filtram as especialidades oferecidas.
@@ -201,17 +204,17 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
   };
 
   const handleSalvar = async (force = false) => {
-    if (!form.nome.trim())             { toast.error('Nome é obrigatório'); return; }
+    if (!form.nome.trim())             { setErroInline('Nome é obrigatório'); return; }
     if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
-      toast.error('Selecione ao menos uma especialidade'); return;
+      setErroInline('Selecione ao menos uma especialidade'); return;
     }
-    if (!form.email.trim())            { toast.error('E-mail é obrigatório'); return; }
-    if (!isValidEmail(form.email))     { toast.error('Informe um e-mail válido'); return; }
-    if (!form.telefone.trim())         { toast.error('Telefone é obrigatório'); return; }
+    if (!form.email.trim())            { setErroInline('E-mail é obrigatório'); return; }
+    if (!isValidEmail(form.email))     { setErroInline('Informe um e-mail válido'); return; }
+    if (!form.telefone.trim())         { setErroInline('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
-    if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf))   { toast.error('CPF inválido');  return; }
-    if (form.tipoDoc === 'cnpj' && docCNPJ && !validarCNPJ(form.cnpj)) { toast.error('CNPJ inválido'); return; }
+    if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf))   { setErroInline('CPF inválido');  return; }
+    if (form.tipoDoc === 'cnpj' && docCNPJ && !validarCNPJ(form.cnpj)) { setErroInline('CNPJ inválido'); return; }
 
     setSaving(true);
     try {
@@ -246,7 +249,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         setDupInativoInfo({ mensagem: errData.mensagem ?? '' });
         return;
       }
-      toast.error(errData?.mensagem ?? 'Erro ao salvar fornecedor');
+      setErroInline(errData?.mensagem ?? 'Erro ao salvar fornecedor');
     } finally { setSaving(false); }
   };
 
@@ -407,6 +410,8 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
           </section>
 
         </div>
+
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
 
         <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} disabled={saving}

@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Users2, CheckCircle2, XCircle, Loader2, Building2 } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 const LABEL_CARGO: Record<string, string> = {
   VETERINARIO:  'Médico(a) Veterinário(a)',
@@ -16,6 +17,8 @@ const LABEL_CARGO: Record<string, string> = {
 export default function AceitarConviteEquipe() {
   const { user, refreshUser } = useAuth();
   const [loading, setLoading] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const convite = user?.pendingInvite;
 
@@ -27,7 +30,7 @@ export default function AceitarConviteEquipe() {
       await refreshUser();
       // ProtectedRoute cuida do próximo redirecionamento automaticamente
     } catch {
-      toast.error('Erro ao aceitar convite. Tente novamente.');
+      setErroInline('Erro ao aceitar convite. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -40,7 +43,7 @@ export default function AceitarConviteEquipe() {
       toast('Convite recusado.');
       await refreshUser();
     } catch {
-      toast.error('Erro ao recusar convite.');
+      setErroInline('Erro ao recusar convite.');
     } finally {
       setLoading(false);
     }
@@ -53,6 +56,8 @@ export default function AceitarConviteEquipe() {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 w-full max-w-md">
+
+        <InlineError message={erroInline} className="mb-4" />
 
         {/* Ícone */}
         <div className="flex justify-center mb-6">

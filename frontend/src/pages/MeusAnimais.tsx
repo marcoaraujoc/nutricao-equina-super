@@ -9,6 +9,8 @@ import toast from 'react-hot-toast';
 import { Pencil, Trash2, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
+
 
 interface Solicitacao {
   id:               number;
@@ -119,6 +121,8 @@ const MeusAnimais = () => {
   const [loading,                setLoading]                = useState(true);
   const [animalToDelete,         setAnimalToDelete]         = useState<Animal | null>(null);
   const [cancelSolicitacaoAnimal, setCancelSolicitacaoAnimal] = useState<Animal | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [cancelando,             setCancelando]             = useState(false);
   const [respondendo,            setRespondendo]            = useState(false);
 
@@ -166,7 +170,7 @@ const MeusAnimais = () => {
       toast.success('Animal excluído.');
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao excluir animal.');
+      setErroInline('Erro ao excluir animal.');
     }
   };
 
@@ -191,7 +195,7 @@ const MeusAnimais = () => {
       toast.success(res.data?.mensagem ?? (status === 'ACEITO' ? 'Vínculo autorizado!' : 'Vínculo recusado.'));
       loadAnimais();
     } catch (err: any) {
-      toast.error(err?.response?.data?.mensagem ?? 'Erro ao responder solicitação');
+      setErroInline(err?.response?.data?.mensagem ?? 'Erro ao responder solicitação');
     } finally {
       setRespondendo(false);
     }
@@ -202,6 +206,8 @@ const MeusAnimais = () => {
 
   return (
     <PageContainer>
+      <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         {/* ── Header ────────────────────────────────────────────────────── */}

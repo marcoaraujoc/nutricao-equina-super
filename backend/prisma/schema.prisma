@@ -78,6 +78,7 @@ model User {
   membrosEquipe        MembroEquipe[]
   permissoesMembro       PermissaoMembro[]
   permissoesProprietario PermissaoProprietario[]
+  proprietarioPerfis       ProprietarioPerfil[]    @relation("ProprietarioPerfilUser")
   fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
   encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
   designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
@@ -87,6 +88,8 @@ model User {
   resenhasCriadas          ResenhaEquino[]         @relation("ResenhasCriadas")
   resenhasGraficasCriadas  ResenhaGrafica[]        @relation("ResenhaGraficaCriadaPor")
   passwordHistory          PasswordHistory[]
+  orcamentos               Orcamento[]             @relation("OrcamentoProprietario")
+  orcamentosCriados        Orcamento[]             @relation("OrcamentoCriadoPor")
   @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
@@ -173,6 +176,7 @@ model Animal {
   resenha         ResenhaEquino?         @relation("AnimalResenha")
   resenhasGraficas ResenhaGrafica[]      @relation("ResenhaGraficaAnimal")
   exameImagens    ExameImagemAnexo[]     @relation("AnimalExameImagens")
+  orcamentoItens  OrcamentoItem[]        @relation("OrcamentoItemAnimal")
 
   @@index([especieId])
   @@index([racaId])
@@ -586,6 +590,9 @@ model ProcedimentoVeterinario {
   valorCusto       Float?
   valorVenda       Float?
   especie          String?  @db.VarChar(50)    // Bovino | Equino | Bovino e Equino
+  // null = catálogo global (ADMIN); setado = procedimento próprio da empresa
+  // (criado por item manual de orçamento) — só a empresa dona vê/edita.
+  empresaId        Int?     @map("empresa_id")
   ativo            Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -596,6 +603,7 @@ model ProcedimentoVeterinario {
   @@index([ativo])
   @@index([categoria])
   @@index([especie])
+  @@index([empresaId])
   @@map("tb_procedimentos_vet")
   @@schema("schs2vet")
 }
@@ -824,6 +832,10 @@ model FaturaItem {
   prescricaoId            Int?
   vacinaClinicaId         Int?
   encaminhamentoClinicoId Int?
+  orcamentoItemId         Int?     @map("orcamento_item_id")   // origem: OrcamentoItem tipo OUTROS
+  // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
+  descontoTipo            String?  @map("desconto_tipo")  @db.VarChar(12)
+  descontoValor           Float    @default(0) @map("desconto_valor")
 
   fatura                Fatura                 @relation(fields: [faturaId],      references: [id])
   animal                Animal?                @relation("FaturaItemAnimal", fields: [animalId], references: [id])
@@ -832,11 +844,13 @@ model FaturaItem {
   prescricao            Prescricao?            @relation("FaturaItemPrescricao",     fields: [prescricaoId],            references: [id], onDelete: SetNull)
   vacinaClinica         VacinaClinica?         @relation("FaturaItemVacina",         fields: [vacinaClinicaId],         references: [id], onDelete: SetNull)
   encaminhamentoClinico EncaminhamentoClinico? @relation("FaturaItemEncaminhamento", fields: [encaminhamentoClinicoId], references: [id], onDelete: SetNull)
+  orcamentoItem         OrcamentoItem?         @relation("FaturaItemOrcamento",      fields: [orcamentoItemId],         references: [id], onDelete: SetNull)
 
   @@index([exameClinicoId])
   @@index([prescricaoId])
   @@index([vacinaClinicaId])
   @@index([encaminhamentoClinicoId])
+  @@index([orcamentoItemId])
 
   @@map("tb_fatura_itens")
   @@schema("schs2vet")
@@ -1127,6 +1141,68 @@ model ProcedimentoComboItem {
   @@schema("schs2vet")
 }
 
+// =============================================================================
+// ORÇAMENTO (etapa OPCIONAL — quote por proprietário/animais)
+// =============================================================================
+// Monta um orçamento de procedimentos/combos, medicamentos e vacinas. A equipe
+// registra o que o cliente aceitou/rejeitou (status derivado dos itens). Os itens
+// ACEITO podem ser importados nas telas de Prescrição e Vacina. Não substitui nem
+// bloqueia o fluxo clínico/fatura atual.
+model Orcamento {
+  id             Int      @id @default(autoincrement())
+  empresaId      Int      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
+  equipeId       Int?     @map("equipe_id")
+  proprietarioId Int      @map("proprietario_id")
+  criadoPorId    Int      @map("criado_por_id")
+  numero         Int      // sequencial por empresa
+  status         String   @default("RASCUNHO") // RASCUNHO|APROVADO|APROVADO_PARCIALMENTE|REJEITADO
+  observacao     String?  @db.Text
+  ativo          Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt        @map("updated_at")
+
+  proprietario User            @relation("OrcamentoProprietario", fields: [proprietarioId], references: [id], onDelete: Cascade)
+  criadoPor    User            @relation("OrcamentoCriadoPor",    fields: [criadoPorId],    references: [id], onDelete: Cascade)
+  itens        OrcamentoItem[]
+
+  @@index([empresaId])
+  @@index([proprietarioId])
+  @@index([status])
+  @@map("tb_orcamentos")
+  @@schema("schs2vet")
+}
+
+model OrcamentoItem {
+  id            Int       @id @default(autoincrement())
+  orcamentoId   Int       @map("orcamento_id")
+  animalId      Int?      @map("animal_id") // null = item no nível do proprietário
+  tipo          String    // PROCEDIMENTO|COMBO|MEDICAMENTO|VACINA|OUTROS
+  refId         Int?      @map("ref_id")    // id do catálogo de origem (proc/combo/medicamento/vacina)
+  especialidade String?   @db.VarChar(100)
+  descricao     String    @db.VarChar(255)
+  quantidade    Float     @default(1)
+  unidade       String?   @db.VarChar(50)
+  // MEDICAMENTO: posologia orçada. quantidade = dias × aplicações/dia; os dois campos
+  // voltam preenchidos na importação para a Prescrição (duração e frequência).
+  dias          Int?
+  frequencia    String?   @db.VarChar(50)
+  valorUnitario Float     @default(0) @map("valor_unitario")
+  valorTotal    Float     @default(0) @map("valor_total")
+  statusItem    String    @default("PENDENTE") @map("status_item") // PENDENTE|ACEITO|REJEITADO
+  // OUTROS: marcado quando o item é lançado direto na fatura (mesma semântica de "importado")
+  importadoEm   DateTime? @map("importado_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  orcamento   Orcamento    @relation(fields: [orcamentoId], references: [id], onDelete: Cascade)
+  animal      Animal?      @relation("OrcamentoItemAnimal", fields: [animalId], references: [id], onDelete: SetNull)
+  faturaItens FaturaItem[] @relation("FaturaItemOrcamento")
+
+  @@index([orcamentoId])
+  @@index([animalId])
+  @@map("tb_orcamento_itens")
+  @@schema("schs2vet")
+}
+
 model Empresa {
   id        Int      @id @default(autoincrement())
   nome      String
@@ -1139,6 +1215,7 @@ model Empresa {
 
   owner           User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   proprietarios   User[]           @relation("ProprietarioEmpresa")
+  proprietarioPerfis ProprietarioPerfil[] @relation("ProprietarioPerfilEmpresa")
   equipes         Equipe[]
   animais         Animal[]         @relation("EmpresaAnimais")
   estoques    EstoqueClinica[] @relation("EmpresaEstoque")
@@ -1152,6 +1229,51 @@ model Empresa {
   // cnpj NULL (empresa pessoal/CPF): Postgres trata NULLs como distintos — enforcement na aplicação.
   @@unique([ownerId, nome, cnpj])
   @@map("tb_empresas")
+  @@schema("schs2vet")
+}
+
+// Perfil do PROPRIETÁRIO por EMPRESA — isolamento multi-tenant dos dados do cliente.
+//
+// O `User` permanece como IDENTIDADE de login (email/senha/ativo global) e é único no
+// sistema (User.email @unique). Já os dados CADASTRAIS que cada clínica mantém sobre o
+// mesmo cliente (nome como ela o chama, telefones, documento, endereço, condição
+// comercial) vivem AQUI, uma linha por empresa. Assim, o mesmo proprietário atendido
+// pelas empresas A e B tem dois cadastros independentes: alterar na A não reflete na B.
+//
+// REGRA DE LEITURA (lib/proprietarioPerfil.js): quando existe perfil para a empresa do
+// contexto, ele é a AUTORIDADE de todos os seus campos — null aqui significa "vazio
+// nesta empresa", e NÃO cai de volta no User. Sem perfil (dado legado), lê-se o User.
+model ProprietarioPerfil {
+  id        Int @id @default(autoincrement())
+  userId    Int @map("user_id")
+  empresaId Int @map("empresa_id")
+
+  fullName            String?  @map("full_name") @db.VarChar(255)
+  phone               String?  @db.VarChar(30)
+  phone2              String?  @db.VarChar(30)
+  cpf                 String?  @db.VarChar(14)
+  cnpj                String?  @db.VarChar(18)
+  cep                 String?  @db.VarChar(10)
+  endereco            String?  @db.VarChar(255)
+  complemento         String?  @db.VarChar(100)
+  bairro              String?  @db.VarChar(100)
+  cidade              String?  @db.VarChar(100)
+  estado              String?  @db.VarChar(2)
+  mensalista          Boolean  @default(false)
+  valorAssistencia    Float?   @map("valor_assistencia")
+  frequenciaVisitas   Int?     @map("frequencia_visitas")
+  diaVencimentoFatura Int?     @map("dia_vencimento_fatura")
+  // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation("ProprietarioPerfilUser", fields: [userId], references: [id], onDelete: Cascade)
+  empresa Empresa @relation("ProprietarioPerfilEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, empresaId])
+  @@index([empresaId])
+  @@map("tb_proprietario_perfis")
   @@schema("schs2vet")
 }
 
@@ -1302,9 +1424,32 @@ model MembroEquipe {
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  locaisTrabalho MembroLocalTrabalho[]
 
   @@unique([equipeId, userId])
   @@map("tb_membros_equipe")
+  @@schema("schs2vet")
+}
+
+// Local de trabalho do membro na empresa. Um membro pode ter VÁRIOS locais, cada um
+// com dias e horário próprios (ex: atende no CENTRO HIPICO seg/qua manhã e no CENTAURO
+// ter/qui tarde). Os campos de expediente em MembroEquipe seguem existindo como
+// AGREGADO (união dos dias, faixa min–max) — a Agenda ainda os lê; ver EquipeController.
+model MembroLocalTrabalho {
+  id                 Int      @id @default(autoincrement())
+  membroEquipeId     Int      @map("membro_equipe_id")
+  localizacaoId      Int      @map("localizacao_id")
+  diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
+  horaInicioTrabalho String?  @db.VarChar(5)  // HH:MM
+  horaFimTrabalho    String?  @db.VarChar(5)  // HH:MM
+  createdAt          DateTime @default(now())
+
+  membro      MembroEquipe      @relation(fields: [membroEquipeId], references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal @relation(fields: [localizacaoId],  references: [id], onDelete: Cascade)
+
+  @@index([membroEquipeId])
+  @@index([localizacaoId])
+  @@map("tb_membro_locais_trabalho")
   @@schema("schs2vet")
 }
 
@@ -1496,6 +1641,9 @@ model Medicamento {
   classificacao     String?  @db.VarChar(255)
   fabricante        String?  @db.VarChar(150)
   controlado        Boolean  @default(false)
+  // null = catálogo global (ADMIN); setado = medicamento próprio da empresa
+  // (criado por item manual de orçamento) — só a empresa dona vê/edita.
+  empresaId         Int?     @map("empresa_id")
   ativo             Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -1509,6 +1657,7 @@ model Medicamento {
   @@index([nome])
   @@index([ativo])
   @@index([controlado])
+  @@index([empresaId])
   @@map("tb_medicamentos")
   @@schema("schs2vet")
 }
@@ -1702,9 +1851,10 @@ model LocalizacaoAnimal {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  animais    Animal[]
-  tratadores Tratador[]
-  equipe     Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
+  animais         Animal[]
+  tratadores      Tratador[]
+  locaisTrabalho  MembroLocalTrabalho[]
+  equipe          Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
 
   @@index([tipoLocalizacao])
   @@index([ativo])

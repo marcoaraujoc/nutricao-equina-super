@@ -10,6 +10,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import {
   ListChecks, Search, Pencil, Trash2, X, Loader2, Check, Layers, PackagePlus,
@@ -106,6 +107,10 @@ export default function CadastroProcedimento() {
   const [comboBusca,    setComboBusca]    = useState('');
   const [todosProcs,    setTodosProcs]    = useState<Procedimento[]>([]);
   const [salvandoCombo, setSalvandoCombo] = useState(false);
+  // Erros inline: página (lista/valor), modal de novo procedimento e modal de combo
+  const [erroInline,    setErroInline]    = useState<string | null>(null);
+  const [erroProc,      setErroProc]      = useState<string | null>(null);
+  const [erroCombo,     setErroCombo]     = useState<string | null>(null);
   const [comboExcluir,  setComboExcluir]  = useState<Combo | null>(null);
 
   const podeGerirEmpresa = isGestor || gestorBackend;
@@ -182,15 +187,16 @@ export default function CadastroProcedimento() {
       toast.success(novo === null ? 'Valor da empresa removido' : 'Valor salvo');
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao salvar valor');
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao salvar valor');
     } finally { setSalvandoValor(false); }
   };
 
   // ── Novo procedimento (ADMIN) ─────────────────────────────────────────────
 
   const salvarNovoProc = async () => {
-    if (!formProc.nome.trim())      { toast.error('Nome é obrigatório'); return; }
-    if (!formProc.categoria.trim()) { toast.error('Categoria é obrigatória'); return; }
+    setErroProc(null);
+    if (!formProc.nome.trim())      { setErroProc('Nome é obrigatório'); return; }
+    if (!formProc.categoria.trim()) { setErroProc('Categoria é obrigatória'); return; }
     setSalvandoProc(true);
     try {
       await api.post('/procedimentos', {
@@ -206,13 +212,14 @@ export default function CadastroProcedimento() {
       if (espSel) carregarProcedimentos(espSel);
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao incluir procedimento');
+      if (!e.isPermissionError) setErroProc(e.response?.data?.error ?? 'Erro ao incluir procedimento');
     } finally { setSalvandoProc(false); }
   };
 
   // ── Combos (gestor) ───────────────────────────────────────────────────────
 
   const abrirNovoCombo = async () => {
+    setErroCombo(null);
     setComboEditando(null);
     setComboNome(''); setComboEsp(''); setComboValor(''); setComboDesc(''); setComboIds([]); setComboBusca('');
     setShowCombo(true);
@@ -225,6 +232,7 @@ export default function CadastroProcedimento() {
   };
 
   const abrirEdicaoCombo = async (c: Combo) => {
+    setErroCombo(null);
     setComboEditando(c);
     setComboNome(c.nome);
     setComboEsp(c.especialidade ?? '');
@@ -242,11 +250,12 @@ export default function CadastroProcedimento() {
   };
 
   const salvarCombo = async () => {
-    if (!comboNome.trim())            { toast.error('Nome do combo é obrigatório'); return; }
-    if (!comboEsp.trim())             { toast.error('Selecione a especialidade do combo'); return; }
+    setErroCombo(null);
+    if (!comboNome.trim())            { setErroCombo('Nome do combo é obrigatório'); return; }
+    if (!comboEsp.trim())             { setErroCombo('Selecione a especialidade do combo'); return; }
     const valorNum = parseBRL(comboValor);
-    if (!valorNum || valorNum <= 0)   { toast.error('Informe o valor do combo'); return; }
-    if (comboIds.length < 2)          { toast.error('Selecione pelo menos 2 procedimentos'); return; }
+    if (!valorNum || valorNum <= 0)   { setErroCombo('Informe o valor do combo'); return; }
+    if (comboIds.length < 2)          { setErroCombo('Selecione pelo menos 2 procedimentos'); return; }
     setSalvandoCombo(true);
     try {
       const payload = { nome: comboNome.trim(), especialidade: comboEsp.trim(), valor: valorNum, descricao: comboDesc.trim() || undefined, procedimentoIds: comboIds };
@@ -257,7 +266,7 @@ export default function CadastroProcedimento() {
       carregarCombos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao salvar combo');
+      if (!e.isPermissionError) setErroCombo(e.response?.data?.error ?? 'Erro ao salvar combo');
     } finally { setSalvandoCombo(false); }
   };
 
@@ -270,7 +279,7 @@ export default function CadastroProcedimento() {
       carregarCombos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao excluir combo');
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao excluir combo');
     }
   };
 
@@ -305,6 +314,8 @@ export default function CadastroProcedimento() {
   return (
     <PageContainer>
       <BotaoVoltar className="mb-4" />
+
+      <InlineError message={erroInline} className="mb-4" />
 
       {/* Cabeçalho (mesmo padrão de Agendamentos): ícone em box + título + descritivo */}
       <div className="mt-2 mb-4 flex items-center gap-3">
@@ -554,6 +565,8 @@ export default function CadastroProcedimento() {
                   rows={3} className={inputCls} />
               </div>
             </div>
+            <InlineError message={erroProc} className="mx-5 mt-3" />
+
             <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
               <button onClick={() => setShowNovoProc(false)} disabled={salvandoProc}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">Cancelar</button>
@@ -644,6 +657,8 @@ export default function CadastroProcedimento() {
                 </div>
               </div>
             </div>
+            <InlineError message={erroCombo} className="mx-5 mt-3" />
+
             <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
               <button onClick={() => setShowCombo(false)} disabled={salvandoCombo}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">Cancelar</button>

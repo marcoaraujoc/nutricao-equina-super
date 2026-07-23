@@ -10,7 +10,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
 import { RefreshCw, ChevronDown, ChevronRight, Download, Printer, FileBarChart } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
-import toast from 'react-hot-toast';
+import InlineError from '../components/InlineError';
 import { formatDateTime } from '../utils/dateUtils';
 import * as XLSX from 'xlsx';
 
@@ -190,8 +190,9 @@ const RelatorioNutricional = () => {
   const podeImprimir = isGestor || podeExecutar('nutricao.relatorios.imprimir');
   const podeExportar = isGestor || podeExecutar('nutricao.relatorios.exportar');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
+  const [erroInline,            setErroInline]            = useState<string | null>(null);
   const [snapshot,              setSnapshot]              = useState<SnapshotRelatorio | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<Animal[]>([]);
   const [currentAnimal,         setCurrentAnimal]         = useState<Animal | null>(null);
@@ -343,7 +344,7 @@ const RelatorioNutricional = () => {
 
   const exportarPDF = () => {
     if (!podeImprimir) { semPermissao('imprimir relatório nutricional'); return; }
-    if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
+    if (relatorio.length === 0) { setErroInline('Nenhum dado para exportar'); return; }
     const nomeAnimal = currentAnimal?.nome ?? 'Animal';
     const dataGerado = snapshot?.geradoEm ? formatDateTime(snapshot.geradoEm) : '';
     const linhas = relatorio.map(item => `
@@ -391,7 +392,7 @@ const RelatorioNutricional = () => {
 
   const exportarExcelRelatorio = () => {
     if (!podeExportar) { semPermissao('exportar relatório nutricional'); return; }
-    if (relatorio.length === 0) { toast.error('Nenhum dado para exportar'); return; }
+    if (relatorio.length === 0) { setErroInline('Nenhum dado para exportar'); return; }
     const wb   = XLSX.utils.book_new();
     const cols  = ['Nutriente', 'Unidade', 'Total Dieta', 'Exigido NRC', 'Saldo', '% Atendido', 'Status', ...colunasDinamicas];
     const rows  = relatorio.map(item => [
@@ -452,6 +453,8 @@ const RelatorioNutricional = () => {
       <div className="space-y-4 text-gray-900">
 
         <BotaoVoltar className="mb-4" />
+
+        <InlineError message={erroInline} />
 
         {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título + descritivo */}
         <div className="mt-2 mb-4 flex items-center gap-3">

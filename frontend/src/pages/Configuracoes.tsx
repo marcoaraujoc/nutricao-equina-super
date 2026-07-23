@@ -8,6 +8,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import InlineError from '../components/InlineError';
 
 // ─── Utilitário de compressão (mesmo padrão de Animal.tsx) ───────────────────
 const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise<File> =>
@@ -78,6 +79,8 @@ export default function Configuracoes() {
   // gestor (ProtectedRoute redirecionou para cá) — ao salvar, leva para dentro do
   // app. Se o gestor só veio editar Configurações depois, não navega para lugar nenhum.
   const [completandoPrimeiroAcesso] = useState(() => !empresaConfigurada);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const [loading,      setLoading]      = useState(true);
   const [salvando,     setSalvando]     = useState(false);
@@ -137,7 +140,7 @@ export default function Configuracoes() {
       }
     } catch (err) {
       const e = err as { response?: { data?: { mensagem?: string } } };
-      toast.error(e.response?.data?.mensagem ?? 'Falha ao conectar o WhatsApp');
+      setErroInline(e.response?.data?.mensagem ?? 'Falha ao conectar o WhatsApp');
     } finally { setWaAcao(false); }
   };
 
@@ -149,7 +152,7 @@ export default function Configuracoes() {
       toast.success('WhatsApp desconectado');
     } catch (err) {
       const e = err as { response?: { data?: { mensagem?: string } } };
-      toast.error(e.response?.data?.mensagem ?? 'Falha ao desconectar');
+      setErroInline(e.response?.data?.mensagem ?? 'Falha ao desconectar');
     } finally { setWaAcao(false); }
   };
 
@@ -190,7 +193,7 @@ export default function Configuracoes() {
         }
       }
     } catch {
-      toast.error('Erro ao carregar configurações.');
+      setErroInline('Erro ao carregar configurações.');
     } finally {
       setLoading(false);
     }
@@ -240,7 +243,7 @@ export default function Configuracoes() {
   const handleSalvar = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isGestor) {
-      toast.error('Sem permissão para salvar configurações. Verifique com o responsável da equipe.');
+      setErroInline('Sem permissão para salvar configurações. Verifique com o responsável da equipe.');
       return;
     }
 
@@ -256,7 +259,7 @@ export default function Configuracoes() {
     } else if (tipoSelecao === 'DIA_UTIL') {
       const n = Number(nDiaUtil);
       if (!Number.isInteger(n) || n < 1 || n > 10) {
-        toast.error('O dia útil deve estar entre 1 e 10.');
+        setErroInline('O dia útil deve estar entre 1 e 10.');
         return;
       }
       tipoFechamento = 'DIA_UTIL';
@@ -274,12 +277,12 @@ export default function Configuracoes() {
 
     const whatsappDigitos = whatsapp.replace(/\D/g, '');
     if (whatsappDigitos !== '' && whatsappDigitos.length < 10) {
-      toast.error('WhatsApp incompleto — informe DDD + número.');
+      setErroInline('WhatsApp incompleto — informe DDD + número.');
       return;
     }
 
     if (horaInicio && horaFim && horaInicio >= horaFim) {
-      toast.error('O horário de abertura deve ser menor que o de fechamento.');
+      setErroInline('O horário de abertura deve ser menor que o de fechamento.');
       return;
     }
 
@@ -317,7 +320,7 @@ export default function Configuracoes() {
       }
     } catch {
       // interceptor já trata isPermissionError silenciosamente
-      toast.error('Erro ao salvar configurações.');
+      setErroInline('Erro ao salvar configurações.');
     } finally {
       setSalvando(false);
     }
@@ -346,6 +349,8 @@ export default function Configuracoes() {
 
   return (
     <PageContainer maxWidth="3xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <BotaoVoltar />
       <h1 className="text-2xl font-bold text-gray-800 mb-6">Configurações</h1>
 

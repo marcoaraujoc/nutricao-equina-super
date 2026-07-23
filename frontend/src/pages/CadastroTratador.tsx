@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -77,6 +78,9 @@ export default function CadastroTratador() {
   const [form,        setForm]        = useState<FormTratador>(FORM_INICIAL);
   const [salvando,    setSalvando]    = useState(false);
   const [showInfo,    setShowInfo]    = useState(false);
+  // Erros inline: da página (lista/ações) e do modal de cadastro/edição
+  const [erroInline,  setErroInline]  = useState<string | null>(null);
+  const [erroModal,   setErroModal]   = useState<string | null>(null);
 
   // ── Combobox de localização no modal ─────────────────────────────────────
   const [localizacoes,         setLocalizacoes]         = useState<Localizacao[]>([]);
@@ -112,7 +116,7 @@ export default function CadastroTratador() {
       if (!res.data) return;
       setLista(res.data.dados ?? []);
     } catch {
-      toast.error('Erro ao carregar tratadores');
+      setErroInline('Erro ao carregar tratadores');
     } finally {
       setLoading(false);
     }
@@ -123,6 +127,8 @@ export default function CadastroTratador() {
   // ── Abrir modal ───────────────────────────────────────────────────────────
   const abrirNovo = () => {
     setEditando(null);
+    setErroInline(null);
+    setErroModal(null);
     setForm(FORM_INICIAL);
     setLocBusca('');
     setLocalizacaoSelecionada(null);
@@ -130,8 +136,10 @@ export default function CadastroTratador() {
   };
 
   const abrirEditar = (t: Tratador) => {
-    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode editar tratadores do catálogo global.'); return; }
-    if (!podeEditar) { toast.error('Sem permissão para editar tratadores.'); return; }
+    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroInline('Apenas ADMIN pode editar tratadores do catálogo global.'); return; }
+    if (!podeEditar) { setErroInline('Sem permissão para editar tratadores.'); return; }
+    setErroInline(null);
+    setErroModal(null);
     setEditando(t);
     setForm({ nome: t.nome, telefone: t.telefone ? mascaraTelefone(t.telefone) : '', localizacaoId: t.localizacaoId });
     const loc = t.localizacao ? (localizacoes.find(l => l.id === t.localizacaoId) ?? null) : null;
@@ -142,8 +150,9 @@ export default function CadastroTratador() {
 
   // ── Salvar ────────────────────────────────────────────────────────────────
   const salvar = async () => {
-    if (!form.nome.trim())      { toast.error('Nome é obrigatório'); return; }
-    if (!form.localizacaoId)    { toast.error('Local de trabalho é obrigatório'); return; }
+    setErroModal(null);
+    if (!form.nome.trim())      { setErroModal('Nome é obrigatório'); return; }
+    if (!form.localizacaoId)    { setErroModal('Local de trabalho é obrigatório'); return; }
     setSalvando(true);
     try {
       const payload = {
@@ -162,7 +171,7 @@ export default function CadastroTratador() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar tratador');
+      setErroModal(msg ?? 'Erro ao salvar tratador');
     } finally {
       setSalvando(false);
     }
@@ -170,14 +179,15 @@ export default function CadastroTratador() {
 
   // ── Toggle ativo ───────────────────────────────────────────────────────────
   const toggleAtivo = async (t: Tratador) => {
-    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar tratadores do catálogo global.'); return; }
-    if (!podeAtivar) { toast.error('Sem permissão para ativar/inativar tratadores.'); return; }
+    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroInline('Apenas ADMIN pode ativar/inativar tratadores do catálogo global.'); return; }
+    if (!podeAtivar) { setErroInline('Sem permissão para ativar/inativar tratadores.'); return; }
+    setErroInline(null);
     try {
       await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
       toast.success(`Tratador ${t.ativo ? 'inativado' : 'ativado'}`);
       carregar();
     } catch {
-      toast.error('Erro ao alterar status');
+      setErroInline('Erro ao alterar status');
     }
   };
 
@@ -214,6 +224,8 @@ export default function CadastroTratador() {
 
       {/* ── Cabeçalho ──────────────────────────────────────────────────────── */}
       <BotaoVoltar />
+
+      <InlineError message={erroInline} className="mt-3" />
       <div className="flex items-center justify-between gap-3 mt-2 mb-6 flex-wrap">
         <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
           <User2 size={22} className="text-emerald-600" /> Tratadores
@@ -521,6 +533,8 @@ export default function CadastroTratador() {
             </div>
 
             {/* Footer */}
+            <InlineError message={erroModal} className="mx-6 mt-3 flex-shrink-0" />
+
             <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
               <button onClick={() => setModalAberto(false)}
                 className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">

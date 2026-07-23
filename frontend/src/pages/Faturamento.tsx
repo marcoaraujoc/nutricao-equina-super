@@ -15,11 +15,14 @@ import {
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/FaturaExport';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import InlineError from '../components/InlineError';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA' | 'ATRASADA';
 type ItemTipo     = 'ASSISTENCIA' | 'MEDICAMENTO' | 'PROCEDIMENTO';
+/** Desconto do item: percentual sobre o bruto ou abatimento em reais */
+type DescontoTipo = 'PERCENTUAL' | 'VALOR';
 
 interface AnimalResumo {
   id: number; nome: string; photoUrl?: string;
@@ -29,6 +32,7 @@ interface AnimalResumo {
 interface FaturaItem {
   id: number; faturaId: number; animalId?: number; tipo: string;
   descricao: string; valor: number; quantidade: number;
+  descontoTipo?: DescontoTipo | null; descontoValor?: number;
   criadoEm?: string;
   veterinario?: { id: number; fullName: string };
   animal?: AnimalResumo;
@@ -85,7 +89,24 @@ const TIPO_COR: Record<string, string> = {
   ASSISTENCIA:  'bg-blue-100 text-blue-700',
   MEDICAMENTO:  'bg-purple-100 text-purple-700',
   PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
+  OUTROS:       'bg-amber-100 text-amber-700',
 };
+
+// ─── Desconto do item (espelha lib/faturaUtils.js no backend) ─────────────────
+
+/** Abatimento em R$ do item — PERCENTUAL incide sobre o bruto; VALOR é direto. */
+function descontoDoItem(i: { valor: number; quantidade: number; descontoTipo?: DescontoTipo | null; descontoValor?: number }) {
+  const bruto = i.valor * i.quantidade;
+  const d     = Number(i.descontoValor ?? 0);
+  if (!d || d <= 0) return 0;
+  const abatimento = i.descontoTipo === 'PERCENTUAL' ? bruto * (Math.min(d, 100) / 100) : d;
+  return Math.min(Math.max(abatimento, 0), Math.max(bruto, 0));
+}
+
+/** Valor do item que entra no total da fatura: bruto − desconto. */
+function totalItem(i: { valor: number; quantidade: number; descontoTipo?: DescontoTipo | null; descontoValor?: number }) {
+  return i.valor * i.quantidade - descontoDoItem(i);
+}
 
 // WhatsApp exige número internacional (Brasil: 55 + DDD + número).
 function foneIntl(phone?: string): string {
@@ -142,7 +163,38 @@ function ItemRow({
   const [valorUnitStr,  setValorUnitStr]  = useState(fmtNum(item.valor));
   const [valorFinal,    setValorFinal]    = useState(item.valor * item.quantidade);
   const [valorFinalStr, setValorFinalStr] = useState(fmtNum(item.valor * item.quantidade));
+  // Desconto — tipo + valor. descTipo '' = sem desconto (limpa o campo ao salvar).
+  // Percentual é exibido inteiro (10 = 10%); valor em R$ usa o formato monetário.
+  const fmtDesc = (tipo: DescontoTipo | '' | null | undefined, v: number) =>
+    !v ? '' : (tipo === 'PERCENTUAL' ? String(v) : fmtNum(v));
+  const [descTipo,      setDescTipo]      = useState<DescontoTipo | ''>(item.descontoTipo ?? '');
+  const [descValor,     setDescValor]     = useState(item.descontoValor ?? 0);
+  const [descValorStr,  setDescValorStr]  = useState(fmtDesc(item.descontoTipo, item.descontoValor ?? 0));
   const [saving,        setSaving]        = useState(false);
+
+  const descontoAtual = descontoDoItem(item);
+  // Prévia do abatimento com o que está sendo editado (antes de salvar)
+  const previaBruto    = valorUnit * Math.max(1, parseInt(qty) || 1);
+  const previaDesconto = descontoDoItem({
+    valor: valorUnit, quantidade: Math.max(1, parseInt(qty) || 1),
+    descontoTipo: descTipo || null, descontoValor: descValor,
+  });
+
+  const handleDescValorChange = (raw: string) => {
+    // Percentual é digitado direto (ex: 10 = 10%); em R$ vale a máscara de centavos
+    const v = descTipo === 'PERCENTUAL'
+      ? Math.min(100, Number(raw.replace(/\D/g, '') || '0'))
+      : parseCents(raw);
+    setDescValor(v);
+    setDescValorStr(fmtDesc(descTipo, v));
+  };
+
+  const handleDescTipoChange = (t: DescontoTipo | '') => {
+    setDescTipo(t);
+    // Trocar de tipo zera o valor — 10% e R$ 10,00 não são a mesma coisa
+    setDescValor(0);
+    setDescValorStr('');
+  };
 
   const handleUnitChange = (raw: string) => {
     const unit = parseCents(raw);
@@ -174,7 +226,11 @@ function ItemRow({
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(item.id, { descricao: desc, valor: valorUnit, quantidade: Number(qty), tipo });
+    await onSave(item.id, {
+      descricao: desc, valor: valorUnit, quantidade: Number(qty), tipo,
+      descontoTipo:  descTipo || null,
+      descontoValor: descTipo ? descValor : 0,
+    });
     setSaving(false);
     setEditing(false);
   };
@@ -185,6 +241,9 @@ function ItemRow({
     setValorUnit(item.valor);     setValorUnitStr(fmtNum(item.valor));
     setValorFinal(item.valor * item.quantidade);
     setValorFinalStr(fmtNum(item.valor * item.quantidade));
+    setDescTipo(item.descontoTipo ?? '');
+    setDescValor(item.descontoValor ?? 0);
+    setDescValorStr(fmtDesc(item.descontoTipo, item.descontoValor ?? 0));
     setEditing(false);
   };
 
@@ -197,6 +256,7 @@ function ItemRow({
             <option value="ASSISTENCIA">ASSISTENCIA</option>
             <option value="MEDICAMENTO">MEDICAMENTO</option>
             <option value="PROCEDIMENTO">PROCEDIMENTO</option>
+            <option value="OUTROS">OUTROS</option>
           </select>
           <input value={desc} onChange={e => setDesc(e.target.value)}
             className="flex-1 min-w-40 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-indigo-400"
@@ -233,6 +293,34 @@ function ItemRow({
             <X size={13}/>
           </button>
         </div>
+
+        {/* Desconto — percentual ou valor, sempre sobre o valor final do item */}
+        <div className="flex gap-2 items-center flex-wrap pt-2 border-t border-indigo-100">
+          <label className="text-xs text-gray-500">Desconto</label>
+          <select value={descTipo} onChange={e => handleDescTipoChange(e.target.value as DescontoTipo | '')}
+            className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-indigo-400 bg-white">
+            <option value="">Sem desconto</option>
+            <option value="PERCENTUAL">Percentual (%)</option>
+            <option value="VALOR">Valor (R$)</option>
+          </select>
+
+          {descTipo && (
+            <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-400 bg-white">
+              <span className="px-1.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-1.5">
+                {descTipo === 'PERCENTUAL' ? '%' : 'R$'}
+              </span>
+              <input type="text" inputMode="decimal" value={descValorStr}
+                onChange={e => handleDescValorChange(e.target.value)}
+                placeholder={descTipo === 'PERCENTUAL' ? '0' : '0,00'}
+                className="w-24 px-2 py-1.5 text-sm focus:outline-none" />
+            </div>
+          )}
+
+          <span className="text-xs text-gray-500">
+            {previaDesconto > 0 && <>Abatimento: <b className="text-red-600">−{formatBRL(previaDesconto)}</b> · </>}
+            Total: <b className="text-indigo-700">{formatBRL(previaBruto - previaDesconto)}</b>
+          </span>
+        </div>
       </div>
     );
   }
@@ -253,11 +341,22 @@ function ItemRow({
             </span>
           )}
           Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
+          {descontoAtual > 0 && (
+            <span className="ml-2 text-red-500 font-medium">
+              Desconto: {item.descontoTipo === 'PERCENTUAL' ? `${item.descontoValor}%` : formatBRL(item.descontoValor ?? 0)}
+              {' '}(−{formatBRL(descontoAtual)})
+            </span>
+          )}
         </p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">
-          {formatBRL(item.valor * item.quantidade)}
+        <span className="text-sm font-semibold text-gray-700 whitespace-nowrap text-right">
+          {descontoAtual > 0 && (
+            <span className="block text-[10px] font-normal text-gray-400 line-through">
+              {formatBRL(item.valor * item.quantidade)}
+            </span>
+          )}
+          {formatBRL(totalItem(item))}
         </span>
         {canEdit && (
           <div className="flex gap-0.5">
@@ -271,6 +370,133 @@ function ItemRow({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal — itens "Outros" do orçamento → fatura ────────────────────────────
+// Só aparecem itens tipo OUTROS já APROVADOS e ainda não lançados. O backend só
+// libera o lançamento depois que os demais itens do mesmo orçamento (medicamento/
+// procedimento/vacina) tiverem sido importados numa evolução — aqui esses
+// orçamentos aparecem bloqueados, com o nº de pendências.
+
+interface OrcOutrosItem {
+  id: number; descricao: string; quantidade: number;
+  valorUnitario: number; valorTotal: number;
+  animalId: number | null; animal?: { id: number; nome: string } | null;
+}
+interface OrcOutros {
+  id: number; numeroFormatado: string; liberado: boolean;
+  pendentesClinicos: number; itens: OrcOutrosItem[];
+}
+
+function ModalImportarOrcamento({ proprietarioId, faturaId, onFechar, onLancado }: {
+  proprietarioId: number;
+  faturaId: number;
+  onFechar: () => void;
+  onLancado: () => void;
+}) {
+  const [orcamentos, setOrcamentos] = useState<OrcOutros[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [sel, setSel]               = useState<Set<number>>(new Set());
+  const [lancando, setLancando]     = useState(false);
+  const [erro, setErro]             = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    api.get('/orcamentos/outros-para-fatura', { params: { proprietarioId } })
+      .then(r => { if (vivo) setOrcamentos(r.data?.dados ?? []); })
+      .catch(() => { if (vivo) setOrcamentos([]); })
+      .finally(() => { if (vivo) setLoading(false); });
+    return () => { vivo = false; };
+  }, [proprietarioId]);
+
+  const toggle = (id: number) =>
+    setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const selecionados = orcamentos.flatMap(o => o.itens).filter(i => sel.has(i.id));
+  const totalSel = selecionados.reduce((s, i) => s + i.valorTotal, 0);
+
+  const lancar = async () => {
+    if (selecionados.length === 0) { setErro('Selecione ao menos um item'); return; }
+    setLancando(true);
+    try {
+      await api.post('/orcamentos/lancar-na-fatura', { faturaId, itemIds: [...sel] });
+      toast.success(selecionados.length > 1 ? `${selecionados.length} itens lançados` : 'Item lançado na fatura');
+      onLancado();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErro(e.response?.data?.error ?? 'Erro ao lançar os itens na fatura');
+    } finally { setLancando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-xl max-h-[90vh] flex flex-col border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Receipt size={16} className="text-emerald-600" />
+            <h3 className="font-bold text-gray-900">Importar “Outros” do orçamento</h3>
+          </div>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex justify-center py-12"><Loader2 size={22} className="animate-spin text-emerald-600" /></div>
+          ) : orcamentos.length === 0 ? (
+            <div className="text-center py-12 px-6 text-sm text-gray-400">
+              Nenhum item “Outros” aprovado e pendente de lançamento para este cliente.
+            </div>
+          ) : orcamentos.map(o => (
+            <div key={o.id} className={`border-b border-gray-100 ${o.liberado ? '' : 'opacity-60'}`}>
+              <div className="px-5 py-2 bg-gray-50 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-gray-600">Orçamento #{o.numeroFormatado}</span>
+                {!o.liberado && (
+                  <span className="text-[11px] text-amber-600">
+                    {o.pendentesClinicos} item(ns) ainda não importado(s) em uma evolução
+                  </span>
+                )}
+              </div>
+              {o.itens.map(i => {
+                const checked = sel.has(i.id);
+                return (
+                  <button key={i.id} onClick={() => toggle(i.id)} disabled={!o.liberado}
+                    title={o.liberado ? undefined : 'Importe primeiro os demais itens do orçamento em uma evolução'}
+                    className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'} ${o.liberado ? '' : 'cursor-not-allowed hover:bg-transparent'}`}>
+                    <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'}`}>
+                      {checked && <Check size={13} className="text-white" />}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-800 truncate">{i.descricao}</p>
+                      <p className="text-[11px] text-gray-400">
+                        {i.quantidade}x {formatBRL(i.valorUnitario)}
+                        {i.animal?.nome ? ` · ${i.animal.nome}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatBRL(i.valorTotal)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        <InlineError message={erro} className="mx-5 mt-3" />
+
+        <div className="flex items-center gap-2 px-5 py-4 border-t border-gray-100">
+          <button onClick={onFechar} className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">
+            Cancelar
+          </button>
+          <div className="flex-1" />
+          {totalSel > 0 && <span className="text-sm text-gray-500">Total: <b className="text-gray-800">{formatBRL(totalSel)}</b></span>}
+          <button onClick={lancar} disabled={lancando || selecionados.length === 0}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold">
+            {lancando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Lançar na fatura {selecionados.length > 0 ? `(${selecionados.length})` : ''}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -294,7 +520,7 @@ function PainelFatura({
   const podeLancar  = isGestor || podeExecutar('financeiro.faturas.lancar');
   const podeFechar  = isGestor || podeExecutar('financeiro.faturas.fechar');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [fatura,         setFatura]         = useState<Fatura | null>(null);
   const [loading,        setLoading]        = useState(true);
@@ -342,7 +568,7 @@ function PainelFatura({
     try {
       await compartilharFatura(fatura, prop.animais, logoUrl);
     } catch {
-      toast.error('Erro ao gerar PDF');
+      setErroInline('Erro ao gerar PDF');
     } finally {
       setCompartilhando(false);
     }
@@ -357,12 +583,19 @@ function PainelFatura({
   const [novoQty,           setNovoQty]           = useState('1');
   const [novoValor,         setNovoValor]         = useState('0');
   const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
+  const [novoDescTipo,      setNovoDescTipo]      = useState<DescontoTipo | ''>('');
+  const [novoDescValor,     setNovoDescValor]     = useState(0);
+  const [novoDescDisplay,   setNovoDescDisplay]   = useState('');
   const [lancando,          setLancando]          = useState(false);
+  // Modal de importação dos itens "Outros" aprovados no orçamento
+  const [showImportOrc,     setShowImportOrc]     = useState(false);
 
   // Catálogo de itens frequentes (persistidos por empresa)
   const [catalogo,      setCatalogo]      = useState<CatalogoItem[]>([]);
 
   const [itemParaExcluir, setItemParaExcluir] = useState<number | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -374,7 +607,7 @@ function PainelFatura({
       setFatura(r.data.dados);
       onMeta?.({ meses: Array.isArray(r.data.meses) ? r.data.meses : [], mesAtual: r.data.dados?.mesReferencia });
     } catch {
-      toast.error('Erro ao carregar fatura');
+      setErroInline('Erro ao carregar fatura');
     } finally {
       setLoading(false);
     }
@@ -409,7 +642,7 @@ function PainelFatura({
       toast.success('Item removido.');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao remover item');
+      setErroInline(msg ?? 'Erro ao remover item');
     }
   };
 
@@ -422,7 +655,7 @@ function PainelFatura({
         total: r.data.totalFatura,
         itens: prev.itens.map(i => i.id === itemId ? r.data.dados : i),
       } : prev);
-    } catch { toast.error('Erro ao salvar item'); }
+    } catch { setErroInline('Erro ao salvar item'); }
   };
 
   // Itens fixos do código + itens frequentes salvos no backend
@@ -453,18 +686,35 @@ function PainelFatura({
     setNovoValorDisplay(value === 0 ? '' : formatarValorFatura(value));
   };
 
+  // Desconto do lançamento: percentual é digitado direto (10 = 10%); R$ usa centavos
+  const handleNovoDescValor = (raw: string) => {
+    const v = novoDescTipo === 'PERCENTUAL'
+      ? Math.min(100, Number(raw.replace(/\D/g, '') || '0'))
+      : parseInt(raw.replace(/\D/g, '') || '0', 10) / 100;
+    setNovoDescValor(v);
+    setNovoDescDisplay(v === 0 ? '' : (novoDescTipo === 'PERCENTUAL' ? String(v) : formatarValorFatura(v)));
+  };
+
+  const novoBruto    = Number(novoValor) * Number(novoQty || 1);
+  const novoDesconto = descontoDoItem({
+    valor: Number(novoValor), quantidade: Number(novoQty || 1),
+    descontoTipo: novoDescTipo || null, descontoValor: novoDescValor,
+  });
+
   const handleLancar = async () => {
     if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
     if (!fatura) return;
-    if (!novoNome.trim()) { toast.error('Informe a descrição do item'); return; }
+    if (!novoNome.trim()) { setErroInline('Informe a descrição do item'); return; }
     setLancando(true);
     try {
       const r = await api.post(`/clinica/faturas/${fatura.id}/itens`, {
-        tipo:       novoTipo,
-        descricao:  novoNome.trim(),
-        valor:      Number(novoValor),
-        quantidade: Number(novoQty),
-        animalId:   novoAnimalId ? Number(novoAnimalId) : undefined,
+        tipo:          novoTipo,
+        descricao:     novoNome.trim(),
+        valor:         Number(novoValor),
+        quantidade:    Number(novoQty),
+        animalId:      novoAnimalId ? Number(novoAnimalId) : undefined,
+        descontoTipo:  novoDescTipo || null,
+        descontoValor: novoDescTipo ? novoDescValor : 0,
       });
       setFatura(prev => prev ? {
         ...prev,
@@ -487,8 +737,9 @@ function PainelFatura({
       setNovoNome(''); setNovoCatIdx('');
       setNovoAnimalId(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
       setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
+      setNovoDescTipo(''); setNovoDescValor(0); setNovoDescDisplay('');
       toast.success('Item lançado');
-    } catch { toast.error('Erro ao lançar item'); }
+    } catch { setErroInline('Erro ao lançar item'); }
     finally { setLancando(false); }
   };
 
@@ -505,7 +756,7 @@ function PainelFatura({
       };
       toast.success(MSG[status] ?? 'Status atualizado');
       onStatusChange();
-    } catch { toast.error('Erro ao atualizar status'); }
+    } catch { setErroInline('Erro ao atualizar status'); }
     finally { setSalvando(false); }
   };
 
@@ -518,7 +769,7 @@ function PainelFatura({
       setFatura(r.data.dados);
       toast.success('Fatura fechada — itens bloqueados para edição');
       onStatusChange();
-    } catch { toast.error('Erro ao fechar fatura'); }
+    } catch { setErroInline('Erro ao fechar fatura'); }
     finally { setSalvando(false); }
   };
 
@@ -547,6 +798,8 @@ function PainelFatura({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 lg:overflow-hidden min-w-0">
+      <InlineError message={erroInline} className="mb-3 flex-shrink-0" />
+
       {/* Card do cliente — SOMENTE proprietário + fatura (ações ficam fora) */}
       <div className="bg-emerald-600 rounded-2xl px-5 py-4 mb-3 flex-shrink-0">
         <div className="flex items-center gap-2 mb-1.5">
@@ -613,6 +866,16 @@ function PainelFatura({
         </div>
       </div>
 
+      {/* Modal — itens "Outros" aprovados no orçamento → fatura */}
+      {showImportOrc && (
+        <ModalImportarOrcamento
+          proprietarioId={prop.id}
+          faturaId={fatura.id}
+          onFechar={() => setShowImportOrc(false)}
+          onLancado={() => { setShowImportOrc(false); carregar(); }}
+        />
+      )}
+
       {/* Modal — remover item (justificativa obrigatória → Auditoria) */}
       <ModalJustificativa
         aberto={itemParaExcluir != null}
@@ -649,7 +912,7 @@ function PainelFatura({
           const todosItens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
           const itensAssistencia = todosItens.filter(i => i.tipo === 'ASSISTENCIA');
           const itensOutros      = todosItens.filter(i => i.tipo !== 'ASSISTENCIA');
-          const subtotal = todosItens.reduce((s: number, i: FaturaItem) => s + i.valor * i.quantidade, 0);
+          const subtotal = todosItens.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
 
           return (
             <div key={animal.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -741,9 +1004,17 @@ function PainelFatura({
         {/* Formulário novo item */}
         {canEdit && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
-              Lançar Novo Item / Cobrança na Fatura
-            </p>
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                Lançar Novo Item / Cobrança na Fatura
+              </p>
+              {podeLancar && (
+                <button onClick={() => setShowImportOrc(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                  <Receipt size={13}/> Importar do orçamento
+                </button>
+              )}
+            </div>
             <div className="mb-3">
               <label className="block text-[11px] font-semibold text-gray-500 mb-1">
                 Itens Frequentes <span className="text-gray-400 font-normal">(atalho — opcional)</span>
@@ -795,7 +1066,7 @@ function PainelFatura({
               </div>
             ) : null}
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 items-end">
               {/* Quantidade */}
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">Quantidade</label>
@@ -818,12 +1089,32 @@ function PainelFatura({
                     className="flex-1 px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-r-xl"/>
                 </div>
               </div>
+              {/* Desconto — percentual ou valor sobre o total do item */}
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Desconto</label>
+                <div className="flex gap-1.5">
+                  <select value={novoDescTipo}
+                    onChange={e => { setNovoDescTipo(e.target.value as DescontoTipo | ''); setNovoDescValor(0); setNovoDescDisplay(''); }}
+                    className="border border-gray-300 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-indigo-400 bg-white">
+                    <option value="">Não</option>
+                    <option value="PERCENTUAL">%</option>
+                    <option value="VALOR">R$</option>
+                  </select>
+                  {novoDescTipo && (
+                    <input type="text" inputMode="decimal" value={novoDescDisplay}
+                      onChange={e => handleNovoDescValor(e.target.value)}
+                      placeholder={novoDescTipo === 'PERCENTUAL' ? '0' : '0,00'}
+                      className="flex-1 min-w-0 border border-gray-300 rounded-xl px-2.5 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+                  )}
+                </div>
+              </div>
               {/* Subtotal preview */}
               <div className="text-center">
                 <p className="text-[10px] text-gray-400 mb-1">Total do item</p>
-                <p className="text-sm font-bold text-gray-700">
-                  {formatBRL(Number(novoValor) * Number(novoQty))}
-                </p>
+                <p className="text-sm font-bold text-gray-700">{formatBRL(novoBruto - novoDesconto)}</p>
+                {novoDesconto > 0 && (
+                  <p className="text-[10px] text-red-500">−{formatBRL(novoDesconto)}</p>
+                )}
               </div>
               {/* Botão */}
               <button
@@ -893,25 +1184,29 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
   const [mes,       setMes]       = useState(mesAnterior());
   const [fechando,  setFechando]  = useState(false);
   const [resultado, setResultado] = useState<FechadaLote[] | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const abertasDoMes = proprietarios.filter(p => p.faturaAtiva?.mesReferencia === mes);
 
   const fechar = async () => {
     const ids = abertasDoMes.map(p => p.faturaAtiva!.id);
-    if (ids.length === 0) { toast.error('Nenhuma fatura aberta neste mês'); return; }
+    if (ids.length === 0) { setErroInline('Nenhuma fatura aberta neste mês'); return; }
     setFechando(true);
     try {
       const r = await api.post('/clinica/faturas/fechar-lote', { faturaIds: ids });
       setResultado((r.data?.dados?.fechadas ?? []) as FechadaLote[]);
       toast.success(`${r.data?.dados?.total ?? 0} fatura(s) fechada(s)`);
       onDone();
-    } catch { toast.error('Erro ao fechar faturas'); }
+    } catch { setErroInline('Erro ao fechar faturas'); }
     finally { setFechando(false); }
   };
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <h3 className="font-bold text-gray-900">Fechar mês em lote</h3>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18}/></button>
@@ -1009,6 +1304,8 @@ export default function Faturamento() {
   const [faturaMeta,    setFaturaMeta]    = useState<{ meses: MesFatura[]; mesAtual?: string }>({ meses: [] });
   const [dropdownAberto, setDropdownAberto] = useState(false);
   const [showLote,       setShowLote]       = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const seletorRef = useRef<HTMLDivElement>(null);
 
   const podeFecharLote = isGestor || podeExecutar('financeiro.faturas.fechar');
@@ -1025,7 +1322,7 @@ export default function Faturamento() {
         pagas:    lista.filter(p => !!p.faturaPaga).length,
       });
     } catch {
-      toast.error('Erro ao carregar proprietários');
+      setErroInline('Erro ao carregar proprietários');
     } finally {
       setLoading(false);
     }
@@ -1070,6 +1367,8 @@ export default function Faturamento() {
     <PageContainer maxWidth="7xl">
       <div className="flex flex-col space-y-4">
         <BotaoVoltar className="mb-6" />
+
+        <InlineError message={erroInline} />
 
         {/* Cabeçalho */}
         <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">

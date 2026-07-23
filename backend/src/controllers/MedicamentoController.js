@@ -387,6 +387,9 @@ const paraAtendimento = async (req, res) => {
       ];
     }
 
+    // Catálogo global (empresaId null) + medicamentos próprios da empresa ativa
+    where.AND = [{ OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] }];
+
     const estoqueWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
     const loteWhere    = { ativo: true, qtdDisponivel: { gt: 0 }, ...(empresaId ? { empresaId } : {}) };
 
@@ -395,8 +398,8 @@ const paraAtendimento = async (req, res) => {
       include: {
         vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
         ...(isVacina
-          ? { lotes: { where: loteWhere, select: { id: true }, take: 1 } }
-          : { estoques: { where: estoqueWhere, select: { id: true, qtdEstoque: true } } }
+          ? { lotes: { where: loteWhere, select: { id: true, valorUnitario: true, valorUnitarioRepassado: true, dosesPorFrasco: true }, orderBy: { validade: 'asc' }, take: 1 } }
+          : { estoques: { where: estoqueWhere, select: { id: true, qtdEstoque: true, precoUnitarioBase: true } } }
         ),
       },
       orderBy: { nome: 'asc' },
@@ -404,19 +407,29 @@ const paraAtendimento = async (req, res) => {
 
     const dados = medicamentos.map(m => {
       if (isVacina) {
+        // Preço por dose do lote FEFO disponível (para pré-preencher o orçamento);
+        // null quando não há estoque — a vacina ainda aparece (preço editável).
+        const lote = (m.lotes ?? [])[0];
+        const valorPorDose = lote
+          ? Number(lote.valorUnitarioRepassado ?? lote.valorUnitario ?? 0) / (Number(lote.dosesPorFrasco) || 1)
+          : null;
         return {
           id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
           unidade: m.unidade, vias: m.vias,
           emEstoque: (m.lotes ?? []).length > 0,
+          valorPorDose,
         };
       }
       const estoques = m.estoques ?? [];
       const qtdTotal = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
+      // Preço base do estoque (R$/g ou R$/mL) para pré-preencher o orçamento
+      const precoUnitarioBase = estoques.find(e => e.precoUnitarioBase != null)?.precoUnitarioBase ?? null;
       return {
         id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
         unidade: m.unidade, vias: m.vias,
         emEstoque:   estoques.length > 0,
         qtdEstoque:  estoques.length > 0 ? qtdTotal : null,
+        precoUnitarioBase,
       };
     });
 

@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { CheckCircle2, XCircle, Users } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 interface DadosConvite {
   email: string; cargo: string; cargoLabel: string;
@@ -24,6 +25,8 @@ export default function AceitarConvite() {
   const [loading,  setLoading]  = useState(true);
   const [erro,     setErro]     = useState('');
   const [aceitando,setAceitando]= useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [aceito,   setAceito]   = useState(false);
 
   useEffect(() => {
@@ -37,13 +40,14 @@ export default function AceitarConvite() {
   const handleAceitar = async () => {
     if (!user) { navigate(`/login?redirect=/convite-equipe?token=${token}`); return; }
     setAceitando(true);
+    setErroInline(null);
     try {
       await api.post(`/equipes/convite/${token}/aceitar`);
       toast.success('Você entrou para a equipe!');
       setAceito(true);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao aceitar convite';
-      toast.error(msg);
+      setErroInline(msg);
     } finally { setAceitando(false); }
   };
 
@@ -108,6 +112,8 @@ export default function AceitarConvite() {
                 Você precisa estar logado com o e-mail <strong>{dados.email}</strong> para aceitar.
               </p>
             )}
+
+            <InlineError message={erroInline} className="mb-4 text-left" />
 
             <button onClick={handleAceitar} disabled={aceitando}
               className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white py-3.5 rounded-2xl font-semibold transition-colors">

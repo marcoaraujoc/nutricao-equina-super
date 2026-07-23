@@ -18,7 +18,28 @@ function brl(v: number) {
 // ─── Tipos locais (reutilizados de Faturamento) ───────────────────────────────
 
 interface AnimalMin { id: number; nome: string; especie?: { nome: string } | null }
-interface ItemMin   { animalId?: number | null; tipo: string; descricao: string; valor: number; quantidade: number }
+interface ItemMin   {
+  animalId?: number | null; tipo: string; descricao: string; valor: number; quantidade: number;
+  descontoTipo?: 'PERCENTUAL' | 'VALOR' | null; descontoValor?: number;
+}
+
+// Desconto e total líquido do item — mesma regra do backend (lib/faturaUtils.js)
+function descontoItem(i: ItemMin) {
+  const bruto = i.valor * i.quantidade;
+  const d     = Number(i.descontoValor ?? 0);
+  if (!d || d <= 0) return 0;
+  const abatimento = i.descontoTipo === 'PERCENTUAL' ? bruto * (Math.min(d, 100) / 100) : d;
+  return Math.min(Math.max(abatimento, 0), Math.max(bruto, 0));
+}
+function totalItem(i: ItemMin) {
+  return i.valor * i.quantidade - descontoItem(i);
+}
+
+// Texto do desconto exibido nos documentos ("10%" ou "R$ 25,00"); vazio se não houver
+function labelDesconto(i: ItemMin) {
+  if (descontoItem(i) <= 0) return '';
+  return i.descontoTipo === 'PERCENTUAL' ? `${i.descontoValor}%` : brl(Number(i.descontoValor ?? 0));
+}
 interface FaturaMin {
   id: number; total: number; status: string; mesReferencia?: string | null;
   itens: ItemMin[];
@@ -42,14 +63,14 @@ export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?
   }
 
   const linhasGrupos = [...grupos.values()].map(g => {
-    const subtotal = g.itens.reduce((s, i) => s + i.valor * i.quantidade, 0);
+    const subtotal = g.itens.reduce((s, i) => s + totalItem(i), 0);
     const linhasItens = g.itens.map(i => `
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
-        <td>${i.descricao}</td>
+        <td>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
         <td class="center">${i.quantidade}</td>
         <td class="right">${brl(i.valor)}</td>
-        <td class="right">${brl(i.valor * i.quantidade)}</td>
+        <td class="right">${brl(totalItem(i))}</td>
       </tr>`).join('');
     return `
       <tr class="group-header">
@@ -180,7 +201,7 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
     ['Mês de Referência', formatMes(fatura.mesReferencia)],
     ['Status', fatura.status],
     [''],
-    ['Animal', 'Tipo', 'Descrição', 'Quantidade', 'Valor Unitário (R$)', 'Subtotal (R$)'],
+    ['Animal', 'Tipo', 'Descrição', 'Quantidade', 'Valor Unitário (R$)', 'Desconto (R$)', 'Subtotal (R$)'],
   ];
 
   for (const item of fatura.itens) {
@@ -193,12 +214,13 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
       item.descricao,
       String(item.quantidade),
       item.valor.toFixed(2).replace('.', ','),
-      (item.valor * item.quantidade).toFixed(2).replace('.', ','),
+      descontoItem(item).toFixed(2).replace('.', ','),
+      totalItem(item).toFixed(2).replace('.', ','),
     ]);
   }
 
   linhas.push(['']);
-  linhas.push(['', '', '', '', 'TOTAL', fatura.total.toFixed(2).replace('.', ',')]);
+  linhas.push(['', '', '', '', '', 'TOTAL', fatura.total.toFixed(2).replace('.', ',')]);
 
   const csv = linhas
     .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';'))
@@ -238,14 +260,14 @@ async function gerarPdfBlob(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: s
   }
 
   const linhasGrupos = [...grupos.values()].map(g => {
-    const subtotal   = g.itens.reduce((s, i) => s + i.valor * i.quantidade, 0);
+    const subtotal   = g.itens.reduce((s, i) => s + totalItem(i), 0);
     const linhasItens = g.itens.map(i => `
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
-        <td>${i.descricao}</td>
+        <td>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
         <td class="center">${i.quantidade}</td>
         <td class="right">${brl(i.valor)}</td>
-        <td class="right">${brl(i.valor * i.quantidade)}</td>
+        <td class="right">${brl(totalItem(i))}</td>
       </tr>`).join('');
     return `
       <tr class="group-header">

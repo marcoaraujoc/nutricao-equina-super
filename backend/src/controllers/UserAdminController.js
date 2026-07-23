@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
+const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {
@@ -108,7 +109,8 @@ const UserAdminController = {
     if (!phone?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
 
     try {
-      const existente = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+      const emailNorm = normalizeEmail(email);
+      const existente = await findUserByEmail(prisma, emailNorm, { select: { id: true } });
       if (existente) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
 
       // Sem senha no payload → aplica a padrão do sistema com troca obrigatória no primeiro acesso
@@ -117,7 +119,7 @@ const UserAdminController = {
       const usuario = await prisma.user.create({
         data: {
           fullName:    fullName.trim(),
-          email:       email.trim().toLowerCase(),
+          email:       emailNorm,
           phone:       phone.trim(),
           role:        role                || 'USER',
           userType:    userType            || 'PROPRIETARIO',
@@ -168,9 +170,9 @@ const UserAdminController = {
       const existe = await prisma.user.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
 
-      const emailNovo = email.trim().toLowerCase();
-      if (emailNovo !== existe.email) {
-        const duplicado = await prisma.user.findUnique({ where: { email: emailNovo } });
+      const emailNovo = normalizeEmail(email);
+      if (emailNovo !== (existe.email ?? '').toLowerCase()) {
+        const duplicado = await prisma.user.findFirst({ where: { ...whereEmailInsensitive(emailNovo), id: { not: Number(id) } }, select: { id: true } });
         if (duplicado) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já está em uso por outro usuário' });
       }
 

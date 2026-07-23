@@ -11,6 +11,7 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { gerarHtmlDieta, type PrintAnimal, type PrintPlan, type PrintItem, type PrintUser } from '../utils/Dietaprint';
+import InlineError from './InlineError';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,8 @@ function CompartilharModal({
   onClose: () => void;
 }) {
   const [estado, setEstado] = useState<'idle' | 'gerando' | 'enviando'>('idle');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const emailPropr = animal.user?.email  ?? '';
   const phoneRaw   = (animal.user?.phone ?? '').replace(/\D/g, '');
@@ -144,7 +147,7 @@ function CompartilharModal({
       toast('PDF baixado — anexe-o na conversa do WhatsApp.', { icon: '📎', duration: 5000 });
       onClose();
     } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') toast.error('Erro ao preparar compartilhamento');
+      if ((err as Error)?.name !== 'AbortError') setErroInline('Erro ao preparar compartilhamento');
     } finally {
       setEstado('idle');
     }
@@ -154,7 +157,7 @@ function CompartilharModal({
 
   const handleEmail = async () => {
     if (!emailPropr) {
-      toast.error('Proprietário sem e-mail cadastrado');
+      setErroInline('Proprietário sem e-mail cadastrado');
       return;
     }
     setEstado('gerando');
@@ -174,7 +177,7 @@ function CompartilharModal({
       toast.success(`E-mail enviado para ${emailPropr}`);
       onClose();
     } catch {
-      toast.error('Erro ao enviar e-mail');
+      setErroInline('Erro ao enviar e-mail');
     } finally {
       setEstado('idle');
     }
@@ -233,6 +236,8 @@ function CompartilharModal({
                   Proprietário sem e-mail cadastrado
                 </p>
               )}
+              <InlineError message={erroInline} />
+
               <button onClick={onClose} className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 transition-colors">
                 Cancelar
               </button>
@@ -254,6 +259,8 @@ export default function DietaAcoesBar({
   const [compartilhando,       setCompartilhando]       = useState(false);
   const [showCompartilhar,     setShowCompartilhar]     = useState(false);
   const [showExportMenu,       setShowExportMenu]       = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,           setErroInline]           = useState<string | null>(null);
   const exportMenuRef = { current: null as HTMLDivElement | null };
 
   useEffect(() => {
@@ -297,7 +304,7 @@ export default function DietaAcoesBar({
       a.href = url; a.download = `dieta-${animal.nome}-${plano.nome}.pdf`; a.click();
       URL.revokeObjectURL(url);
     } catch {
-      toast.error('Erro ao gerar PDF');
+      setErroInline('Erro ao gerar PDF');
     } finally {
       setExportandoPdf(false);
     }
@@ -306,7 +313,7 @@ export default function DietaAcoesBar({
   // ── Exportar Excel ──────────────────────────────────────────────────────
 
   const exportarExcel = () => {
-    if (itens.length === 0) { toast.error('Nenhum item na dieta para exportar'); return; }
+    if (itens.length === 0) { setErroInline('Nenhum item na dieta para exportar'); return; }
     const wb      = XLSX.utils.book_new();
     const headers = ['Alimento', 'Quantidade', 'Unidade', 'Periodicidade', 'Horário'];
     const rows    = itens.map(i => [i.alimento?.nome ?? '—', i.qtdGramasDia, i.unidade, i.periodicidade, i.horario ?? '—']);
@@ -328,11 +335,13 @@ export default function DietaAcoesBar({
   // ── Render ───────────────────────────────────────────────────────────────
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   if (compacto) {
     return (
       <>
+        <InlineError message={erroInline} className="mb-2" />
+
         {podeCompartilhar && (
           <button onClick={abrirCompartilhar} title="Compartilhar"
             className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
@@ -363,6 +372,8 @@ export default function DietaAcoesBar({
 
   return (
     <>
+      <InlineError message={erroInline} className="mb-2" />
+
       <button
         onClick={podeCompartilhar ? abrirCompartilhar : () => semPermissao('compartilhar dieta')}
         disabled={compartilhando}

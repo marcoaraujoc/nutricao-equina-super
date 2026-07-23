@@ -24,6 +24,17 @@ class WhatsAppProvider {
   async enviarMensagem(msg) {
     throw new Error('WhatsAppProvider.enviarMensagem não implementado');
   }
+
+  /**
+   * Envio de documento (PDF, etc.).
+   * @param {{ para:string, arquivo:{ base64:string, nome:string }, legenda?:string,
+   *           contexto?:object }} msg
+   * @returns {Promise<{ sucesso: boolean, simulado?: boolean, id?: string, erro?: string }>}
+   */
+  // eslint-disable-next-line no-unused-vars
+  async enviarDocumento(msg) {
+    throw new Error('WhatsAppProvider.enviarDocumento não implementado');
+  }
 }
 
 /** Provider padrão — não envia nada, apenas registra no log (base pronta). */
@@ -31,6 +42,13 @@ class NoopWhatsAppProvider extends WhatsAppProvider {
   async enviarMensagem({ para, texto, contexto }) {
     const ctx = contexto ? ` ${JSON.stringify(contexto)}` : '';
     logger.info(`[WhatsApp:noop] (simulado) para=${para || '—'}${ctx} :: ${String(texto).replace(/\n/g, ' | ')}`);
+    return { sucesso: true, simulado: true };
+  }
+
+  async enviarDocumento({ para, arquivo, legenda, contexto }) {
+    const ctx = contexto ? ` ${JSON.stringify(contexto)}` : '';
+    const kb  = Math.round((arquivo?.base64?.length ?? 0) * 0.75 / 1024);
+    logger.info(`[WhatsApp:noop] (simulado) documento para=${para || '—'}${ctx} :: ${arquivo?.nome} (~${kb}KB) :: ${legenda ?? ''}`);
     return { sucesso: true, simulado: true };
   }
 }
@@ -53,6 +71,21 @@ class EvolutionWhatsAppProvider extends WhatsAppProvider {
       { empresaId, equipeId: contexto?.equipeId ?? null }, para, texto,
     );
     if (!res.sucesso) logger.warn(`[WhatsApp:evolution] Envio falhou (${res.erro}) para=${para}`);
+    return res;
+  }
+
+  async enviarDocumento({ para, arquivo, legenda, contexto }) {
+    const empresaId = contexto?.empresaId ?? null;
+    if (!empresaId) {
+      logger.warn('[WhatsApp:evolution] contexto.empresaId ausente — documento suprimido.');
+      return { sucesso: false, erro: 'SEM_EMPRESA' };
+    }
+    const whatsappService = require('../services/whatsappService');
+    const res = await whatsappService.sendMedia(
+      { empresaId, equipeId: contexto?.equipeId ?? null }, para,
+      { base64: arquivo?.base64, nomeArquivo: arquivo?.nome, legenda, tipo: 'document' },
+    );
+    if (!res.sucesso) logger.warn(`[WhatsApp:evolution] Envio de documento falhou (${res.erro}) para=${para}`);
     return res;
   }
 }

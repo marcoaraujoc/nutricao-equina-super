@@ -4,6 +4,7 @@ const https  = require('https');
 
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
+const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -57,28 +58,31 @@ const GoogleController = {
         return res.status(400).json({ error: 'Token Google inválido ou expirado' });
       }
 
-      const email    = googleUser.email;
+      const email    = normalizeEmail(googleUser.email);
       const fullName = googleUser.name;
 
       if (!email) {
         return res.status(400).json({ error: 'E-mail não encontrado no token Google' });
       }
 
-      // UPSERT: cria ou atualiza o usuário
-      const user = await prisma.user.upsert({
-        where: { email },
-        update: {
-          fullName: fullName || undefined,
-        },
-        create: {
-          fullName: fullName || 'Usuário Google',
-          email,
-          passwordHash: '', 
-          userType: 'PROPRIETARIO',
-          role: 'USER',
-          ativo: true,
-        },
-      });
+      // Busca case-insensitive antes de criar — evita duplicar conta existente em
+      // maiúsculas (ex: "Karina@gmail.com"). Grava e-mail sempre normalizado.
+      const existente = await findUserByEmail(prisma, email, { select: { id: true } });
+      const user = existente
+        ? await prisma.user.update({
+            where: { id: existente.id },
+            data:  { fullName: fullName || undefined },
+          })
+        : await prisma.user.create({
+            data: {
+              fullName: fullName || 'Usuário Google',
+              email,
+              passwordHash: '',
+              userType: 'PROPRIETARIO',
+              role: 'USER',
+              ativo: true,
+            },
+          });
 
       if (user.ativo === false) {
         return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });

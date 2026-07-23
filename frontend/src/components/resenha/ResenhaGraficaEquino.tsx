@@ -15,6 +15,7 @@ import { ResenhaStage } from './ResenhaStage';
 import { ResenhaToolbar } from './ResenhaToolbar';
 import { ResenhaImpressao } from './ResenhaImpressao';
 import type { useResenhaCanvas, FerramentaDesenho } from './useResenhaCanvas';
+import InlineError from '../InlineError';
 
 interface ResenhaGraficaEquinoProps {
   animalId: number;
@@ -46,6 +47,8 @@ const VISTAS_REAIS: VistaResenha[] = [
  */
 export function ResenhaGraficaEquino({ animalId, somenteLeitura = false }: ResenhaGraficaEquinoProps) {
   const [vistaAtiva, setVistaAtiva] = useState<VistaSelecionavel>('LATERAL');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [tipoMarcacaoAtivo, setTipoMarcacaoAtivo] = useState<TipoMarcacaoResenha>('PELO_BRANCO');
   const [ferramenta, setFerramenta] = useState<FerramentaDesenho>('caneta');
   const [controladorAtivo, setControladorAtivo] = useState<ReturnType<typeof useResenhaCanvas> | null>(
@@ -102,7 +105,7 @@ export function ResenhaGraficaEquino({ animalId, somenteLeitura = false }: Resen
       queryClient.invalidateQueries({ queryKey: ['resenha-grafica-completa', animalId] });
     },
     onError: () => {
-      toast.error('Não foi possível salvar a resenha gráfica. Tente novamente.');
+      setErroInline('Não foi possível salvar a resenha gráfica. Tente novamente.');
     },
   });
 
@@ -118,6 +121,8 @@ export function ResenhaGraficaEquino({ animalId, somenteLeitura = false }: Resen
 
   return (
     <div className="space-y-4">
+      <InlineError message={erroInline} />
+
       <div className="flex items-center justify-between gap-2">
         <div className="flex gap-2 overflow-x-auto pb-1">
           {FOCOS_VISTA.map((foco) => (

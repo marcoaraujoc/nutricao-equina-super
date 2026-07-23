@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
-import toast from 'react-hot-toast';
+import InlineError from '../components/InlineError';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -84,6 +84,7 @@ export default function AuditoriaGeral() {
   const [meta,       setMeta]       = useState<Meta>({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [loading,    setLoading]    = useState(false);
   const [semAcesso,  setSemAcesso]  = useState(false);
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const [categoria,  setCategoria]  = useState<FiltroCategoria>('');
   const [entidade,   setEntidade]   = useState('');
@@ -107,7 +108,8 @@ export default function AuditoriaGeral() {
       setSemAcesso(false);
       setLogs(res.data.dados ?? []);
       setMeta(res.data.meta ?? { total: 0, page: 1, limit: 50, totalPages: 1 });
-    } catch { toast.error('Erro ao carregar auditoria.'); }
+      setErroInline(null);
+    } catch { setErroInline('Erro ao carregar auditoria.'); }
     finally { setLoading(false); }
   }, [page, categoria, entidade, busca, dataInicio, dataFim]);
 
@@ -141,6 +143,8 @@ export default function AuditoriaGeral() {
     <PageContainer maxWidth="7xl">
       <div className="space-y-5">
         <BotaoVoltar className="mb-6" />
+
+        <InlineError message={erroInline} />
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">

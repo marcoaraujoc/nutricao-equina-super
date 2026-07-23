@@ -1,5 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-07-23 (Orçamento: posologia do medicamento (dias+frequência), doses da vacina e item OUTROS lançado direto na fatura; desconto por item na fatura)
 # Atualizado em: 2026-07-16 (Listagem de animais base × convidado: base própria vê todos os vínculos incl. co-tratados de outra empresa; convidada = isolamento estrito por empresa; designação de prestador escopada ao contexto)
 # Atualizado em: 2026-07-14 (Relatórios com período + Tabela responsiva; expediente de atendimento; autosave de evolução; lembretes WhatsApp; alertas/Monitoração de cron com agenda dinâmica; cookie-dica de sessão)
 
@@ -297,6 +298,24 @@ Fatura / FaturaItem → financeiro básico
                     Fatura: animalId? (legado, nullable desde migration 20260605), proprietarioId?,
                     mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA|FECHADA)
                     FaturaItem: animalId? (adicionado migration 20260605), tipo VARCHAR(50), veterinarioId?
+                    FaturaItem.descontoTipo (PERCENTUAL|VALOR|null) + descontoValor (Float, default 0)
+                    [migration 20260725000000] — desconto POR ITEM. O total da fatura é sempre a soma
+                    do LÍQUIDO: usar `valorLiquidoItem(item)` / `descontoDoItem(item)` de lib/faturaUtils.js
+                    (e `recalcularTotal`) — NUNCA somar `valor * quantidade` à mão, senão o desconto
+                    é ignorado. Espelho no front: `totalItem`/`descontoDoItem` em Faturamento.tsx e
+                    FaturaExport.ts. `normalizarDesconto(tipo, valor)` valida a entrada (percentual ≤ 100).
+                    FaturaItem.orcamentoItemId? → origem: item de orçamento tipo OUTROS lançado na fatura.
+Orcamento /       → orçamento (etapa OPCIONAL) por proprietário — tb_orcamentos / tb_orcamento_itens
+OrcamentoItem       (migration 20260723000000). Item tipo PROCEDIMENTO|COMBO|MEDICAMENTO|VACINA|OUTROS.
+                    MEDICAMENTO: `dias` + `frequencia` (posologia orçada; quantidade = dias ×
+                    aplicações/dia) voltam preenchidos na importação para a Prescrição.
+                    VACINA: `quantidade` é o nº de DOSES (unidade 'dose').
+                    OUTROS (migration 20260725000000): cobrança avulsa com 3 campos (nome, qtd de vezes,
+                    valor), sempre no nível do proprietário (animalId null). NÃO entra na importação
+                    clínica (`TIPOS_CLINICOS` exclui OUTROS) — depois de ACEITO vai DIRETO para a fatura
+                    em Financeiro > Faturamento, e só depois que os demais itens aceitos do MESMO
+                    orçamento já tiverem `importadoEm` (isto é, importados numa evolução).
+                    `importadoEm` do OUTROS = lançado na fatura.
 Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
 AuditLog          → log de ações dos usuários
@@ -328,6 +347,21 @@ MatrizPerfil      → template de permissões por perfil — propagado a membros
                     NEGADO = bloqueio explícito; deny-wins sobre outras equipes
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
 PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — substituído por MatrizPerfil PROPRIETARIO
+ProprietarioPerfil → cadastro do PROPRIETÁRIO por EMPRESA (tb_proprietario_perfis, migration
+                    20260724000000). unique(userId, empresaId). Campos: fullName, phone, phone2,
+                    cpf, cnpj, cep/endereco/complemento/bairro/cidade/estado, mensalista,
+                    valorAssistencia, frequenciaVisitas, diaVencimentoFatura, ativo (na empresa).
+                    POR QUÊ: User.email é único global → o mesmo cliente atendido por 2 clínicas é
+                    UMA linha em users; sem isto, editar o telefone na empresa A mudava o cadastro
+                    da B. O User ficou só como IDENTIDADE (email/senha/ativo global).
+                    LEITURA/ESCRITA: SEMPRE via `lib/proprietarioPerfil.js` — havendo perfil na
+                    empresa do contexto ele é AUTORIDADE de todos os seus campos (null = vazio
+                    naquela empresa, NÃO cai de volta no User); sem perfil (legado/ADMIN global),
+                    lê-se o User. `ativo` efetivo = User.ativo && perfil.ativo.
+                    Já aplicado em: ProprietarioController (listar/obterPorId/criar/atualizar/
+                    removerDaEmpresa), AnimalController (listar/obterPorId/criar), FaturaController
+                    (listarProprietarios + FATURA_INCLUDE), OrcamentoController (listar/obter/criar/
+                    atualizar/WhatsApp), UserController (getMe/updateMe).
 EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (empresa pessoal/CPF) —
                     mesmo critério de escopo do EmpresaContext. Campos: logoUrl, tipoFechamento
                     (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|null=compat), diaFechamentoFatura (dia do mês
@@ -857,6 +891,34 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-07-23 — Orçamento (posologia, doses, OUTROS) + desconto na fatura
+- [x] **Medicamento no orçamento com dias + frequência** — `OrcamentoItem.dias` / `.frequencia`
+      (migration `20260725000000`). A aba Medicamentos do builder tem um painel de posologia
+      (Qtd. de dias + Frequência, mesmas opções da Prescrição) que vale para os itens adicionados
+      em seguida; a **quantidade cobrada é derivada** (`aplicacoesNoPeriodo` = dias × aplicações/dia,
+      espelha `INTERVALOS_H` do `PrescricaoController`; "agora" = dose única; posologia sem intervalo
+      fixo = 1/dia) e continua editável na lista. Na importação para a Prescrição, `dias`/`frequencia`
+      preenchem `duracaoDias`/`frequencia` do formulário (`SubModuloPrescricao.importarDoOrcamento`).
+- [x] **Vacina no orçamento com Qtd. de doses** — campo "Qtd. de doses" na aba Vacinas define a
+      `quantidade` do item (unidade 'dose'); `SubModuloVacina` já usava `quantidade` como nº de doses.
+      Impressão (OrcamentoPrint.ts) e PDF do cliente (templates/orcamentoHtml.js) mostram o detalhe
+      (dias · frequência / N doses) sob a descrição; a chave de consolidação passou a incluir
+      dias+frequência para não fundir posologias diferentes do mesmo medicamento.
+- [x] **Item OUTROS no orçamento → lançado direto na fatura** — aba **Outros** ao lado de Vacinas,
+      com 3 campos (Nome, Qtd. de vezes, Valor). Não é rateado por animal (`animalId` null) e NÃO
+      aparece na importação clínica. Depois de ACEITO, é lançado em **Financeiro > Faturamento** pelo
+      botão "Importar do orçamento" (`ModalImportarOrcamento`), que só libera o orçamento quando
+      todos os seus itens aceitos clínicos já têm `importadoEm` (importados numa evolução) —
+      orçamentos com pendência aparecem bloqueados com a contagem. Backend:
+      `OrcamentoController.listarOutrosParaFatura` / `lancarNaFatura` (cria FaturaItem tipo `OUTROS`,
+      descrição `[ORC-0000] …`, `orcamentoItemId` para rastreio, marca `importadoEm`, recalcula o total).
+- [x] **Desconto por item na fatura** — `FaturaItem.descontoTipo` (PERCENTUAL|VALOR) + `descontoValor`.
+      Disponível na edição do item e no formulário de lançamento (Faturamento.tsx), com prévia do
+      abatimento e do total líquido; a linha exibe o bruto riscado quando há desconto. O total da
+      fatura, subtotais por animal, impressão/PDF/CSV e os relatórios financeiros passaram a somar o
+      **líquido** (`valorLiquidoItem`). `PrescricaoController` deixou de recalcular o total à mão
+      (usava `valor*qtd`, o que apagaria descontos) e agora chama `recalcularTotal`.
+
 ### Sessão 2026-07-14 — Relatórios/UX, expediente, mensageria e agendador
 - [x] **Relatórios por período (Dia/Semana/Mês/Ano)** — `PeriodoContext` (localStorage `s2vet_rel_gran`/`s2vet_rel_data`, sem reload) + `PeriodoSelector` (Dia|Semana|Mês|Ano + ◀▶ + data + Hoje) no topo dos 5 submódulos (Gestão/Financeiro/Atendimento/Cadastro/Farmácia). Backend `resolverPeriodo(req)` (query `granularidade`+`data`) em `RelatorioGerencialController` (exportado) → janela `[inicio,fim]`+`mesRef`+`refDate`; `RelatoriosController` usa a janela (métricas de janela filtram por `[inicio,fim]`; snapshots as-of `refDate`). Semana = domingo a sábado. **Bug do original corrigido**: Animal usa `dataCadastro` (não `createdAt`) no relatório de cadastro.
 - [x] **Atribuição de animal no lançamento manual de fatura** — `Faturamento.tsx` `handleLancar` agora envia `animalId` (seletor no form); antes o "Atd. Emergencial" caía em "Sem animal/localização" no relatório emergencial. `FaturaController.adicionarItem` já aceitava `animalId`.
@@ -1330,6 +1392,14 @@ DELETE /clinica/agendamentos/:id              → soft delete
 GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPorEquipe (busca FORNECEDOR da empresa, exclui já-membros)
 GET  /api/equipes/configuracoes → EquipeController.obterConfiguracao (logo + diaFechamentoFatura do escopo ativo)
 PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipart: logo?, diaFechamentoFatura, removerLogo?) — GESTOR/dono only
+
+# orcamentos.js — prefixo /api/orcamentos (OrcamentoController)
+GET    /para-importar?animalId=&tipos=   → itens ACEITO p/ importar na Prescrição/Vacina (OUTROS nunca entra)
+POST   /importar                         → marca itens como importados (após SALVAR a prescrição/vacina)
+GET    /outros-para-fatura?proprietarioId= → itens OUTROS ACEITO pendentes, por orçamento, com `liberado`
+                                           (false enquanto houver item clínico aceito sem importadoEm)
+POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaItem tipo OUTROS + marca
+                                           importadoEm + recalcularTotal. Permissão financeiro.faturas.lancar
 ```
 
 ### Backend — Middlewares
@@ -1669,6 +1739,38 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     fica undefined → gestor NÃO bypassa no histórico (usa escopo por empresa). Botão Finalizar no
     front continua sendo `isGestor || nível de finalizar (EQUIPE/FULL = qualquer registro; PROPRIO =
     só os próprios)` — o bypass do escopo só garante que o registro APAREÇA para o gestor decidir.
+
+36. **Proprietário é isolado por empresa (2026-07-24)** — o cadastro do cliente NÃO mora mais no
+    `User`: mora em `ProprietarioPerfil` (uma linha por empresa). NUNCA leia nome/telefone/documento
+    /endereço/condição comercial de um proprietário direto do `User` numa tela de clínica — use
+    `lib/proprietarioPerfil.js` (`aplicarPerfil` / `aplicarPerfilEmLista` / `aplicarPerfilEmRelacao`)
+    com `req.empresaId`; para gravar, `salvarPerfil`/`garantirPerfil`. Escrever no `User` volta a
+    vazar a edição de uma clínica para a outra. No `User` só ficam e-mail, senha, userType e o
+    `ativo` global (ADMIN).
+    - Cliente que já existe no sistema NÃO é mais erro 409 ao ser cadastrado por outra clínica:
+      `ProprietarioController.criar` cria só o PERFIL da empresa e responde 201 com `mensagem`.
+      `AnimalController.criar` faz o mesmo via `garantirPerfil` ao reaproveitar o login por e-mail.
+    - `GET /users/buscar-proprietario` é ESCOPADO à empresa ativa (antes era global e vazava o
+      cliente de outra clínica); `GET /animais/buscar-por-nome` não devolve mais `proprietario`.
+    - **Portal do proprietário**: `meusContextos` devolve uma opção por empresa que o atende
+      (`cargo: 'PROPRIETARIO'`), então o seletor do Sidebar aparece igual ao do vet multi-empresa.
+      `auth.js` aceita `x-empresa-id` do proprietário quando ele tem animal ativo OU perfil na
+      empresa. As permissões passaram a ser resolvidas pela empresa ATIVA — `getEquipeIdsDoProprietario
+      (userId, empresaId)` e `getNivelPermissaoProprietario(userId, slug, empresaId)`, idem
+      `minhasPermissoes`. Ou seja: se a empresa A liberou a fatura e a B não, ele vê a fatura só
+      enquanto estiver com a empresa A selecionada (antes era união entre TODAS as equipes).
+
+37. **Item de fatura tem DESCONTO (2026-07-23) — nunca somar `valor * quantidade`.**
+    O total de um FaturaItem é o LÍQUIDO: `valorLiquidoItem(item)` (= valor×qtd − desconto) de
+    `lib/faturaUtils.js`; `recalcularTotal(client, faturaId)` já usa isso e é o único caminho
+    correto para gravar `Fatura.total`. Qualquer soma nova (relatório, export, tela) precisa
+    trazer `descontoTipo`/`descontoValor` no `select` — sem eles o helper devolve o bruto
+    silenciosamente. Espelhos no front (mesma fórmula, mantidos em sincronia): `totalItem`/
+    `descontoDoItem` em `Faturamento.tsx` e em `utils/FaturaExport.ts`. PERCENTUAL é 0-100 e
+    incide sobre o bruto; VALOR é abatimento em R$; o abatimento nunca passa do bruto.
+    Entradas do request passam por `normalizarDesconto` (400 em tipo inválido ou % > 100);
+    em `atualizarItem` o desconto só é tocado se o body mencionar um dos dois campos — assim
+    um PATCH parcial não zera desconto existente.
 ```
 
 ---

@@ -193,6 +193,8 @@ const mapaAtendimentoRoutes    = require('./routes/mapa-atendimento');
 const relatoriosGerenciaisRoutes = require('./routes/relatoriosGerenciais');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const monitoracaoRoutes        = require('./routes/monitoracao');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const orcamentosRoutes         = require('./routes/orcamentos');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiter, authRoutes);
@@ -228,6 +230,7 @@ app.use('/api/relatorio',             relatorioRoutes);
 app.use('/api/farmacia',              farmaciaRoutes);
 app.use('/api/medicamentos',          medicamentosRoutes);
 app.use('/api/procedimentos',         procedimentosRoutes);
+app.use('/api/orcamentos',            orcamentosRoutes);
 app.use('/api/cadastro/proprietarios', proprietariosRoutes);
 app.use('/api/cadastro/tratadores',   tratadoresRoutes);
 app.use('/api/cadastro/fornecedores', fornecedoresRoutes);

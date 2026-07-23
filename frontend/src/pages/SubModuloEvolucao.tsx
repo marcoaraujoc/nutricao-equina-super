@@ -25,6 +25,8 @@ import {
   carregarModelo,
   transcreverOffline,
 } from '../services/whisperService';
+import InlineError from '../components/InlineError';
+
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
 
@@ -391,6 +393,8 @@ function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onC
   saving:         boolean;
 }) {
   const [justificativa, setJustificativa] = useState('');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border border-gray-100">
@@ -411,6 +415,9 @@ function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onC
           placeholder="Justificativa (obrigatório) *"
           rows={3}
           className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none mb-4" />
+
+        <InlineError message={erroInline} className="mb-4" />
+
         <div className="flex gap-3">
           <button onClick={onCancelar}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
@@ -418,7 +425,7 @@ function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onC
           </button>
           <button
             onClick={() => {
-              if (!justificativa.trim()) { toast.error('Informe a justificativa'); return; }
+              if (!justificativa.trim()) { setErroInline('Informe a justificativa'); return; }
               onConfirmar(justificativa.trim());
             }}
             disabled={saving}
@@ -464,6 +471,8 @@ function NovaEvolucaoModal({
   const [arquivosSelecionados, setArquivosSelecionados] = useState<File[]>([]);
   // Áudios anexados aguardando resposta de "deseja transcrever?" (um por vez)
   const [audiosPendentes,      setAudiosPendentes]      = useState<File[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const recognitionRef   = useRef<ISpeechRecognition | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -519,7 +528,7 @@ function NovaEvolucaoModal({
       recorder.start(250);
       mediaRecorderRef.current = recorder;
       setGravacaoAtiva(true);
-    } catch { toast.error('Não foi possível acessar o microfone'); }
+    } catch { setErroInline('Não foi possível acessar o microfone'); }
   };
 
   const pararMediaRecorder = () => {
@@ -546,7 +555,7 @@ function NovaEvolucaoModal({
         onFormChange('texto', (textoRef.current + ' ' + texto).trim());
       }
       if (mostrarContinuar) setShowRecordAgain(true);
-    } catch { toast.error(estaOnline() ? 'Erro ao transcrever' : 'Erro no Whisper offline'); }
+    } catch { setErroInline(estaOnline() ? 'Erro ao transcrever' : 'Erro no Whisper offline'); }
     finally { setTranscrevendo(false); }
   };
 
@@ -593,7 +602,7 @@ function NovaEvolucaoModal({
       if (e.error === 'not-allowed') {
         shouldRestartRef.current = false;
         setGravacaoAtiva(false);
-        toast.error('Permissão de microfone negada');
+        setErroInline('Permissão de microfone negada');
         return;
       }
       if (shouldRestartRef.current) { try { rec.start(); } catch { setGravacaoAtiva(false); } }
@@ -634,6 +643,8 @@ function NovaEvolucaoModal({
         </div>
       )}
       <fieldset disabled={somenteLeitura} className="p-5 space-y-4 border-0 m-0 min-w-0">
+
+          <InlineError message={erroInline} />
 
           {!editingId && agendamentos.length > 0 && (
             <div>
@@ -882,7 +893,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
@@ -920,6 +931,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [arquivosModal,  setArquivosModal]  = useState<File[]>([]);
   const [imprimindoId,   setImprimindoId]   = useState<number | null>(null);
   const [relatorioModal, setRelatorioModal] = useState<{ ev: EvolucaoItem; dados: RelatorioAtendimentoDados } | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const agendamentoPreSelecionado = useRef(false);
 
@@ -955,7 +968,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         tipoAtendimento:  aberta.tipoAtendimento ?? null,
         atendimentoNumero: aberta.atendimentoNumero ?? null,
       } : null);
-    } catch { toast.error('Erro ao carregar evoluções'); }
+    } catch { setErroInline('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
   }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, onEvolucaoChange]);
 
@@ -1049,7 +1062,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const abrirNova = async () => {
     if (!podeCriar) { semPermissao('criar evolução'); return; }
     if (temEvolucaoAberta) {
-      toast.error('Finalize ou cancele a evolução em andamento antes de criar uma nova.');
+      setErroInline('Finalize ou cancele a evolução em andamento antes de criar uma nova.');
       return;
     }
     setArquivosModal([]);
@@ -1117,7 +1130,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         await api.post(`/clinica/evolucoes/${evolucaoId}/midias`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-      } catch { toast.error(`Erro ao enviar ${arquivo.name}`); }
+      } catch { setErroInline(`Erro ao enviar ${arquivo.name}`); }
     }
   };
 
@@ -1130,7 +1143,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       semPermissao('editar evolução de outro profissional'); return;
     }
     if (!form.texto.trim()) {
-      toast.error('O texto da evolução é obrigatório');
+      setErroInline('O texto da evolução é obrigatório');
       return;
     }
     setSavingEv(true);
@@ -1172,7 +1185,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar evolução');
+      setErroInline(msg ?? 'Erro ao salvar evolução');
     } finally { setSavingEv(false); }
   };
 
@@ -1183,7 +1196,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       semPermissao('finalizar evolução de outro profissional'); return;
     }
     if (!form.texto.trim()) {
-      toast.error('O texto da evolução é obrigatório');
+      setErroInline('O texto da evolução é obrigatório');
       return;
     }
     setSavingEv(true);
@@ -1231,7 +1244,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao finalizar evolução');
+      setErroInline(msg ?? 'Erro ao finalizar evolução');
     } finally { setSavingEv(false); }
   };
 
@@ -1248,7 +1261,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       toast.success('Evolução removida');
       carregarEvolucoes();
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
-    } catch { toast.error('Erro ao remover evolução'); }
+    } catch { setErroInline('Erro ao remover evolução'); }
     finally { setSavingExclusao(false); }
   };
 
@@ -1265,7 +1278,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao cancelar evolução');
+      setErroInline(msg ?? 'Erro ao cancelar evolução');
     } finally { setSavingCancelamento(false); }
   };
 
@@ -1291,7 +1304,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao finalizar evolução');
+      setErroInline(msg ?? 'Erro ao finalizar evolução');
     } finally { setSavingEv(false); }
   };
 
@@ -1305,7 +1318,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           : prev
         );
       }
-    } catch { toast.error('Erro ao remover mídia'); }
+    } catch { setErroInline('Erro ao remover mídia'); }
   };
 
   const handleAprovar = async (id: number) => {
@@ -1313,7 +1326,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       await api.patch(`/clinica/evolucoes/${id}/aprovar`);
       toast.success('Evolução aprovada');
       carregarEvolucoes();
-    } catch { toast.error('Erro ao aprovar'); }
+    } catch { setErroInline('Erro ao aprovar'); }
   };
 
   const handleConfirmarEncaminhamento = async (selecionadas: AcaoSelecionavel[]) => {
@@ -1334,7 +1347,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       setShowLLM(false);
       setAcoesLLM([]);
       onFaturaAtualizada();
-    } catch { toast.error('Erro ao registrar encaminhamento'); }
+    } catch { setErroInline('Erro ao registrar encaminhamento'); }
     finally { setSavingFatura(false); }
   };
 
@@ -1376,6 +1389,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   return (
     <>
+      <InlineError message={erroInline} className="mx-4 mt-3" />
+
       {/* Barra de ação e filtros */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
 

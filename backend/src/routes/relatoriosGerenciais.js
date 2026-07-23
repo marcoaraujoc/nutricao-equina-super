@@ -19,5 +19,6 @@ router.get('/financeiro',   authenticate, perm, Relatorios.financeiro);
 router.get('/atendimento',  authenticate, perm, Relatorios.atendimento);
 router.get('/cadastro',     authenticate, perm, Relatorios.cadastro);
 router.get('/farmacia',     authenticate, perm, Relatorios.farmacia);
+router.get('/orcamentos',   authenticate, perm, Relatorios.orcamentos);
 
 module.exports = router;

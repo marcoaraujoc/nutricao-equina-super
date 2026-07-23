@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const prisma = require('../lib/prisma').default;
 const { aplicarPermissoesPadrao } = require('./PermissaoService');
+const { normalizeEmail, findUserByEmail } = require('../lib/email');
 
 const CARGOS_VALIDOS      = ['GESTOR', 'VETERINARIO', 'ESPECIALISTA', 'ESTAGIARIO'];
 const HORAS_EXPIRACAO_CONVITE = 72;
@@ -84,6 +85,7 @@ async function criarEmpresaEEquipe({ userId, empresaNome, equipeName }) {
 // =============================================================================
 
 async function convidarMembro({ equipeId, email, cargo, atualizadoPorId }) {
+  email = normalizeEmail(email);
   if (!CARGOS_VALIDOS.includes(cargo)) {
     throw new Error(`Cargo inválido: ${cargo}. Use: ${CARGOS_VALIDOS.join(', ')}`);
   }
@@ -97,8 +99,8 @@ async function convidarMembro({ equipeId, email, cargo, atualizadoPorId }) {
     throw new Error('Apenas gestores podem convidar membros.');
   }
 
-  // Verifica se email já é membro
-  const userExistente = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+  // Verifica se email já é membro (case-insensitive)
+  const userExistente = await findUserByEmail(prisma, email, { select: { id: true } });
   if (userExistente) {
     const jaEMembro = await prisma.membroEquipe.findUnique({
       where: { equipeId_userId: { equipeId, userId: userExistente.id } },
@@ -135,7 +137,7 @@ async function aceitarConvite({ token, userId }) {
 
   // Garante que o userId corresponde ao email do convite
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-  if (!user || user.email !== convite.email) {
+  if (!user || normalizeEmail(user.email) !== normalizeEmail(convite.email)) {
     throw new Error('Este convite pertence a outro e-mail.');
   }
 
@@ -170,7 +172,7 @@ async function recusarConvite({ token, userId }) {
   if (convite.expiresAt < new Date())  throw new Error('Convite expirado.');
 
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-  if (!user || user.email !== convite.email) throw new Error('Convite pertence a outro e-mail.');
+  if (!user || normalizeEmail(user.email) !== normalizeEmail(convite.email)) throw new Error('Convite pertence a outro e-mail.');
 
   return prisma.conviteEquipe.update({
     where: { id: convite.id },

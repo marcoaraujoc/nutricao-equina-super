@@ -16,7 +16,7 @@ import {
   FileText, Syringe, Share2, HeartPulse, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
   Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
-  Bell, Gauge, ListChecks,
+  Bell, Gauge, ListChecks, Receipt,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
 import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
@@ -144,8 +144,10 @@ export default function Sidebar() {
   const temAcessoAtendimento = podeVerEvolucoes || podeVerPrescricoes || podeVerExames || podeVerVacinas || podeVerEncaminhamentos;
   const temAcessoNutricional  = podeVerDieta || podeVerRelatorio || isAdmin;
   const podeVerAgendamentos    = podeExecutar('atendimento.agendamentos.ler');
+  const podeVerOrcamento       = isGestor || podeExecutar('orcamento.orcamentos.ler');
   const temAlgumModulo        =
     podeVerAgendamentos                        ||
+    podeVerOrcamento                           ||
     (temAcessoClinico && temAcessoAtendimento) ||
     (temAcessoClinico && podeVerPrescricoes)   ||
     podeVerFarmacia || podeVerEstoqueVacina    ||
@@ -244,9 +246,15 @@ export default function Sidebar() {
   const toggle      = (s: React.Dispatch<React.SetStateAction<boolean>>) => s(v => !v);
   const closeMobile = () => setIsMobileMenuOpen(false);
 
+  // Módulo "folha" (sem sub-itens: Orçamento, Agendamento, Dashboard, ...): ao navegar,
+  // recolhe qualquer grupo expansível aberto (Cadastro, Estoque, Atendimento, ...) —
+  // mantém só um contexto visível por vez no sidebar.
+  const sairDosGrupos = () => { setOpenGroup(null); closeMobile(); };
+  const irParaModulo  = (to: string) => { sairDosGrupos(); navigate(to); };
+
   // ── Renderizadores ────────────────────────────────────────────────────────
   const navLink = (to: string, icon: React.ReactNode, label: string, active: boolean) => (
-    <Link to={to} onClick={closeMobile}
+    <Link to={to} onClick={sairDosGrupos}
       className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       {icon} {label}
     </Link>
@@ -255,7 +263,7 @@ export default function Sidebar() {
   const navLinkBadge = (
     to: string, icon: React.ReactNode, label: string, active: boolean, badge: number,
   ) => (
-    <Link to={to} onClick={closeMobile}
+    <Link to={to} onClick={sairDosGrupos}
       className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       {icon}
       <span className="flex-1">{label}</span>
@@ -484,13 +492,26 @@ export default function Sidebar() {
                   {/* ── Agendamento ──────────────────────────────────── */}
                   {podeVerAgendamentos && (
                     <button
-                      onClick={() => { closeMobile(); navigate('/agendamentos'); }}
+                      onClick={() => irParaModulo('/agendamentos')}
                       className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
                         p.startsWith('/agendamentos') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                       }`}
                     >
                       <CalendarClock size={20} />
                       Agendamento
+                    </button>
+                  )}
+
+                  {/* ── Orçamento (etapa opcional) ───────────────────── */}
+                  {podeVerOrcamento && (
+                    <button
+                      onClick={() => irParaModulo('/orcamento')}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/orcamento') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <Receipt size={20} />
+                      Orçamento
                     </button>
                   )}
 
@@ -607,6 +628,7 @@ export default function Sidebar() {
                           {subLink('/relatorios/atendimento', <CalendarClock size={16} />, 'Atendimento',         p.startsWith('/relatorios/atendimento'))}
                           {subLink('/relatorios/cadastro',    <Users size={16} />,         'Pacientes & Clientes', p.startsWith('/relatorios/cadastro'))}
                           {subLink('/relatorios/farmacia',    <Package size={16} />,       'Farmácia & Estoque',  p.startsWith('/relatorios/farmacia'))}
+                          {subLink('/relatorios/orcamentos',  <Receipt size={16} />,       'Orçamentos',          p.startsWith('/relatorios/orcamentos'))}
                         </div>
                       )}
                     </div>

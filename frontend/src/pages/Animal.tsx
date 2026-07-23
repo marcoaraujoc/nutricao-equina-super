@@ -6,9 +6,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2 } from 'lucide-react';
+import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
+
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
 const NRC_CATEGORIAS: Record<string, string[]> = {
@@ -245,7 +247,7 @@ const Animal = () => {
   const podeCriar  = isGestor || podeExecutar('animais.criar');
   const podeEditar = isGestor || podeExecutar('animais.editar');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const role          = (user?.role     ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType ?? '').toUpperCase();
@@ -262,6 +264,8 @@ const Animal = () => {
   const [especies,       setEspecies]       = useState<{ id: number; nome: string }[]>([]);
   const [todasRacas,     setTodasRacas]     = useState<{ id: number; nome: string; especieId: number }[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [vets,           setVets]           = useState<Vet[]>([]);
   const [vetsFiltrados,  setVetsFiltrados]  = useState<Vet[]>([]);
   const [vetOriginalId,  setVetOriginalId]  = useState<number | null>(null);
@@ -290,7 +294,6 @@ const Animal = () => {
   // ── Busca proprietário por email ───────────────────────────────────────────
   const [buscandoProprietario,   setBuscandoProprietario]   = useState(false);
   const [proprietarioExistente,  setProprietarioExistente]  = useState<boolean | null>(null);
-  const [pedirAutorizacao,       setPedirAutorizacao]       = useState(false);
 
   // ── Estado de bloqueio do animal ────────────────────────────────────────────
   const [animalBloqueado,   setAnimalBloqueado]   = useState(false);
@@ -307,6 +310,12 @@ const Animal = () => {
     pelagem: '', altura: '', registroPassaporte: '', finalidades: [],
     seguradora: '',
   });
+
+  // Checagem da baia enquanto o usuário digita (regra: única por local + empresa).
+  // A validação definitiva continua no backend ao salvar — esta só antecipa o erro.
+  const [baiaStatus, setBaiaStatus] = useState<
+    { estado: 'idle' | 'checando' | 'livre' } | { estado: 'ocupada'; por: string }
+  >({ estado: 'idle' });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
     nomeCompleto: '', email: '', telefone: '', telefone2: '',
@@ -329,6 +338,38 @@ const Animal = () => {
     especieAtual.nome.toLowerCase().includes('gato')
   );
   const labelBaia = isEquino ? 'Baia' : (isCanino || isFelino) ? 'Leito' : null;
+
+  // Verifica a disponibilidade da baia enquanto o usuário preenche (debounce 500ms).
+  // Depende do local porque a regra é única por LOCAL (espaço físico): trocar o local
+  // revalida a mesma baia. `animalId` ignora o próprio registro na edição.
+  useEffect(() => {
+    const baia  = formData.baia.trim();
+    const local = locBusca.trim();
+    if (!baia) { setBaiaStatus({ estado: 'idle' }); return; }
+
+    setBaiaStatus({ estado: 'checando' });
+    let cancelado = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/animais/verificar-baia', {
+          params: {
+            baia,
+            localizacaoId: formData.localizacaoId ?? undefined,
+            local:         local || undefined,
+            animalId:      isEditMode ? id : undefined,
+          },
+        });
+        if (cancelado) return;
+        const d = res.data?.dados;
+        if (!d) { setBaiaStatus({ estado: 'idle' }); return; }   // GET 403 → interceptor devolve null
+        setBaiaStatus(d.disponivel ? { estado: 'livre' } : { estado: 'ocupada', por: d.ocupadaPor });
+      } catch {
+        if (!cancelado) setBaiaStatus({ estado: 'idle' });        // falha na checagem não bloqueia o form
+      }
+    }, 500);
+
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [formData.baia, formData.localizacaoId, locBusca, isEditMode, id]);
 
   const categoriasDisponiveis = useMemo(
     () => getCategoriasDisponiveis(formData.sexo, formData.dataNascimento, formData.idadeAnos),
@@ -529,7 +570,7 @@ const Animal = () => {
         }
       } catch (err) {
         console.error(err);
-        toast.error('Erro ao carregar dados');
+        setErroInline('Erro ao carregar dados');
       } finally {
         setLoading(false);
       }
@@ -551,23 +592,15 @@ const Animal = () => {
 
         // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
         // registro para este veterinário — tratado como cadastro em branco.
-        // NÃO pré-preenche dados próprios do animal (peso, raça, local, tratador,
-        // foto etc.): eles pertencem ao registro do OUTRO vet/empresa e podem
-        // referenciar localização/tratador de outro escopo, causando erro ao
-        // salvar. Só os dados do PROPRIETÁRIO são reaproveitados (abaixo), pois
-        // são necessários para vincular o novo registro ao mesmo proprietário.
+        // NÃO pré-preenche NADA vindo do registro de origem: nem os dados do
+        // animal (peso, raça, local, tratador, foto — referenciam localização/
+        // tratador de outro escopo) nem os do PROPRIETÁRIO. O proprietário é
+        // isolado por empresa igual ao animal: cada empresa preenche e mantém
+        // os próprios dados de contato do cliente.
 
         if (!animal.temVet) {
           // Sem vet → pode vincular
           setStatusBuscaAnimal('sem_vet');
-          if (animal.proprietario) {
-            setFormProp({
-              nomeCompleto: animal.proprietario.fullName ?? '',
-              email:        animal.proprietario.email    ?? '',
-              telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
-              telefone2:    '',
-            });
-          }
         } else if (animal.vetDaMinhaEquipe) {
           // Tem vet mas é da mesma equipe → informa, bloqueia
           setStatusBuscaAnimal('minha_equipe');
@@ -575,14 +608,6 @@ const Animal = () => {
           // Tem vet de outra equipe → cadastro segue normalmente como vínculo
           // ADICIONAL (um animal pode ter mais de um veterinário)
           setStatusBuscaAnimal('com_vet');
-          if (animal.proprietario) {
-            setFormProp({
-              nomeCompleto: animal.proprietario.fullName ?? '',
-              email:        animal.proprietario.email    ?? '',
-              telefone:     animal.proprietario.phone ? mascaraTelefone(animal.proprietario.phone.replace(/\D/g, '')) : '',
-              telefone2:    '',
-            });
-          }
         }
       } else {
         setStatusBuscaAnimal('nao_encontrado');
@@ -602,8 +627,11 @@ const Animal = () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Busca proprietário por email ───────────────────────────────────────────
+  // O backend só devolve o proprietário quando ele pertence à EMPRESA ATIVA
+  // (mesmo escopo da listagem de proprietários). Cliente de outra empresa não é
+  // encontrado aqui — os dados são preenchidos do zero e ficam isolados.
   const buscarProprietarioPorEmail = async (email: string) => {
-    if (!isVet || isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') return;
+    if (!isVet || isEditMode) return;
     const e = email.trim();
     if (!e) return;
     setBuscandoProprietario(true);
@@ -656,11 +684,11 @@ const Animal = () => {
       const [d, m, y] = parts.map(Number);
       const obj = new Date(y, m - 1, d);
       if (obj.getFullYear() !== y || obj.getMonth() !== m - 1 || obj.getDate() !== d) {
-        toast.error('Data inválida.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
+        setErroInline('Data inválida.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
       }
       const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
       if (obj > hoje) {
-        toast.error('A data de nascimento não pode ser futura.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
+        setErroInline('A data de nascimento não pode ser futura.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
       }
       const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
       setFormData(p => ({ ...p, dataNascimento: iso, idadeAnos: calcularIdadeAnos(iso) }));
@@ -680,8 +708,8 @@ const Animal = () => {
   };
 
   const handleCriarTratador = async () => {
-    if (!novoTratNome.trim()) { toast.error('Nome é obrigatório'); return; }
-    if (!novoTratLocId)       { toast.error('Local de trabalho é obrigatório'); return; }
+    if (!novoTratNome.trim()) { setErroInline('Nome é obrigatório'); return; }
+    if (!novoTratLocId)       { setErroInline('Local de trabalho é obrigatório'); return; }
     setCriandoTratador(true);
     try {
       const res = await api.post('/cadastro/tratadores', {
@@ -699,7 +727,7 @@ const Animal = () => {
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar tratador';
-      toast.error(msg);
+      setErroInline(msg);
     } finally {
       setCriandoTratador(false);
     }
@@ -713,22 +741,26 @@ const Animal = () => {
     if (!isEditMode && !podeCriar) { semPermissao('criar animal'); return; }
 
     if (statusBuscaAnimal === 'minha_equipe') {
-      toast.error(`${formData.nome} já está sob cuidados da sua equipe`);
+      setErroInline(`${formData.nome} já está sob cuidados da sua equipe`);
       return;
     }
 
     setSubmitting(true);
 
-    if (!formData.nome?.trim())      { toast.error('Nome do animal é obrigatório'); setSubmitting(false); return; }
-    if (!formData.especieId)         { toast.error('Espécie é obrigatória'); setSubmitting(false); return; }
-    if (!formData.sexo)              { toast.error('Sexo é obrigatório'); setSubmitting(false); return; }
-    if (!formData.localizacaoId)     { toast.error('Selecione ou crie o local do animal'); setSubmitting(false); return; }
-    if (!formData.racaId)            { toast.error('Raça é obrigatória'); setSubmitting(false); return; }
-    if (!formData.dataNascimento && !formData.idadeAnos) { toast.error('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
-    if (formData.peso && Number(formData.peso) <= 0)     { toast.error('O peso deve ser positivo'); setSubmitting(false); return; }
-    if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { toast.error('A idade deve ser positiva'); setSubmitting(false); return; }
+    if (!formData.nome?.trim())      { setErroInline('Nome do animal é obrigatório'); setSubmitting(false); return; }
+    if (!formData.especieId)         { setErroInline('Espécie é obrigatória'); setSubmitting(false); return; }
+    if (!formData.sexo)              { setErroInline('Sexo é obrigatório'); setSubmitting(false); return; }
+    if (!formData.localizacaoId)     { setErroInline('Selecione ou crie o local do animal'); setSubmitting(false); return; }
+    if (!formData.racaId)            { setErroInline('Raça é obrigatória'); setSubmitting(false); return; }
+    if (baiaStatus.estado === 'ocupada') {
+      setErroInline(`${labelBaia ?? 'Baia'} já ocupada por ${baiaStatus.por}. Escolha outra.`);
+      setSubmitting(false); return;
+    }
+    if (!formData.dataNascimento && !formData.idadeAnos) { setErroInline('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
+    if (formData.peso && Number(formData.peso) <= 0)     { setErroInline('O peso deve ser positivo'); setSubmitting(false); return; }
+    if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { setErroInline('A idade deve ser positiva'); setSubmitting(false); return; }
     if (isEquino && (!formData.categoriaAnimal || !formData.tipoExercicio)) {
-      toast.error('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
+      setErroInline('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
     }
 
     // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
@@ -738,11 +770,11 @@ const Animal = () => {
 
     // Vet criando animal novo — valida dados do proprietário
     if (criandoNovoRegistro) {
-      if (!formProp.nomeCompleto.trim()) { toast.error('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
-      if (!formProp.email.trim())        { toast.error('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
+      if (!formProp.nomeCompleto.trim()) { setErroInline('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
+      if (!formProp.email.trim())        { setErroInline('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
       const digsTel = formProp.telefone.replace(/\D/g, '');
       if (digsTel && (digsTel.length < 10 || digsTel.length > 11)) {
-        toast.error('Telefone inválido — use (00) 00000-0000'); setSubmitting(false); return;
+        setErroInline('Telefone inválido — use (00) 00000-0000'); setSubmitting(false); return;
       }
     }
 
@@ -788,8 +820,6 @@ const Animal = () => {
             phone2:   (formProp.telefone2    ?? '').trim() || null,
           },
         }),
-        // Informa o backend se o proprietário precisa aprovar ou vínculo é imediato
-        ...(criandoNovoRegistro && { pedirAutorizacao }),
       };
 
       let createdAnimalId: number | null = null;
@@ -828,11 +858,9 @@ const Animal = () => {
       }
 
       // Mensagem de sucesso contextual
-      const msgSucesso = criandoNovoRegistro
-        ? (pedirAutorizacao
-            ? 'Solicitação enviada! O proprietário receberá um e-mail para autorizar o vínculo.'
-            : 'Animal cadastrado com sucesso!')
-        : isEditMode ? 'Animal atualizado com sucesso!' : 'Animal cadastrado com sucesso!';
+      const msgSucesso = isEditMode
+        ? 'Animal atualizado com sucesso!'
+        : 'Animal cadastrado com sucesso!';
 
       toast.success(msgSucesso);
       await refreshSelectedAnimal();
@@ -862,7 +890,7 @@ const Animal = () => {
           ?? resp?.data?.error
           ?? resp?.data?.erros?.[0]?.mensagem
           ?? 'Erro ao salvar animal';
-      toast.error(msg);
+      setErroInline(msg);
     } finally {
       setSubmitting(false);
     }
@@ -894,6 +922,8 @@ const Animal = () => {
   return (
     <>
     <PageContainer maxWidth="2xl">
+      <InlineError message={erroInline} className="mb-4" />
+
 
       <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
 
@@ -1009,21 +1039,15 @@ const Animal = () => {
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
                     <strong>{formData.nome}</strong> já está cadastrado sem veterinário responsável.
-                    Os dados do proprietário foram preenchidos automaticamente. Será criado um{' '}
-                    <strong>novo cadastro do animal</strong> tendo você como veterinário responsável.{' '}
-                    {pedirAutorizacao
-                      ? 'Após salvar, um e-mail será enviado ao proprietário para autorizar o vínculo.'
-                      : 'Após salvar, o proprietário receberá um e-mail informativo.'}
+                    Será criado um <strong>novo cadastro do animal</strong> tendo você como
+                    veterinário responsável — preencha os dados do animal e do proprietário.{' '}
+                    Após salvar, o proprietário receberá um e-mail informativo.
                   </span>
                 </div>
               )}
 
-              {/* Animal não encontrado — novo cadastro */}
-              {statusBuscaAnimal === 'nao_encontrado' && isVet && !isEditMode && (
-                <p className="mt-1 text-xs text-emerald-600">
-                  ✓ Animal não encontrado — será criado um novo cadastro.
-                </p>
-              )}
+              {/* Animal não cadastrado na empresa é o caso normal de um cadastro novo —
+                  não precisa de aviso. Só avisamos quando há algo a decidir. */}
             </div>
 
             {/* ── 2. Local do Animal + Baia ────────────────────────────────── */}
@@ -1089,13 +1113,28 @@ const Animal = () => {
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
                     {labelBaia}
                   </label>
-                  <input
-                    type="text"
-                    value={formData.baia}
-                    onChange={e => setFormData({ ...formData, baia: e.target.value })}
-                    placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
-                    className={inputClass}
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formData.baia}
+                      onChange={e => setFormData({ ...formData, baia: e.target.value })}
+                      placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
+                      className={`${inputClass} pr-9 ${
+                        baiaStatus.estado === 'ocupada' ? 'border-red-300 focus:border-red-500' : ''
+                      }`}
+                    />
+                    {/* Só sinaliza problema: baia livre é o caso esperado, não precisa de aviso */}
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      {baiaStatus.estado === 'checando' && <Loader2 size={14} className="animate-spin text-gray-400" />}
+                      {baiaStatus.estado === 'ocupada'  && <AlertCircle size={14} className="text-red-500" />}
+                    </span>
+                  </div>
+                  {baiaStatus.estado === 'ocupada' && (
+                    <p className="mt-1 text-xs text-red-600">
+                      {labelBaia} ocupada por <strong>{baiaStatus.por}</strong>
+                      {locBusca.trim() ? ` (${locBusca.trim()})` : ''}.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -1175,7 +1214,7 @@ const Animal = () => {
                         if (!e.target.value) return;
                         const d = new Date(e.target.value + 'T00:00');
                         const h = new Date(); h.setHours(0, 0, 0, 0);
-                        if (d > h) { toast.error('Data futura não permitida.'); return; }
+                        if (d > h) { setErroInline('Data futura não permitida.'); return; }
                         setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: calcularIdadeAnos(e.target.value) });
                       }}
                       className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
@@ -1418,8 +1457,8 @@ const Animal = () => {
                           }}
                           onBlur={e => buscarProprietarioPorEmail(e.target.value)}
                           placeholder="email@exemplo.com"
-                          disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet'}
-                          className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet') ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                          disabled={isEditMode}
+                          className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                         />
                         {buscandoProprietario && (
                           <span className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1442,8 +1481,8 @@ const Animal = () => {
                         value={formProp.nomeCompleto}
                         onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
                         placeholder="Nome do proprietário"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                   </div>
@@ -1456,8 +1495,8 @@ const Animal = () => {
                         value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                     <div>
@@ -1467,37 +1506,15 @@ const Animal = () => {
                         value={formProp.telefone2}
                         onChange={e => setFormProp(p => ({ ...p, telefone2: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        disabled={isEditMode || proprietarioExistente === true}
+                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
                     </div>
                   </div>
-                  {/* Checkbox "Pedir Autorização?" — apenas para novos vínculos */}
-                  {!isEditMode && (statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'nao_encontrado') && (
-                    <div className="border border-gray-200 rounded-2xl p-3 bg-gray-50 space-y-2">
-                      <label className="flex items-start gap-2 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={pedirAutorizacao}
-                          onChange={e => setPedirAutorizacao(e.target.checked)}
-                          className="w-4 h-4 rounded border-gray-300 accent-blue-600 mt-0.5 flex-shrink-0"
-                        />
-                        <div>
-                          <span className="text-sm font-semibold text-gray-700">Solicitar autorização ao proprietário</span>
-                          <p className="text-xs text-gray-500 mt-0.5">
-                            {pedirAutorizacao
-                              ? 'O proprietário receberá um e-mail com os dados de acesso (se conta nova) e um link para autorizar o vínculo.'
-                              : 'O vínculo será estabelecido imediatamente. O proprietário receberá um e-mail informativo (sem necessidade de aprovação).'}
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-                  )}
-
                   {!isEditMode && proprietarioExistente === true && (
                     <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
                       <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>Proprietário encontrado. Dados preenchidos automaticamente.</span>
+                      <span>Proprietário já cadastrado nesta empresa. Dados preenchidos automaticamente.</span>
                     </div>
                   )}
                   {!isEditMode && proprietarioExistente === false && statusBuscaAnimal === 'nao_encontrado' && (
@@ -1607,7 +1624,7 @@ const Animal = () => {
                 : statusBuscaAnimal === 'minha_equipe'
                   ? 'Animal já com sua equipe'
                   : (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'sem_vet')
-                    ? (pedirAutorizacao ? 'Solicitar autorização ao proprietário' : 'Cadastrar Animal')
+                    ? 'Cadastrar Animal'
                     : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
             </button>
 

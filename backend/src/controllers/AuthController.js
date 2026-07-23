@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require('../lib/authCookies');
+const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
@@ -40,7 +41,7 @@ const AuthController = {
     }
 
     try {
-      const emailLower = email.trim().toLowerCase();
+      const emailLower = normalizeEmail(email);
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const user = await prisma.user.create({
@@ -88,9 +89,8 @@ const AuthController = {
       const { email } = req.body;
       if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
 
-      const user = await prisma.user.findUnique({
-        where: { email: email.toLowerCase() }
-      });
+      // Busca case-insensitive (funciona p/ cadastros antigos em maiúsculas)
+      const user = await findUserByEmail(prisma, email);
 
       // E-mail inexistente: responde igual ao caso de sucesso, sem enviar nada.
       if (!user) return res.json(respostaGenerica);

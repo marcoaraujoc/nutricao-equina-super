@@ -4,6 +4,7 @@ import api from '../services/api';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { ArrowLeft, AlertCircle } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 // =====================================================================
 // INTERFACES
@@ -52,6 +53,8 @@ const NovoNutrienteComposicao = () => {
 
   // ── Dados carregados ─────────────────────────────────────────────────
   const [composicoes, setComposicoes] = useState<ComposicaoItem[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [nutrientes, setNutrientes] = useState<Nutriente[]>([]);
   const [loadingDados, setLoadingDados] = useState(true);
 
@@ -76,7 +79,7 @@ const NovoNutrienteComposicao = () => {
         setNutrientes(nutRes.data?.dados ?? nutRes.data ?? []);
       } catch (err) {
         console.error('Erro ao carregar dados:', err);
-        toast.error('Erro ao carregar dados');
+        setErroInline('Erro ao carregar dados');
       } finally {
         setLoadingDados(false);
       }
@@ -192,6 +195,8 @@ const NovoNutrienteComposicao = () => {
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-xl mx-auto">
         <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
+
+          <InlineError message={erroInline} className="mb-4" />
 
           {/* Header */}
           <div className="flex items-center gap-3 mb-5">

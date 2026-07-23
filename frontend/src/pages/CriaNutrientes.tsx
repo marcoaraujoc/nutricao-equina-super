@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 
 const CriaNutrientes = () => {
   const navigate = useNavigate();
@@ -11,6 +13,8 @@ const CriaNutrientes = () => {
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Erro de ação exibido inline (substitui o alert de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     nome: '',
@@ -37,18 +41,19 @@ const CriaNutrientes = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setErroInline(null);
     try {
       if (isEditMode) {
         await api.put(`/nutrientes/${id}`, formData);
-        alert('Nutriente atualizado com sucesso!');
+        toast.success('Nutriente atualizado com sucesso!');
       } else {
         await api.post('/nutrientes', formData);
-        alert('Nutriente cadastrado com sucesso!');
+        toast.success('Nutriente cadastrado com sucesso!');
       }
       navigate('/nutrientes');
     } catch (error: any) {
       console.error(error);
-      alert(error.response?.data?.error || 'Erro ao salvar nutriente');
+      setErroInline(error.response?.data?.error || 'Erro ao salvar nutriente');
     } finally {
       setSubmitting(false);
     }
@@ -70,6 +75,8 @@ const CriaNutrientes = () => {
       <div className="max-w-2xl mx-auto px-3 sm:px-4">
 
         <BotaoVoltar className="mb-4" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 text-center mb-5">

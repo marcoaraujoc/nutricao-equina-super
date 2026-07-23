@@ -16,6 +16,7 @@ import {
 import { formatDateShort, formatDate } from '../utils/dateUtils';
 import DateInput from '../components/DateInput';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
+import InlineError from '../components/InlineError';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -144,10 +145,12 @@ export default function Farmacia() {
   const podeAjustar = isGestor || podeExecutar('farmacia.estoque.ajustar');
   const podeDeletar = isGestor || podeExecutar('farmacia.estoque.deletar');
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [itens,        setItens]        = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [fornecedores, setFornecedores] = useState<FornecedorItem[]>([]);
   const [showNovoForn, setShowNovoForn] = useState(false);
   const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
@@ -256,7 +259,7 @@ export default function Farmacia() {
       setFornecedores(
         (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => fornecedorDeFarmacia(f.tipoServico))
       );
-    } catch { toast.error('Erro ao carregar estoque.'); }
+    } catch { setErroInline('Erro ao carregar estoque.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
 
@@ -416,18 +419,18 @@ export default function Farmacia() {
   const salvar = async () => {
     if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de estoque'); return; }
-    if (!form.medicamentoId) return toast.error('Selecione um medicamento do catálogo.');
-    if (!form.lote.trim())   return toast.error('Lote é obrigatório.');
-    if (!form.validade)      return toast.error('Validade é obrigatória.');
+    if (!form.medicamentoId) return setErroInline('Selecione um medicamento do catálogo.');
+    if (!form.lote.trim())   return setErroInline('Lote é obrigatório.');
+    if (!form.validade)      return setErroInline('Validade é obrigatória.');
     // Não permite validade vencida (anterior a hoje) sempre que o campo for editável —
     // na criação e na edição de item ainda não movimentado (item em uso tem a validade travada).
     if (validadeVencida) {
-      return toast.error('Validade vencida: informe uma data igual ou posterior a hoje.');
+      return setErroInline('Validade vencida: informe uma data igual ou posterior a hoje.');
     }
 
-    if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return toast.error('Quantidades não podem ser negativas.');
-    if (!editandoId && form.qtdEstoque < 0) return toast.error('Estoque não pode ser negativo.');
-    if (!form.valor || form.valor <= 0) return toast.error('Valor é obrigatório.');
+    if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return setErroInline('Quantidades não podem ser negativas.');
+    if (!editandoId && form.qtdEstoque < 0) return setErroInline('Estoque não pode ser negativo.');
+    if (!form.valor || form.valor <= 0) return setErroInline('Valor é obrigatório.');
 
     // Na criação, valor e valorRepassado são por embalagem — multiplicar pelo nº de embalagens
     // para que o banco armazene o valor TOTAL da entrada (base do cálculo de custo por unidade).
@@ -470,7 +473,7 @@ export default function Farmacia() {
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar.');
+      setErroInline(msg ?? 'Erro ao salvar.');
     } finally { setSalvando(false); }
   };
 
@@ -484,7 +487,7 @@ export default function Farmacia() {
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao inativar.');
+      setErroInline(msg ?? 'Erro ao inativar.');
     }
   };
 
@@ -517,13 +520,13 @@ export default function Farmacia() {
 
   const confirmarAjuste = async () => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
-    if (!itemAjuste)             return toast.error('Selecione um medicamento do estoque.');
-    if (ajusteQtd === '')        return toast.error('Informe a quantidade em estoque.');
+    if (!itemAjuste)             return setErroInline('Selecione um medicamento do estoque.');
+    if (ajusteQtd === '')        return setErroInline('Informe a quantidade em estoque.');
     const qtd = Number(ajusteQtd);
-    if (qtd < 0)                 return toast.error('Quantidade não pode ser negativa.');
-    if (!ajusteMotivo.trim())    return toast.error('Informe o motivo do ajuste.');
+    if (qtd < 0)                 return setErroInline('Quantidade não pode ser negativa.');
+    if (!ajusteMotivo.trim())    return setErroInline('Informe o motivo do ajuste.');
     const delta = qtd - itemAjuste.qtdEstoque;
-    if (delta === 0)             return toast.error('A quantidade informada é igual ao estoque atual.');
+    if (delta === 0)             return setErroInline('A quantidade informada é igual ao estoque atual.');
 
     setAjustando(true);
     try {
@@ -537,7 +540,7 @@ export default function Farmacia() {
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao ajustar estoque.');
+      setErroInline(msg ?? 'Erro ao ajustar estoque.');
     } finally { setAjustando(false); }
   };
 
@@ -547,7 +550,7 @@ export default function Farmacia() {
     try {
       const res = await api.get(`/farmacia/estoque/movimentos/${item.id}`);
       setMovimentos(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar histórico.'); }
+    } catch { setErroInline('Erro ao carregar histórico.'); }
     finally { setLoadingMov(false); }
   };
 
@@ -571,6 +574,8 @@ export default function Farmacia() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         <BotaoVoltar className="mb-6" />

@@ -7,7 +7,6 @@
 // campo "Nova senha" (admin: qualquer usuário; gestor: membros da própria equipe).
 
 import { useState, useEffect } from 'react';
-import toast from 'react-hot-toast';
 import {
   X, AlertCircle, Info, Eye, EyeOff, Loader2, Plus,
   User as UserIcon, MapPin, Users,
@@ -44,7 +43,23 @@ export interface UsuarioFormValues {
   diasTrabalho?: number[];       // 0=Dom … 6=Sáb
   horaInicioTrabalho?: string;   // HH:MM
   horaFimTrabalho?: string;      // HH:MM
+  /** Locais de trabalho — o membro pode ter vários na mesma empresa, cada um com
+   *  dias e horário próprios. Quando presente, é a fonte do expediente. */
+  locaisTrabalho?: LocalTrabalhoForm[];
 }
+
+export interface LocalTrabalhoForm {
+  localizacaoId:      number;
+  localizacaoNome:    string;
+  diasTrabalho:       number[];  // 0=Dom … 6=Sáb
+  horaInicioTrabalho: string;    // HH:MM
+  horaFimTrabalho:    string;    // HH:MM
+}
+
+interface LocalizacaoOpcao { id: number; nome: string }
+
+const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
+const labelCls = 'block text-xs text-gray-500 mb-1';
 
 interface FornecedorDisponivel {
   id:          number;
@@ -101,6 +116,7 @@ const FORM_VAZIO: UsuarioFormValues = {
   fullName: '', email: '', phone: '', perfil: 'VETERINARIO', cargos: ['VETERINARIO'], senha: '', ativo: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
   diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '', especialidadeIds: [],
+  locaisTrabalho: [],
 };
 
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
@@ -138,6 +154,68 @@ interface UsuarioFormModalProps {
   onSubmit: (values: UsuarioFormValues) => void;
 }
 
+// ─── Combobox de localização (autocomplete no catálogo) ───────────────────────
+function LocalizacaoCombobox({
+  value, nome, onSelect,
+}: {
+  value: number | null;
+  nome: string;
+  onSelect: (id: number, nome: string) => void;
+}) {
+  const [busca, setBusca]   = useState(nome);
+  const [aberto, setAberto] = useState(false);
+  const [opcoes, setOpcoes] = useState<LocalizacaoOpcao[]>([]);
+  const [carregando, setCarregando] = useState(false);
+
+  useEffect(() => { setBusca(nome); }, [nome]);
+
+  useEffect(() => {
+    if (!aberto) return;
+    const t = setTimeout(async () => {
+      setCarregando(true);
+      try {
+        const res = await api.get('/cadastro/localizacoes', {
+          params: { busca: busca.trim() || undefined, limit: 10 },
+        });
+        setOpcoes(res.data?.dados ?? []);
+      } catch { setOpcoes([]); }
+      finally { setCarregando(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [busca, aberto]);
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <MapPin size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <input
+          type="text" value={busca}
+          onChange={e => { setBusca(e.target.value); setAberto(true); }}
+          onFocus={() => setAberto(true)}
+          onBlur={() => setTimeout(() => setAberto(false), 180)}
+          placeholder="Buscar local de trabalho..."
+          className={`${inputCls} pl-7 ${value ? '' : 'text-gray-700'}`}
+        />
+      </div>
+      {aberto && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+          {carregando && <p className="px-3 py-2 text-xs text-gray-400">Buscando…</p>}
+          {!carregando && opcoes.length === 0 && (
+            <p className="px-3 py-2 text-xs text-gray-400">Nenhum local encontrado.</p>
+          )}
+          {opcoes.map(o => (
+            <button key={o.id} type="button"
+              onMouseDown={() => { onSelect(o.id, o.nome); setBusca(o.nome); setAberto(false); }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 border-b border-gray-50 last:border-0">
+              {o.nome}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function UsuarioFormModal({
@@ -154,6 +232,8 @@ export default function UsuarioFormModal({
   });
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [erroSenhaLocal, setErroSenhaLocal] = useState('');
+  // Erro de ação/validação do formulário — exibido inline acima dos botões do rodapé
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
 
   // Seletor de fornecedor existente
@@ -225,12 +305,13 @@ export default function UsuarioFormModal({
 
   const buscarCep = async (cepValue?: string) => {
     const cep = (cepValue ?? form.cep).replace(/\D/g, '');
-    if (cep.length !== 8) { toast.error('CEP inválido'); return; }
+    setErroInline(null);
+    if (cep.length !== 8) { setErroInline('CEP inválido'); return; }
     setBuscandoCEP(true);
     try {
       const res  = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
       const data = await res.json();
-      if (data.erro) { toast.error('CEP não encontrado'); return; }
+      if (data.erro) { setErroInline('CEP não encontrado'); return; }
       setForm(prev => ({
         ...prev,
         endereco: data.logradouro ?? '',
@@ -239,20 +320,21 @@ export default function UsuarioFormModal({
         estado:   data.uf         ?? '',
       }));
     } catch {
-      toast.error('Erro ao buscar CEP');
+      setErroInline('Erro ao buscar CEP');
     } finally { setBuscandoCEP(false); }
   };
 
   const handleSubmit = () => {
     setErroSenhaLocal('');
-    if (!form.fullName.trim())     { toast.error('Informe o nome');           return; }
-    if (!form.email.trim())        { toast.error('Informe o e-mail');         return; }
-    if (!isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
-    if (!form.phone.trim())                          { toast.error('Informe o telefone'); return; }
-    if (form.phone.replace(/\D/g, '').length < 10)  { toast.error('Telefone inválido');  return; }
+    setErroInline(null);
+    if (!form.fullName.trim())     { setErroInline('Informe o nome');           return; }
+    if (!form.email.trim())        { setErroInline('Informe o e-mail');         return; }
+    if (!isValidEmail(form.email)) { setErroInline('Informe um e-mail válido'); return; }
+    if (!form.phone.trim())                          { setErroInline('Informe o telefone'); return; }
+    if (form.phone.replace(/\D/g, '').length < 10)  { setErroInline('Telefone inválido');  return; }
     const cargosFinais = form.cargos ?? [form.perfil];
     if (permitirMultiCargos && cargosFinais.length === 0) {
-      toast.error('Selecione ao menos um perfil de acesso'); return;
+      setErroInline('Selecione ao menos um perfil de acesso'); return;
     }
     if (permitirSenha && form.senha) {
       const erroSenha = validarSenha(form.senha);
@@ -261,7 +343,11 @@ export default function UsuarioFormModal({
     const perfilFinal = cargosFinais[0];
     const enviaEspec = perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR';
     if (enviaEspec && !modoEdicao && (form.especialidadeIds ?? []).length === 0) {
-      toast.error('Selecione ao menos uma especialidade'); return;
+      setErroInline('Selecione ao menos uma especialidade'); return;
+    }
+    // Local de trabalho adicionado precisa ter uma localização escolhida
+    if (comExpediente && (form.locaisTrabalho ?? []).some(l => !l.localizacaoId)) {
+      setErroInline('Selecione o local de cada linha de trabalho (ou remova a linha vazia).'); return;
     }
     onSubmit({
       ...form,
@@ -275,9 +361,6 @@ export default function UsuarioFormModal({
       especialidadeIds: enviaEspec ? (form.especialidadeIds ?? []) : undefined,
     });
   };
-
-  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
-  const labelCls = 'block text-xs text-gray-500 mb-1';
 
   return (<>
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
@@ -453,44 +536,95 @@ export default function UsuarioFormModal({
             </div>
           </section>
 
-          {/* ── Expediente de trabalho (Agenda) ── */}
+          {/* ── Locais de trabalho (dias + horário por local) ── */}
           {comExpediente && (
             <section>
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                <UserIcon size={12} /> Dias e horário de trabalho
-              </h4>
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {DIAS_SEMANA_TRAB.map(d => {
-                  const on = (form.diasTrabalho ?? []).includes(d.v);
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <MapPin size={12} /> Locais de trabalho
+                </h4>
+                <button type="button"
+                  onClick={() => setForm(prev => ({
+                    ...prev,
+                    locaisTrabalho: [
+                      ...(prev.locaisTrabalho ?? []),
+                      { localizacaoId: 0, localizacaoNome: '', diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '' },
+                    ],
+                  }))}
+                  className="flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800">
+                  <Plus size={13} /> Adicionar local
+                </button>
+              </div>
+
+              {(form.locaisTrabalho ?? []).length === 0 && (
+                <p className="text-xs text-gray-400 mb-2">
+                  Nenhum local informado — o profissional herda o expediente da empresa.
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {(form.locaisTrabalho ?? []).map((lt, idx) => {
+                  const patch = (campos: Partial<LocalTrabalhoForm>) =>
+                    setForm(prev => ({
+                      ...prev,
+                      locaisTrabalho: (prev.locaisTrabalho ?? []).map((x, i) => i === idx ? { ...x, ...campos } : x),
+                    }));
                   return (
-                    <button key={d.v} type="button"
-                      onClick={() => setForm(prev => {
-                        const atual = prev.diasTrabalho ?? [];
-                        return { ...prev, diasTrabalho: on ? atual.filter(x => x !== d.v) : [...atual, d.v].sort((a, b) => a - b) };
-                      })}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
-                        on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                      }`}>
-                      {d.l}
-                    </button>
+                    <div key={idx} className="border border-gray-200 rounded-2xl p-3 space-y-2.5 bg-gray-50/60">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1">
+                          <LocalizacaoCombobox
+                            value={lt.localizacaoId || null}
+                            nome={lt.localizacaoNome}
+                            onSelect={(id, nome) => patch({ localizacaoId: id, localizacaoNome: nome })}
+                          />
+                        </div>
+                        <button type="button" title="Remover local"
+                          onClick={() => setForm(prev => ({
+                            ...prev,
+                            locaisTrabalho: (prev.locaisTrabalho ?? []).filter((_, i) => i !== idx),
+                          }))}
+                          className="p-2 text-gray-300 hover:text-red-500 flex-shrink-0">
+                          <X size={15} />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {DIAS_SEMANA_TRAB.map(d => {
+                          const on = lt.diasTrabalho.includes(d.v);
+                          return (
+                            <button key={d.v} type="button"
+                              onClick={() => patch({
+                                diasTrabalho: on ? lt.diasTrabalho.filter(x => x !== d.v)
+                                                 : [...lt.diasTrabalho, d.v].sort((a, b) => a - b),
+                              })}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                                on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                              }`}>
+                              {d.l}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={labelCls}>Entra às</label>
+                          <input type="time" step={1800} value={lt.horaInicioTrabalho}
+                            onChange={e => patch({ horaInicioTrabalho: e.target.value })} className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Sai às</label>
+                          <input type="time" step={1800} value={lt.horaFimTrabalho}
+                            onChange={e => patch({ horaFimTrabalho: e.target.value })} className={inputCls} />
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={labelCls}>Entra às</label>
-                  <input type="time" step={1800} value={form.horaInicioTrabalho ?? ''}
-                    onChange={e => set('horaInicioTrabalho', e.target.value)} className={inputCls} />
-                </div>
-                <div>
-                  <label className={labelCls}>Sai às</label>
-                  <input type="time" step={1800} value={form.horaFimTrabalho ?? ''}
-                    onChange={e => set('horaFimTrabalho', e.target.value)} className={inputCls} />
-                </div>
-              </div>
-              <p className="text-xs text-gray-400 mt-1">
-                A Agenda libera horários deste profissional apenas nos dias e na faixa informados.
-                Deixe em branco para herdar o expediente da empresa.
+              <p className="text-xs text-gray-400 mt-2">
+                O mesmo profissional pode atender em locais diferentes, cada um com seus dias e horário.
               </p>
             </section>
           )}
@@ -558,6 +692,8 @@ export default function UsuarioFormModal({
         </div>
 
         {/* Footer */}
+        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+
         <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} disabled={salvando}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">

@@ -63,6 +63,11 @@ const authenticate = async (req, res, next) => {
               OR: [
                 { ownerId: decoded.id },
                 { equipes: { some: { membros: { some: { userId: decoded.id } } } } },
+                // PROPRIETÁRIO: o vínculo com a clínica é ter animal nela ou possuir
+                // cadastro (perfil) nela — é o que habilita o seletor de empresa no
+                // portal do cliente, com permissões resolvidas por empresa ativa.
+                { animais: { some: { userId: decoded.id, ativo: true } } },
+                { proprietarioPerfis: { some: { userId: decoded.id, ativo: true } } },
               ],
             },
             select: { id: true },
@@ -83,6 +88,17 @@ const authenticate = async (req, res, next) => {
           // Fallback: usuário é dono da empresa (Empresa.ownerId) mas pode não ter MembroEquipe
           const empresa = await prisma.empresa.findFirst({ where: { ownerId: decoded.id } });
           req.empresaId = empresa?.id ?? null;
+
+          // Proprietário sem contexto escolhido: assume a empresa do animal mais
+          // recente, para que o cadastro/permissões já venham de uma empresa real.
+          if (!req.empresaId && decoded.userType === 'PROPRIETARIO') {
+            const animal = await prisma.animal.findFirst({
+              where:   { userId: decoded.id, ativo: true, empresaId: { not: null } },
+              select:  { empresaId: true },
+              orderBy: { dataCadastro: 'desc' },
+            });
+            req.empresaId = animal?.empresaId ?? null;
+          }
         }
       }
     } catch {

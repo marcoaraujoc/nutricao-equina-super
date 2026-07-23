@@ -130,24 +130,29 @@ const listarComValores = async (req, res) => {
       ];
     }
 
+    // Catálogo global (empresaId null) + procedimentos próprios da empresa ativa
+    where.AND = [{ OR: [{ empresaId: null }, ...(req.empresaId ? [{ empresaId: req.empresaId }] : [])] }];
+
     let procedimentos = await prisma.procedimentoVeterinario.findMany({
       where,
       orderBy: [{ categoria: 'asc' }, { nome: 'asc' }],
       select: {
         id: true, nome: true, nomeAbreviado: true, categoria: true, subcategoria: true,
         especialidade: true, especie: true, tipoProcedimento: true, duracao: true, valorVenda: true, descricao: true,
+        empresaId: true,
       },
     });
 
-    // Só os procedimentos das especialidades que a empresa atende.
-    const permitidas = await nomesEspecialidadesPermitidas(req);
-    if (permitidas) procedimentos = procedimentos.filter(p => permitidas.has(p.especialidade));
-
-    // Só os procedimentos das ESPÉCIES que a empresa trabalha (evita Bovino etc.
-    // numa empresa que só atende Equinos). Aplica-se sempre, independente do
-    // parâmetro `especie` (que ainda restringe à espécie do animal em atendimento).
+    // Filtros por especialidade/espécie que a empresa atende — procedimento PRÓPRIO da
+    // empresa (empresaId setado) sempre aparece, independente desses filtros.
+    const permitidas      = await nomesEspecialidadesPermitidas(req);
     const especiesEmpresa = await nomesEspeciesDaEmpresa(req);
-    procedimentos = procedimentos.filter(p => procedimentoDaEmpresa(p.especie, especiesEmpresa));
+    procedimentos = procedimentos.filter(p => {
+      if (p.empresaId && p.empresaId === req.empresaId) return true;
+      if (permitidas && !permitidas.has(p.especialidade)) return false;
+      if (!procedimentoDaEmpresa(p.especie, especiesEmpresa)) return false;
+      return true;
+    });
 
     // Só os procedimentos da espécie do animal em atendimento (ex: "Acupuntura" tem
     // procedimentos catalogados por espécie — Equino, Bovino, Canino... — o mesmo nome

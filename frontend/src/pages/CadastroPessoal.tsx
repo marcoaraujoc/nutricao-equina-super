@@ -10,6 +10,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import { CheckCircle2, XCircle, Loader2, Info, User } from 'lucide-react';
+import InlineError from '../components/InlineError';
 
 type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
 
@@ -70,6 +71,8 @@ export default function CadastroPessoal() {
   const [especiesErro,    setEspeciesErro]    = useState(false);
   // Verdadeiro quando o usuário entrou via convite — espécies são herdadas e ficam bloqueadas
   const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   // Cargo na equipe (ex: GESTOR) — definido quando foi incluído como membro
   const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
   // Membro de alguma equipe → habilita o expediente de atendimento
@@ -183,7 +186,7 @@ export default function CadastroPessoal() {
     try {
       const res  = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
       const data = await res.json();
-      if (data.erro) { toast.error('CEP não encontrado'); return; }
+      if (data.erro) { setErroInline('CEP não encontrado'); return; }
       setForm(prev => ({
         ...prev,
         endereco: data.logradouro || '',
@@ -192,7 +195,7 @@ export default function CadastroPessoal() {
         estado:   data.uf         || '',
       }));
     } catch {
-      toast.error('Erro ao buscar CEP. Verifique sua conexão.');
+      setErroInline('Erro ao buscar CEP. Verifique sua conexão.');
     }
   };
 
@@ -241,63 +244,63 @@ export default function CadastroPessoal() {
   // ── Validação em JS — sem popup do browser ────────────────────────────────
   const validar = (): boolean => {
     if (!form.nomeCompleto.trim()) {
-      toast.error('Nome completo é obrigatório');
+      setErroInline('Nome completo é obrigatório');
       return false;
     }
     if (!form.telefone.trim()) {
-      toast.error('Telefone é obrigatório');
+      setErroInline('Telefone é obrigatório');
       return false;
     }
     if (form.telefone.replace(/\D/g, '').length < 10) {
-      toast.error('Telefone inválido');
+      setErroInline('Telefone inválido');
       return false;
     }
     if (!form.cep.trim()) {
-      toast.error('CEP é obrigatório');
+      setErroInline('CEP é obrigatório');
       return false;
     }
     if (!form.endereco.trim()) {
-      toast.error('Endereço é obrigatório');
+      setErroInline('Endereço é obrigatório');
       return false;
     }
     if (!form.bairro.trim()) {
-      toast.error('Bairro é obrigatório');
+      setErroInline('Bairro é obrigatório');
       return false;
     }
     if (!form.cidade.trim()) {
-      toast.error('Cidade é obrigatória');
+      setErroInline('Cidade é obrigatória');
       return false;
     }
     if (!form.estado.trim()) {
-      toast.error('Estado é obrigatório');
+      setErroInline('Estado é obrigatório');
       return false;
     }
     if (form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe) {
       if (!form.crmv.trim()) {
-        toast.error('CRMV é obrigatório para Médicos Veterinários');
+        setErroInline('CRMV é obrigatório para Médicos Veterinários');
         return false;
       }
       if (!CRMV_REGEX.test(form.crmv.trim())) {
-        toast.error('Formato de CRMV inválido. Use o formato: 12345/SP');
+        setErroInline('Formato de CRMV inválido. Use o formato: 12345/SP');
         return false;
       }
       if (crmvStatus === 'invalido') {
-        toast.error('CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.');
+        setErroInline('CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.');
         return false;
       }
       if (crmvStatus === 'checking') {
-        toast.error('Aguarde a verificação do CRMV ser concluída');
+        setErroInline('Aguarde a verificação do CRMV ser concluída');
         return false;
       }
       if (!isConvidadoFlag && form.especiesAtendidas.length === 0 && especies.length > 0) {
-        toast.error('Selecione ao menos uma espécie atendida');
+        setErroInline('Selecione ao menos uma espécie atendida');
         return false;
       }
     }
     // Especialidade: obrigatória para VET e FORNECEDOR (gestor não preenche)
     if ((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe) {
       if (form.especialidadeIds.length === 0) {
-        toast.error('Selecione ao menos uma especialidade');
+        setErroInline('Selecione ao menos uma especialidade');
         return false;
       }
     }
@@ -370,10 +373,10 @@ export default function CadastroPessoal() {
           }
         }
       } else {
-        toast.error(resData.error || 'Não foi possível salvar o cadastro. Tente novamente.');
+        setErroInline(resData.error || 'Não foi possível salvar o cadastro. Tente novamente.');
       }
     } catch {
-      toast.error('Erro de conexão com o servidor. Verifique sua internet e tente novamente.');
+      setErroInline('Erro de conexão com o servidor. Verifique sua internet e tente novamente.');
     } finally {
       setSaving(false);
     }
@@ -393,6 +396,8 @@ export default function CadastroPessoal() {
 
   return (
     <PageContainer maxWidth="2xl">
+      <InlineError message={erroInline} className="mb-4" />
+
 
       <BotaoVoltar className="mb-4" />
 

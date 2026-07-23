@@ -9,6 +9,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
 import { ResenhaGraficaEquino } from '../components/resenha/ResenhaGraficaEquino';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ export default function Resenha() {
 
   const [animais,        setAnimais]        = useState<AnimalSimples[]>([]);
   const [loadingAnimais, setLoadingAnimais] = useState(true);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [animal,         setAnimal]         = useState<AnimalSimples | null>(null);
   const [form,           setForm]           = useState<ResenhaForm>(FORM_EMPTY);
   const [saving,         setSaving]         = useState(false);
@@ -123,7 +126,7 @@ export default function Resenha() {
       });
       toast.success('Dados da resenha salvos!');
     } catch {
-      toast.error('Erro ao salvar dados da resenha.');
+      setErroInline('Erro ao salvar dados da resenha.');
     } finally {
       setSaving(false);
     }
@@ -146,6 +149,8 @@ export default function Resenha() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate(-1)}

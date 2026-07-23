@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import api from '../services/api';
-import toast from 'react-hot-toast';
+import InlineError from '../components/InlineError';
 import {
   Search, FileText, Pill, Syringe,
   FlaskConical, Share2, Stethoscope,
@@ -79,11 +79,12 @@ export default function ClinicaDashboard() {
   const [loading,     setLoading]     = useState(true);
   const [busca,       setBusca]       = useState('');
   const [filtroCampo, setFiltroCampo] = useState<FiltroCampo>('animal');
+  const [erroInline,  setErroInline]  = useState<string | null>(null);
 
   useEffect(() => {
     api.get('/animais')
       .then(res => setAnimais(res.data?.dados ?? []))
-      .catch(() => toast.error('Erro ao carregar pacientes'))
+      .catch(() => setErroInline('Erro ao carregar pacientes'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -122,6 +123,8 @@ export default function ClinicaDashboard() {
           </div>
         </div>
       </div>
+
+      <InlineError message={erroInline} />
 
       {/* Busca */}
       {animais.length > 0 && (

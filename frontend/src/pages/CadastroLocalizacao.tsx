@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -106,6 +107,9 @@ export default function CadastroLocalizacao() {
 
   const [buscandoCEP,    setBuscandoCEP]    = useState(false);
   const [showInfo,       setShowInfo]       = useState(false);
+  // Erros inline: da página (lista/ações) e do modal de cadastro/edição
+  const [erroInline,     setErroInline]     = useState<string | null>(null);
+  const [erroModal,      setErroModal]      = useState<string | null>(null);
 
   // ── Carregar lista ──────────────────────────────────────────────────────────
   const carregar = useCallback(async () => {
@@ -120,7 +124,7 @@ export default function CadastroLocalizacao() {
       if (!res.data) return;
       setLista(res.data.dados ?? []);
     } catch {
-      toast.error('Erro ao carregar localizações');
+      setErroInline('Erro ao carregar localizações');
     } finally {
       setLoading(false);
     }
@@ -152,19 +156,23 @@ export default function CadastroLocalizacao() {
   // ── Abrir modal ─────────────────────────────────────────────────────────────
   const abrirNovo = () => {
     setEditando(null);
+    setErroInline(null);
+    setErroModal(null);
     setForm(FORM_INICIAL);
     setModalAberto(true);
   };
 
   const abrirEditar = (loc: Localizacao) => {
     if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) {
-      toast.error('Apenas ADMIN pode editar localizações do catálogo global.');
+      setErroInline('Apenas ADMIN pode editar localizações do catálogo global.');
       return;
     }
     if (!podeEditar) {
-      toast.error('Sem permissão para editar localizações.');
+      setErroInline('Sem permissão para editar localizações.');
       return;
     }
+    setErroInline(null);
+    setErroModal(null);
     setEditando(loc);
     setForm({
       nome:              loc.nome,
@@ -180,8 +188,9 @@ export default function CadastroLocalizacao() {
 
   // ── Salvar ──────────────────────────────────────────────────────────────────
   const salvar = async () => {
-    if (!form.nome.trim()) { toast.error('Nome é obrigatório'); return; }
-    if (!form.tipoLocalizacao) { toast.error('Tipo de localização é obrigatório'); return; }
+    setErroModal(null);
+    if (!form.nome.trim()) { setErroModal('Nome é obrigatório'); return; }
+    if (!form.tipoLocalizacao) { setErroModal('Tipo de localização é obrigatório'); return; }
 
     setSalvando(true);
     try {
@@ -208,7 +217,7 @@ export default function CadastroLocalizacao() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as {response?: {data?: {mensagem?: string}}})?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar localização');
+      setErroModal(msg ?? 'Erro ao salvar localização');
     } finally {
       setSalvando(false);
     }
@@ -216,14 +225,15 @@ export default function CadastroLocalizacao() {
 
   // ── Toggle ativo ───────────────────────────────────────────────────────────
   const toggleAtivo = async (loc: Localizacao) => {
-    if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) { toast.error('Apenas ADMIN pode ativar/inativar localizações do catálogo global.'); return; }
-    if (!podeAtivar) { toast.error('Sem permissão para ativar/inativar localizações.'); return; }
+    if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroInline('Apenas ADMIN pode ativar/inativar localizações do catálogo global.'); return; }
+    if (!podeAtivar) { setErroInline('Sem permissão para ativar/inativar localizações.'); return; }
+    setErroInline(null);
     try {
       await api.patch(`/cadastro/localizacoes/${loc.id}/toggle`);
       toast.success(`Localização ${loc.ativo ? 'inativada' : 'ativada'}`);
       carregar();
     } catch {
-      toast.error('Erro ao alterar status');
+      setErroInline('Erro ao alterar status');
     }
   };
 
@@ -243,6 +253,9 @@ export default function CadastroLocalizacao() {
     <PageContainer maxWidth="7xl">
       {/* ── Cabeçalho ─────────────────────────────────────────────────────── */}
       <BotaoVoltar />
+
+      <InlineError message={erroInline} className="mt-3" />
+
       <div className="flex items-center justify-between gap-3 mt-2 mb-6 flex-wrap">
         <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">
           <MapPin size={22} className="text-emerald-600" />
@@ -569,6 +582,8 @@ export default function CadastroLocalizacao() {
             </div>
 
             {/* Footer */}
+            <InlineError message={erroModal} className="mx-6 mt-3 flex-shrink-0" />
+
             <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
               <button onClick={() => setModalAberto(false)}
                 className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">

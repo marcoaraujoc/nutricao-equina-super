@@ -15,6 +15,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
+import InlineError from '../components/InlineError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -441,8 +442,10 @@ export default function CadastroFornecedor() {
   const podeAtivar = isAdmin || podeExecutar('cadastro.fornecedor.ativar');
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,      setErroInline]      = useState<string | null>(null);
   const [fornecedores,    setFornecedores]    = useState<Fornecedor[]>([]);
   const [loading,         setLoading]         = useState(true);
   const [busca,           setBusca]           = useState('');
@@ -462,7 +465,7 @@ export default function CadastroFornecedor() {
       const res = await api.get(`/cadastro/fornecedores?${params}`);
       if (!res.data) return;
       setFornecedores(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar fornecedores'); }
+    } catch { setErroInline('Erro ao carregar fornecedores'); }
     finally { setLoading(false); }
   }, [busca, filtroAtivo]);
 
@@ -531,19 +534,19 @@ export default function CadastroFornecedor() {
     if (editando && editando.tipoEntrada === 'SYSTEM' && !isAdmin) { semPermissao('alterar fornecedor do catálogo global'); return; }
     if (editando && !podeEditar) { semPermissao('alterar fornecedor'); return; }
     if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
-    if (!form.nome.trim())       { toast.error('Nome é obrigatório'); return; }
+    if (!form.nome.trim())       { setErroInline('Nome é obrigatório'); return; }
     if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
-      toast.error('Selecione ao menos uma especialidade'); return;
+      setErroInline('Selecione ao menos uma especialidade'); return;
     }
-    if (form.email.trim() && !isValidEmail(form.email)) { toast.error('Informe um e-mail válido'); return; }
-    if (!form.telefone.trim())   { toast.error('Telefone é obrigatório'); return; }
+    if (form.email.trim() && !isValidEmail(form.email)) { setErroInline('Informe um e-mail válido'); return; }
+    if (!form.telefone.trim())   { setErroInline('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
     if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf)) {
-      toast.error('CPF inválido'); return;
+      setErroInline('CPF inválido'); return;
     }
     if (form.tipoDoc === 'cnpj' && docCNPJ && !validarCNPJ(form.cnpj)) {
-      toast.error('CNPJ inválido'); return;
+      setErroInline('CNPJ inválido'); return;
     }
 
     setSaving(true);
@@ -582,7 +585,7 @@ export default function CadastroFornecedor() {
         setDupInativoInfo({ mensagem: errData.mensagem ?? '' });
         return;
       }
-      toast.error(errData?.mensagem ?? 'Erro ao salvar');
+      setErroInline(errData?.mensagem ?? 'Erro ao salvar');
     } finally { setSaving(false); }
   };
 
@@ -593,7 +596,7 @@ export default function CadastroFornecedor() {
       await api.patch(`/cadastro/fornecedores/${f.id}/toggle`);
       toast.success(f.ativo ? 'Fornecedor inativado' : 'Fornecedor ativado');
       carregar();
-    } catch { toast.error('Erro ao alternar status'); }
+    } catch { setErroInline('Erro ao alternar status'); }
   };
 
   if (loadingPerms) return (
@@ -615,6 +618,9 @@ export default function CadastroFornecedor() {
     <PageContainer maxWidth="7xl">
       {/* Header */}
       <BotaoVoltar />
+
+      <InlineError message={erroInline} className="mt-3" />
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-2 mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">

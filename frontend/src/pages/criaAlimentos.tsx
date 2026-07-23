@@ -6,6 +6,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -47,6 +48,8 @@ const CriaAlimentos = () => {
   const isEditMode = !!id && id !== 'novo';
 
   const [formData,    setFormData]    = useState<FormData>(FORM_INICIAL);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [submitting,  setSubmitting]  = useState(false);
   const [loading,     setLoading]     = useState(isEditMode);
 
@@ -68,7 +71,7 @@ const CriaAlimentos = () => {
         });
       } catch (error) {
         console.error('Erro ao carregar alimento:', error);
-        toast.error('Erro ao carregar alimento');
+        setErroInline('Erro ao carregar alimento');
       } finally {
         setLoading(false);
       }
@@ -81,8 +84,8 @@ const CriaAlimentos = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.nome.trim()) { toast.error('Informe o nome do alimento'); return; }
-    if (!formData.categoria)   { toast.error('Selecione a categoria');       return; }
+    if (!formData.nome.trim()) { setErroInline('Informe o nome do alimento'); return; }
+    if (!formData.categoria)   { setErroInline('Selecione a categoria');       return; }
 
     setSubmitting(true);
     try {
@@ -98,7 +101,7 @@ const CriaAlimentos = () => {
       const mensagem = axios.isAxiosError(error)
         ? error.response?.data?.mensagem ?? 'Erro ao salvar alimento'
         : 'Erro inesperado';
-      toast.error(mensagem);
+      setErroInline(mensagem);
     } finally {
       setSubmitting(false);
     }
@@ -122,6 +125,8 @@ const CriaAlimentos = () => {
         <BotaoVoltar className="mb-6" />
 
         <div className="bg-white shadow-xl rounded-3xl p-6 border border-gray-100">
+
+          <InlineError message={erroInline} className="mb-4" />
 
           <h1 className="text-xl font-bold text-gray-900 text-center mb-6">
             {isEditMode ? 'Editar Alimento' : 'Novo Alimento'}

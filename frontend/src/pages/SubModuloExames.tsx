@@ -14,6 +14,8 @@ import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import InlineError from '../components/InlineError';
+
 
 // ─── Types catálogo ───────────────────────────────────────────────────────────
 
@@ -417,6 +419,8 @@ export default function SubModuloExames({
   // ── Tab state ──────────────────────────────────────────────────────────────
   const [mainTab,      setMainTab]      = useState<MainTab>('laboratorial');
   const [showProcDrop, setShowProcDrop] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [procSearch,   setProcSearch]   = useState('');
 
   // ── Catálogo dinâmico de laboratórios ─────────────────────────────────────
@@ -481,7 +485,7 @@ export default function SubModuloExames({
   const podeCriarImg = podeCriar && (isGestor || podeExecutar('exames.imagem.criar'));
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
 
   // Tipos de amostra que têm pelo menos um exame no grupo carregado
   // Fallback para lista completa enquanto os dados não estão populados (tiposAmostra=[])
@@ -799,12 +803,12 @@ export default function SubModuloExames({
   }, [pendingGroups, laboratorioNomeSalvo]);
 
   const validateCurrentForm = (): boolean => {
-    if (examesEfetivos.length === 0)                               { toast.error('Selecione ao menos um exame'); return false; }
-    if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { toast.error('Selecione o laboratório de destino'); return false; }
+    if (examesEfetivos.length === 0)                               { setErroInline('Selecione ao menos um exame'); return false; }
+    if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { setErroInline('Selecione o laboratório de destino'); return false; }
     if (mainTab === 'laboratorial') {
       const repetidos = examesEfetivos.filter(n => examesJaInseridosNoLab.has(n.trim().toLowerCase()));
       if (repetidos.length > 0) {
-        toast.error(`Exame(s) já incluído(s) para este laboratório: ${repetidos.join(', ')}`);
+        setErroInline(`Exame(s) já incluído(s) para este laboratório: ${repetidos.join(', ')}`);
         return false;
       }
     }
@@ -868,7 +872,7 @@ export default function SubModuloExames({
 
   const handleInserir = () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
-    if (!evolucaoId) { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
+    if (!evolucaoId) { setErroInline('Inicie uma evolução antes de registrar um exame.'); return; }
     if (!validateCurrentForm()) return;
     setPendingGroups(prev => [...prev, buildCurrentGroup()]);
     resetCurrentForm();
@@ -878,14 +882,14 @@ export default function SubModuloExames({
   // (mesmo padrão da Prescrição: apenas Inserir e Salvar, sem botão Finalizar)
   const handleSalvar = async () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
-    if (!evolucaoId) { toast.error('Inicie uma evolução antes de registrar um exame.'); return; }
+    if (!evolucaoId) { setErroInline('Inicie uma evolução antes de registrar um exame.'); return; }
 
     let rawGroups = [...pendingGroups];
     if (canSave) {
       if (!validateCurrentForm()) return;
       rawGroups = [...rawGroups, buildCurrentGroup()];
     }
-    if (rawGroups.length === 0) { toast.error('Selecione ao menos um exame para salvar'); return; }
+    if (rawGroups.length === 0) { setErroInline('Selecione ao menos um exame para salvar'); return; }
 
     // Um pedido (registro no histórico) por LABORATÓRIO distinto — exames solicitados
     // de laboratórios diferentes viram entradas separadas, mesmo na mesma evolução.
@@ -943,7 +947,7 @@ export default function SubModuloExames({
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao salvar exames');
+      setErroInline(msg ?? 'Erro ao salvar exames');
     } finally { setSaving(false); }
   };
 
@@ -962,7 +966,7 @@ export default function SubModuloExames({
       carregarHistorico(page);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao remover');
+      setErroInline(msg ?? 'Erro ao remover');
     }
   };
 
@@ -1025,6 +1029,8 @@ export default function SubModuloExames({
 
   return (
     <>
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* ── Formulário ────────────────────────────────────────────────────── */}
       <div ref={viewTopRef} />
       {(podeCriar || exameVisualizando) && (

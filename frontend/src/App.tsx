@@ -67,6 +67,9 @@ import RelatoriosFarmacia    from './pages/RelatoriosFarmacia';
 
 // Pages — Agenda / Agendamentos
 import Agendamentos    from './pages/Agendamentos';
+// Pages — Orçamento
+import Orcamento           from './pages/Orcamento';
+import RelatoriosOrcamentos from './pages/RelatoriosOrcamentos';
 import MapaAtendimento from './pages/MapaAtendimento';
 import ConfiguracaoAlerta from './pages/ConfiguracaoAlerta';
 import Monitoracao from './pages/Monitoracao';
@@ -244,6 +247,9 @@ function App() {
                           {/* Agenda de Atendimentos */}
                           <Route path="/agendamentos" element={<Agendamentos />} />
 
+                          {/* Orçamento (etapa opcional) */}
+                          <Route path="/orcamento" element={<Orcamento />} />
+
                           {/* Módulo Clínico */}
                           <Route path="/clinica"                          element={<Atendimento />} />
                           <Route path="/clinica/agenda"                   element={<Atendimento />} />
@@ -283,6 +289,7 @@ function App() {
                           <Route path="/relatorios/atendimento" element={<RelatoriosAtendimento />} />
                           <Route path="/relatorios/cadastro"    element={<RelatoriosCadastro />} />
                           <Route path="/relatorios/farmacia"    element={<RelatoriosFarmacia />} />
+                          <Route path="/relatorios/orcamentos"  element={<RelatoriosOrcamentos />} />
 
                           {/* Troca Senha */}
                           {/* Onboarding de convidado — aceitar convite de equipe */}

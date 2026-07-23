@@ -17,6 +17,7 @@ import SeletorAnimal from '../components/SeletorAnimal';
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DietaAcoesBar from '../components/DietaAcoesBar';
+import InlineError from '../components/InlineError';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -271,13 +272,15 @@ function ModalMultiSlot({
   );
   const [observacao, setObservacao] = useState('');
   const [saving, setSaving] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
 
   const updateSlot = (i: number, field: 'horario' | 'qty' | 'unidade', value: string) =>
     setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s));
 
   const handleConfirm = async () => {
     if (slots.some(s => !s.qty || Number(s.qty) <= 0)) {
-      toast.error('Informe a quantidade em todos os slots');
+      setErroInline('Informe a quantidade em todos os slots');
       return;
     }
     setSaving(true);
@@ -329,6 +332,8 @@ function ModalMultiSlot({
           />
         </div>
 
+        <InlineError message={erroInline} className="mt-4" />
+
         <div className="flex gap-3 mt-4">
           <button onClick={onClose} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">Cancelar</button>
           <button onClick={handleConfirm} disabled={saving}
@@ -358,6 +363,8 @@ function BottomAddBar({
   const [observacao,    setObservacao]    = useState('');
   const [saving,        setSaving]        = useState(false);
   const [showModal,     setShowModal]     = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,    setErroInline]    = useState<string | null>(null);
 
   const slotCount = /^3x/.test(periodicidade) ? 3 : /^2x/.test(periodicidade) ? 2 : 1;
 
@@ -385,9 +392,9 @@ function BottomAddBar({
   };
 
   const handleAdd = async () => {
-    if (!alimentoId) { toast.error('Selecione um alimento'); return; }
+    if (!alimentoId) { setErroInline('Selecione um alimento'); return; }
     if (precisaModal) { setShowModal(true); return; }
-    if (!qty || Number(qty) <= 0) { toast.error('Informe a quantidade'); return; }
+    if (!qty || Number(qty) <= 0) { setErroInline('Informe a quantidade'); return; }
     setSaving(true);
     try {
       await onAdd(Number(alimentoId), horario, periodicidade, Number(qty), unidade, observacao);
@@ -421,6 +428,8 @@ function BottomAddBar({
   if (mobile) {
     return (
       <>
+        <InlineError message={erroInline} className="mx-3 mt-2" />
+
         <div className="border-b border-gray-100 bg-white p-3 space-y-2 flex-shrink-0">
           <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
             className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 focus:outline-none focus:border-emerald-500">
@@ -463,6 +472,8 @@ function BottomAddBar({
 
   return (
     <>
+      <InlineError message={erroInline} className="mx-2 mt-2" />
+
       <div className="border-b border-gray-100 bg-white p-2 flex gap-2 items-center flex-shrink-0">
         <select value={alimentoId} onChange={e => setAlimentoId(e.target.value)}
           className="flex-1 min-w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-emerald-500">
@@ -516,13 +527,15 @@ const Dieta = () => {
   const podeExportar   = podeExecutar('nutricao.dietas.exportar');
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const location  = useLocation();
   const { animalId } = useParams<{ animalId?: string }>();
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline,            setErroInline]            = useState<string | null>(null);
   const [animal,                setAnimal]                = useState<AnimalExtended | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<AnimalExtended[]>([]);
   const [loading,               setLoading]               = useState(true);
@@ -681,7 +694,7 @@ const Dieta = () => {
   const handleCriarPlano = async () => {
     if (!podeCriar) { semPermissao('criar dieta'); return; }
     const nomeFinal = (pendingCriarPlano?.nome ?? novoPlanoNome).trim();
-    if (!nomeFinal) { toast.error('Informe um nome para o plano'); return; }
+    if (!nomeFinal) { setErroInline('Informe um nome para o plano'); return; }
     if (!pendingCriarPlano) {
       const planoAtivo = planos.find(p => p.ativo);
       if (planoAtivo) { setPendingCriarPlano({ nome: nomeFinal, planoAtivoNome: planoAtivo.nome }); return; }
@@ -689,7 +702,7 @@ const Dieta = () => {
     try {
       const planoAtivo = planos.find(p => p.ativo);
       const res        = await api.post('/dietas/planos', { animalId: Number(effectiveAnimalId), nome: nomeFinal });
-      if (!res.data) { toast.error('Sem permissão para criar dieta'); return; }
+      if (!res.data) { setErroInline('Sem permissão para criar dieta'); return; }
       const novoPlano  = res.data.dados as PlanoDieta;
       if (planoAtivo) await api.patch(`/dietas/planos/${planoAtivo.id}/toggle`);
       setNovoPlanoNome(''); setPendingCriarPlano(null);
@@ -702,7 +715,7 @@ const Dieta = () => {
 
   const handleSalvarNomePlano = async (id: number) => {
     if (!podeEditar) { semPermissao('alterar dieta'); return; }
-    if (!editandoNome.trim()) { toast.error('O nome não pode ser vazio'); return; }
+    if (!editandoNome.trim()) { setErroInline('O nome não pode ser vazio'); return; }
     try {
       await api.put(`/dietas/planos/${id}`, { nome: editandoNome.trim() });
       setEditandoPlanoId(null);
@@ -735,9 +748,9 @@ const Dieta = () => {
     noRefresh = false,
   ) => {
     if (!podeCriar) { semPermissao('adicionar item à dieta'); return; }
-    if (!planoSelecionado) { toast.error('Selecione um plano primeiro'); return; }
+    if (!planoSelecionado) { setErroInline('Selecione um plano primeiro'); return; }
     const erro = validarItem(alimentoId, periodicidade, horario, itens, alimentos);
-    if (erro) { toast.error(erro); return; }
+    if (erro) { setErroInline(erro); return; }
     try {
       await api.post('/dietas', {
         animalId:      Number(effectiveAnimalId),
@@ -766,7 +779,7 @@ const Dieta = () => {
     if (!podeEditar) { semPermissao('alterar item da dieta'); return; }
     const alimentoIdNum = Number(editItemValues.alimentoId);
     const erro = validarItem(alimentoIdNum, editItemValues.periodicidade, editItemValues.horario, itens, alimentos, id);
-    if (erro) { toast.error(erro); return; }
+    if (erro) { setErroInline(erro); return; }
     try {
       await api.put(`/dietas/${id}`, {
         alimentoId:    alimentoIdNum,
@@ -909,6 +922,8 @@ const Dieta = () => {
       <PageContainer>
 
         <BotaoVoltar />
+
+        <InlineError message={erroInline} className="mt-3" />
 
         {/* Cabeçalho de página (mesmo conceito da tela de Fornecedores): título + descritivo */}
         {/* Cabeçalho fixo da página — não depende do plano carregado (persiste ao trocar de animal) */}

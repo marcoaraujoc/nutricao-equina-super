@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { Pencil, Trash2, Unlink, Search, LayoutDashboard, ArrowLeft } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 interface Animal {
   id:               number;
@@ -125,6 +126,8 @@ const AnimaisVet = () => {
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
   const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
 
@@ -133,7 +136,7 @@ const AnimaisVet = () => {
       const res = await api.get('/animais');
       setAnimais(res.data?.dados ?? res.data ?? []);
     } catch {
-      toast.error('Erro ao carregar pacientes');
+      setErroInline('Erro ao carregar pacientes');
     } finally {
       setLoading(false);
     }
@@ -189,7 +192,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success('Paciente excluído');
     } catch {
-      toast.error('Erro ao excluir paciente');
+      setErroInline('Erro ao excluir paciente');
     }
   };
 
@@ -203,7 +206,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success(`${animalToUnlink.nome} removido da sua lista`);
     } catch {
-      toast.error('Erro ao desvincular');
+      setErroInline('Erro ao desvincular');
     } finally {
       setUnlinking(false);
     }
@@ -211,6 +214,8 @@ const AnimaisVet = () => {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <div className="space-y-5">
 
         {/* ── Header ────────────────────────────────────────────────────── */}

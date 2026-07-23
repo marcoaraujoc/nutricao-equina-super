@@ -6,6 +6,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Pencil, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -29,6 +30,8 @@ const Alimentos = () => {
   const [alimentos,       setAlimentos]       = useState<Alimento[]>([]);
   const [search,          setSearch]          = useState('');
   const [categoriaFiltro, setCategoriaFiltro] = useState('');
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [loading,         setLoading]         = useState(true);
   const [itemToDelete,    setItemToDelete]     = useState<Alimento | null>(null);
 
@@ -41,7 +44,7 @@ const Alimentos = () => {
       setAlimentos(res.data?.dados ?? res.data ?? []);
     } catch (error) {
       console.error('Erro ao carregar alimentos:', error);
-      toast.error('Erro ao carregar alimentos');
+      setErroInline('Erro ao carregar alimentos');
     } finally {
       setLoading(false);
     }
@@ -70,7 +73,7 @@ const Alimentos = () => {
       loadAlimentos();
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao excluir alimento');
+      setErroInline('Erro ao excluir alimento');
     }
   };
 
@@ -82,6 +85,8 @@ const Alimentos = () => {
 
         {/* Voltar */}
         <BotaoVoltar className="mb-4 mt-6" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">

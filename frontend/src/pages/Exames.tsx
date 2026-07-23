@@ -3,8 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
-import toast from 'react-hot-toast';
 import api from '../services/api';
+import InlineError from '../components/InlineError';
 import { Eye, Download, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -26,8 +26,9 @@ const Exames = () => {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeEditar  = isGestor || podeExecutar('atendimento.exames.editar');
   const podeDeletar = isGestor || podeExecutar('atendimento.exames.deletar');
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [exames, setExames] = useState<any[]>([]);
   const [currentAnimal, setCurrentAnimal] = useState<any>(null);
@@ -141,8 +142,9 @@ const Exames = () => {
       setExames(exames.map(ex => ex.id === id ? { ...ex, ...editValues } : ex));
       setEditingId(null);
       setEditValues({});
-    } catch (error) {
-      alert('Erro ao salvar edição');
+      setErroInline(null);
+    } catch {
+      setErroInline('Erro ao salvar edição');
     }
   };
 
@@ -158,8 +160,9 @@ const Exames = () => {
     try {
       await api.delete(`/exames/${id}`, { data: { motivo } });
       setExames(exames.filter(ex => ex.id !== id));
+      setErroInline(null);
     } catch (error) {
-      toast.error('Erro ao excluir o exame');
+      setErroInline('Erro ao excluir o exame');
       console.error(error);
     }
   };
@@ -214,6 +217,8 @@ const Exames = () => {
       <div className="space-y-5">
 
         <BotaoVoltar />
+
+        <InlineError message={erroInline} />
 
         {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título por submenu */}
         <div className="mt-2 flex items-center gap-3">

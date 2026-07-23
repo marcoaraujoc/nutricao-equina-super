@@ -31,6 +31,15 @@ const upload = multer({
 // GET  /api/animais/buscar-por-nome?nome=X       → busca animal por nome (vet)
 router.get('/buscar-por-nome', authenticate, animalController.buscarPorNome);
 
+// GET  /api/animais/verificar-baia?baia=&local=&localizacaoId=&animalId=  → checagem em
+// tempo de preenchimento do formulário (somente leitura; a validação definitiva segue no
+// POST/PUT). O checkPermission NÃO é opcional aqui: além de autorizar a leitura, é ele
+// que popula `req.membroCargo`, do qual buildAnimalScopeWhere depende para distinguir
+// base própria (gestor vê todos os seus vínculos) de convidada (isolamento estrito).
+// Sem ele o gestor não enxerga os próprios pacientes de outra empresa e a baia ocupada
+// aparece como livre.
+router.get('/verificar-baia', authenticate, checkPermission('animais.ler', 'LEITURA'), animalController.verificarBaia);
+
 // GET  /api/animais/minhas-solicitacoes           → solicitações dos animais do proprietário (polling)
 router.get('/minhas-solicitacoes', authenticate, animalController.minhasSolicitacoes);
 

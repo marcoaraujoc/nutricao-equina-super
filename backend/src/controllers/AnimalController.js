@@ -13,6 +13,12 @@ const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
 
 const prisma = require('../lib/prisma').default;
+const { normalizeEmail, findUserByEmail } = require('../lib/email');
+const {
+  garantirPerfil: garantirPerfilProprietario,
+  aplicarPerfil: aplicarPerfilProprietario,
+  aplicarPerfilEmRelacao: aplicarPerfilProprietarioEmRelacao,
+} = require('../lib/proprietarioPerfil');
 
 async function notificarGestoresDaEmpresa(empresaId, { animalNome, proprietarioNome, vetNome }) {
   if (!empresaId) return;
@@ -271,10 +277,77 @@ const vincularVetDireto = async ({ animalId, vetId }) => {
   return vet;
 };
 
+// ─── Regra de baia ───────────────────────────────────────────────────────────
+// Baia única por LOCAL, dentro do que o usuário PODE VER.
+//
+// O escopo NÃO é `empresaId` cru: um vet pode atender legitimamente um animal cujo
+// registro pertence a outra clínica (premissa multi-empresa). Escopar por empresa
+// deixaria a baia desse animal aparecer como livre para o próprio vet que o atende.
+// Por isso usamos `buildAnimalScopeWhere` — a MESMA fonte de verdade da listagem de
+// pacientes. Consequência: a checagem jamais lê um animal que o usuário não poderia
+// ver de qualquer forma (nenhum dado atravessa a fronteira entre empresas), e ao
+// mesmo tempo enxerga os animais que ele de fato atende.
+//
+// O local casa por localizacaoId (FK, confiável); cai no texto `local` para legado.
+function escopoLocalBaia({ localizacaoId, local }) {
+  if (localizacaoId) return { localizacaoId: Number(localizacaoId) };
+  const txt = local?.trim();
+  return txt ? { local: { equals: txt, mode: 'insensitive' } } : { local: null };
+}
+
+// Procura quem ocupa a baia dentro do escopo visível de `req`.
+// `ignorarId` exclui o próprio registro (edição).
+async function acharOcupanteDaBaia(req, { baia, localizacaoId, local, ignorarId }) {
+  const { where: escopoVisivel } = await buildAnimalScopeWhere(req);
+  return prisma.animal.findFirst({
+    where: {
+      AND: [
+        escopoVisivel,
+        {
+          baia:  { equals: String(baia).trim(), mode: 'insensitive' },
+          ativo: true,
+          ...escopoLocalBaia({ localizacaoId, local }),
+          ...(ignorarId && !isNaN(ignorarId) ? { id: { not: Number(ignorarId) } } : {}),
+        },
+      ],
+    },
+    select: { id: true, nome: true },
+  });
+}
+
 class AnimalController {
 
   // ── GET /api/animais/buscar-por-nome?nome=X ──────────────────────────────
   // DEVE ser registrado ANTES de /:id nas rotas
+
+  // GET /api/animais/verificar-baia?baia=&local=&localizacaoId=&animalId=
+  // Checagem em tempo de preenchimento (não altera nada). Usa a MESMA regra de
+  // criar/atualizar: baia única por LOCAL (ver escopoLocalBaia). `animalId` exclui
+  // o próprio registro, para a edição não acusar conflito consigo mesma.
+  async verificarBaia(req, res) {
+    try {
+      const baia = String(req.query.baia ?? '').trim();
+      // Sem baia informada não há o que validar
+      if (!baia) return res.json({ sucesso: true, dados: { disponivel: true } });
+
+      const ocupante = await acharOcupanteDaBaia(req, {
+        baia,
+        localizacaoId: req.query.localizacaoId || null,
+        local:         String(req.query.local ?? '').trim() || null,
+        ignorarId:     req.query.animalId || null,
+      });
+
+      return res.json({
+        sucesso: true,
+        dados: ocupante
+          ? { disponivel: false, ocupadaPor: ocupante.nome }
+          : { disponivel: true },
+      });
+    } catch (error) {
+      console.error('[AnimalController.verificarBaia]', error);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao verificar disponibilidade da baia' });
+    }
+  }
 
   async buscarPorNome(req, res) {
       const { nome } = req.query;
@@ -389,7 +462,9 @@ class AnimalController {
             seguradora:         animal.seguradora         ?? null,
             temVet,
             vetDaMinhaEquipe,
-            proprietario:    animal.user,
+            // NÃO devolvemos o proprietário do registro de origem: o cadastro em
+            // outra empresa é isolado (animal e proprietário), e devolver aqui
+            // vazaria o cliente de outra clínica para quem só pesquisou um nome.
           },
         });
       } catch (error) {
@@ -575,7 +650,11 @@ class AnimalController {
         orderBy:  { dataCadastro: 'desc' },
       });
 
-      res.json({ sucesso: true, dados: animais });
+      // Nome/telefone do proprietário conforme o cadastro DESTA empresa
+      res.json({
+        sucesso: true,
+        dados:   await aplicarPerfilProprietarioEmRelacao(animais, 'user', req.empresaId),
+      });
     } catch (error) {
       console.error('[AnimalController.listar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar animais' });
@@ -603,7 +682,12 @@ class AnimalController {
         if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
 
-      res.json({ sucesso: true, dados: animal });
+      res.json({
+        sucesso: true,
+        dados:   animal?.user
+          ? { ...animal, user: await aplicarPerfilProprietario(animal.user, req.empresaId) }
+          : animal,
+      });
     } catch (error) {
       console.error('[AnimalController.obterPorId]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar animal' });
@@ -824,12 +908,13 @@ class AnimalController {
                 : req.body.proprietario;
 
               if (propData?.email) {
-                let prop = await prisma.user.findUnique({ where: { email: propData.email } });
+                const emailProp = normalizeEmail(propData.email);
+                let prop = await findUserByEmail(prisma, emailProp);
                 if (!prop) {
                   prop = await prisma.user.create({
                     data: {
                       fullName:           propData.fullName || 'Proprietário',
-                      email:              propData.email,
+                      email:              emailProp,
                       phone:              propData.phone  || null,
                       phone2:             propData.phone2 || null,
                       passwordHash:       await bcrypt.hash('Inicial#001', 10),
@@ -842,8 +927,22 @@ class AnimalController {
                   });
                   isNewProprietario = true;
                 }
+
+                // Cadastro do cliente NESTA empresa. Se o proprietário já existe
+                // (atendido por outra clínica), esta empresa passa a ter o próprio
+                // perfil com os dados que o vet digitou — sem herdar nem alterar o
+                // cadastro da outra. Já existindo perfil aqui, ele é preservado.
+                if (vetEmpresaId) {
+                  await garantirPerfilProprietario(prisma, prop.id, vetEmpresaId, {
+                    fullName: propData.fullName || prop.fullName || 'Proprietário',
+                    phone:    propData.phone  || null,
+                    phone2:   propData.phone2 || null,
+                    ativo:    true,
+                  });
+                }
+
                 targetUserId               = prop.id;
-                proprietarioNomeParaEmail  = prop.fullName;
+                proprietarioNomeParaEmail  = propData.fullName || prop.fullName;
                 proprietarioEmailParaEmail = prop.email;
               }
             } else {
@@ -869,25 +968,15 @@ class AnimalController {
 
       const criadoParaSiMesmo = isVet && Number(targetUserId) === Number(req.user.id);
 
-      // Validação de baia: única por (local + empresa/proprietário).
-      // Mesmo número de baia é permitido em locais distintos.
+      // Validação de baia: única por LOCAL dentro do escopo visível — ver acharOcupanteDaBaia.
       if (baia?.trim()) {
-        const scopeBaia  = vetEmpresaId
-          ? { empresaId: vetEmpresaId }
-          : { userId: Number(targetUserId) };
-        const localNorm  = local?.trim() || null;
-        const baiaOcupada = await prisma.animal.findFirst({
-          where: {
-            baia:  { equals: baia.trim(), mode: 'insensitive' },
-            local: localNorm ? { equals: localNorm, mode: 'insensitive' } : null,
-            ativo: true,
-            ...scopeBaia,
-          },
-          select: { nome: true },
+        const localNorm = local?.trim() || null;
+        const ocupante  = await acharOcupanteDaBaia(req, {
+          baia: baia.trim(), localizacaoId, local: localNorm,
         });
-        if (baiaOcupada) {
+        if (ocupante) {
           const localLabel = localNorm ? ` (${localNorm})` : '';
-          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${baiaOcupada.nome}` });
+          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${ocupante.nome}` });
         }
       }
 
@@ -928,98 +1017,58 @@ class AnimalController {
           });
           await garantirFaturaAberta(Number(targetUserId));
         } else {
-          const pedirAutorizacaoNovo = req.body.pedirAutorizacao === true
-            || req.body.pedirAutorizacao === 'true';
+          // PREMISSA MULTI-EMPRESA: um animal pode ser atendido por mais de uma empresa e
+          // um proprietário pode estar em mais de uma. Cadastrar um animal que já existe
+          // gera um REGISTRO NOVO, que pertence a quem cadastrou — por isso o vínculo já
+          // nasce ACEITO e o animal NUNCA fica bloqueado aguardando aprovação: a empresa
+          // precisa atendê-lo de imediato. O proprietário é apenas informado por e-mail;
+          // é ele (e só ele) quem enxerga o histórico consolidado entre as empresas.
+          const empIdNovo = vetEmpresaId;
+          let clinicaNomeNovo = null;
+          if (empIdNovo) {
+            const empresaNova = await prisma.empresa.findUnique({ where: { id: empIdNovo }, select: { nome: true } });
+            clinicaNomeNovo = empresaNova?.nome ?? null;
+          }
 
-          if (pedirAutorizacaoNovo) {
-            // Solicita autorização ao proprietário — animal fica bloqueado até aprovação
-            const tokenVinculo     = gerarToken();
-            const expiresAtVinculo = gerarExpiracao(7);
+          await prisma.vetAnimalSolicitacao.create({
+            data: {
+              animalId:      animal.id,
+              vetUserId:     Number(req.user.id),
+              tipo:          'VINCULO',
+              status:        'ACEITO',
+              solicitanteId: Number(req.user.id),
+            },
+          });
 
-            await prisma.vetAnimalSolicitacao.create({
-              data: {
-                animalId:      animal.id,
-                vetUserId:     Number(req.user.id),
-                status:        'PENDENTE',
-                approvalToken: tokenVinculo,
-                expiresAt:     expiresAtVinculo,
-                solicitanteId: Number(req.user.id),
-              },
-            });
+          await prisma.animal.update({
+            where: { id: animal.id },
+            data:  {
+              bloqueado:          false,
+              bloqueioTipo:       null,
+              bloqueioExpira:     null,
+              veterinarioNome:    vetNomeCompleto,
+              veterinarioClinica: clinicaNomeNovo,
+              ...(empIdNovo ? { empresaId: empIdNovo, equipeId: vetEquipeId } : {}),
+            },
+          });
 
-            await prisma.animal.update({
-              where: { id: animal.id },
-              data:  {
-                bloqueado:    true,
-                bloqueioTipo: 'AGUARDANDO_APROVACAO',
-                bloqueioExpira: null,
-                ...(vetEmpresaId ? { empresaId: vetEmpresaId, equipeId: vetEquipeId } : {}),
-              },
-            });
+          await garantirFaturaAberta(Number(targetUserId));
 
-            if (proprietarioEmailParaEmail) {
-              emailService.enviarSolicitacaoVinculoProprietario({
-                proprietarioEmail: proprietarioEmailParaEmail,
-                proprietarioNome:  proprietarioNomeParaEmail,
-                animalNome:        animal.nome,
-                vetNome:           vetNomeCompleto,
-                token:             tokenVinculo,
-                isNewUser:         isNewProprietario,
-                senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,
-              })
-                .then(() => console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmailParaEmail}`))
-                .catch(err => console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err));
-            } else {
-              console.warn('[emailService] Proprietário sem email — notificação não enviada');
-            }
+          // E-mail meramente informativo ao proprietário (sem link de aprovação).
+          // Proprietário recém-criado recebe também a senha inicial de acesso.
+          if (proprietarioEmailParaEmail) {
+            emailService.enviarVinculoInformativo({
+              proprietarioEmail: proprietarioEmailParaEmail,
+              proprietarioNome:  proprietarioNomeParaEmail,
+              animalNome:        animal.nome,
+              vetNome:           vetNomeCompleto,
+              isNewUser:         isNewProprietario,
+              senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,
+            })
+              .then(() => console.log(`[emailService] Email informativo enviado → ${proprietarioEmailParaEmail}`))
+              .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));
           } else {
-            // Vínculo direto (ACEITO) — sem bloqueio; e-mail informativo ao proprietário
-            const empIdNovo = vetEmpresaId;
-            let clinicaNomeNovo = null;
-            if (empIdNovo) {
-              const empresaNova = await prisma.empresa.findUnique({ where: { id: empIdNovo }, select: { nome: true } });
-              clinicaNomeNovo = empresaNova?.nome ?? null;
-            }
-
-            await prisma.vetAnimalSolicitacao.create({
-              data: {
-                animalId:      animal.id,
-                vetUserId:     Number(req.user.id),
-                tipo:          'VINCULO',
-                status:        'ACEITO',
-                solicitanteId: Number(req.user.id),
-              },
-            });
-
-            await prisma.animal.update({
-              where: { id: animal.id },
-              data:  {
-                bloqueado:          false,
-                bloqueioTipo:       null,
-                bloqueioExpira:     null,
-                veterinarioNome:    vetNomeCompleto,
-                veterinarioClinica: clinicaNomeNovo,
-                ...(empIdNovo ? { empresaId: empIdNovo, equipeId: vetEquipeId } : {}),
-              },
-            });
-
-            await garantirFaturaAberta(Number(targetUserId));
-
-            // E-mail meramente informativo ao proprietário (sem link de aprovação)
-            if (proprietarioEmailParaEmail) {
-              emailService.enviarVinculoInformativo({
-                proprietarioEmail: proprietarioEmailParaEmail,
-                proprietarioNome:  proprietarioNomeParaEmail,
-                animalNome:        animal.nome,
-                vetNome:           vetNomeCompleto,
-                isNewUser:         isNewProprietario,
-                senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,
-              })
-                .then(() => console.log(`[emailService] Email informativo enviado → ${proprietarioEmailParaEmail}`))
-                .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));
-            } else {
-              console.warn('[emailService] Proprietário sem email — notificação informativa não enviada');
-            }
+            console.warn('[emailService] Proprietário sem email — notificação informativa não enviada');
           }
         }
       }
@@ -1096,24 +1145,15 @@ class AnimalController {
         select: { userId: true, empresaId: true, user: { select: { fullName: true, email: true, phone: true } } },
       });
 
+      // Validação de baia: única por LOCAL dentro do escopo visível — ver acharOcupanteDaBaia.
       if (baia?.trim()) {
-        const scopeBaia   = animalAtual?.empresaId
-          ? { empresaId: animalAtual.empresaId }
-          : { userId: animalAtual?.userId };
-        const localNorm   = local?.trim() || null;
-        const baiaOcupada = await prisma.animal.findFirst({
-          where: {
-            baia:  { equals: baia.trim(), mode: 'insensitive' },
-            local: localNorm ? { equals: localNorm, mode: 'insensitive' } : null,
-            ativo: true,
-            id:    { not: animalId },
-            ...scopeBaia,
-          },
-          select: { nome: true },
+        const localNorm = local?.trim() || null;
+        const ocupante  = await acharOcupanteDaBaia(req, {
+          baia: baia.trim(), localizacaoId, local: localNorm, ignorarId: animalId,
         });
-        if (baiaOcupada) {
+        if (ocupante) {
           const localLabel = localNorm ? ` (${localNorm})` : '';
-          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${baiaOcupada.nome}` });
+          return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${ocupante.nome}` });
         }
       }
 

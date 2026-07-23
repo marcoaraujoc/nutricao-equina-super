@@ -13,6 +13,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -513,9 +514,11 @@ export default function CadastroProprietario() {
   const podeRemover = isGestor || podeExecutar('cadastro.proprietario.deletar');
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [busca,         setBusca]         = useState('');
   const [showModal,     setShowModal]     = useState(false);
@@ -537,7 +540,7 @@ export default function CadastroProprietario() {
       });
       if (!res.data) return;
       setProprietarios(res.data.dados ?? []);
-    } catch { toast.error('Erro ao carregar proprietários'); }
+    } catch { setErroInline('Erro ao carregar proprietários'); }
     finally { setLoading(false); }
   }, [busca, filtroAtivo]);
 
@@ -582,17 +585,17 @@ export default function CadastroProprietario() {
   const handleSalvar = async () => {
     if (editando && !podeEditar) { semPermissao('alterar proprietário'); return; }
     if (!editando && !podeCriar) { semPermissao('criar proprietário'); return; }
-    if (!form.fullName.trim())      { toast.error('Nome é obrigatório'); return; }
-    if (!form.email.trim())         { toast.error('E-mail é obrigatório'); return; }
-    if (!form.phone.trim())         { toast.error('Telefone é obrigatório'); return; }
-    if (!form.frequenciaVisitas)    { toast.error('Frequência de visitas é obrigatória'); return; }
+    if (!form.fullName.trim())      { setErroInline('Nome é obrigatório'); return; }
+    if (!form.email.trim())         { setErroInline('E-mail é obrigatório'); return; }
+    if (!form.phone.trim())         { setErroInline('Telefone é obrigatório'); return; }
+    if (!form.frequenciaVisitas)    { setErroInline('Frequência de visitas é obrigatória'); return; }
     if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro já exibido inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
-    if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { toast.error('CPF inválido'); return; }
-    if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { toast.error('CNPJ inválido'); return; }
+    if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { setErroInline('CPF inválido'); return; }
+    if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { setErroInline('CNPJ inválido'); return; }
     if (form.mensalista && !form.valorAssistencia) {
-      toast.error('Informe o valor da assistência veterinária'); return;
+      setErroInline('Informe o valor da assistência veterinária'); return;
     }
 
     setSaving(true);
@@ -619,14 +622,16 @@ export default function CadastroProprietario() {
         await api.put(`/cadastro/proprietarios/${editando.id}`, payload);
         toast.success('Proprietário atualizado');
       } else {
-        await api.post('/cadastro/proprietarios', payload);
-        toast.success('Proprietário cadastrado — e-mail de boas-vindas enviado');
+        const res = await api.post('/cadastro/proprietarios', payload);
+        // Cliente que já tinha acesso ao sistema (atendido por outra clínica):
+        // o backend cria só o cadastro DESTA empresa e avisa pela mensagem.
+        toast.success(res.data?.mensagem ?? 'Proprietário cadastrado — e-mail de boas-vindas enviado');
       }
       fecharModal();
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao salvar');
+      setErroInline(msg ?? 'Erro ao salvar');
     } finally { setSaving(false); }
   };
 
@@ -646,7 +651,7 @@ export default function CadastroProprietario() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      toast.error(msg ?? 'Erro ao remover proprietário');
+      setErroInline(msg ?? 'Erro ao remover proprietário');
     }
   };
 
@@ -673,6 +678,8 @@ export default function CadastroProprietario() {
 
   return (
     <PageContainer maxWidth="7xl">
+      <InlineError message={erroInline} className="mb-4" />
+
       <BotaoVoltar />
       <div className="flex items-center justify-between gap-3 mt-2 mb-6 flex-wrap">
         <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold text-gray-900">

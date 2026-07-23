@@ -1,12 +1,16 @@
 ﻿import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
 
 const Nutrientes = () => {
   const navigate = useNavigate();
   const [nutrientes, setNutrientes] = useState<any[]>([]);
+  // Erro de ação exibido inline (substitui o alert de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [nutrienteToDelete, setNutrienteToDelete] = useState<any | null>(null);
@@ -32,12 +36,13 @@ const Nutrientes = () => {
     if (!nutrienteToDelete) return;
     try {
       await api.delete(`/nutrientes/${nutrienteToDelete.id}`);
-      alert('Nutriente desativado com sucesso!');
+      toast.success('Nutriente desativado com sucesso!');
+      setErroInline(null);
       setNutrienteToDelete(null);
       loadNutrientes();
     } catch (error) {
       console.error(error);
-      alert('Erro ao excluir nutriente');
+      setErroInline('Erro ao excluir nutriente');
     }
   };
 
@@ -46,6 +51,8 @@ const Nutrientes = () => {
       <div className="max-w-6xl mx-auto px-3 sm:px-4">
 
         <BotaoVoltar className="mb-4" />
+
+        <InlineError message={erroInline} className="mb-4" />
 
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 text-center mb-5">Nutrientes</h1>

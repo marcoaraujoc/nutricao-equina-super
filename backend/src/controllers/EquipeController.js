@@ -11,6 +11,7 @@ const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 const prisma = require('../lib/prisma').default;
+const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -267,6 +268,97 @@ async function gravarExpedienteTrabalho(membroId, exp) {
   await prisma.$executeRawUnsafe(`UPDATE schs2vet.tb_membros_equipe SET ${sets.join(', ')} WHERE id=$${i}`, ...vals);
 }
 
+// ─── Locais de trabalho do MEMBRO (múltiplos por membro) ──────────────────────
+// Valida a lista body.locaisTrabalho = [{ localizacaoId, diasTrabalho, horaInicioTrabalho, horaFimTrabalho }].
+// undefined = não altera; [] = limpa todos. Cada local reaproveita a validação de
+// dias/horário do expediente único.
+function parseLocaisTrabalho(body) {
+  if (body.locaisTrabalho === undefined) return { locais: undefined };
+  if (!Array.isArray(body.locaisTrabalho)) return { erro: 'locaisTrabalho deve ser uma lista.' };
+
+  const locais = [];
+  for (const l of body.locaisTrabalho) {
+    const localizacaoId = Number(l?.localizacaoId);
+    if (!Number.isInteger(localizacaoId) || localizacaoId <= 0) {
+      return { erro: 'Selecione o local de trabalho.' };
+    }
+    // Reusa a mesma validação de dias/horário do expediente único
+    const exp = parseExpedienteTrabalho(l);
+    if (exp.erro) return { erro: exp.erro };
+    locais.push({
+      localizacaoId,
+      diasTrabalho:       exp.diasTrabalho       ?? null,
+      horaInicioTrabalho: exp.horaInicioTrabalho ?? null,
+      horaFimTrabalho:    exp.horaFimTrabalho    ?? null,
+    });
+  }
+  // Um mesmo local não deve se repetir (usaria duas linhas para o mesmo lugar)
+  const vistos = new Set();
+  for (const l of locais) {
+    if (vistos.has(l.localizacaoId)) return { erro: 'Local de trabalho repetido — use um horário por local.' };
+    vistos.add(l.localizacaoId);
+  }
+  return { locais };
+}
+
+// Agrega os locais no expediente ÚNICO de tb_membros_equipe (ponte p/ a Agenda, que
+// ainda lê esses campos): união dos dias, menor início e maior fim. É deliberadamente
+// grosseiro — quando a Agenda passar a ser por local, esta agregação sai.
+function agregarExpediente(locais) {
+  if (!locais || locais.length === 0) {
+    return { diasTrabalho: null, horaInicioTrabalho: null, horaFimTrabalho: null };
+  }
+  const dias = new Set();
+  let inicio = null, fim = null;
+  for (const l of locais) {
+    (l.diasTrabalho ? String(l.diasTrabalho).split(',') : []).forEach(d => d && dias.add(Number(d)));
+    if (l.horaInicioTrabalho && (inicio === null || l.horaInicioTrabalho < inicio)) inicio = l.horaInicioTrabalho;
+    if (l.horaFimTrabalho    && (fim === null || l.horaFimTrabalho > fim))          fim = l.horaFimTrabalho;
+  }
+  return {
+    diasTrabalho:       dias.size ? [...dias].sort((a, b) => a - b).join(',') : null,
+    horaInicioTrabalho: inicio,
+    horaFimTrabalho:    fim,
+  };
+}
+
+// Substitui TODOS os locais do membro (delete + insert) e sincroniza o expediente
+// agregado. Passar `tx` quando já houver transação em andamento.
+async function gravarLocaisTrabalho(client, membroId, locais) {
+  if (locais === undefined) return; // não enviado → não altera
+  await client.membroLocalTrabalho.deleteMany({ where: { membroEquipeId: Number(membroId) } });
+  if (locais.length > 0) {
+    await client.membroLocalTrabalho.createMany({
+      data: locais.map(l => ({ membroEquipeId: Number(membroId), ...l })),
+    });
+  }
+  // Espelha no expediente único (Agenda) via os helpers já existentes
+  await gravarExpedienteTrabalho(membroId, agregarExpediente(locais));
+}
+
+// Carrega os locais de cada membro (com nome da localização) e anexa em `locaisTrabalho`.
+async function anexarLocaisTrabalho(membros) {
+  const ids = membros.map(m => m.id).filter(Boolean);
+  if (ids.length === 0) return membros;
+  const rows = await prisma.membroLocalTrabalho.findMany({
+    where:   { membroEquipeId: { in: ids } },
+    include: { localizacao: { select: { id: true, nome: true } } },
+    orderBy: { id: 'asc' },
+  });
+  const porMembro = new Map();
+  for (const r of rows) {
+    if (!porMembro.has(r.membroEquipeId)) porMembro.set(r.membroEquipeId, []);
+    porMembro.get(r.membroEquipeId).push({
+      localizacaoId:      r.localizacaoId,
+      localizacaoNome:    r.localizacao?.nome ?? null,
+      diasTrabalho:       r.diasTrabalho,
+      horaInicioTrabalho: r.horaInicioTrabalho,
+      horaFimTrabalho:    r.horaFimTrabalho,
+    });
+  }
+  return membros.map(m => ({ ...m, locaisTrabalho: porMembro.get(m.id) ?? [] }));
+}
+
 // Anexa diasTrabalho/horaInicioTrabalho/horaFimTrabalho a uma lista de membros já carregados.
 // Resolução POR PROFISSIONAL: usa o expediente do vínculo do contexto; se ele estiver
 // vazio, herda o expediente que o profissional definiu em QUALQUER vínculo (o mais
@@ -420,6 +512,31 @@ const EquipeController = {
           add({ empresaId: emp.id, equipeId: null, label: `${emp.nome} · Gestor`, cargo: 'GESTOR' });
         } else {
           add({ empresaId: emp.id, equipeId: m.equipe.id, label: `${m.equipe.nome} · ${labelCargo(m.cargo)}`, cargo: m.cargo });
+        }
+      }
+
+      // ── PROPRIETÁRIO: uma opção por EMPRESA que o atende ─────────────────────
+      // Mesmo modelo do vet que é gestor numa empresa e prestador em outra: ele
+      // escolhe a clínica e vê APENAS o que aquela clínica liberou no controle de
+      // acesso (as permissões são resolvidas pela empresa ativa) e o cadastro que
+      // aquela clínica mantém dele (lib/proprietarioPerfil).
+      if (req.user.userType === 'PROPRIETARIO') {
+        const [animais, perfis] = await Promise.all([
+          prisma.animal.findMany({
+            where:  { userId, ativo: true, empresaId: { not: null } },
+            select: { empresa: { select: { id: true, nome: true } } },
+          }),
+          prisma.proprietarioPerfil.findMany({
+            where:  { userId, ativo: true },
+            select: { empresa: { select: { id: true, nome: true } } },
+          }),
+        ]);
+        const empresasDoCliente = new Map();
+        for (const r of [...animais, ...perfis]) {
+          if (r.empresa) empresasDoCliente.set(r.empresa.id, r.empresa.nome);
+        }
+        for (const [empresaId, nome] of empresasDoCliente) {
+          add({ empresaId, equipeId: null, label: `${nome} · Proprietário`, cargo: 'PROPRIETARIO' });
         }
       }
 
@@ -914,7 +1031,7 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          dados:        await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true })), // ADMIN da plataforma vê tudo
+          dados:        await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true }))), // ADMIN da plataforma vê tudo
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -945,7 +1062,7 @@ const EquipeController = {
       res.json({
         sucesso: true,
         // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
-        dados:        await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id })),
+        dados:        await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id }))),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -1160,12 +1277,13 @@ const EquipeController = {
 
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
 
-      let usuario = await prisma.user.findUnique({ where: { email } });
+      const emailNorm = normalizeEmail(email);
+      let usuario = await findUserByEmail(prisma, emailNorm);
       if (!usuario) {
         const senhaHash = await bcrypt.hash(senha || 'Inicial#001', 10);
         usuario = await prisma.user.create({
           data: {
-            fullName, email,
+            fullName, email: emailNorm,
             phone:        phone || null,
             passwordHash: senhaHash,
             role:         'USER',
@@ -1219,11 +1337,11 @@ const EquipeController = {
       }
 
       if (email !== undefined) {
-        const emailNorm = email.trim().toLowerCase();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm)) {
+        const emailNorm = normalizeEmail(email);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm ?? '')) {
           return res.status(400).json({ sucesso: false, mensagem: 'E-mail inválido' });
         }
-        const existente = await prisma.user.findFirst({ where: { email: emailNorm, id: { not: membro.userId } } });
+        const existente = await prisma.user.findFirst({ where: { ...whereEmailInsensitive(emailNorm), id: { not: membro.userId } } });
         if (existente) {
           return res.status(409).json({ sucesso: false, mensagem: 'Este e-mail já está em uso por outro usuário.' });
         }
@@ -1244,7 +1362,16 @@ const EquipeController = {
       // Expediente de trabalho do profissional (dias/horários) — via SQL raw
       const expediente = parseExpedienteTrabalho(req.body);
       if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
-      await gravarExpedienteTrabalho(Number(id), expediente);
+
+      // Locais de trabalho (múltiplos). Quando enviados, são a fonte do expediente
+      // (a agregação sincroniza os campos únicos); senão mantém o expediente único.
+      const locaisParsed = parseLocaisTrabalho(req.body);
+      if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
+      if (locaisParsed.locais !== undefined) {
+        await gravarLocaisTrabalho(prisma, Number(id), locaisParsed.locais);
+      } else {
+        await gravarExpedienteTrabalho(Number(id), expediente);
+      }
 
       const dadosUser = {};
       if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
@@ -1413,7 +1540,7 @@ const EquipeController = {
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
 
       // Bloqueia re-convite: membro já existente
-      const usuarioCheck = await prisma.user.findUnique({ where: { email } });
+      const usuarioCheck = await findUserByEmail(prisma, email);
       if (usuarioCheck) {
         const jaMembro = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId: equipe.id, userId: usuarioCheck.id } },
@@ -1460,7 +1587,7 @@ const EquipeController = {
       const userTypeConvidado = cargoToUserType[cargo] || 'ESTAGIARIO';
       let usuarioCriado = false;
       let usuarioConvidadoId = null;
-      const usuarioExistente = await prisma.user.findUnique({ where: { email } });
+      const usuarioExistente = await findUserByEmail(prisma, email);
 
       if (!usuarioExistente) {
         const senhaHash = await bcrypt.hash(SENHA_INICIAL, 10);
@@ -1584,7 +1711,7 @@ const EquipeController = {
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, equipeIdBody ?? req.equipeId);
 
       // Bloqueia se já é membro
-      const usuarioCheck = await prisma.user.findUnique({ where: { email } });
+      const usuarioCheck = await findUserByEmail(prisma, email);
       if (usuarioCheck) {
         const jaMembro = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId: equipe.id, userId: usuarioCheck.id } },
@@ -1600,6 +1727,10 @@ const EquipeController = {
       // Expediente de trabalho (dias/horários) — valida o formato já aqui
       const expediente = parseExpedienteTrabalho(req.body);
       if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
+
+      // Locais de trabalho (múltiplos) — valida antes de gravar qualquer coisa
+      const locaisParsed = parseLocaisTrabalho(req.body);
+      if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
 
       // Fornecedor selecionado já vinculado a OUTRA conta não pode ser reutilizado
       if (fornecedorVinculo?.userId && (!usuarioCheck || fornecedorVinculo.userId !== usuarioCheck.id)) {
@@ -1630,7 +1761,7 @@ const EquipeController = {
       const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
 
       let usuarioCriado = false;
-      let usuario = await prisma.user.findUnique({ where: { email } });
+      let usuario = await findUserByEmail(prisma, email);
       // Rastreio p/ compensação em caso de falha no meio do fluxo (evita órfãos)
       var usuarioCriadoId = null;
       var membroCriadoId  = null;
@@ -1676,8 +1807,14 @@ const EquipeController = {
       membroCriadoId = novoMembro.id;
       membroUserId   = usuario.id;
 
-      // Expediente de trabalho do profissional (dias/horários) — via SQL raw
-      await gravarExpedienteTrabalho(novoMembro.id, expediente);
+      // Locais de trabalho (múltiplos). Quando enviados, eles são a fonte do
+      // expediente — a agregação sincroniza os campos únicos que a Agenda lê. Sem
+      // locais, cai no expediente único informado diretamente (compat).
+      if (locaisParsed.locais !== undefined) {
+        await gravarLocaisTrabalho(prisma, novoMembro.id, locaisParsed.locais);
+      } else {
+        await gravarExpedienteTrabalho(novoMembro.id, expediente);
+      }
 
       // Vincular/criar cadastro Fornecedor
       let fornecedorFinalId = null;
@@ -1813,7 +1950,7 @@ const EquipeController = {
 
       // Cria usuário se não existir
       const SENHA_INICIAL  = 'Inicial_001';
-      let usuarioExistente = await prisma.user.findUnique({ where: { email } });
+      let usuarioExistente = await findUserByEmail(prisma, email);
       let usuarioCriado    = false;
 
       if (!usuarioExistente) {
@@ -1965,7 +2102,7 @@ const EquipeController = {
       if (!equipe) return res.status(404).json({ sucesso: false, mensagem: 'Equipe não encontrada' });
 
       // Bloqueia re-convite: membro já existente
-      const usuarioCheck = await prisma.user.findUnique({ where: { email } });
+      const usuarioCheck = await findUserByEmail(prisma, email);
       if (usuarioCheck) {
         const jaMembro = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: usuarioCheck.id } },
@@ -1992,7 +2129,7 @@ const EquipeController = {
       const SENHA_INICIAL     = 'Inicial_001';
       const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeConvidado = cargoToUserType[cargo] ?? 'ESTAGIARIO';
-      const usuarioExistente  = await prisma.user.findUnique({ where: { email } });
+      const usuarioExistente  = await findUserByEmail(prisma, email);
       let usuarioCriado      = false;
       let usuarioConvidadoId = usuarioExistente?.id ?? null;
 
@@ -2216,7 +2353,7 @@ const EquipeController = {
 
       if (!convite)                      return res.status(404).json({ sucesso: false, mensagem: 'Convite não encontrado' });
       if (convite.status !== 'PENDENTE') return res.status(410).json({ sucesso: false, mensagem: 'Convite já respondido' });
-      if (!user || user.email !== convite.email) {
+      if (!user || normalizeEmail(user.email) !== normalizeEmail(convite.email)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Convite pertence a outro e-mail.' });
       }
 
@@ -2572,7 +2709,9 @@ const EquipeController = {
           return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
         }
 
-        const equipeIds = await getEquipeIdsDoProprietario(Number(userId));
+        // Escopo da EMPRESA ATIVA (seletor do portal do proprietário): o que a
+        // empresa A liberou não vale enquanto ele estiver olhando a empresa B.
+        const equipeIds = await getEquipeIdsDoProprietario(Number(userId), req.empresaId);
         const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
 
         // Permissões de PROPRIETARIO (das equipes vinculadas via animais)

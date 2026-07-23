@@ -9,6 +9,7 @@ import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
+import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
   const podeEditar = isGestor || podeExecutar('atendimento.agendamentos.editar');
 
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [loading,      setLoading]      = useState(false);
   const [vets,         setVets]         = useState<VetMembro[]>([]);
 
@@ -136,7 +139,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       // Mostra todos os agendamentos do dia — inclusive os que já passaram e os CONCLUIDO
       setAgendamentos(todos.filter(ag => ag.status !== 'CANCELADO'));
     } catch {
-      toast.error('Erro ao carregar agenda do dia');
+      setErroInline('Erro ao carregar agenda do dia');
     } finally {
       setLoading(false);
     }
@@ -151,7 +154,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
   // ── Iniciar atendimento ────────────────────────────────────────────────────
 
   const handleIniciarAtendimento = (ag: Agendamento) => {
-    if (!ag.animal?.id) { toast.error('Animal não identificado no agendamento'); return; }
+    if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   };
 
@@ -163,7 +166,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       toast.success('Atendimento concluído');
       setAgendamentos(prev => prev.map(a => a.id === id ? { ...a, status: 'CONCLUIDO' as StatusAgendamento } : a));
     } catch {
-      toast.error('Erro ao concluir atendimento');
+      setErroInline('Erro ao concluir atendimento');
     }
   };
 
@@ -177,7 +180,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       setAgendamentos(prev => prev.filter(a => a.id !== id));
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao cancelar agendamento');
+      setErroInline(msg ?? 'Erro ao cancelar agendamento');
     }
   };
 
@@ -197,8 +200,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   const handleSalvar = async () => {
     if (!editando) return;
-    if (!editTitulo.trim()) { toast.error('Título é obrigatório'); return; }
-    if (!editData || !editHora) { toast.error('Data e hora são obrigatórias'); return; }
+    if (!editTitulo.trim()) { setErroInline('Título é obrigatório'); return; }
+    if (!editData || !editHora) { setErroInline('Data e hora são obrigatórias'); return; }
     setSaving(true);
     try {
       await api.patch(`/clinica/agendamentos/${editando.id}`, {
@@ -211,7 +214,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       setEditando(null);
       carregar();
     } catch {
-      toast.error('Erro ao atualizar agendamento');
+      setErroInline('Erro ao atualizar agendamento');
     } finally {
       setSaving(false);
     }
@@ -225,9 +228,9 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
   };
 
   const handleTrocarVet = async () => {
-    if (!trocandoVet || !trocandoVetId) { toast.error('Selecione um profissional'); return; }
+    if (!trocandoVet || !trocandoVetId) { setErroInline('Selecione um profissional'); return; }
     if (trocandoVetId === String(trocandoVet.veterinario?.id)) {
-      toast.error('O profissional selecionado já é o responsável');
+      setErroInline('O profissional selecionado já é o responsável');
       return;
     }
     setSavingTroca(true);
@@ -238,7 +241,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       setTrocandoVet(null);
       carregar();
     } catch {
-      toast.error('Erro ao trocar profissional');
+      setErroInline('Erro ao trocar profissional');
     } finally {
       setSavingTroca(false);
     }
@@ -273,6 +276,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   return (
     <>
+      <InlineError message={erroInline} className="mb-4" />
+
       {/* ── Filtro por profissional (GESTOR) ──────────────────────────────── */}
       {isGestor && vets.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-50">

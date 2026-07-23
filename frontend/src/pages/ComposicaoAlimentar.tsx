@@ -5,6 +5,8 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import InlineError from '../components/InlineError';
+
 
 // =====================================================================
 // INTERFACES
@@ -50,6 +52,8 @@ const ComposicaoAlimentar = () => {
   const navigate = useNavigate();
 
   const [composicoes, setComposicoes] = useState<ComposicaoItem[]>([]);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
   const [especies, setEspecies] = useState<Especie[]>([]);
 
   const [search, setSearch] = useState('');
@@ -75,7 +79,7 @@ const ComposicaoAlimentar = () => {
       setComposicoes(res.data?.dados ?? []);
     } catch (error) {
       console.error('Erro ao carregar composições:', error);
-      toast.error('Erro ao carregar composições');
+      setErroInline('Erro ao carregar composições');
     } finally {
       setLoading(false);
     }
@@ -117,7 +121,7 @@ const ComposicaoAlimentar = () => {
       isNaN(parseFloat(editValues.valorPorKg)) ||
       parseFloat(editValues.valorPorKg) < 0
     ) {
-      toast.error('Informe um valor numérico válido');
+      setErroInline('Informe um valor numérico válido');
       return;
     }
 
@@ -129,7 +133,7 @@ const ComposicaoAlimentar = () => {
       cancelEdit();
       loadComposicoes();
     } catch {
-      toast.error('Erro ao salvar edição');
+      setErroInline('Erro ao salvar edição');
     }
   };
 
@@ -146,7 +150,7 @@ const ComposicaoAlimentar = () => {
       loadComposicoes();
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao excluir composição');
+      setErroInline('Erro ao excluir composição');
     }
   };
 
@@ -169,6 +173,8 @@ const ComposicaoAlimentar = () => {
   return (
     <div className="min-h-screen bg-gray-50 pb-10">
       <div className="max-w-6xl mx-auto px-4">
+
+        <InlineError message={erroInline} className="mt-6" />
 
         {/* Voltar */}
         <BotaoVoltar className="mb-4 mt-6" />

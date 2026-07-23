@@ -1,9 +1,10 @@
 // frontend/src/pages/SubModuloVacina.tsx — registro clínico de vacinas
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail } from 'lucide-react';
+import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
+import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import DateInput from '../components/DateInput';
 import { formatDate } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
@@ -14,6 +15,8 @@ import {
   imprimirPrescricao as imprimirPrescricaoPrint,
   type PrintAnimalPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao,
 } from '../utils/PrescricaoPrint';
+import InlineError from '../components/InlineError';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +35,26 @@ interface LoteDisponivel {
   validade:      string | null;
   qtdDisponivel: number;
   valorPorDose:  number;
+}
+
+// Vacina em edição, importada do orçamento (mesma abordagem da prescrição: cada item
+// do orçamento vira uma linha editável, salva em lote). Guarda os próprios lotes.
+interface VacImport {
+  key:              string;
+  orcamentoItemId:  number;         // item de orçamento de origem (marcar só após salvar)
+  medicamentoCatId: number | null; // refId do catálogo; null = manual sem cadastro
+  nome:             string;
+  quantidade:       number;
+  dataAplicacao:    string;
+  dose:             string;
+  via:              string;
+  loteId:           number | '';
+  cliente:          boolean;
+  observacao:       string;
+  emEstoque:        boolean;
+  vias:             string[];
+  lotes:            LoteDisponivel[];
+  loadingLotes:     boolean;
 }
 
 interface VacinaClinica {
@@ -208,6 +231,15 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-xs text-gray-400 w-28 flex-shrink-0 pt-0.5">{label}</span>
       <span className="text-sm text-gray-800 font-medium">{value}</span>
     </div>
+  );
+}
+
+// Chip compacto rótulo:valor na linha do item importado (mesmo estilo do InfoChip da prescrição)
+function ChipVac({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="text-[11px] text-gray-400 whitespace-nowrap">
+      {label} <span className="text-gray-600 font-medium">{value}</span>
+    </span>
   );
 }
 
@@ -451,6 +483,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const [buscaMed,          setBuscaMed]          = useState('');
   const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
   const comboboxRef = useRef<HTMLDivElement>(null);
+  const formRef     = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -474,6 +507,117 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const [page, setPage] = useState(1);
   const limit = 10;
   const [confirmandoDuplicata, setConfirmandoDuplicata] = useState(false);
+  const [showImportOrc, setShowImportOrc] = useState(false);
+  // Erro de ação exibido inline (substitui o toast de erro)
+  const [erroInline, setErroInline] = useState<string | null>(null);
+
+  // Rascunho das vacinas importadas — persiste ao trocar de tela (mesmo padrão da
+  // prescrição). Restaurado na montagem; limpo ao salvar.
+  const draftKeyVac = `s2vet_vacina_import_draft_${animalId}_${evolucaoId ?? 'sem'}`;
+  const [itensImport, setItensImport] = useState<VacImport[]>(() => {
+    try {
+      const raw = localStorage.getItem(draftKeyVac);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        // loadingLotes nunca deve voltar "true" (não há fetch em andamento na restauração)
+        if (Array.isArray(arr)) return arr.map((x: VacImport) => ({ ...x, loadingLotes: false }));
+      }
+    } catch { /* ignore */ }
+    return [];
+  });
+  const [editandoKey,   setEditandoKey]   = useState<string | null>(null); // linha importada em edição
+
+  // Importa uma vacina ACEITA do orçamento → pré-preenche o formulário (vacina + qtd).
+  // O valor final vem do lote escolhido; se vier mais de uma, usa a primeira.
+  const patchImport = (key: string, patch: Partial<VacImport>) =>
+    setItensImport(prev => prev.map(x => x.key === key ? { ...x, ...patch } : x));
+
+  // Carrega TODAS as vacinas do orçamento como itens editáveis (mesmo método da
+  // prescrição). Cada item já resolve nome/vias do catálogo e busca seus lotes.
+  const importarDoOrcamento = (itensOrc: OrcamentoItemImport[]) => {
+    const base: VacImport[] = itensOrc.map(i => {
+      const med  = i.refId ? catalogo.find(m => m.id === i.refId) ?? null : null;
+      const vias = med && med.vias.length > 0
+        ? [...new Set(med.vias.map(v => normalizeVia(v.via)))]
+        : VIAS_PADRAO;
+      return {
+        key:              `imp-${i.id}-${Math.random().toString(36).slice(2)}`,
+        orcamentoItemId:  i.id,
+        medicamentoCatId: i.refId,
+        nome:             i.descricao,
+        quantidade:       i.quantidade || 1,
+        dataAplicacao:    hoje(),
+        dose:             '',
+        via:              vias.length === 1 ? vias[0] : '',
+        loteId:           '',
+        cliente:          false,
+        observacao:       'Importado do orçamento',
+        emEstoque:        !!med?.emEstoque,
+        vias,
+        lotes:            [],
+        loadingLotes:     !!med?.emEstoque,
+      };
+    });
+    setItensImport(prev => [...prev, ...base]);
+
+    // Busca os lotes de cada item com estoque, em paralelo (não bloqueia a lista)
+    base.forEach(async item => {
+      if (!item.emEstoque || !item.medicamentoCatId) return;
+      try {
+        const res = await api.get('/vacinas/estoque/lotes-disponiveis', {
+          params: { medicamentoCatId: item.medicamentoCatId },
+        });
+        const lotes: LoteDisponivel[] = res.data?.dados ?? [];
+        patchImport(item.key, { lotes, loteId: lotes.length === 1 ? lotes[0].id : '', loadingLotes: false });
+      } catch {
+        patchImport(item.key, { loadingLotes: false });
+      }
+    });
+  };
+
+  // Grava a lista de itens (importados do orçamento e/ou inseridos à mão).
+  // Espelha o "Salvar" da prescrição: um POST por item, tudo de uma vez.
+  const salvarItens = async (itens: VacImport[]) => {
+    if (itens.length === 0) return;
+    if (itens.some(i => !i.medicamentoCatId)) {
+      setErroInline('Há vacina sem cadastro no catálogo — remova a linha.'); return;
+    }
+    setSaving(true);
+    let ok = 0;
+    try {
+      for (const item of itens) {
+        await api.post('/clinica/vacinas', {
+          animalId,
+          medicamentoCatId: item.medicamentoCatId,
+          ...(evolucaoId  && { evolucaoId }),
+          ...(item.loteId && { loteId: item.loteId }),
+          dose:       item.dose || null,
+          quantidade: item.quantidade,
+          cliente:    item.cliente,
+          via:        item.via || null,
+          dataAplicacao: item.dataAplicacao,
+          observacao: item.observacao.trim() || null,
+        });
+        ok++;
+      }
+      // Salvou tudo → só agora marca os itens de ORÇAMENTO como importados
+      // (orcamentoItemId 0 = item inserido manualmente, não vem de orçamento)
+      await marcarOrcamentoImportado(itens.filter(i => i.orcamentoItemId > 0).map(i => i.orcamentoItemId));
+      toast.success(`${ok} vacina(s) registrada(s)`);
+      setItensImport([]);
+      limparForm();
+      setPage(1);
+      carregarHistorico();
+      onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(`${msg ?? 'Erro ao registrar vacina'}${ok > 0 ? ` — ${ok} já salva(s)` : ''}`);
+      // Marca só as que chegaram a ser salvas e remove-as da lista (não duplicar)
+      if (ok > 0) await marcarOrcamentoImportado(itens.slice(0, ok).filter(i => i.orcamentoItemId > 0).map(i => i.orcamentoItemId));
+      setItensImport(itens.slice(ok));
+      carregarHistorico();
+    } finally { setSaving(false); }
+  };
 
   const historicoFiltrado = historico.filter(v => {
     if (filtroStatus === 'todos') return true;
@@ -487,7 +631,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const podeImprimir = isGestor || podeExecutar('atendimento.vacinas.imprimir');
 
   const semPermissao = (acao: string) =>
-    toast.error(`Sem permissão para ${acao}. Verifique com o responsável.`);
+    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
 
   const medSelecionado = catalogo.find(m => m.id === medicamentoId) ?? null;
 
@@ -540,7 +684,13 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       .finally(() => onViewConsumed?.());
   }, [openItemId]);
 
+  // Durante a carga de um item importado no formulário, a vacina é fixada e via/lote
+  // são preenchidos a partir do próprio item — os efeitos reativos abaixo (que resetam
+  // via/lote ao trocar a vacina) são pulados para não sobrescrever esses valores.
+  const carregandoEdicaoRef = useRef(false);
+
   useEffect(() => {
+    if (carregandoEdicaoRef.current) return;
     if (!medicamentoId) { setVia(''); return; }
     const med = catalogo.find(m => m.id === medicamentoId);
     if (med && med.vias.length > 0) {
@@ -569,6 +719,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   }, []);
 
   useEffect(() => {
+    // Libera o flag DEPOIS que os efeitos reativos de medicamentoId rodaram (este é o
+    // último deles). Assim a carga de edição não é sobrescrita, mas trocas manuais de
+    // vacina seguem recarregando lotes/via normalmente.
+    if (carregandoEdicaoRef.current) { carregandoEdicaoRef.current = false; return; }
     if (!medicamentoId) {
       setLoteId('');
       setLotesDisponiveis([]);
@@ -586,6 +740,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   // Reset page when filter changes
   useEffect(() => { setPage(1); }, [filtroStatus]);
 
+  // Persiste o rascunho das vacinas importadas a cada mudança (sobrevive à troca de tela)
+  useEffect(() => {
+    try {
+      if (itensImport.length > 0) localStorage.setItem(draftKeyVac, JSON.stringify(itensImport));
+      else localStorage.removeItem(draftKeyVac);
+    } catch { /* ignore */ }
+  }, [itensImport, draftKeyVac]);
+
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const limparForm = () => {
@@ -602,37 +764,93 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     setDropdownMedAberto(false);
   };
 
+  // Carrega um item importado NO FORMULÁRIO para edição (mesmo fluxo da prescrição).
+  const editarNoForm = (item: VacImport) => {
+    carregandoEdicaoRef.current = true; // impede os efeitos de resetarem lote/via
+    setEditandoKey(item.key);
+    setMedicamentoId(item.medicamentoCatId ?? '');
+    setLotesDisponiveis(item.lotes);
+    setLoteId(item.loteId);
+    setDose(item.dose);
+    setQtd(item.quantidade);
+    setCliente(item.cliente);
+    setDataAplicacao(item.dataAplicacao);
+    setVia(item.via);
+    setObservacao(item.observacao);
+    setBuscaMed('');
+    setDropdownMedAberto(false);
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const cancelarEdicaoForm = () => { setEditandoKey(null); limparForm(); };
+
+  // Aplica os valores do formulário de volta ao item importado (não salva no servidor;
+  // a gravação real continua no botão "Salvar N vacinas").
+  const salvarEdicaoForm = () => {
+    if (!editandoKey) return;
+    if (!medicamentoId) { setErroInline('Selecione a vacina'); return; }
+    patchImport(editandoKey, {
+      medicamentoCatId: typeof medicamentoId === 'number' ? medicamentoId : null,
+      nome:             medSelecionado?.nome ?? undefined,
+      quantidade:       qtd,
+      dataAplicacao,
+      dose,
+      via,
+      loteId,
+      cliente,
+      observacao,
+    });
+    cancelarEdicaoForm();
+  };
+
+  // Formulário vazio = nada preenchido para inserir/salvar (espelha formEstaVazio
+  // da prescrição — é o que decide se o "Salvar" leva também o conteúdo do form).
+  const formEstaVazio = () => !medicamentoId;
+
+  // Converte o formulário atual em um item da lista (sem gravar no servidor).
+  const itemDoFormulario = (): VacImport => ({
+    key:              `man-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    orcamentoItemId:  0,                       // 0 = inserido à mão, não veio de orçamento
+    medicamentoCatId: typeof medicamentoId === 'number' ? medicamentoId : null,
+    nome:             medSelecionado?.nome ?? '',
+    quantidade:       qtd,
+    dataAplicacao,
+    dose,
+    via,
+    loteId,
+    cliente,
+    observacao,
+    emEstoque:        !!medSelecionado?.emEstoque,
+    vias:             viasDisponiveis,
+    lotes:            lotesDisponiveis,
+    loadingLotes:     false,
+  });
+
+  // "Inserir" — adiciona o item à lista e limpa o formulário para o próximo,
+  // igual ao Inserir da prescrição. A gravação acontece só no "Salvar".
+  const handleInserir = () => {
+    if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
+    if (!medicamentoId) { setErroInline('Selecione a vacina'); return; }
+    setErroInline(null);
+    setItensImport(prev => [...prev, itemDoFormulario()]);
+    limparForm();
+  };
+
   const executarSalvar = async () => {
-    setSaving(true);
-    try {
-      await api.post('/clinica/vacinas', {
-        animalId,
-        medicamentoCatId: medicamentoId,
-        ...(evolucaoId && { evolucaoId }),
-        ...(loteId     && { loteId }),
-        dose:      dose || null,
-        quantidade: qtd,
-        cliente,
-        via:       via || null,
-        dataAplicacao,
-        observacao: observacao.trim() || null,
-      });
-      toast.success('Vacina registrada com sucesso');
-      limparForm();
-      setPage(1);
-      carregarHistorico();
-      onSalvo?.();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao registrar vacina');
-    } finally { setSaving(false); }
+    // Salva a lista + o que estiver no formulário, numa única ação
+    const itens = formEstaVazio() ? itensImport : [...itensImport, itemDoFormulario()];
+    await salvarItens(itens);
   };
 
   const handleSalvar = () => {
-    if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
-    if (!medicamentoId) { toast.error('Selecione a vacina'); return; }
+    if (!podeCriar) { semPermissao('registrar vacinas'); return; }
+    if (formEstaVazio() && itensImport.length === 0) {
+      setErroInline('Selecione a vacina'); return;
+    }
+    setErroInline(null);
 
-    if (medSelecionado) {
+    // Duplicata só faz sentido para o que está no formulário
+    if (!formEstaVazio() && medSelecionado) {
       const nomeBusca = medSelecionado.nome.toLowerCase().trim();
       const duplicata = historico.find(v => {
         if (!v.ativo) return false;
@@ -663,7 +881,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       carregarHistorico();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      toast.error(msg ?? 'Erro ao inativar');
+      setErroInline(msg ?? 'Erro ao inativar');
     }
   };
 
@@ -689,12 +907,33 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
   return (
     <>
+      <InlineError message={erroInline} className="mx-5 mt-4" />
 
       {/* ── Formulário de registro ─────────────────────────────────────────── */}
       {podeCriar && (
-        <div className="p-5 border-b border-gray-100">
+        <div ref={formRef} className="p-5 border-b border-gray-100">
 
+          {/* Importar orçamento (opcional) */}
+          <button onClick={() => setShowImportOrc(true)}
+            className="flex items-center gap-1.5 px-3 py-2 mb-3 rounded-xl text-xs font-semibold border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
+            <Receipt size={13} /> Importar orçamento
+          </button>
+          {showImportOrc && (
+            <ImportarOrcamentoModal
+              animalId={animalId}
+              tipos={['VACINA']}
+              onFechar={() => setShowImportOrc(false)}
+              onImportar={importarDoOrcamento}
+            />
+          )}
 
+          {/* Aviso de edição de item importado */}
+          {editandoKey && (
+            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-teal-50 border border-teal-200 text-xs text-teal-700">
+              <Pencil size={12} />
+              Editando um item importado — ajuste os campos e clique em <b>Atualizar item</b>.
+            </div>
+          )}
 
           {/* Linha 1: Vacina (combobox) / Lote */}
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 mb-4">
@@ -878,15 +1117,90 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
             )}
           </div>
 
-          <div className="flex justify-end">
-            <button
-              onClick={handleSalvar}
-              disabled={saving || !medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
-              className="flex items-center gap-2 px-6 py-2.5 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-              {saving && <Loader2 size={14} className="animate-spin" />}
-              <Syringe size={15} />
-              {saving ? 'Salvando…' : 'Salvar'}
-            </button>
+          {/* ── Itens da vacina — abaixo do formulário e ACIMA do rodapé, igual à prescrição ── */}
+          {itensImport.length > 0 && (
+            <div className="mt-5 pt-4 border-t border-gray-100">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+                ITENS DA VACINA ({itensImport.length})
+              </p>
+
+              <div className="space-y-2">
+                {itensImport.map(item => {
+                  const emEdicao = editandoKey === item.key;
+                  const loteLabel = item.loteId
+                    ? (item.lotes.find(l => l.id === item.loteId)?.lote ?? null) : null;
+                  return (
+                  <div key={item.key}
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-colors ${emEdicao ? 'border-teal-300 bg-teal-50' : 'border-gray-100 bg-gray-50'}`}>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 bg-teal-100 text-teal-700">
+                      <Syringe size={9} /> Vacina
+                    </span>
+                    <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <span className="text-sm font-semibold text-gray-800">{item.nome}</span>
+                      {!item.medicamentoCatId && (
+                        <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Sem cadastro</span>
+                      )}
+                      {item.cliente && (
+                        <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Cliente</span>
+                      )}
+                      <ChipVac label="Início:" value={formatDate(item.dataAplicacao)} />
+                      <ChipVac label="Qtd:" value={String(item.quantidade)} />
+                      {item.via  && <ChipVac label="Via:" value={item.via} />}
+                      {item.dose && <ChipVac label="Dose:" value={item.dose} />}
+                      {loteLabel && <ChipVac label="Lote:" value={loteLabel} />}
+                      {item.observacao.trim() && <ChipVac label="Obs:" value={item.observacao.trim()} />}
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button onClick={() => emEdicao ? cancelarEdicaoForm() : editarNoForm(item)}
+                        title={emEdicao ? 'Em edição no formulário — cancelar' : 'Editar no formulário'}
+                        className="p-1.5 text-teal-500 hover:text-teal-700 hover:bg-teal-100 rounded-lg transition-colors">
+                        {emEdicao ? <Check size={13} /> : <Pencil size={12} />}
+                      </button>
+                      <button onClick={() => { setItensImport(prev => prev.filter(x => x.key !== item.key)); if (emEdicao) cancelarEdicaoForm(); }}
+                        title="Remover" className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Rodapé — mesma composição da prescrição: Inserir + Salvar ────── */}
+          <div className="flex items-center justify-end gap-2 mt-5 pt-4 border-t border-gray-100 flex-wrap">
+            {editandoKey ? (
+              <>
+                <button onClick={cancelarEdicaoForm}
+                  className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
+                  Cancelar
+                </button>
+                <button
+                  onClick={salvarEdicaoForm}
+                  disabled={!medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
+                  className="flex items-center gap-1.5 px-5 py-2 border border-teal-600 text-teal-700 hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
+                  <Check size={13} /> Atualizar item
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleInserir}
+                  disabled={saving || !medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
+                  className="flex items-center gap-1.5 px-5 py-2 border border-teal-600 text-teal-700 hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
+                  Inserir
+                </button>
+                <button
+                  onClick={handleSalvar}
+                  disabled={saving || loadingLotes || (!medicamentoId && itensImport.length === 0) ||
+                            (!!medicamentoId && lotesDisponiveis.length > 1 && !loteId)}
+                  className="flex items-center gap-1.5 px-5 py-2 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
+                  {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                  {saving ? 'Salvando…' : 'Salvar'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

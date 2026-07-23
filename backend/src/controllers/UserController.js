@@ -5,6 +5,13 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
+const { normalizeEmail, findUserByEmail } = require('../lib/email');
+const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
+const { whereProprietarioNoEscopo } = require('./ProprietarioController');
+const {
+  salvarPerfil: salvarPerfilProprietario,
+  aplicarPerfil: aplicarPerfilProprietario,
+} = require('../lib/proprietarioPerfil');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
@@ -154,7 +161,11 @@ const UserController = {
         }
       } catch { /* colunas ainda não migradas — ignora */ }
 
-      const { vetPerfil, especialidades, ...userData } = user;
+      const { vetPerfil, especialidades, ...userBruto } = user;
+      // PROPRIETÁRIO: mostra o cadastro da EMPRESA ATIVA (cada clínica mantém o seu)
+      const userData = userBruto.userType === 'PROPRIETARIO'
+        ? await aplicarPerfilProprietario(userBruto, req.empresaId)
+        : userBruto;
       return res.status(200).json({
         ...userData,
         isConvidado,
@@ -266,6 +277,22 @@ const UserController = {
           userType:    effectiveUserType,
         },
       });
+
+      // PROPRIETÁRIO editando os próprios dados: reflete no cadastro que a EMPRESA
+      // ATIVA mantém dele (é esse o cadastro que a clínica enxerga). Sem contexto de
+      // empresa, fica só no User — as clínicas seguem com os cadastros delas.
+      if (updatedUser.userType === 'PROPRIETARIO' && req.empresaId) {
+        await salvarPerfilProprietario(prisma, updatedUser.id, req.empresaId, {
+          ...(fullName    !== undefined ? { fullName }    : {}),
+          ...(phone       !== undefined ? { phone }       : {}),
+          ...(cep         !== undefined ? { cep }         : {}),
+          ...(endereco    !== undefined ? { endereco }    : {}),
+          ...(complemento !== undefined ? { complemento } : {}),
+          ...(bairro      !== undefined ? { bairro }      : {}),
+          ...(cidade      !== undefined ? { cidade }      : {}),
+          ...(estado      !== undefined ? { estado }      : {}),
+        });
+      }
 
       // Salvar dados do veterinário
       if (userType === 'VETERINARIO' && crmv !== undefined) {
@@ -382,17 +409,35 @@ const UserController = {
     }
   },
 
+  // Busca de proprietário por e-mail para o cadastro de animal.
+  // ESCOPADA À EMPRESA ATIVA: o proprietário só é considerado "encontrado" quando
+  // já pertence ao escopo de quem está consultando (mesmo critério da listagem de
+  // proprietários). Cliente cadastrado em OUTRA empresa não é devolvido — o vet
+  // preenche os dados do zero, e cada empresa mantém os seus próprios, do mesmo
+  // jeito que o animal é isolado por empresa.
   buscarProprietarioPorEmail: async (req, res) => {
-    const email = (req.query.email ?? '').trim().toLowerCase();
+    const email = normalizeEmail(req.query.email);
     if (!email) return res.status(400).json({ error: 'E-mail obrigatório' });
     try {
-      const user = await prisma.user.findUnique({
-        where:  { email },
-        select: { fullName: true, phone: true },
+      const user = await findUserByEmail(prisma, email, {
+        select: { id: true, fullName: true, phone: true, userType: true },
       });
       if (!user) return res.json({ encontrado: false });
+
+      // ADMIN global enxerga qualquer proprietário
+      if (req.user?.role !== 'ADMIN') {
+        if (!req.empresaId) return res.json({ encontrado: false });
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        const noEscopo = await prisma.user.findFirst({
+          where:  { id: user.id, ...whereProprietarioNoEscopo(req.empresaId, equipeScope) },
+          select: { id: true },
+        });
+        if (!noEscopo) return res.json({ encontrado: false });
+      }
+
       return res.json({ encontrado: true, fullName: user.fullName, phone: user.phone ?? '' });
     } catch (err) {
+      console.error('[UserController.buscarProprietarioPorEmail]', err);
       return res.status(500).json({ error: 'Erro interno' });
     }
   },

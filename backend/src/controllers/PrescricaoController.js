@@ -3,6 +3,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { recalcularTotal } = require('../lib/faturaUtils');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 const INCLUDE = {
@@ -301,9 +302,8 @@ const PrescricaoController = {
         data: { faturaId: fatura.id, animalId: prescricao.animalId, tipo: prescricao.tipo, descricao, valor: 0, quantidade: 1, veterinarioId: vet.id },
       });
 
-      const itens = await prisma.faturaItem.findMany({ where: { faturaId: fatura.id } });
-      const total = itens.reduce((sum, i) => sum + i.valor * i.quantidade, 0);
-      await prisma.fatura.update({ where: { id: fatura.id }, data: { total } });
+      // Total sempre pelo helper compartilhado — ele desconta os abatimentos por item
+      await recalcularTotal(prisma, fatura.id);
 
       res.json({ dados: { finalizado: 1 } });
     } catch (err) {
@@ -378,9 +378,8 @@ const PrescricaoController = {
         });
       }
 
-      const itens = await prisma.faturaItem.findMany({ where: { faturaId: fatura.id } });
-      const total = itens.reduce((sum, i) => sum + i.valor * i.quantidade, 0);
-      await prisma.fatura.update({ where: { id: fatura.id }, data: { total } });
+      // Total sempre pelo helper compartilhado — ele desconta os abatimentos por item
+      await recalcularTotal(prisma, fatura.id);
 
       res.json({ dados: { finalizado: rascunhos.length } });
     } catch (err) {

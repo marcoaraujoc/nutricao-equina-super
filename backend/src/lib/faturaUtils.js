@@ -101,9 +101,51 @@ async function lancarExameNaFatura(tx, exame, proprietarioUserId) {
   return true;
 }
 
+const TIPOS_DESCONTO_VALIDOS = ['PERCENTUAL', 'VALOR'];
+
 /**
- * Recalcula o total da fatura a partir da soma de valor × quantidade dos itens.
- * Aceita tanto o client `prisma` quanto um client de transaction (`tx`).
+ * Desconto (em R$) de um item de fatura. PERCENTUAL incide sobre o bruto (valor × qtd);
+ * VALOR é o abatimento direto. Nunca passa do bruto nem fica negativo.
+ *
+ * @param {{valor?:number, quantidade?:number, descontoTipo?:string|null, descontoValor?:number}} item
+ */
+function descontoDoItem(item) {
+  const bruto = (item.valor ?? 0) * (item.quantidade ?? 1);
+  const d     = Number(item.descontoValor ?? 0);
+  if (!d || d <= 0) return 0;
+  const abatimento = item.descontoTipo === 'PERCENTUAL' ? bruto * (Math.min(d, 100) / 100) : d;
+  return Math.min(Math.max(abatimento, 0), Math.max(bruto, 0));
+}
+
+/**
+ * Valor líquido de um item de fatura: bruto (valor × qtd) menos o desconto.
+ * É este valor que compõe o total da fatura — usar SEMPRE que somar itens.
+ */
+function valorLiquidoItem(item) {
+  return (item.valor ?? 0) * (item.quantidade ?? 1) - descontoDoItem(item);
+}
+
+/**
+ * Normaliza o par (tipo, valor) de desconto vindo do request. Retorna null quando o
+ * desconto deve ser zerado (sem desconto) e lança Error em entrada inválida.
+ *
+ * @returns {{descontoTipo: string|null, descontoValor: number}}
+ */
+function normalizarDesconto(descontoTipo, descontoValor) {
+  const valor = Number(descontoValor ?? 0);
+  if (!descontoTipo || !valor || valor <= 0) return { descontoTipo: null, descontoValor: 0 };
+  if (!TIPOS_DESCONTO_VALIDOS.includes(descontoTipo)) {
+    throw new Error(`Tipo de desconto inválido. Use: ${TIPOS_DESCONTO_VALIDOS.join(' ou ')}`);
+  }
+  if (descontoTipo === 'PERCENTUAL' && valor > 100) {
+    throw new Error('Desconto percentual não pode passar de 100%.');
+  }
+  return { descontoTipo, descontoValor: valor };
+}
+
+/**
+ * Recalcula o total da fatura a partir da soma dos valores LÍQUIDOS dos itens
+ * (valor × quantidade − desconto). Aceita tanto o client `prisma` quanto um `tx`.
  *
  * @param {object} client
  * @param {number} faturaId
@@ -111,7 +153,7 @@ async function lancarExameNaFatura(tx, exame, proprietarioUserId) {
  */
 async function recalcularTotal(client, faturaId) {
   const itens = await client.faturaItem.findMany({ where: { faturaId } });
-  const total = itens.reduce((acc, i) => acc + i.valor * i.quantidade, 0);
+  const total = itens.reduce((acc, i) => acc + valorLiquidoItem(i), 0);
   await client.fatura.update({ where: { id: faturaId }, data: { total } });
   return total;
 }
@@ -314,6 +356,10 @@ module.exports = {
   adicionarFaturaItem,
   lancarExameNaFatura,
   recalcularTotal,
+  descontoDoItem,
+  valorLiquidoItem,
+  normalizarDesconto,
+  TIPOS_DESCONTO_VALIDOS,
   registrarCorrecaoFatura,
   removerFaturaItensDaOrigem,
   atualizarFaturaItensDaOrigem,
