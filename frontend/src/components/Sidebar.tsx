@@ -122,6 +122,7 @@ export default function Sidebar() {
   const podeVerPrescricoes     = podeExecutar('atendimento.prescricoes.ler');
   const podeVerVacinas         = podeExecutar('atendimento.vacinas.ler');
   const podeVerEncaminhamentos = podeExecutar('atendimento.encaminhamentos.ler');
+  const podeVerEnfermagem      = podeExecutar('enfermagem.prescricao.ler');
   const podeVerDieta           = podeExecutar('nutricao.dietas.ler');
   const podeVerRelatorio       = podeExecutar('nutricao.relatorios.ler');
   const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
@@ -129,6 +130,7 @@ export default function Sidebar() {
   const podeVerEstoqueVacina   = isGestor || podeExecutar('vacina.estoque.ler');
   const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
   const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
+  const podeVerCadProcedimentos = isAdmin || isGestor || podeExecutar('cadastro.procedimento.ler');
   const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
   const podeVerTratadores      = isAdmin || isGestor || podeExecutar('cadastro.tratador.ler');
   const podeVerFornecedores    = isAdmin || isGestor || podeExecutar('cadastro.fornecedor.ler');
@@ -185,6 +187,7 @@ export default function Sidebar() {
     podeVerEquipe ||
     podeVerFornecedores ||
     podeVerLocalizacoes ||
+    podeVerCadProcedimentos ||
     podeVerProprietarios ||
     podeVerTratadores;
 
@@ -421,7 +424,7 @@ export default function Sidebar() {
                           {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                           {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
                           {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
-                          {(isVet || isAdmin || isGestor) && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
+                          {podeVerCadProcedimentos && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                           {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
                           {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
                         </div>
@@ -553,7 +556,7 @@ export default function Sidebar() {
                   )}
 
                   {/* ── Enfermagem ────────────────────────────────────── */}
-                  {temAcessoClinico && podeVerPrescricoes && (
+                  {temAcessoClinico && podeVerEnfermagem && (
                     <div>
                       {moduleButton('Enfermagem', <HeartPulse size={20} />, 'enfermagem', openGroup === 'enfermagem', () => toggleGroup('enfermagem'))}
                       {openGroup === 'enfermagem' && (

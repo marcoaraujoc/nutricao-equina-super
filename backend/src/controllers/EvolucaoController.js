@@ -386,16 +386,18 @@ const EvolucaoController = {
       const textoMudou   = texto != null && texto.trim() !== existente.texto;
       const textoEfetivo = texto?.trim() ?? existente.texto;
 
-      // Título via IA gerado ANTES de salvar e gravado na MESMA escrita — só quando
-      // ainda não existe título (evita reprocessar a cada "Salvar" de um rascunho já
-      // titulado, e nunca sobrescreve um título definido manualmente via PATCH /titulo).
+      // Título via IA gerado ANTES de salvar e gravado na MESMA escrita. Regera quando
+      // ainda não há título OU quando o TEXTO da evolução mudou — assim editar o
+      // conteúdo atualiza o título para refletir a nova evolução. Se o texto não mudou,
+      // não reprocessa (evita gasto de IA a cada "Salvar" de um rascunho já titulado).
+      // Falha/retorno vazio da IA mantém o título anterior (nunca zera um já existente).
       // `acoes` (sugestões de encaminhamento) volta na resposta, sem persistir aqui.
       let tituloParaSalvar = existente.titulo;
       let acoesIA = [];
-      if (!existente.titulo?.trim() && textoEfetivo?.trim()) {
+      if ((!existente.titulo?.trim() || textoMudou) && textoEfetivo?.trim()) {
         const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId).catch(() => null);
         if (resultadoIA) {
-          tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
+          tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || existente.titulo;
           acoesIA = resultadoIA.acoes ?? [];
         }
       }
@@ -983,12 +985,16 @@ const EvolucaoController = {
       // sempre especialidade com especialidade (odontologia x odontologia,
       // fisioterapia x fisioterapia...). Exceção: Fisioterapia e Quiropraxia
       // formam um grupo comparável entre si.
+      // Só compara com a última FINALIZADA: rascunhos (EM_ANDAMENTO) e canceladas
+      // não são baseline clínica válida — o comparativo é sempre contra o último
+      // atendimento efetivamente concluído.
       const GRUPOS_COMPARACAO = [['Fisioterapia', 'Quiropraxia']];
       const comparaveis = GRUPOS_COMPARACAO.find(g => g.includes(atual.especialidade)) ?? [atual.especialidade];
       const anterior = await prisma.evolucaoClinica.findFirst({
         where: {
           animalId:      atual.animalId,
           ativo:         true,
+          status:        'FINALIZADA',
           id:            { not: atual.id },
           dataInicio:    { lt: atual.dataInicio },
           especialidade: { in: comparaveis },

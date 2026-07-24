@@ -3,12 +3,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Camera, Loader2, MessageCircle, QrCode, Power, RefreshCw } from 'lucide-react';
+import { Camera, Loader2, MessageCircle, QrCode, Power, RefreshCw, Settings } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import InlineError from '../components/InlineError';
+import { HoraInput } from '../components/UsuarioFormModal';
 
 // ─── Utilitário de compressão (mesmo padrão de Animal.tsx) ───────────────────
 const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise<File> =>
@@ -352,7 +353,10 @@ export default function Configuracoes() {
       <InlineError message={erroInline} className="mb-4" />
 
       <BotaoVoltar />
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">Configurações</h1>
+      <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+        <Settings size={24} className="text-emerald-600" />
+        Configurações
+      </h1>
 
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
 
@@ -562,12 +566,12 @@ export default function Configuracoes() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Abre às</label>
-                <input type="time" step={1800} value={horaInicio} onChange={e => setHoraInicio(e.target.value)}
+                <HoraInput value={horaInicio} onChange={setHoraInicio}
                   className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Fecha às</label>
-                <input type="time" step={1800} value={horaFim} onChange={e => setHoraFim(e.target.value)}
+                <HoraInput value={horaFim} onChange={setHoraFim}
                   className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
             </div>

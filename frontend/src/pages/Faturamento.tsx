@@ -782,6 +782,18 @@ function PainelFatura({
     return acc;
   }, {}) ?? {};
 
+  // A fatura é do PROPRIETÁRIO (não é escopada por empresa), mas a lista de animais
+  // é a da clínica ativa. Itens de um animal fora dessa lista (outra clínica atende o
+  // mesmo cliente) ganham uma seção própria — sem isto eles simplesmente sumiam da tela.
+  const idsDoEscopo = new Set(prop.animais.map(a => a.id));
+  const animaisForaDoEscopo = Object.entries(itensPorAnimal)
+    .filter(([key]) => key !== 'sem' && !idsDoEscopo.has(Number(key)))
+    .map(([key, itens]) => ({
+      id:    Number(key),
+      nome:  itens?.[0]?.animal?.nome ?? `Animal #${key}`,
+      itens: itens ?? [],
+    }));
+
   const canEdit = fatura?.status === 'ABERTA';
 
   const invoiceRef = fatura ? `INV-${String(fatura.id).padStart(3, '0')}` : '—';
@@ -989,6 +1001,36 @@ function PainelFatura({
             </div>
           );
         })}
+
+        {/* Animais atendidos por OUTRA clínica do mesmo cliente — a fatura é única do
+            proprietário, então os lançamentos aparecem aqui em vez de sumirem. */}
+        {animaisForaDoEscopo.map(grupo => (
+          <div key={`fora-${grupo.id}`} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-gray-50">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
+                Informação do Cavalo
+              </p>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-gray-900">{grupo.nome}</p>
+                  <p className="text-[10px] text-gray-400">Lançamentos de outro atendimento deste cliente</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
+                  <p className="text-sm font-bold text-gray-800">
+                    {formatBRL(grupo.itens.reduce((s, i) => s + totalItem(i), 0))}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {grupo.itens.map(item => (
+                <ItemRow key={item.id} item={item} canEdit={canEdit}
+                  onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+              ))}
+            </div>
+          </div>
+        ))}
 
         {/* Resumo */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">

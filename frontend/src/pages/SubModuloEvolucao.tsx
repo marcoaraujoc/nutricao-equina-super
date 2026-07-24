@@ -679,11 +679,11 @@ function NovaEvolucaoModal({
             <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Evolução clínica *</label>
               <div className="flex items-center gap-2">
-                {form.texto && !gravacaoAtiva && !transcrevendo && (
+                {!somenteLeitura && form.texto && !gravacaoAtiva && !transcrevendo && (
                   <button onClick={() => onFormChange('texto', '')}
                     className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
-                {!showRecordAgain && !transcrevendo && (
+                {!somenteLeitura && !showRecordAgain && !transcrevendo && (
                   mobile ? (
                     <button
                       onClick={() => (gravacaoAtiva ? pararGravacao() : iniciarGravacao())}
@@ -1512,13 +1512,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
               const podeEditarEsta  = isFornecedor
                 ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
-                : (nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' || (nivelEditar  === 'PROPRIO' && eProprioAutor));
+                : (nivelEditar  === 'FULL' || ((nivelEditar  === 'EQUIPE' || nivelEditar  === 'PROPRIO') && eProprioAutor));
               const podeExcluir    = emAndamento && (isFornecedor
                 ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
-                : (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' || (nivelDeletar === 'PROPRIO' && eProprioAutor)));
+                : (nivelDeletar === 'FULL' || ((nivelDeletar === 'EQUIPE' || nivelDeletar === 'PROPRIO') && eProprioAutor)));
               const podeFinalizarEsta = emAndamento && (isFornecedor
                 ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
-                : (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' || (nivelFinalizar === 'PROPRIO' && eProprioAutor)));
+                : (nivelFinalizar === 'FULL' || ((nivelFinalizar === 'EQUIPE' || nivelFinalizar === 'PROPRIO') && eProprioAutor)));
               const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
               const podeAlterar    = (emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
               const podeCancelarFinalizada = ev.status === 'FINALIZADA' && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId));
@@ -1634,14 +1634,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 // FORNECEDOR: autoria obrigatória independente do nível configurado
                 const podeEditarEsta  = isFornecedor
                   ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
-                  : (nivelEditar  === 'FULL' || nivelEditar  === 'EQUIPE' || (nivelEditar  === 'PROPRIO' && eProprioAutor));
+                  : (nivelEditar  === 'FULL' || ((nivelEditar  === 'EQUIPE' || nivelEditar  === 'PROPRIO') && eProprioAutor));
                 // FORNECEDOR: autoria obrigatória independente do nível configurado
                 const podeExcluir    = emAndamento && (isFornecedor
                   ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
-                  : (nivelDeletar === 'FULL' || nivelDeletar === 'EQUIPE' || (nivelDeletar === 'PROPRIO' && eProprioAutor)));
+                  : (nivelDeletar === 'FULL' || ((nivelDeletar === 'EQUIPE' || nivelDeletar === 'PROPRIO') && eProprioAutor)));
                 const podeFinalizarEsta = emAndamento && (isFornecedor
                   ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
-                  : (nivelFinalizar === 'FULL' || nivelFinalizar === 'EQUIPE' || (nivelFinalizar === 'PROPRIO' && eProprioAutor)));
+                  : (nivelFinalizar === 'FULL' || ((nivelFinalizar === 'EQUIPE' || nivelFinalizar === 'PROPRIO') && eProprioAutor)));
                 const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
                 const tituloDisplay = ev.titulo
                   ? ev.titulo

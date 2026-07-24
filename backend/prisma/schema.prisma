@@ -524,16 +524,22 @@ model Prescricao {
   aprovado            Boolean   @default(true)
   medicamentoCliente  Boolean   @default(false)
   executadoEm         DateTime? // setado na 1ª execução do item; presente = item travado (imutável)
+  // Origem no orçamento: `valorOrcado` é o valor UNITÁRIO aceito pelo cliente e tem
+  // precedência sobre o preço do catálogo/estoque no lançamento da fatura.
+  orcamentoItemId     Int?      @map("orcamento_item_id")
+  valorOrcado         Float?    @map("valor_orcado")
 
   animal           Animal           @relation("AnimalPrescricoes",     fields: [animalId],         references: [id], onDelete: Cascade)
   veterinario      User?            @relation("PrescricaoVeterinario", fields: [veterinarioId],    references: [id], onDelete: SetNull)
   grupo            PrescricaoGrupo? @relation("GrupoPrescricoes",      fields: [grupoId],          references: [id])
   medicamentoCat   Medicamento?     @relation("MedicamentoPrescricoes", fields: [medicamentoCatId], references: [id])
   faturaItens      FaturaItem[]     @relation("FaturaItemPrescricao")
+  orcamentoItem    OrcamentoItem?   @relation("PrescricaoOrcamento",   fields: [orcamentoItemId],  references: [id], onDelete: SetNull)
 
   @@index([animalId])
   @@index([veterinarioId])
   @@index([grupoId])
+  @@index([orcamentoItemId])
   @@map("tb_prescricoes")
   @@schema("schs2vet")
 }
@@ -1182,20 +1188,25 @@ model OrcamentoItem {
   descricao     String    @db.VarChar(255)
   quantidade    Float     @default(1)
   unidade       String?   @db.VarChar(50)
-  // MEDICAMENTO: posologia orçada. quantidade = dias × aplicações/dia; os dois campos
-  // voltam preenchidos na importação para a Prescrição (duração e frequência).
+  // MEDICAMENTO/PROCEDIMENTO: posologia orçada. quantidade = dias × aplicações/dia;
+  // os dois campos voltam preenchidos na importação para a Prescrição (duração e frequência).
   dias          Int?
   frequencia    String?   @db.VarChar(50)
   valorUnitario Float     @default(0) @map("valor_unitario")
+  // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
+  descontoTipo  String?   @map("desconto_tipo") @db.VarChar(12)
+  descontoValor Float     @default(0) @map("desconto_valor")
+  // LÍQUIDO: quantidade × valorUnitario − desconto
   valorTotal    Float     @default(0) @map("valor_total")
   statusItem    String    @default("PENDENTE") @map("status_item") // PENDENTE|ACEITO|REJEITADO
   // OUTROS: marcado quando o item é lançado direto na fatura (mesma semântica de "importado")
   importadoEm   DateTime? @map("importado_em")
   createdAt     DateTime  @default(now()) @map("created_at")
 
-  orcamento   Orcamento    @relation(fields: [orcamentoId], references: [id], onDelete: Cascade)
-  animal      Animal?      @relation("OrcamentoItemAnimal", fields: [animalId], references: [id], onDelete: SetNull)
-  faturaItens FaturaItem[] @relation("FaturaItemOrcamento")
+  orcamento    Orcamento     @relation(fields: [orcamentoId], references: [id], onDelete: Cascade)
+  animal       Animal?       @relation("OrcamentoItemAnimal", fields: [animalId], references: [id], onDelete: SetNull)
+  faturaItens  FaturaItem[]  @relation("FaturaItemOrcamento")
+  prescricoes  Prescricao[]  @relation("PrescricaoOrcamento")
 
   @@index([orcamentoId])
   @@index([animalId])
@@ -1439,9 +1450,10 @@ model MembroLocalTrabalho {
   id                 Int      @id @default(autoincrement())
   membroEquipeId     Int      @map("membro_equipe_id")
   localizacaoId      Int      @map("localizacao_id")
-  diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
-  horaInicioTrabalho String?  @db.VarChar(5)  // HH:MM
-  horaFimTrabalho    String?  @db.VarChar(5)  // HH:MM
+  diasTrabalho       String?  @db.VarChar(20)  // CSV 0-6 (0=Dom … 6=Sáb)
+  horaInicioTrabalho String?  @db.VarChar(5)   // HH:MM
+  horaFimTrabalho    String?  @db.VarChar(5)   // HH:MM
+  especialidadesIds  String?  @db.VarChar(255) // CSV de IDs de tb_especialidades (por local)
   createdAt          DateTime @default(now())
 
   membro      MembroEquipe      @relation(fields: [membroEquipeId], references: [id], onDelete: Cascade)

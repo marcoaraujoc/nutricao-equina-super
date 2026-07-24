@@ -23,7 +23,7 @@ import {
   DollarSign, Users, PawPrint, AlertCircle,
   RefreshCw, Plus, X, Building2, ChevronRight,
   LayoutDashboard, FlaskConical, Printer, Pill,
-  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, CalendarClock, Syringe, Package,
+  Lock, Globe, Pencil, Ban, Mail, Wrench, ChevronDown, CalendarDays, Syringe, Package,
   ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
@@ -179,7 +179,6 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
   dashboard:      { label: 'Dashboard',           icon: <LayoutDashboard size={14} /> },
   cadastro:       { label: 'Cadastro',            icon: <Users2          size={14} /> },
   animais:        { label: 'Animais & Pacientes', icon: <PawPrint        size={14} /> },
-  agendamento:    { label: 'Agendamento',          icon: <CalendarClock   size={14} /> },
   agenda:         { label: 'Agenda',              icon: <CalendarDays    size={14} /> },
   atendimento:    { label: 'Atendimento',         icon: <Stethoscope     size={14} /> },
   enfermagem:     { label: 'Enfermagem',          icon: <Activity        size={14} /> },
@@ -197,7 +196,7 @@ const MODULO_INFO: Record<string, { label: string; icon: React.ReactNode }> = {
 // Ordem dos módulos espelhando o Sidebar
 // 'animais' e 'equipe' são filhos de 'cadastro' — ver MODULO_CHILDREN
 const MODULO_ORDER = [
-  'dashboard', 'cadastro', 'agendamento', 'agenda', 'atendimento',
+  'dashboard', 'cadastro', 'agenda', 'atendimento',
   'enfermagem', 'estoque', 'nutricao', 'exames', 'financeiro',
   'medicamentos', 'procedimentos',
 ];
@@ -208,6 +207,7 @@ const SUBMODULO_LABEL: Record<string, string> = {
   proprietario:       'Proprietários',
   tratador:           'Tratadores',
   fornecedor:         'Fornecedores',
+  procedimento:       'Procedimentos (Empresa)',
   evolucoes:          'Evolução Clínica',
   prescricoes:        'Prescrições',
   vacinas:            'Vacinas',
@@ -238,19 +238,13 @@ const ACAO_COLS: Array<{ acao: string; label: string; icon?: React.ReactNode }> 
 ];
 
 const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: string }>> = {
-  agendamento: [
-    { acao: 'ler',                label: 'VER'            },
-    { acao: 'confirmar',          label: 'CONFIRMAR'      },
-    { acao: 'reagendar',          label: 'REAGENDAR'      },
-    { acao: 'trocar_profissional', label: 'TROCAR PROF.'  },
-    { acao: 'cancelar',           label: 'CANCELAR'       },
-  ],
+  // Agenda = atendimento.agendamentos.* (o que o app realmente enforça).
+  // "Alterar" cobre confirmar/reagendar/trocar profissional/mudar status.
   agenda: [
-    { acao: 'ler',                label: 'VER'            },
-    { acao: 'editar',             label: 'EDITAR'         },
-    { acao: 'concluir',           label: 'CONCLUIR'       },
-    { acao: 'trocar_profissional', label: 'TROCAR PROF.'  },
-    { acao: 'deletar',            label: 'CANCELAR'       },
+    { acao: 'ler',     label: 'VER'      },
+    { acao: 'criar',   label: 'CRIAR'    },
+    { acao: 'editar',  label: 'ALTERAR'  },
+    { acao: 'deletar', label: 'CANCELAR' },
   ],
   farmacia: [
     { acao: 'ler',      label: 'VER'      },

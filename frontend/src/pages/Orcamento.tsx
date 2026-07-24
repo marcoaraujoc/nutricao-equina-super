@@ -23,6 +23,8 @@ import InlineError from '../components/InlineError';
 type TipoItem   = 'PROCEDIMENTO' | 'COMBO' | 'MEDICAMENTO' | 'VACINA' | 'OUTROS';
 type StatusOrc  = 'RASCUNHO' | 'APROVADO' | 'APROVADO_PARCIALMENTE' | 'REJEITADO' | 'CANCELADO';
 type StatusItem = 'PENDENTE' | 'ACEITO' | 'REJEITADO';
+/** Desconto do item: percentual sobre o bruto ou abatimento em reais */
+type DescontoTipo = 'PERCENTUAL' | 'VALOR';
 
 interface Proprietario { id: number; fullName: string; email: string | null; phone: string | null }
 interface Animal { id: number; nome: string; especieId: number | null; especie?: { nome: string } | null; raca?: { nome: string } | null }
@@ -30,6 +32,7 @@ interface Proc  { id: number; nome: string; especialidade: string | null; catego
 interface Combo { id: number; nome: string; valor: number | null; especialidade: string | null }
 interface Med   { id: number; nome: string; unidade: string; precoUnitarioBase: number | null; emEstoque: boolean }
 interface Vac   { id: number; nome: string; emEstoque: boolean; valorPorDose: number | null }
+interface EspecieOpcao { id: number; nome: string }
 
 // Item local (em construção) e item persistido têm o mesmo formato visível
 interface ItemLocal {
@@ -40,17 +43,21 @@ interface ItemLocal {
   especialidade: string | null;
   quantidade:    number;
   unidade:       string | null;
-  /** MEDICAMENTO — posologia orçada: quantidade = dias × aplicações/dia */
+  /** Espécies do item criado à mão — as que a empresa atende (catálogo próprio) */
+  especieIds?:   number[];
+  /** MEDICAMENTO/PROCEDIMENTO — posologia orçada: quantidade = dias × aplicações/dia */
   dias:          number | null;
   frequencia:    string | null;
   valorUnitario: number;
+  descontoTipo:  DescontoTipo | null;
+  descontoValor: number;
   animalId:      number | null; // null = nível proprietário
   manual:        boolean;
 }
 interface ItemSalvo {
   id: number; tipo: TipoItem; refId: number | null; descricao: string; especialidade: string | null;
   quantidade: number; unidade: string | null; dias: number | null; frequencia: string | null;
-  valorUnitario: number; valorTotal: number;
+  valorUnitario: number; descontoTipo: DescontoTipo | null; descontoValor: number; valorTotal: number;
   statusItem: StatusItem; importadoEm: string | null; animalId: number | null; animal?: { id: number; nome: string } | null;
 }
 interface OrcamentoResumo {
@@ -97,7 +104,10 @@ const STATUS_ORC: Record<StatusOrc, { label: string; cls: string }> = {
   CANCELADO:            { label: 'Cancelado',             cls: 'bg-gray-200 text-gray-500'       },
 };
 
-const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500';
+// Base SEM largura — para campos que vivem em linha compacta: com `w-full` (100% do
+// container) o campo se recusa a encolher e a linha estoura o card "Adicionar itens".
+const inputClsBase = 'border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500';
+const inputCls     = `w-full ${inputClsBase}`;
 
 // ─── Agrupamento tipo → animal (mesma ordem usada na impressão) ───────────────
 const ORDEM_TIPO: TipoItem[] = ['PROCEDIMENTO', 'COMBO', 'MEDICAMENTO', 'VACINA', 'OUTROS'];
@@ -136,6 +146,10 @@ const INTERVALOS_H: Record<string, number> = {
   '1x2dias': 48, '1x3dias': 72, '1xSemana': 168, '1x21dias': 504, '1x30dias': 720, '1x90dias': 2160,
 };
 
+// Nº de letras a partir do qual a busca consulta o servidor. Abaixo disso nada é
+// listado — as telas não despejam o catálogo inteiro, o usuário digita e vai filtrando.
+const MIN_BUSCA = 2;
+
 const posologiaLabel = (v: string | null) =>
   (v && POSOLOGIAS.find(p => p.value === v)?.label) || v || '';
 
@@ -152,7 +166,8 @@ function aplicacoesNoPeriodo(dias: number, frequencia: string): number {
 
 // Detalhe exibido abaixo da descrição do item na lista do orçamento
 function detalheItem(i: { tipo: TipoItem; quantidade: number; dias: number | null; frequencia: string | null }): string {
-  if (i.tipo === 'MEDICAMENTO') {
+  // Medicamento e procedimento/combo têm posologia orçada (duração + frequência)
+  if (i.tipo === 'MEDICAMENTO' || i.tipo === 'PROCEDIMENTO' || i.tipo === 'COMBO') {
     return [
       i.dias ? `${i.dias} dia${i.dias > 1 ? 's' : ''}` : null,
       i.frequencia ? posologiaLabel(i.frequencia) : null,
@@ -161,6 +176,82 @@ function detalheItem(i: { tipo: TipoItem; quantidade: number; dias: number | nul
   if (i.tipo === 'VACINA')  return i.quantidade > 0 ? `${i.quantidade} dose${i.quantidade > 1 ? 's' : ''}` : '';
   if (i.tipo === 'OUTROS')  return i.quantidade > 0 ? `${i.quantidade}x` : '';
   return '';
+}
+
+// ─── Desconto do item (mesma regra do backend — lib/faturaUtils.js) ───────────
+interface ComDesconto { quantidade: number; valorUnitario: number; descontoTipo: DescontoTipo | null; descontoValor: number }
+
+function descontoDoItem(i: ComDesconto): number {
+  const bruto = i.quantidade * i.valorUnitario;
+  const d     = Number(i.descontoValor ?? 0);
+  if (!d || d <= 0) return 0;
+  const abatimento = i.descontoTipo === 'PERCENTUAL' ? bruto * (Math.min(d, 100) / 100) : d;
+  return Math.min(Math.max(abatimento, 0), Math.max(bruto, 0));
+}
+
+/** Total do item: bruto (qtd × unitário) menos o desconto. */
+const totalItem = (i: ComDesconto): number => i.quantidade * i.valorUnitario - descontoDoItem(i);
+
+// Espécies do item novo: a empresa atendendo UMA, ela é assumida e o seletor nem
+// aparece; atendendo várias, o usuário marca para quais o item está sendo criado.
+function SeletorEspecies({ especies, valor, onChange }: {
+  especies: EspecieOpcao[];
+  valor:    number[];
+  onChange: (ids: number[]) => void;
+}) {
+  if (especies.length <= 1) return null;
+  const alternar = (id: number) =>
+    onChange(valor.includes(id) ? valor.filter(x => x !== id) : [...valor, id]);
+  return (
+    <div className="w-full">
+      <label className="block text-[10px] text-gray-400 mb-1">
+        Espécie(s) do novo item <span className="text-red-500">*</span>
+      </label>
+      <div className="flex flex-wrap gap-1.5">
+        {especies.map(e => {
+          const on = valor.includes(e.id);
+          return (
+            <button key={e.id} type="button" onClick={() => alternar(e.id)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-emerald-300'
+              }`}>
+              {e.nome}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Campo inteiro que PODE ficar vazio enquanto se digita (apagar todos os dígitos não
+// volta sozinho para "1"). O valor só é normalizado ao sair do campo / ao usar.
+function InputInteiro({ value, onChange, className, title, min = 1 }: {
+  value:      number;
+  onChange:   (v: number) => void;
+  className?: string;
+  title?:     string;
+  min?:       number;
+}) {
+  const [texto, setTexto] = useState(String(value));
+  // Reflete mudanças vindas de fora (ex: reset do formulário) sem atrapalhar a digitação
+  useEffect(() => { setTexto(String(value)); }, [value]);
+
+  return (
+    <input
+      type="text" inputMode="numeric" value={texto} title={title} className={className}
+      onChange={e => {
+        const limpo = e.target.value.replace(/\D/g, '');
+        setTexto(limpo);                       // vazio é permitido enquanto digita
+        if (limpo !== '') onChange(Number(limpo));
+      }}
+      onBlur={() => {
+        const n = Math.max(min, Number(texto) || min);
+        setTexto(String(n));
+        onChange(n);
+      }}
+    />
+  );
 }
 
 interface GrupoAnimal<T> { nome: string; itens: T[]; subtotal: number }
@@ -389,7 +480,9 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
       key: uid(), tipo: i.tipo, refId: i.refId, descricao: i.descricao,
       especialidade: i.especialidade, quantidade: i.quantidade, unidade: i.unidade,
       dias: i.dias ?? null, frequencia: i.frequencia ?? null,
-      valorUnitario: i.valorUnitario, animalId: i.animalId,
+      valorUnitario: i.valorUnitario,
+      descontoTipo: i.descontoTipo ?? null, descontoValor: i.descontoValor ?? 0,
+      animalId: i.animalId,
       // Já persistido: o catálogo manual foi criado no salvamento anterior — não recriar.
       manual: false,
     }))
@@ -413,6 +506,22 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
   // o checkbox refaria a busca dos animais.
   const semAnimaisRef = useRef(semAnimais);
   useEffect(() => { semAnimaisRef.current = semAnimais; }, [semAnimais]);
+
+  // Espécies que a EMPRESA atende — definem a espécie do item criado à mão
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<EspecieOpcao[]>([]);
+  useEffect(() => {
+    Promise.all([
+      api.get('/equipes/especies-atendidas').catch(() => null),
+      api.get('/especialidades/especies').catch(() => null),
+    ]).then(([rEmp, rTodas]) => {
+      const ids: number[] = rEmp?.data?.dados?.especiesAtendidas ?? [];
+      const todas: EspecieOpcao[] = rTodas?.data?.dados ?? rTodas?.data ?? [];
+      if (!Array.isArray(todas)) return;
+      // Sem configuração de espécies na empresa, o item manual fica sem espécie —
+      // aí não há o que perguntar (e o catálogo global segue disponível).
+      setEspeciesEmpresa(ids.length > 0 ? todas.filter(e => ids.includes(e.id)) : []);
+    });
+  }, []);
 
   useEffect(() => {
     api.get('/orcamentos/proprietarios').then(r => {
@@ -491,7 +600,7 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
     ));
   };
 
-  const total = itens.reduce((s, i) => s + i.quantidade * i.valorUnitario, 0);
+  const total = itens.reduce((s, i) => s + totalItem(i), 0);
 
   // Resolve o nome do animal a partir de DUAS fontes: a lista carregada do proprietário
   // e os nomes já embutidos nos itens do orçamento em edição (backend manda animal.nome).
@@ -516,7 +625,8 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
       const payloadItens = itens.map(i => ({
         tipo: i.tipo, refId: i.refId, descricao: i.descricao, especialidade: i.especialidade,
         quantidade: i.quantidade, unidade: i.unidade, dias: i.dias, frequencia: i.frequencia,
-        valorUnitario: i.valorUnitario, animalId: i.animalId, manual: i.manual,
+        valorUnitario: i.valorUnitario, descontoTipo: i.descontoTipo, descontoValor: i.descontoValor,
+        animalId: i.animalId, manual: i.manual, especieIds: i.especieIds ?? [],
       }));
       if (editando) {
         // PUT substitui os itens; observacao é reenviada para não ser apagada.
@@ -605,13 +715,16 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
             </div>
 
             {tipoAba === 'PROCEDIMENTO' && (
-              <TabProcedimentos especie={animalContextoObj?.especie?.nome ?? null} onAdd={addItem} />
+              <TabProcedimentos especie={animalContextoObj?.especie?.nome ?? null}
+                especiesEmpresa={especiesEmpresa} onAdd={addItem} />
             )}
             {tipoAba === 'MEDICAMENTO' && (
-              <TabMedicamentos animalId={animalContextoId} onAdd={addItem} />
+              <TabMedicamentos animalId={animalContextoId}
+                especiesEmpresa={especiesEmpresa} onAdd={addItem} />
             )}
             {tipoAba === 'VACINA' && (
-              <TabVacinas animalId={animalContextoId} onAdd={addItem} />
+              <TabVacinas animalId={animalContextoId}
+                especiesEmpresa={especiesEmpresa} onAdd={addItem} />
             )}
             {tipoAba === 'OUTROS' && (
               <TabOutros onAdd={addItem} />
@@ -629,7 +742,7 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
               <div className="text-center py-10 text-gray-400 text-sm">Nenhum item adicionado ainda.</div>
             ) : (
               <div>
-                {agruparPorTipoEAnimal(itens, nomeAnimal, i => i.quantidade * i.valorUnitario).map(sec => (
+                {agruparPorTipoEAnimal(itens, nomeAnimal, totalItem).map(sec => (
                   <div key={sec.tipo}>
                     {/* Seção do tipo */}
                     <div className="px-4 py-2 flex items-center justify-between bg-emerald-50 border-y border-emerald-100">
@@ -660,9 +773,9 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
                                 </p>
                               )}
                             </div>
-                            <input type="number" min="0.01" step="0.01" value={it.quantidade}
-                              onChange={e => setItens(prev => prev.map(x => x.key === it.key ? { ...x, quantidade: Number(e.target.value) || 0 } : x))}
-                              className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs text-right focus:outline-none focus:border-emerald-500" title="Quantidade" />
+                            <InputInteiro value={it.quantidade}
+                              onChange={v => setItens(prev => prev.map(x => x.key === it.key ? { ...x, quantidade: v } : x))}
+                              className="w-14 border border-gray-200 rounded-lg px-2 py-1 text-xs text-right focus:outline-none focus:border-emerald-500" title="Quantidade" />
                             <div className="flex items-center gap-1">
                               <span className="text-[10px] text-gray-400">R$</span>
                               <InputMoeda value={it.valorUnitario}
@@ -672,7 +785,40 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
                                   ? 'Valor unitário — replicado nos demais animais'
                                   : 'Valor unitário'} />
                             </div>
-                            <span className="w-24 text-right text-sm font-semibold text-emerald-700">{brl(it.quantidade * it.valorUnitario)}</span>
+                            {/* Desconto do item — percentual (0-100) ou valor em R$ */}
+                            <div className="flex items-center gap-1">
+                              <select value={it.descontoTipo ?? ''} title="Desconto"
+                                onChange={e => {
+                                  const tipo = (e.target.value || null) as DescontoTipo | null;
+                                  setItens(prev => prev.map(x => x.key === it.key
+                                    ? { ...x, descontoTipo: tipo, descontoValor: 0 } : x));
+                                }}
+                                className="border border-gray-200 rounded-lg px-1 py-1 text-[11px] text-gray-600 focus:outline-none focus:border-emerald-500">
+                                <option value="">s/ desc.</option>
+                                <option value="PERCENTUAL">%</option>
+                                <option value="VALOR">R$</option>
+                              </select>
+                              {it.descontoTipo === 'PERCENTUAL' && (
+                                <InputInteiro value={it.descontoValor} min={0} title="Desconto em %"
+                                  onChange={v => setItens(prev => prev.map(x => x.key === it.key
+                                    ? { ...x, descontoValor: Math.min(100, v) } : x))}
+                                  className="w-12 border border-gray-200 rounded-lg px-1 py-1 text-xs text-right focus:outline-none focus:border-emerald-500" />
+                              )}
+                              {it.descontoTipo === 'VALOR' && (
+                                <InputMoeda value={it.descontoValor} title="Desconto em R$"
+                                  onChange={v => setItens(prev => prev.map(x => x.key === it.key
+                                    ? { ...x, descontoValor: v } : x))}
+                                  className="w-16 border border-gray-200 rounded-lg px-1 py-1 text-xs text-right focus:outline-none focus:border-emerald-500" />
+                              )}
+                            </div>
+                            <span className="w-24 text-right text-sm font-semibold text-emerald-700">
+                              {descontoDoItem(it) > 0 && (
+                                <span className="block text-[10px] font-normal text-gray-400 line-through">
+                                  {brl(it.quantidade * it.valorUnitario)}
+                                </span>
+                              )}
+                              {brl(totalItem(it))}
+                            </span>
                             <button onClick={() => setItens(prev => prev.filter(x => x.key !== it.key))} className="p-1 text-gray-300 hover:text-red-500">
                               <Trash2 size={14} />
                             </button>
@@ -685,7 +831,7 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
 
                 {/* Total por animal — consolida todos os tipos */}
                 {(() => {
-                  const porAnimal = totaisPorAnimal(itens, nomeAnimal, i => i.quantidade * i.valorUnitario);
+                  const porAnimal = totaisPorAnimal(itens, nomeAnimal, totalItem);
                   // Com um único grupo o resumo repetiria o total geral — não agrega nada
                   if (porAnimal.length < 2) return null;
                   return (
@@ -732,7 +878,12 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
 }
 
 // ─── Tab Procedimentos (procedimentos + combos por especialidade + manual) ─────
-function TabProcedimentos({ especie, onAdd }: { especie: string | null; onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void }) {
+function TabProcedimentos({ especie, especiesEmpresa, onAdd }: {
+  especie: string | null;
+  especiesEmpresa: EspecieOpcao[];
+  onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void;
+}) {
+  const [busca, setBusca]     = useState('');
   const [espList, setEspList] = useState<string[]>([]);
   const [espSel, setEspSel]   = useState('');
   const [procs, setProcs]     = useState<Proc[]>([]);
@@ -742,107 +893,198 @@ function TabProcedimentos({ especie, onAdd }: { especie: string | null; onAdd: (
   const [mNome, setMNome]     = useState('');
   const [mEsp, setMEsp]       = useState('');
   const [mValor, setMValor]   = useState(0);
+  // Posologia orçada do procedimento (duração + frequência) — igual à do medicamento;
+  // a quantidade cobrada é o nº de sessões no período e volta na importação da prescrição.
+  const [dias, setDias]             = useState(1);
+  const [frequencia, setFrequencia] = useState('1xDia');
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+
+  const qtdOrcada = aplicacoesNoPeriodo(dias, frequencia);
+
+  // Espécies do item manual: com uma só na empresa ela é assumida; com várias, escolhidas
+  const [mEspecies, setMEspecies] = useState<number[]>([]);
+  const especiesDoNovoItem = especiesEmpresa.length === 1 ? [especiesEmpresa[0].id] : mEspecies;
+  const faltaEspecie = especiesEmpresa.length > 1 && mEspecies.length === 0;
 
   useEffect(() => {
     api.get('/procedimentos/especialidades-minhas').then(r => { if (r.data) setEspList(r.data.dados ?? []); }).catch(() => {});
     api.get('/procedimentos/cadastro/combos').then(r => { if (r.data) setCombos(r.data.dados ?? []); }).catch(() => {});
   }, []);
 
+  // Busca sob demanda: nada é listado até digitar MIN_BUSCA letras. A especialidade,
+  // quando escolhida, restringe a busca (e é ela que o item leva para a prescrição).
+  const termo = busca.trim();
   useEffect(() => {
-    if (!espSel) { setProcs([]); return; }
+    if (termo.length < MIN_BUSCA) { setProcs([]); setLoading(false); return; }
     setLoading(true);
-    api.get('/procedimentos/cadastro/lista', { params: { especialidade: espSel, ...(especie ? { especie } : {}) } })
-      .then(r => { if (r.data) setProcs(r.data.dados ?? []); })
-      .catch(() => {}).finally(() => setLoading(false));
-  }, [espSel, especie]);
+    const t = setTimeout(() => {
+      api.get('/procedimentos/cadastro/lista', {
+        params: { busca: termo, ...(espSel ? { especialidade: espSel } : {}), ...(especie ? { especie } : {}) },
+      })
+        .then(r => { if (r.data) setProcs(r.data.dados ?? []); })
+        .catch(() => {}).finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [termo, espSel, especie]);
 
-  const combosDaEsp = combos.filter(c => espSel && (!c.especialidade || c.especialidade === espSel));
+  // Combos são poucos (cadastro da empresa) e já vêm carregados — filtram junto pelo
+  // mesmo termo. Sem especialidade escolhida, só entram os que têm a própria.
+  const combosDaEsp = termo.length < MIN_BUSCA ? [] : combos.filter(c =>
+    (espSel ? (!c.especialidade || c.especialidade === espSel) : !!c.especialidade)
+    && c.nome.toLowerCase().includes(termo.toLowerCase()));
   const valorProc = (p: Proc) => p.valorEmpresa ?? p.valorVenda ?? 0;
 
   return (
     <div className="space-y-3">
       <InlineError message={erroInline} />
 
-      <div className="flex items-center gap-2">
-        {!manual && (
-          <select value={espSel} onChange={e => setEspSel(e.target.value)} className={`${inputCls} max-w-xs`}>
-            <option value="">— Especialidade —</option>
-            {espList.map(e => <option key={e} value={e}>{e}</option>)}
-          </select>
-        )}
-        <button onClick={() => setManual(m => !m)}
-          className={`flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
-            manual ? 'bg-emerald-700 border-emerald-700 text-white' : 'border-gray-200 text-gray-600 hover:border-emerald-300'
-          }`}>
-          <PackagePlus size={13} /> Manual
-        </button>
-      </div>
-
-      {manual && (
-        <div className="flex flex-wrap items-end gap-2 p-3 bg-gray-50 rounded-xl">
-          <div className="flex-1 min-w-[160px]">
-            <label className="block text-[10px] text-gray-400 mb-1">Procedimento (novo)</label>
-            <input value={mNome} onChange={e => setMNome(e.target.value)} placeholder="Nome" className={inputCls} />
-          </div>
-          <div className="w-44">
-            <label className="block text-[10px] text-gray-400 mb-1">
-              Especialidade <span className="text-red-500">*</span>
-            </label>
-            <select value={mEsp} onChange={e => setMEsp(e.target.value)} className={inputCls}>
-              <option value="">— Selecionar —</option>
+      {/* Especialidade + Qtd. de dias + Frequência — mesma linha, cada um com título */}
+      {!manual && (
+        <div className="flex items-end gap-1.5 w-full">
+          <div className="flex-1 min-w-0">
+            <label className="block text-[10px] font-medium text-gray-500 mb-1">Especialidade</label>
+            <select value={espSel} onChange={e => setEspSel(e.target.value)}
+              className={`${inputClsBase} w-full px-2`}>
+              <option value="">— Todas —</option>
               {espList.map(e => <option key={e} value={e}>{e}</option>)}
             </select>
           </div>
-          <div className="w-28">
-            <label className="block text-[10px] text-gray-400 mb-1">Valor</label>
-            <InputMoeda value={mValor} onChange={setMValor} className={inputCls} />
+          <div className="w-16 flex-shrink-0">
+            <label className="block text-[10px] font-medium text-gray-500 mb-1">Qtd. dias</label>
+            <InputInteiro value={dias} onChange={setDias} title="Qtd. de dias (posologia orçada)"
+              className={`${inputClsBase} w-full px-2 text-center`} />
           </div>
-          <button onClick={() => {
+          <div className="flex-1 min-w-0">
+            <label className="block text-[10px] font-medium text-gray-500 mb-1">Frequência</label>
+            <select value={frequencia} onChange={e => setFrequencia(e.target.value)}
+              className={`${inputClsBase} w-full px-2`}>
+              {POSOLOGIAS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </div>
+          <span className="text-[11px] font-bold text-emerald-700 flex-shrink-0 pb-2.5"
+            title="Sessões cobradas no período">
+            {qtdOrcada}x
+          </span>
+        </div>
+      )}
+
+      {manual && (
+        <div className="p-3 bg-gray-50 rounded-xl space-y-2">
+          <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Novo procedimento</p>
+          {/* Nome + Especialidade + Qtd. dias + Valor — uma linha só; os dois campos
+              de texto encolhem (min-w-0) para caber junto dos de largura fixa. */}
+          <div className="flex items-end gap-1.5 w-full">
+            <div className="flex-1 min-w-0">
+              <label className="block text-[10px] text-gray-400 mb-1">Procedimento (novo)</label>
+              <input value={mNome} onChange={e => setMNome(e.target.value)} placeholder="Nome"
+                className={`${inputClsBase} w-full px-2`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <label className="block text-[10px] text-gray-400 mb-1">
+                Especialidade <span className="text-red-500">*</span>
+              </label>
+              <select value={mEsp} onChange={e => setMEsp(e.target.value)}
+                className={`${inputClsBase} w-full px-2`}>
+                <option value="">— Selecionar —</option>
+                {espList.map(e => <option key={e} value={e}>{e}</option>)}
+              </select>
+            </div>
+            <div className="w-14 flex-shrink-0">
+              <label className="block text-[10px] text-gray-400 mb-1">Dias</label>
+              <InputInteiro value={dias} onChange={setDias} title="Qtd. de dias (posologia orçada)"
+                className={`${inputClsBase} w-full px-2 text-center`} />
+            </div>
+            <div className="w-24 flex-shrink-0">
+              <label className="block text-[10px] text-gray-400 mb-1">Valor</label>
+              <InputMoeda value={mValor} onChange={setMValor} className={`${inputClsBase} w-full px-2 text-right`} />
+            </div>
+          </div>
+          <SeletorEspecies especies={especiesEmpresa} valor={mEspecies} onChange={setMEspecies} />
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => { setManual(false); setErroInline(null); }}
+              className="px-3 py-2 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-100">
+              Cancelar
+            </button>
+            <button onClick={() => {
               if (!mNome.trim()) { setErroInline('Informe o nome'); return; }
               // Especialidade é obrigatória no orçamento — é ela que volta preenchida
               // na importação para a prescrição (não aparece no documento do cliente).
               if (!mEsp)         { setErroInline('Selecione a especialidade'); return; }
+              if (faltaEspecie)  { setErroInline('Selecione a(s) espécie(s) do novo item'); return; }
               setErroInline(null);
-              onAdd({ tipo: 'PROCEDIMENTO', refId: null, descricao: mNome.trim(), especialidade: mEsp, quantidade: 1, unidade: null, dias: null, frequencia: null, valorUnitario: mValor || 0, manual: true });
-              setMNome(''); setMEsp(''); setMValor(0); setManual(false);
+              onAdd({ tipo: 'PROCEDIMENTO', refId: null, descricao: mNome.trim(), especialidade: mEsp, quantidade: qtdOrcada, unidade: null, dias, frequencia, valorUnitario: mValor || 0, descontoTipo: null, descontoValor: 0, manual: true, especieIds: especiesDoNovoItem });
+              setMNome(''); setMEsp(''); setMValor(0); setManual(false); setBusca(''); setDias(1); setFrequencia('1xDia'); setMEspecies([]);
             }}
-            className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+          </div>
         </div>
       )}
 
-      {!manual && espSel && (loading ? (
-        <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
-      ) : (
+      {!manual && (
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar procedimento ou combo..." className={`${inputCls} pl-8`} />
+        </div>
+      )}
+
+      {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          {termo.length < MIN_BUSCA ? null : loading ? (
+            <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
+          ) : (<>
           {/* Combo/procedimento sem especialidade própria herda a do filtro (espSel):
               nenhum item entra no orçamento sem especialidade. */}
           {combosDaEsp.map(c => (
-            <button key={`c${c.id}`} onClick={() => onAdd({ tipo: 'COMBO', refId: c.id, descricao: c.nome, especialidade: c.especialidade || espSel, quantidade: 1, unidade: null, dias: null, frequencia: null, valorUnitario: c.valor ?? 0, manual: false })}
+            <button key={`c${c.id}`} onClick={() => {
+                onAdd({ tipo: 'COMBO', refId: c.id, descricao: c.nome, especialidade: c.especialidade || espSel, quantidade: qtdOrcada, unidade: null, dias, frequencia, valorUnitario: c.valor ?? 0, descontoTipo: null, descontoValor: 0, manual: false });
+                setBusca(''); setDias(1); setFrequencia('1xDia'); // inserido → fecha a lista e zera a posologia
+              }}
               className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-purple-100 bg-purple-50/40 hover:bg-purple-50 text-left">
               <span className="text-sm text-gray-800 truncate">{c.nome} <span className="text-[9px] font-bold bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">COMBO</span></span>
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{brl(c.valor)}</span>
             </button>
           ))}
           {procs.map(p => (
-            <button key={p.id} onClick={() => onAdd({ tipo: 'PROCEDIMENTO', refId: p.id, descricao: p.nome, especialidade: p.especialidade || espSel, quantidade: 1, unidade: null, dias: null, frequencia: null, valorUnitario: valorProc(p), manual: false })}
+            <button key={p.id} onClick={() => {
+                // Todo item do orçamento precisa de especialidade (é ela que volta na
+                // importação para a prescrição). Buscando em "Todas", um procedimento
+                // sem especialidade própria só entra depois de escolher uma acima.
+                const esp = p.especialidade || espSel;
+                if (!esp) { setErroInline('Escolha a especialidade para incluir este procedimento.'); return; }
+                setErroInline(null);
+                onAdd({ tipo: 'PROCEDIMENTO', refId: p.id, descricao: p.nome, especialidade: esp, quantidade: qtdOrcada, unidade: null, dias, frequencia, valorUnitario: valorProc(p), descontoTipo: null, descontoValor: 0, manual: false });
+                setBusca(''); setDias(1); setFrequencia('1xDia'); // inserido → fecha a lista e zera a posologia
+              }}
               className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-gray-100 hover:bg-gray-50 text-left">
               <span className="text-sm text-gray-800 truncate">{p.nome}{p.empresaId ? <span className="ml-1.5 text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">EMPRESA</span> : ''}</span>
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{brl(valorProc(p))}</span>
             </button>
           ))}
           {combosDaEsp.length === 0 && procs.length === 0 && (
-            <p className="text-xs text-gray-400 py-4 text-center">Nenhum procedimento/combo em {espSel}.</p>
+            <p className="text-xs text-gray-400 py-4 text-center">
+              Nenhum procedimento/combo para “{termo}”{espSel ? ` em ${espSel}` : ''}.
+            </p>
           )}
+          </>)}
+          {/* Última opção do seletor — mesmo padrão do "Incluir novo" dos cadastros */}
+          <button onClick={() => { setManual(true); if (espSel && !mEsp) setMEsp(espSel); }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-left text-sm font-medium">
+            <PackagePlus size={14} className="flex-shrink-0" /> Inserir Procedimento Manualmente
+          </button>
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
 // ─── Tab Medicamentos ──────────────────────────────────────────────────────────
-function TabMedicamentos({ animalId, onAdd }: { animalId: number | null; onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void }) {
+function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
+  animalId: number | null;
+  especiesEmpresa: EspecieOpcao[];
+  onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void;
+}) {
   const [busca, setBusca] = useState('');
   const [meds, setMeds]   = useState<Med[]>([]);
   const [loading, setLoading] = useState(false);
@@ -859,16 +1101,24 @@ function TabMedicamentos({ animalId, onAdd }: { animalId: number | null; onAdd: 
 
   const qtdOrcada = aplicacoesNoPeriodo(dias, frequencia);
 
+  // Espécies do item manual: com uma só na empresa ela é assumida; com várias, escolhidas
+  const [mEspecies, setMEspecies] = useState<number[]>([]);
+  const especiesDoNovoItem = especiesEmpresa.length === 1 ? [especiesEmpresa[0].id] : mEspecies;
+  const faltaEspecie = especiesEmpresa.length > 1 && mEspecies.length === 0;
+
+  // Busca sob demanda: só consulta a partir de MIN_BUSCA letras e vai refazendo a
+  // consulta conforme o usuário digita (debounce para não disparar a cada tecla).
+  const termo = busca.trim();
   useEffect(() => {
-    if (!animalId) { setMeds([]); return; }
+    if (!animalId || termo.length < MIN_BUSCA) { setMeds([]); setLoading(false); return; }
+    setLoading(true);
     const t = setTimeout(() => {
-      setLoading(true);
-      api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'medicamento', ...(busca.trim() ? { busca: busca.trim() } : {}) } })
+      api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'medicamento', busca: termo } })
         .then(r => { if (r.data) setMeds(r.data.dados ?? []); })
         .catch(() => {}).finally(() => setLoading(false));
-    }, 250);
+    }, 300);
     return () => clearTimeout(t);
-  }, [busca, animalId]);
+  }, [termo, animalId]);
 
   if (!animalId) return <p className="text-xs text-amber-600 py-2">Selecione ao menos um animal para orçar medicamentos.</p>;
 
@@ -876,41 +1126,38 @@ function TabMedicamentos({ animalId, onAdd }: { animalId: number | null; onAdd: 
     <div className="space-y-3">
       <InlineError message={erroInline} />
 
-      <div className="flex items-center gap-2">
-        {!manual && (
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar medicamento..." className={`${inputCls} pl-8`} />
-          </div>
-        )}
-        <button onClick={() => setManual(m => !m)}
-          className={`flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
-            manual ? 'bg-emerald-700 border-emerald-700 text-white' : 'border-gray-200 text-gray-600 hover:border-emerald-300'
-          }`}>
-          <PackagePlus size={13} /> Manual
-        </button>
-      </div>
-
-      {/* Posologia orçada — vale para os itens adicionados a seguir */}
-      <div className="flex flex-wrap items-end gap-2 p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl">
-        <div className="w-24">
-          <label className="block text-[10px] text-gray-500 mb-1">Qtd. de dias</label>
-          <input type="number" min="1" step="1" value={dias}
-            onChange={e => setDias(Math.max(1, Number(e.target.value) || 1))} className={inputCls} />
+      {/* Busca (linha própria — a lista abre logo abaixo, como em Vacinas) */}
+      {!manual && (
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar medicamento..." className={`${inputCls} pl-8`} />
         </div>
-        <div className="flex-1 min-w-[150px]">
-          <label className="block text-[10px] text-gray-500 mb-1">Frequência</label>
-          <select value={frequencia} onChange={e => setFrequencia(e.target.value)} className={inputCls}>
+      )}
+
+      {/* Qtd. de dias + Frequência — mesma linha, cada um com título */}
+      <div className="flex items-end gap-1.5 w-full">
+        <div className="w-16 flex-shrink-0">
+          <label className="block text-[10px] font-medium text-gray-500 mb-1">Qtd. dias</label>
+          <InputInteiro value={dias} onChange={setDias} title="Qtd. de dias (posologia orçada)"
+            className={`${inputClsBase} w-full px-2 text-center`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <label className="block text-[10px] font-medium text-gray-500 mb-1">Frequência</label>
+          <select value={frequencia} onChange={e => setFrequencia(e.target.value)}
+            className={`${inputClsBase} w-full px-2`}>
             {POSOLOGIAS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         </div>
-        <p className="text-[11px] text-gray-500 pb-2">
-          = <b className="text-emerald-700">{qtdOrcada}</b> aplicaç{qtdOrcada > 1 ? 'ões' : 'ão'} cobrada{qtdOrcada > 1 ? 's' : ''}
-        </p>
+        <span className="text-[11px] font-bold text-emerald-700 flex-shrink-0 pb-2.5"
+          title="Aplicações cobradas no período">
+          {qtdOrcada}x
+        </span>
       </div>
 
       {manual && (
         <div className="flex flex-wrap items-end gap-2 p-3 bg-gray-50 rounded-xl">
+          <p className="w-full text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Novo medicamento</p>
           <div className="flex-1 min-w-[140px]">
             <label className="block text-[10px] text-gray-400 mb-1">Medicamento (novo)</label>
             <input value={mNome} onChange={e => setMNome(e.target.value)} placeholder="Nome" className={inputCls} />
@@ -919,35 +1166,57 @@ function TabMedicamentos({ animalId, onAdd }: { animalId: number | null; onAdd: 
             <input value={mUnid} onChange={e => setMUnid(e.target.value)} placeholder="un" className={inputCls} /></div>
           <div className="w-24"><label className="block text-[10px] text-gray-400 mb-1">Valor</label>
             <InputMoeda value={mValor} onChange={setMValor} className={inputCls} /></div>
-          <button onClick={() => {
+          <SeletorEspecies especies={especiesEmpresa} valor={mEspecies} onChange={setMEspecies} />
+          <div className="w-full flex justify-end gap-2 pt-1">
+            <button onClick={() => { setManual(false); setErroInline(null); }}
+              className="px-3 py-2 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-100">
+              Cancelar
+            </button>
+            <button onClick={() => {
               if (!mNome.trim()) { setErroInline('Informe o nome'); return; }
-              onAdd({ tipo: 'MEDICAMENTO', refId: null, descricao: mNome.trim(), especialidade: null, quantidade: qtdOrcada, unidade: mUnid || 'un', dias, frequencia, valorUnitario: mValor || 0, manual: true });
-              setMNome(''); setMUnid(''); setMValor(0); setManual(false);
+              if (faltaEspecie)  { setErroInline('Selecione a(s) espécie(s) do novo item'); return; }
+              setErroInline(null);
+              onAdd({ tipo: 'MEDICAMENTO', refId: null, descricao: mNome.trim(), especialidade: null, quantidade: qtdOrcada, unidade: mUnid || 'un', dias, frequencia, valorUnitario: mValor || 0, descontoTipo: null, descontoValor: 0, manual: true, especieIds: especiesDoNovoItem });
+              setMNome(''); setMUnid(''); setMValor(0); setManual(false); setBusca(''); setDias(1); setFrequencia('1xDia'); setMEspecies([]);
             }}
-            className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+          </div>
         </div>
       )}
 
-      {!manual && (loading ? (
-        <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
-      ) : (
+      {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {meds.map(m => (
-            <button key={m.id} onClick={() => onAdd({ tipo: 'MEDICAMENTO', refId: m.id, descricao: m.nome, especialidade: null, quantidade: qtdOrcada, unidade: m.unidade, dias, frequencia, valorUnitario: m.precoUnitarioBase ?? 0, manual: false })}
+          {termo.length < MIN_BUSCA ? null : loading ? (
+            <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
+          ) : meds.length === 0 ? (
+            <p className="text-xs text-gray-400 py-4 text-center">Nenhum medicamento encontrado.</p>
+          ) : meds.map(m => (
+            <button key={m.id} onClick={() => {
+                onAdd({ tipo: 'MEDICAMENTO', refId: m.id, descricao: m.nome, especialidade: null, quantidade: qtdOrcada, unidade: m.unidade, dias, frequencia, valorUnitario: m.precoUnitarioBase ?? 0, descontoTipo: null, descontoValor: 0, manual: false });
+                setBusca(''); setDias(1); setFrequencia('1xDia'); // inserido → fecha a lista e zera a posologia
+              }}
               className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-gray-100 hover:bg-gray-50 text-left">
               <span className="text-sm text-gray-800 truncate">{m.nome} <span className="text-[10px] text-gray-400">/ {m.unidade}</span></span>
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{m.precoUnitarioBase != null ? `${brl(m.precoUnitarioBase)}/${m.unidade}` : 'sem preço'}</span>
             </button>
           ))}
-          {meds.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">Nenhum medicamento encontrado.</p>}
+          {/* Última opção do seletor — mesmo padrão do "Incluir novo" dos cadastros */}
+          <button onClick={() => setManual(true)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-left text-sm font-medium">
+            <PackagePlus size={14} className="flex-shrink-0" /> Inserir Medicamento Manualmente
+          </button>
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
 // ─── Tab Vacinas (mesmo padrão de Medicamentos: mostra TODAS, não só as em estoque) ─
-function TabVacinas({ animalId, onAdd }: { animalId: number | null; onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void }) {
+function TabVacinas({ animalId, especiesEmpresa, onAdd }: {
+  animalId: number | null;
+  especiesEmpresa: EspecieOpcao[];
+  onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>) => void;
+}) {
   const [busca, setBusca]     = useState('');
   const [vacs, setVacs]       = useState<Vac[]>([]);
   const [loading, setLoading] = useState(false);
@@ -959,17 +1228,24 @@ function TabVacinas({ animalId, onAdd }: { animalId: number | null; onAdd: (it: 
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!animalId) { setVacs([]); return; }
-    setLoading(true);
-    api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'vacina' } })
-      .then(r => { if (r.data) setVacs(r.data.dados ?? []); }) // todas as vacinas (com ou sem estoque)
-      .catch(() => {}).finally(() => setLoading(false));
-  }, [animalId]);
+  // Espécies do item manual: com uma só na empresa ela é assumida; com várias, escolhidas
+  const [mEspecies, setMEspecies] = useState<number[]>([]);
+  const especiesDoNovoItem = especiesEmpresa.length === 1 ? [especiesEmpresa[0].id] : mEspecies;
+  const faltaEspecie = especiesEmpresa.length > 1 && mEspecies.length === 0;
 
-  const vacsFiltradas = busca.trim()
-    ? vacs.filter(v => v.nome.toLowerCase().includes(busca.trim().toLowerCase()))
-    : vacs;
+  // Busca sob demanda (mesma regra dos medicamentos): nada é listado antes de
+  // MIN_BUSCA letras; a consulta é refeita conforme o usuário digita.
+  const termo = busca.trim();
+  useEffect(() => {
+    if (!animalId || termo.length < MIN_BUSCA) { setVacs([]); setLoading(false); return; }
+    setLoading(true);
+    const t = setTimeout(() => {
+      api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'vacina', busca: termo } })
+        .then(r => { if (r.data) setVacs(r.data.dados ?? []); }) // com ou sem estoque
+        .catch(() => {}).finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [termo, animalId]);
 
   if (!animalId) return <p className="text-xs text-amber-600 py-2">Selecione ao menos um animal para orçar vacinas.</p>;
 
@@ -977,56 +1253,67 @@ function TabVacinas({ animalId, onAdd }: { animalId: number | null; onAdd: (it: 
     <div className="space-y-3">
       <InlineError message={erroInline} />
 
-      <div className="flex items-center gap-2">
-        {!manual && (
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar vacina..." className={`${inputCls} pl-8`} />
+      {/* Busca + qtd. de doses — mesma linha, cada um com título */}
+      {!manual && (
+        <div className="flex items-end gap-1.5 w-full">
+          <div className="flex-1 min-w-0">
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+              <input value={busca} onChange={e => setBusca(e.target.value)}
+                placeholder="Buscar vacina..." className={`${inputCls} pl-8`} />
+            </div>
           </div>
-        )}
-        <button onClick={() => setManual(m => !m)}
-          className={`flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
-            manual ? 'bg-emerald-700 border-emerald-700 text-white' : 'border-gray-200 text-gray-600 hover:border-emerald-300'
-          }`}>
-          <PackagePlus size={13} /> Manual
-        </button>
-      </div>
-
-      {/* Nº de doses — vale para as vacinas adicionadas a seguir */}
-      <div className="flex flex-wrap items-end gap-2 p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl">
-        <div className="w-28">
-          <label className="block text-[10px] text-gray-500 mb-1">Qtd. de doses</label>
-          <input type="number" min="1" step="1" value={doses}
-            onChange={e => setDoses(Math.max(1, Number(e.target.value) || 1))} className={inputCls} />
+          <div className="w-16 flex-shrink-0">
+            <label className="block text-[10px] font-medium text-gray-500 mb-1">Doses</label>
+            <InputInteiro value={doses} onChange={setDoses} title="Qtd. de doses"
+              className={`${inputClsBase} w-full px-2 text-center`} />
+          </div>
         </div>
-        <p className="text-[11px] text-gray-500 pb-2">
-          Cada vacina entra com <b className="text-emerald-700">{doses}</b> dose{doses > 1 ? 's' : ''}.
-        </p>
-      </div>
+      )}
 
       {manual && (
         <div className="flex flex-wrap items-end gap-2 p-3 bg-gray-50 rounded-xl">
+          <p className="w-full text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Nova vacina</p>
           <div className="flex-1 min-w-[140px]">
             <label className="block text-[10px] text-gray-400 mb-1">Vacina (nova)</label>
             <input value={mNome} onChange={e => setMNome(e.target.value)} placeholder="Nome" className={inputCls} />
           </div>
+          <div className="w-20">
+            <label className="block text-[10px] text-gray-400 mb-1">Doses</label>
+            <InputInteiro value={doses} onChange={setDoses} title="Qtd. de doses"
+              className={`${inputCls} text-center`} />
+          </div>
           <div className="w-24"><label className="block text-[10px] text-gray-400 mb-1">Valor/dose</label>
             <InputMoeda value={mValor} onChange={setMValor} className={inputCls} /></div>
-          <button onClick={() => {
+          <SeletorEspecies especies={especiesEmpresa} valor={mEspecies} onChange={setMEspecies} />
+          <div className="w-full flex justify-end gap-2 pt-1">
+            <button onClick={() => { setManual(false); setErroInline(null); }}
+              className="px-3 py-2 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-100">
+              Cancelar
+            </button>
+            <button onClick={() => {
               if (!mNome.trim()) { setErroInline('Informe o nome'); return; }
-              onAdd({ tipo: 'VACINA', refId: null, descricao: mNome.trim(), especialidade: null, quantidade: doses, unidade: 'dose', dias: null, frequencia: null, valorUnitario: mValor || 0, manual: true });
-              setMNome(''); setMValor(0); setManual(false);
+              if (faltaEspecie)  { setErroInline('Selecione a(s) espécie(s) do novo item'); return; }
+              setErroInline(null);
+              onAdd({ tipo: 'VACINA', refId: null, descricao: mNome.trim(), especialidade: null, quantidade: doses, unidade: 'dose', dias: null, frequencia: null, valorUnitario: mValor || 0, descontoTipo: null, descontoValor: 0, manual: true, especieIds: especiesDoNovoItem });
+              setMNome(''); setMValor(0); setManual(false); setBusca(''); setMEspecies([]);
             }}
-            className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">Adicionar</button>
+          </div>
         </div>
       )}
 
-      {!manual && (loading ? (
-        <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
-      ) : (
+      {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {vacsFiltradas.map(v => (
-            <button key={v.id} onClick={() => onAdd({ tipo: 'VACINA', refId: v.id, descricao: v.nome, especialidade: null, quantidade: doses, unidade: 'dose', dias: null, frequencia: null, valorUnitario: v.valorPorDose ?? 0, manual: false })}
+          {termo.length < MIN_BUSCA ? null : loading ? (
+            <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
+          ) : vacs.length === 0 ? (
+            <p className="text-xs text-gray-400 py-4 text-center">Nenhuma vacina encontrada.</p>
+          ) : vacs.map(v => (
+            <button key={v.id} onClick={() => {
+                onAdd({ tipo: 'VACINA', refId: v.id, descricao: v.nome, especialidade: null, quantidade: doses, unidade: 'dose', dias: null, frequencia: null, valorUnitario: v.valorPorDose ?? 0, descontoTipo: null, descontoValor: 0, manual: false });
+                setBusca(''); // inserido → fecha a lista
+              }}
               className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-gray-100 hover:bg-gray-50 text-left">
               <span className="text-sm text-gray-800 truncate">
                 {v.nome}{!v.emEstoque && <span className="ml-1.5 text-[10px] text-amber-500">sem estoque</span>}
@@ -1034,9 +1321,13 @@ function TabVacinas({ animalId, onAdd }: { animalId: number | null; onAdd: (it: 
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{v.valorPorDose != null ? `${brl(v.valorPorDose)}/dose` : 'sem preço'}</span>
             </button>
           ))}
-          {vacsFiltradas.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">Nenhuma vacina encontrada.</p>}
+          {/* Última opção do seletor — mesmo padrão do "Incluir novo" dos cadastros */}
+          <button onClick={() => setManual(true)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-left text-sm font-medium">
+            <PackagePlus size={14} className="flex-shrink-0" /> Inserir Vacina Manualmente
+          </button>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -1057,7 +1348,7 @@ function TabOutros({ onAdd }: { onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>)
     onAdd({
       tipo: 'OUTROS', refId: null, descricao: nome.trim(), especialidade: null,
       quantidade: Math.max(1, vezes), unidade: null, dias: null, frequencia: null,
-      valorUnitario: valor || 0, manual: false,
+      valorUnitario: valor || 0, descontoTipo: null, descontoValor: 0, manual: false,
     });
     setNome(''); setVezes(1); setValor(0);
   };
@@ -1073,8 +1364,7 @@ function TabOutros({ onAdd }: { onAdd: (it: Omit<ItemLocal, 'key' | 'animalId'>)
         </div>
         <div className="w-24">
           <label className="block text-[10px] text-gray-400 mb-1">Qtd. de vezes</label>
-          <input type="number" min="1" step="1" value={vezes}
-            onChange={e => setVezes(Math.max(1, Number(e.target.value) || 1))} className={inputCls} />
+          <InputInteiro value={vezes} onChange={setVezes} className={inputCls} />
         </div>
         <div className="w-28">
           <label className="block text-[10px] text-gray-400 mb-1">Valor</label>
@@ -1428,9 +1718,12 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
             return (
               <button key={i.id} disabled={!podeAprovar} onClick={() => toggle(i.id)}
                 className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors ${aceito ? 'bg-emerald-50/60' : 'hover:bg-gray-50'} ${!podeAprovar ? 'cursor-default' : ''}`}>
-                <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${aceito ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'}`}>
-                  {aceito && <Check size={13} className="text-white" />}
-                </span>
+                {/* Checkbox só no modo de decisão — na visualização não aparece */}
+                {podeAprovar && (
+                  <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${aceito ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'}`}>
+                    {aceito && <Check size={13} className="text-white" />}
+                  </span>
+                )}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 truncate">{i.descricao}</p>
                   <p className="text-[11px] text-gray-400">

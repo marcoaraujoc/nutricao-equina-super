@@ -98,12 +98,17 @@ function DonutChart({
     );
   }
 
+  // Há um segmento DESTE donut selecionado? Só então esmaecemos os demais.
+  const temAtivoNoDonut = activeId !== undefined && activeId !== null
+    && segments.some((seg, i) => String(seg.id ?? i) === String(activeId));
+
   let offset = 0;
   const paths = segments.map((seg, i) => {
     const frac     = seg.value / total;
     const dash     = frac * circ;
     const gap      = circ - dash;
-    const active   = !noDisplace && activeId !== undefined && activeId !== null && String(seg.id ?? i) === String(activeId);
+    const isActive = temAtivoNoDonut && String(seg.id ?? i) === String(activeId);
+    const active   = !noDisplace && isActive;
     const midAngle = -Math.PI / 2 + 2 * Math.PI * (offset + frac / 2);
     const dx       = active ? Math.cos(midAngle) * DISPLACE : 0;
     const dy       = active ? Math.sin(midAngle) * DISPLACE : 0;
@@ -119,7 +124,12 @@ function DonutChart({
         strokeDasharray={`${dash} ${gap}`}
         strokeDashoffset={(0.25 - offset) * circ}
         strokeLinecap="butt"
-        style={{ transform: `translate(${dx}px, ${dy}px)`, transition: 'transform 0.2s ease', cursor: 'pointer' }}
+        style={{
+          transform: `translate(${dx}px, ${dy}px)`,
+          opacity: temAtivoNoDonut && !isActive ? 0.3 : 1,
+          transition: 'transform 0.2s ease, opacity 0.2s ease',
+          cursor: 'pointer',
+        }}
         onMouseEnter={() => onHover?.(seg.id ?? i)}
         onMouseLeave={() => onHover?.(null)}
         onClick={() => onClick?.(seg.id ?? i)}
@@ -137,14 +147,16 @@ function DonutChart({
   const pct = displaySeg ? Math.round((displaySeg.value / total) * 100) : null;
   const rawName = displaySeg?.label ?? '';
   const truncName = (rawName.length > 13 ? rawName.slice(0, 13) + '…' : rawName).toUpperCase();
+  // Só colore quando há um segmento REALMENTE selecionado (não o padrão)
+  const corCentro = activeSeg?.color ?? '#1f2937';
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
       {paths}
       {displaySeg ? (
         <>
-          <text x={cx} y={cy - 20} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontWeight="600" fill="#6b7280">{truncName}</text>
-          <text x={cx} y={cy - 3}  textAnchor="middle" dominantBaseline="middle" fontSize="20" fontWeight="700" fill="#1f2937">{displaySeg.value}</text>
+          <text x={cx} y={cy - 20} textAnchor="middle" dominantBaseline="middle" fontSize="9" fontWeight="600" fill={activeSeg ? corCentro : '#6b7280'}>{truncName}</text>
+          <text x={cx} y={cy - 3}  textAnchor="middle" dominantBaseline="middle" fontSize="20" fontWeight="700" fill={corCentro}>{displaySeg.value}</text>
           <text x={cx} y={cy + 16} textAnchor="middle" dominantBaseline="middle" fontSize="10" fill="#6b7280">{pct}%</text>
         </>
       ) : centerLabel ? (
@@ -233,11 +245,12 @@ function SimpleSelect({
   options, value, onChange, placeholder,
 }: { options: SelectOption[]; value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
-    <div className="relative">
+    // w-full + min-w-0: o campo acompanha a coluna e encolhe em vez de estourar o card
+    <div className="relative w-full min-w-0">
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="appearance-none pl-3 pr-8 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer"
+        className="w-full appearance-none pl-3 pr-8 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer truncate"
       >
         {placeholder && <option value="">{placeholder}</option>}
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -249,6 +262,9 @@ function SimpleSelect({
 
 // ── Main component ────────────────────────────────────────────────────────────
 const TIPOS_AGENDAMENTO = new Set(['CONSULTA', 'PROCEDIMENTO']);
+// Status que contam como "atendido" — mesma regra do backend (agendamento CONCLUIDO/
+// FINALIZADO, prescrição EXECUTADO, vacina/exame CONCLUIDO).
+const STATUS_COM_ATENDIMENTO = ['CONCLUIDO', 'FINALIZADO', 'EXECUTADO'];
 
 export default function MapaAtendimento() {
   const navigate = useNavigate();
@@ -343,17 +359,39 @@ export default function MapaAtendimento() {
 
   const semAtend    = resumo?.animaisSemAtendimento.semAtendimento ?? 0;
   const comAtend    = resumo?.animaisSemAtendimento.comAtendimento ?? 0;
+  const prescSegs: DonutSegment[] = [
+    { value: resumo?.prescricoes.executadas ?? 0, label: 'Executadas', color: '#10b981', id: 'EXECUTADO' },
+    { value: resumo?.prescricoes.pendentesOuAtrasadas ?? 0, label: 'Não executadas / Atrasadas', color: '#f43f5e', id: 'PENDENTE' },
+  ];
+  const verPrescricoesDoDia = () => {
+    setTipoFiltro('PRESCRICAO'); setActiveStatus(null); setActiveHaras(null); scrollToCronograma();
+  };
+
   const semAtendSeg: DonutSegment[] = [
     { value: semAtend, label: 'Sem atendimento', color: '#f43f5e', id: 'SEM_ATENDIMENTO' },
     { value: comAtend, label: 'Com atendimento', color: '#10b981', id: 'COM' },
   ];
 
   // Filtra cronograma pelo haras clicado + status clicado + tipo.
-  // Itens SEM_ATENDIMENTO só aparecem quando esse status está explicitamente selecionado.
+  // Animal SEM_ATENDIMENTO não polui a lista quando NENHUM filtro foi aplicado (a
+  // agenda do dia mostra o que há para fazer). Mas se o usuário filtrou por animal,
+  // por localização ou pelo próprio status, ele PRECISA aparecer — antes o item era
+  // descartado sempre, e o animal filtrado sumia da lista mesmo contando no donut.
+  const filtrouExplicitamente = !!animalFiltro
+    || activeHaras !== null
+    || !!localizacaoId
+    || activeStatus === 'SEM_ATENDIMENTO'
+    || activeStatus === 'COM';
   const cronogramaFiltrado = (resumo?.cronograma ?? []).filter(item => {
-    if (item.status === 'SEM_ATENDIMENTO' && activeStatus !== 'SEM_ATENDIMENTO') return false;
+    // "Com atendimento" (id virtual COM): mostra o que foi efetivamente atendido
+    // no período — mesma regra que o backend usa para contar (concluído/executado).
+    if (activeStatus === 'COM') {
+      if (!STATUS_COM_ATENDIMENTO.includes(item.status)) return false;
+    } else {
+      if (item.status === 'SEM_ATENDIMENTO' && !filtrouExplicitamente) return false;
+      if (activeStatus && item.status !== activeStatus) return false;
+    }
     if (activeHaras !== null && (item.localizacao?.id ?? 0) !== activeHaras) return false;
-    if (activeStatus && item.status !== activeStatus) return false;
     if (animalFiltro && String(item.animal.id) !== animalFiltro) return false;
     if (tipoFiltro && item.procedimento !== tipoFiltro) return false;
     return true;
@@ -381,6 +419,17 @@ export default function MapaAtendimento() {
     const sid = id === null ? null : String(id);
     setActiveStatus(prev => prev === sid ? null : sid);
     if (id !== null) scrollToCronograma();
+  };
+
+  // Card "Animais sem Atendimento": um clique já mostra a lista. Diferente do toggle
+  // dos outros donuts — aqui SETA o status (clicar de novo mantém; clicar no outro
+  // segmento troca) e zera o filtro de procedimento, que esconderia os itens SEM/COM
+  // (eles não têm tipo). Para limpar, use o link "limpar" do cronograma.
+  const handleAtendimentoFiltro = (id: string | number | null) => {
+    if (id === null) return;
+    setTipoFiltro('');
+    setActiveStatus(String(id));
+    scrollToCronograma();
   };
 
   const dataLabel = (() => {
@@ -420,7 +469,7 @@ export default function MapaAtendimento() {
   const STATUS_LABELS: Record<string, string> = {
     AGENDADO: 'Agendado', EM_ANDAMENTO: 'Em andamento', CONCLUIDO: 'Concluído',
     FINALIZADO: 'Finalizado', EXECUTADO: 'Executado', CANCELADO: 'Cancelado',
-    SEM_ATENDIMENTO: 'Sem atendimento', ATRASADA: 'Atrasada',
+    SEM_ATENDIMENTO: 'Sem atendimento', ATRASADA: 'Atrasada', COM: 'Com atendimento',
   };
   const statusUnicos = [...new Set((resumo?.cronograma ?? []).map(c => c.status))];
   const statusOpcoes: SelectOption[] = statusUnicos
@@ -501,60 +550,70 @@ export default function MapaAtendimento() {
         </div>
       </div>
 
-      {/* ── Filtros rápidos ──────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-3 mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm">
-        <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500">
-          <MapPin size={15} className="text-indigo-500" />
-          <span>Haras/Propriedades</span>
+      {/* ── Filtros rápidos — uma única linha, cada campo com seu título ──
+          As colunas dividem a largura do card (min-w-0 nas células), então os
+          campos encolhem juntos e a linha nunca ultrapassa o card. */}
+      <div className={`grid grid-cols-2 gap-3 mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm ${
+        resumo?.isGestor ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+      }`}>
+        <div className="min-w-0">
+          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
+            <MapPin size={13} className="text-indigo-500 flex-shrink-0" />
+            <span className="truncate">Localização</span>
+          </label>
+          <SimpleSelect
+            options={locOpcoes}
+            value={localizacaoId}
+            onChange={v => { setLocalizacaoId(v); setActiveHaras(null); }}
+            placeholder="Todas"
+          />
         </div>
-        <SimpleSelect
-          options={locOpcoes}
-          value={localizacaoId}
-          onChange={v => { setLocalizacaoId(v); setActiveHaras(null); }}
-          placeholder="Todos"
-        />
         {resumo?.isGestor && (
-          <>
-            <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500 ml-2">
-              <Users size={15} className="text-indigo-500" />
-              <span>Veterinário</span>
-            </div>
+          <div className="min-w-0">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
+              <Users size={13} className="text-indigo-500 flex-shrink-0" />
+              <span className="truncate">Veterinário</span>
+            </label>
             <SimpleSelect
               options={vetOpcoes}
               value={veterinarioId}
               onChange={setVeterinarioId}
               placeholder="Todos"
             />
-          </>
+          </div>
         )}
-        <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500 ml-2">
-          <Activity size={15} className="text-indigo-500" />
-          <span>Animal</span>
+        <div className="min-w-0">
+          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
+            <Activity size={13} className="text-indigo-500 flex-shrink-0" />
+            <span className="truncate">Animal</span>
+          </label>
+          <SimpleSelect
+            options={animalOpcoes}
+            value={animalFiltro}
+            onChange={setAnimalFiltro}
+            placeholder="Todos"
+          />
         </div>
-        <SimpleSelect
-          options={animalOpcoes}
-          value={animalFiltro}
-          onChange={setAnimalFiltro}
-          placeholder="Todos"
-        />
-        <div className="flex items-center gap-1.5 text-sm font-medium text-gray-500 ml-2">
-          <CheckCircle2 size={15} className="text-indigo-500" />
-          <span>Status</span>
+        <div className="min-w-0">
+          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
+            <CheckCircle2 size={13} className="text-indigo-500 flex-shrink-0" />
+            <span className="truncate">Status</span>
+          </label>
+          <SimpleSelect
+            options={statusOpcoes}
+            value={activeStatus ?? ''}
+            onChange={v => setActiveStatus(v || null)}
+            placeholder="Todos"
+          />
         </div>
-        <SimpleSelect
-          options={statusOpcoes}
-          value={activeStatus ?? ''}
-          onChange={v => setActiveStatus(v || null)}
-          placeholder="Todos"
-        />
       </div>
 
       {/* ── Cards de KPI ────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
 
-        {/* Card 1 — Distribuição por Haras */}
+        {/* Card 1 — Distribuição por Localização */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Distribuição por Haras</h2>
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">Distribuição por Localização</h2>
           <div className="flex items-center justify-center mb-3">
             <DonutChart
               segments={harasSegments}
@@ -596,7 +655,6 @@ export default function MapaAtendimento() {
               onClick={handleStatusClick}
               centerLabel={String(resumo?.consultasClinicas.total ?? 0)}
               centerSub="total"
-              noDisplace
             />
           </div>
           <div className="space-y-1.5">
@@ -619,27 +677,34 @@ export default function MapaAtendimento() {
         </div>
 
         {/* Card 3 — Prescrições/Dosagens */}
-        <button type="button" onClick={() => { setTipoFiltro('PRESCRICAO'); setActiveStatus(null); setActiveHaras(null); scrollToCronograma(); }}
-          className="text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:border-indigo-200 transition-colors">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-3">Prescrições / Dosagens</h2>
           <div className="flex items-center justify-center mb-3">
             <DonutChart
-              segments={[
-                { value: resumo?.prescricoes.executadas ?? 0, label: 'Executadas', color: '#10b981', id: 'EXECUTADO' },
-                { value: resumo?.prescricoes.pendentesOuAtrasadas ?? 0, label: 'Não executadas / Atrasadas', color: '#f43f5e', id: 'PENDENTE' },
-              ]}
+              segments={prescSegs}
+              activeId={null}
+              onHover={() => {}}
+              onClick={() => verPrescricoesDoDia()}
               centerLabel={String(resumo?.prescricoes.total ?? 0)}
               centerSub="prescrições"
-              noDisplace
             />
           </div>
-          <div className="mt-3 text-center">
-            <p className="text-xs text-gray-500">
-              {resumo?.prescricoes.executadas ?? 0} executada(s) · {resumo?.prescricoes.pendentesOuAtrasadas ?? 0} não executada(s)/atrasada(s)
-            </p>
-            <p className="text-[11px] text-indigo-500 mt-1 underline">Ver prescrições do dia</p>
+          <div className="space-y-1.5">
+            {prescSegs.map(seg => (
+              <button
+                key={seg.id}
+                onClick={() => verPrescricoesDoDia()}
+                className="w-full flex items-center justify-between gap-2 text-xs rounded-lg px-2 py-1 hover:bg-gray-50 transition-colors"
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: seg.color }} />
+                  <span className="text-left truncate" title={seg.label}>{seg.label}</span>
+                </span>
+                <span className="font-semibold text-gray-700 flex-shrink-0">{seg.value}</span>
+              </button>
+            ))}
           </div>
-        </button>
+        </div>
 
         {/* Card 4 — Animais sem Atendimento */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
@@ -649,21 +714,27 @@ export default function MapaAtendimento() {
               segments={semAtendSeg}
               activeId={activeStatus}
               onHover={() => {}}
-              onClick={handleStatusClick}
+              onClick={handleAtendimentoFiltro}
               centerLabel={String(semAtend)}
               centerSub="pendentes"
-              noDisplace
             />
           </div>
           <div className="space-y-1.5">
             {semAtendSeg.map(seg => (
-              <div key={seg.id} className="flex items-center justify-between text-xs px-2 py-1">
+              // Clicável como nos demais cards — antes só a fatia do donut respondia
+              <button
+                key={seg.id}
+                onClick={() => handleAtendimentoFiltro(seg.id ?? null)}
+                className={`w-full flex items-center justify-between text-xs rounded-lg px-2 py-1 transition-colors ${
+                  activeStatus === seg.id ? 'bg-indigo-50 font-semibold' : 'hover:bg-gray-50'
+                }`}
+              >
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ background: seg.color }} />
                   {seg.label}
                 </span>
                 <span className="font-semibold text-gray-700">{seg.value}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -677,7 +748,7 @@ export default function MapaAtendimento() {
             {(activeHaras !== null || activeStatus) && (
               <p className="text-xs text-indigo-600 mt-0.5">
                 Filtrado
-                {activeHaras !== null && ` por ${resumo?.distribuicaoHaras.find(h => h.id === activeHaras)?.nome ?? 'haras'}`}
+                {activeHaras !== null && ` por ${resumo?.distribuicaoHaras.find(h => h.id === activeHaras)?.nome ?? 'localização'}`}
                 {activeStatus && ` · ${STATUS_LABELS[activeStatus] ?? activeStatus}`}
                 {' — '}
                 <button onClick={() => { setActiveHaras(null); setActiveStatus(null); }} className="underline">limpar</button>

@@ -29,6 +29,7 @@ interface Membro {
     diasTrabalho:       string | null;
     horaInicioTrabalho: string | null;
     horaFimTrabalho:    string | null;
+    especialidadeIds?:  number[];
   }>;
   user: {
     id:       number;
@@ -62,6 +63,7 @@ const mapLocaisParaPayload = (locais?: LocalTrabalhoValue[]) =>
       diasTrabalho:       l.diasTrabalho,
       horaInicioTrabalho: l.horaInicioTrabalho || '',
       horaFimTrabalho:    l.horaFimTrabalho || '',
+      especialidadeIds:   l.especialidadeIds ?? [],
     }));
 
 // Especialidades do membro (catálogo por espécie) — fallback para tipoServico legado do Fornecedor
@@ -75,17 +77,31 @@ function especialidadesDoMembro(m: Membro): string[] {
     : [];
 }
 
-// Expediente de trabalho do membro — null quando não configurado (herda da empresa)
-function expedienteDoMembro(m: Membro): string | null {
-  const dias = m.diasTrabalho
-    ? String(m.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6).sort((a, b) => a - b)
+// "Seg, Ter · 08:00–12:00" — dias (CSV 0-6) + faixa de horário
+function formatarDiasHorario(dias: string | null | undefined, inicio?: string | null, fim?: string | null): string | null {
+  const nums = dias
+    ? String(dias).split(',').map(Number).filter(n => n >= 0 && n <= 6).sort((a, b) => a - b)
     : [];
-  const diasLabel = dias.length > 0 ? dias.map(d => DIAS_SEMANA_LABEL[d]).join(', ') : null;
-  const horaLabel = m.horaInicioTrabalho && m.horaFimTrabalho
-    ? `${m.horaInicioTrabalho}–${m.horaFimTrabalho}`
-    : null;
+  const diasLabel = nums.length > 0 ? nums.map(d => DIAS_SEMANA_LABEL[d]).join(', ') : null;
+  const horaLabel = inicio && fim ? `${inicio}–${fim}` : null;
   if (!diasLabel && !horaLabel) return null;
   return [diasLabel, horaLabel].filter(Boolean).join(' · ');
+}
+
+// Expediente POR LOCAL — o membro pode trabalhar em vários locais, cada um com seus
+// dias e horário. Sem locais cadastrados, cai no expediente agregado do vínculo
+// (compatibilidade com quem configurou antes dos locais); vazio = herda da empresa.
+function expedientePorLocal(m: Membro): { local: string | null; quando: string }[] {
+  const locais = (m.locaisTrabalho ?? [])
+    .map(l => ({
+      local:  l.localizacaoNome ?? `Local #${l.localizacaoId}`,
+      quando: formatarDiasHorario(l.diasTrabalho, l.horaInicioTrabalho, l.horaFimTrabalho),
+    }))
+    .filter((l): l is { local: string; quando: string } => !!l.quando);
+  if (locais.length > 0) return locais;
+
+  const agregado = formatarDiasHorario(m.diasTrabalho, m.horaInicioTrabalho, m.horaFimTrabalho);
+  return agregado ? [{ local: null, quando: agregado }] : [];
 }
 
 // Perfis de acesso atribuíveis a membros da equipe
@@ -418,9 +434,12 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                           ))}
                         </div>
                       )}
-                      {expedienteDoMembro(m) && (
-                        <p className="text-[11px] text-gray-500 mt-1">🕒 {expedienteDoMembro(m)}</p>
-                      )}
+                      {expedientePorLocal(m).map((e, i) => (
+                        <p key={i} className="text-[11px] text-gray-500 mt-1">
+                          🕒 {e.local ? <span className="font-semibold text-gray-600">{e.local}</span> : null}
+                          {e.local ? ' — ' : ''}{e.quando}
+                        </p>
+                      ))}
                       <div className="flex flex-wrap gap-1 mt-1">
                         {cargos.map(c => (
                           <span key={c} className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ativo ? badgeCargo(c) : 'bg-gray-100 text-gray-400'}`}>
@@ -459,8 +478,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           </div>
 
           {/* Desktop */}
-          <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
@@ -499,9 +518,18 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-xs text-gray-600">
-                          {expedienteDoMembro(m) ?? <span className="text-gray-300">Padrão da empresa</span>}
-                        </span>
+                        {expedientePorLocal(m).length === 0 ? (
+                          <span className="text-xs text-gray-300">Padrão da empresa</span>
+                        ) : (
+                          <div className="space-y-0.5">
+                            {expedientePorLocal(m).map((e, i) => (
+                              <p key={i} className="text-xs text-gray-600 whitespace-nowrap">
+                                {e.local && <span className="font-semibold text-gray-700">{e.local}</span>}
+                                {e.local ? ' — ' : ''}{e.quando}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
@@ -598,6 +626,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                 : [],
               horaInicioTrabalho: l.horaInicioTrabalho ?? '',
               horaFimTrabalho:    l.horaFimTrabalho    ?? '',
+              especialidadeIds:   l.especialidadeIds   ?? [],
             })),
             especialidadeIds:   (membroEditando.user.especialidades ?? []).map(e => e.especialidadeId),
           }}

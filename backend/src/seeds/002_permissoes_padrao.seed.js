@@ -91,11 +91,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'FULL',
     'atendimento.agendamentos.deletar':           'FULL',
 
-    'agendamento.ler':                  'FULL',
-    'agendamento.confirmar':            'FULL',
-    'agendamento.reagendar':            'FULL',
-    'agendamento.trocar_profissional':  'FULL',
-    'agendamento.cancelar':             'FULL',
 
     'enfermagem.prescricao.ler':      'FULL',
     'enfermagem.prescricao.executar': 'FULL',
@@ -165,6 +160,10 @@ const PERMISSOES_PADRAO = {
     'procedimentos.catalogo.editar':   'FULL',
     'procedimentos.catalogo.deletar':  'FULL',
     'procedimentos.catalogo.imprimir': 'FULL',
+    'cadastro.procedimento.ler':      'FULL',
+    'cadastro.procedimento.criar':    'FULL',
+    'cadastro.procedimento.editar':   'FULL',
+    'cadastro.procedimento.deletar':  'FULL',
   },
 
   // Veterinário — acesso completo às operações clínicas e nutricionais
@@ -260,11 +259,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.deletar':           'PROPRIO',
 
     // Agendamento (portal standalone)
-    'agendamento.ler':                  'EQUIPE',
-    'agendamento.confirmar':            'PROPRIO',
-    'agendamento.reagendar':            'PROPRIO',
-    'agendamento.trocar_profissional':  'PROPRIO',
-    'agendamento.cancelar':             'PROPRIO',
 
     // Enfermagem — Execução de Prescrição
     'enfermagem.prescricao.ler':      'EQUIPE',
@@ -384,11 +378,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'NENHUM',
     'atendimento.agendamentos.deletar':           'NENHUM',
 
-    'agendamento.ler':                  'LEITURA',
-    'agendamento.confirmar':            'NENHUM',
-    'agendamento.reagendar':            'NENHUM',
-    'agendamento.trocar_profissional':  'NENHUM',
-    'agendamento.cancelar':             'NENHUM',
 
     // Nutrição — desabilitado por padrão; admin/gestor pode habilitar por equipe
     'nutricao.dietas.ler':          'NENHUM',
@@ -481,11 +470,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'NENHUM',
     'atendimento.agendamentos.deletar':           'NENHUM',
 
-    'agendamento.ler':                  'NENHUM',
-    'agendamento.confirmar':            'NENHUM',
-    'agendamento.reagendar':            'NENHUM',
-    'agendamento.trocar_profissional':  'NENHUM',
-    'agendamento.cancelar':             'NENHUM',
 
     'enfermagem.prescricao.ler':      'NENHUM',
     'enfermagem.prescricao.executar': 'NENHUM',
@@ -644,11 +628,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.deletar':           'NENHUM',
 
     // Agendamento (portal standalone)
-    'agendamento.ler':                  'EQUIPE',
-    'agendamento.confirmar':            'EQUIPE',
-    'agendamento.reagendar':            'PROPRIO',
-    'agendamento.trocar_profissional':  'NENHUM',
-    'agendamento.cancelar':             'NENHUM',
 
     // Enfermagem — execução permitida para estagiários (técnicos)
     'enfermagem.prescricao.ler':      'EQUIPE',
@@ -812,11 +791,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'EQUIPE',
     'atendimento.agendamentos.deletar':           'PROPRIO',
 
-    'agendamento.ler':                  'EQUIPE',
-    'agendamento.confirmar':            'EQUIPE',
-    'agendamento.reagendar':            'EQUIPE',
-    'agendamento.trocar_profissional':  'EQUIPE',
-    'agendamento.cancelar':             'PROPRIO',
 
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'NENHUM',
@@ -969,11 +943,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'NENHUM',
     'atendimento.agendamentos.deletar':           'NENHUM',
 
-    'agendamento.ler':                  'LEITURA',
-    'agendamento.confirmar':            'NENHUM',
-    'agendamento.reagendar':            'NENHUM',
-    'agendamento.trocar_profissional':  'NENHUM',
-    'agendamento.cancelar':             'NENHUM',
 
     'enfermagem.prescricao.ler':      'NENHUM',
     'enfermagem.prescricao.executar': 'NENHUM',
@@ -1120,11 +1089,6 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.trocar_profissional': 'NENHUM',
     'atendimento.agendamentos.deletar':           'NENHUM',
 
-    'agendamento.ler':                  'LEITURA',
-    'agendamento.confirmar':            'NENHUM',
-    'agendamento.reagendar':            'NENHUM',
-    'agendamento.trocar_profissional':  'NENHUM',
-    'agendamento.cancelar':             'NENHUM',
 
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'EQUIPE',
@@ -1228,6 +1192,12 @@ const MODULOS_SISTEMA = [
   { slug: 'cadastro.localizacao.editar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'editar', label: 'Localização — Editar',        ordemExib: 18.5 },
   { slug: 'cadastro.localizacao.ativar', modulo: 'cadastro', submodulo: 'localizacao', acao: 'ativar', label: 'Localização — Ativar/Inativar', ordemExib: 18.7 },
 
+  // ── Cadastro > Procedimentos (preços/combos da empresa) ──────────────────────
+  { slug: 'cadastro.procedimento.ler',     modulo: 'cadastro', submodulo: 'procedimento', acao: 'ler',     label: 'Procedimentos (Empresa) — Visualizar', ordemExib: 18.8 },
+  { slug: 'cadastro.procedimento.criar',   modulo: 'cadastro', submodulo: 'procedimento', acao: 'criar',   label: 'Procedimentos (Empresa) — Criar combo', ordemExib: 18.82 },
+  { slug: 'cadastro.procedimento.editar',  modulo: 'cadastro', submodulo: 'procedimento', acao: 'editar',  label: 'Procedimentos (Empresa) — Editar valor/combo', ordemExib: 18.84 },
+  { slug: 'cadastro.procedimento.deletar', modulo: 'cadastro', submodulo: 'procedimento', acao: 'deletar', label: 'Procedimentos (Empresa) — Excluir combo', ordemExib: 18.86 },
+
   // ── Dashboard ───────────────────────────────────────────────────────────────
   { slug: 'dashboard.geral.ler',      modulo: 'dashboard', submodulo: 'geral', acao: 'ler',      label: 'Dashboard — Visualizar',  ordemExib:  1 },
   { slug: 'dashboard.geral.imprimir', modulo: 'dashboard', submodulo: 'geral', acao: 'imprimir', label: 'Dashboard — Imprimir',    ordemExib:  2 },
@@ -1274,11 +1244,6 @@ const MODULOS_SISTEMA = [
   { slug: 'atendimento.encaminhamentos.finalizar', modulo: 'atendimento', submodulo: 'encaminhamentos', acao: 'finalizar', label: 'Encaminhamentos — Finalizar',  ordemExib: 39.95 },
 
   // ── Agendamento — Portal standalone (/agendamentos) ─────────────────────────
-  { slug: 'agendamento.ler',                   modulo: 'agendamento', submodulo: 'agendamento', acao: 'ler',                  label: 'Agendamento — Visualizar',        ordemExib: 39.80 },
-  { slug: 'agendamento.confirmar',             modulo: 'agendamento', submodulo: 'agendamento', acao: 'confirmar',            label: 'Agendamento — Confirmar',         ordemExib: 39.81 },
-  { slug: 'agendamento.reagendar',             modulo: 'agendamento', submodulo: 'agendamento', acao: 'reagendar',            label: 'Agendamento — Reagendar',         ordemExib: 39.82 },
-  { slug: 'agendamento.trocar_profissional',   modulo: 'agendamento', submodulo: 'agendamento', acao: 'trocar_profissional',  label: 'Agendamento — Trocar Profissional', ordemExib: 39.83 },
-  { slug: 'agendamento.cancelar',              modulo: 'agendamento', submodulo: 'agendamento', acao: 'cancelar',             label: 'Agendamento — Cancelar',          ordemExib: 39.84 },
 
   // ── Agenda — dentro de Atendimento (/clinica/agenda) ─────────────────────────
   { slug: 'atendimento.agendamentos.ler',               modulo: 'atendimento', submodulo: 'agendamentos', acao: 'ler',                  label: 'Agenda — Visualizar',         ordemExib: 39.91 },

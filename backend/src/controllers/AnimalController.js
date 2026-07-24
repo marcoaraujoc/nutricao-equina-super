@@ -384,9 +384,18 @@ class AnimalController {
           return res.json({ sucesso: true, dados: null });
         }
 
-        const animal = animais.find(
-          a => a.nome.toLowerCase() === nome.trim().toLowerCase()
-        ) ?? animais[0];
+        // Prioriza o registro da EMPRESA ATIVA: com o mesmo nome cadastrado em mais de
+        // uma clínica, o que interessa aqui é o desta — pegar o de outra empresa
+        // esconderia um conflito real e traria dados de fora do escopo.
+        const empresaAtivaId = req.empresaId ? Number(req.empresaId) : null;
+        const nomeExato = (a) => a.nome.toLowerCase() === nome.trim().toLowerCase();
+        const daEmpresa = (a) => empresaAtivaId != null && a.empresaId === empresaAtivaId;
+
+        const animal =
+          animais.find(a => daEmpresa(a) && nomeExato(a))
+          ?? animais.find(daEmpresa)
+          ?? animais.find(nomeExato)
+          ?? animais[0];
 
         const solAtiva = animal.solicitacoes.find(
           s => s.status === 'ACEITO' || s.status === 'PENDENTE'
@@ -394,42 +403,46 @@ class AnimalController {
         const temVet   = !!solAtiva;
         const vetDoAnimalId = solAtiva?.vetUserId ?? null;
 
-        // ── Checa se o vet do animal é da mesma equipe ──────────────────────
-        let vetDaMinhaEquipe = false;
+        // ── O animal já é da minha clínica? ────────────────────────────────
+        // A regra é de EMPRESA, não de pessoa: o cadastro do animal (e o do
+        // proprietário) é isolado por empresa, então
+        //   • animal de OUTRA empresa  → independente, sempre. Não importa o cargo
+        //     que o vet do animal tenha aqui nem o que EU tenha lá (posso ser
+        //     prestador na clínica dele e gestor na minha, ou o contrário);
+        //   • animal DESTA empresa     → é da casa, não se duplica — qualquer que
+        //     seja o vet responsável (inclusive um prestador da própria equipe).
+        const mesmaEmpresa  = empresaAtivaId != null && animal.empresaId === empresaAtivaId;
+        const outraEmpresa  = empresaAtivaId != null && animal.empresaId != null
+          && animal.empresaId !== empresaAtivaId;
 
-        if (temVet && vetDoAnimalId && vetDoAnimalId !== vetLogadoId) {
-          // Equipes do CONTEXTO ATIVO onde o usuário tem cargo clínico.
-          // Vínculo como PRESTADOR (cargo FORNECEDOR) em outra equipe não conta
-          // como "minha equipe" — ali ele atende como fornecedor, não como gestor.
-          const minhasEquipes = await prisma.membroEquipe.findMany({
-            where: {
-              userId: vetLogadoId,
-              cargo:  { not: 'FORNECEDOR' },
-              ...(req.equipeId
-                ? { equipeId: Number(req.equipeId) }
-                : req.empresaId
-                  ? { equipe: { empresaId: Number(req.empresaId) } }
-                  : {}),
-            },
-            select: { equipeId: true },
-          });
-          const minhasEquipeIds = minhasEquipes.map(e => e.equipeId);
+        let vetDaMinhaEquipe = mesmaEmpresa && temVet;
 
-          if (minhasEquipeIds.length > 0) {
-            // Verifica se o vet do animal também está em alguma dessas equipes
-            const vetDoAnimalNaEquipe = await prisma.membroEquipe.findFirst({
+        // Animal LEGADO (sem empresa definida) não pode ser resolvido pela empresa —
+        // cai no critério antigo: o vet responsável é da minha equipe no contexto ativo?
+        const semEmpresa = !mesmaEmpresa && !outraEmpresa;
+        if (semEmpresa && temVet && vetDoAnimalId) {
+          if (vetDoAnimalId === vetLogadoId) {
+            vetDaMinhaEquipe = true;
+          } else {
+            const minhasEquipes = await prisma.membroEquipe.findMany({
               where: {
-                userId:   vetDoAnimalId,
-                equipeId: { in: minhasEquipeIds },
+                userId: vetLogadoId,
+                ...(req.equipeId
+                  ? { equipeId: Number(req.equipeId) }
+                  : req.empresaId
+                    ? { equipe: { empresaId: Number(req.empresaId) } }
+                    : {}),
               },
+              select: { equipeId: true },
             });
-            vetDaMinhaEquipe = !!vetDoAnimalNaEquipe;
+            const minhasEquipeIds = minhasEquipes.map(e => e.equipeId);
+            if (minhasEquipeIds.length > 0) {
+              const vetDoAnimalNaEquipe = await prisma.membroEquipe.findFirst({
+                where: { userId: vetDoAnimalId, equipeId: { in: minhasEquipeIds } },
+              });
+              vetDaMinhaEquipe = !!vetDoAnimalNaEquipe;
+            }
           }
-        }
-
-        // Se o próprio vet logado tem o animal → também é "minha equipe"
-        if (vetDoAnimalId === vetLogadoId) {
-          vetDaMinhaEquipe = true;
         }
 
         res.json({

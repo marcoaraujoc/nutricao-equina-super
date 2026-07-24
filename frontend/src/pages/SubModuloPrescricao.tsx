@@ -89,8 +89,11 @@ interface FormItem {
   dataInicio:         string;
   observacao:         string;
   medicamentoCliente: boolean;
-  /** Item de orçamento de origem — só marcado como importado APÓS salvar. Removido do payload. */
+  /** Item de orçamento de origem — marcado como importado APÓS salvar; vai no payload
+   *  para o backend guardar a origem e o valor negociado. */
   orcamentoItemId?:   number | null;
+  /** Valor unitário ACEITO no orçamento — é o que vai para a fatura (não o do catálogo) */
+  valorOrcado?:       number | null;
   /** Especialidade do procedimento (vem do orçamento). Só front — removida do payload. */
   especialidade?:     string | null;
 }
@@ -448,6 +451,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       duracaoDias:      i.dias ?? '',
       observacao:       'Importado do orçamento',
       orcamentoItemId:  i.id,
+      valorOrcado:      i.valorUnitario,
       especialidade:    i.especialidade ?? null,
     }));
     setLocalItens(prev => [...prev, ...novos]);
@@ -458,10 +462,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (espImportada) setProcEspecialidade(espImportada);
   };
 
-  // Remove os campos que só existem no front antes de enviar
-  // (o backend não conhece orcamentoItemId nem especialidade do item).
+  // Remove o que só existe no front antes de enviar. `orcamentoItemId` e `valorOrcado`
+  // AGORA vão no payload: é assim que o valor aceito pelo cliente chega à fatura.
   const semRastreio = (itens: FormItem[]) =>
-    itens.map(i => { const c = { ...i }; delete c.orcamentoItemId; delete c.especialidade; return c; });
+    itens.map(i => { const c = { ...i }; delete c.especialidade; return c; });
 
   // Marca no orçamento os itens que foram efetivamente salvos (chamar após o POST).
   const marcarOrcamentoSalvo = (itens: FormItem[]) =>
@@ -786,6 +790,18 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // ── Salvar (create mode) ────────────────────────────────────────────────────
 
+  // Medicamento SEM dosagem não pode ser salvo. `validarForm` só cobre o item que
+  // está no formulário — itens importados do orçamento entram direto na lista, sem
+  // dosagem, então a checagem precisa acontecer também sobre a lista inteira.
+  const bloqueadoPorDosagem = (itens: FormItem[]): boolean => {
+    const semDosagem = itens.find(
+      i => i.tipo === 'MEDICAMENTO' && !String(i.dosagem ?? '').trim(),
+    );
+    if (!semDosagem) return false;
+    setErroInline(`Informe a dosagem de "${semDosagem.medicamento}" antes de salvar.`);
+    return true;
+  };
+
   const handleSalvar = async () => {
     const itens = formEstaVazio() ? localItens : [...localItens, form];
     if (itens.length === 0) {
@@ -793,6 +809,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       return;
     }
     if (!formEstaVazio() && !validarForm()) return;
+    if (bloqueadoPorDosagem(itens)) return;
     setSaving(true);
     try {
       const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
@@ -825,6 +842,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         const itens = formEstaVazio() ? localItens : [...localItens, form];
         if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
+        if (bloqueadoPorDosagem(itens)) return;
         const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
         const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
         // Grupos criados (persistidos) → marca os itens de orçamento como importados
@@ -1780,7 +1798,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const canEdit = podeCriar;
   const canFinalizarCancelar = podeFinalizar;
   // FORNECEDOR só edita/finaliza/cancela itens que ele próprio criou (mesmo que a MatrizPerfil conceda EQUIPE/FULL)
-  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -2061,9 +2078,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
               const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
-              const editavel   = grupoNaoExecutado(g) && canEdit && (!isFornecedor || eProprioAutor);
+              const editavel   = grupoNaoExecutado(g) && canEdit && (isGestor || eProprioAutor);
               const podeFinalizarDireto = g.status === 'SALVO';
-              const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutor);
+              const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
@@ -2138,7 +2155,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       <div className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
           const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
-          const editavelMobile = grupoNaoExecutado(g) && canEdit && (!isFornecedor || eProprioAutorMobile);
+          const editavelMobile = grupoNaoExecutado(g) && canEdit && (isGestor || eProprioAutorMobile);
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -2182,7 +2199,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <Printer size={11} /> Imprimir
                 </button>
               )}
-              {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (!isFornecedor || eProprioAutorMobile) && (
+              {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutorMobile) && (
                 <button onClick={() => setDeletingId(g.id)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                   <Trash2 size={11} /> Cancelar

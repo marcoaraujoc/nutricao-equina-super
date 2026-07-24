@@ -155,13 +155,21 @@ const FaturaController = {
 
       if (proprietarioIds.length === 0) return res.json({ dados: [] });
 
+      // O MESMO animal pode ter um cadastro em cada clínica (registro isolado por
+      // empresa). Sem este filtro, a fatura listava as duas cópias e repetia a seção
+      // "Informação do Cavalo". Animal legado sem empresa continua aparecendo.
+      const whereAnimaisDoEscopo = {
+        ativo: true,
+        ...(empresaId ? { OR: [{ empresaId }, { empresaId: null }] } : {}),
+      };
+
       const proprietarios = await prisma.user.findMany({
         where: { id: { in: proprietarioIds } },
         select: {
           id: true, fullName: true, email: true, phone: true,
           valorAssistencia: true, mensalista: true,
           animais: {
-            where: { ativo: true },
+            where: whereAnimaisDoEscopo,
             select: {
               id: true, nome: true,
               especie: { select: { nome: true } },

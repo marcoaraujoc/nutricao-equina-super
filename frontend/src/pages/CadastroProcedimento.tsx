@@ -73,7 +73,7 @@ const numToMask = (v: number | null | undefined): string =>
 
 export default function CadastroProcedimento() {
   const { user } = useAuth();
-  const { isGestor, loading: loadingPerms } = usePermissoes();
+  const { isGestor, loading: loadingPerms, podeExecutar } = usePermissoes();
   const isAdmin = (user?.userType ?? '').toUpperCase() === 'ADMIN';
 
   const [especialidades, setEspecialidades] = useState<string[]>([]);
@@ -113,7 +113,13 @@ export default function CadastroProcedimento() {
   const [erroCombo,     setErroCombo]     = useState<string | null>(null);
   const [comboExcluir,  setComboExcluir]  = useState<Combo | null>(null);
 
-  const podeGerirEmpresa = isGestor || gestorBackend;
+  // Controle de acesso — slug cadastro.procedimento.* (GESTOR/ADMIN têm bypass via podeExecutar)
+  const podeVer    = isAdmin || isGestor || gestorBackend || podeExecutar('cadastro.procedimento.ler');
+  const podeEditar = isAdmin || isGestor || gestorBackend || podeExecutar('cadastro.procedimento.editar');
+  const podeCriar  = isAdmin || isGestor || gestorBackend || podeExecutar('cadastro.procedimento.criar');
+  const podeExcluir = isAdmin || isGestor || gestorBackend || podeExecutar('cadastro.procedimento.deletar');
+  // "Gerir" = tem alguma ação de escrita (mostra textos/afford. de gestão)
+  const podeGerirEmpresa = podeEditar || podeCriar || podeExcluir;
 
   // ── Loaders ───────────────────────────────────────────────────────────────
 
@@ -309,6 +315,16 @@ export default function CadastroProcedimento() {
     </PageContainer>
   );
 
+  if (!podeVer) return (
+    <PageContainer>
+      <BotaoVoltar className="mb-4" />
+      <div className="text-center py-16">
+        <h2 className="text-lg font-bold text-gray-900">Acesso não autorizado</h2>
+        <p className="text-sm text-gray-500 mt-1">Você não tem permissão para visualizar esta página.</p>
+      </div>
+    </PageContainer>
+  );
+
   const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500';
 
   return (
@@ -426,7 +442,7 @@ export default function CadastroProcedimento() {
                               <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
                                 {brl(p.valorEmpresa)}
                               </span>
-                              {podeGerirEmpresa && (
+                              {podeEditar && (
                                 <button onClick={() => iniciarEdicaoValor(p)} className="p-1 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded" title="Definir valor da empresa">
                                   <Pencil size={13} />
                                 </button>
@@ -461,7 +477,7 @@ export default function CadastroProcedimento() {
                           <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
                             Empresa: {brl(p.valorEmpresa)}
                           </span>
-                          {podeGerirEmpresa && (
+                          {podeEditar && (
                             <button onClick={() => iniciarEdicaoValor(p)} className="p-1 text-gray-400"><Pencil size={13} /></button>
                           )}
                         </span>
@@ -477,7 +493,7 @@ export default function CadastroProcedimento() {
 
       {aba === 'combos' && (
         <div className="space-y-4">
-          {podeGerirEmpresa && (
+          {podeCriar && (
             <button onClick={abrirNovoCombo}
               className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors">
               <PackagePlus size={15} /> Novo Combo
@@ -511,14 +527,18 @@ export default function CadastroProcedimento() {
                       </li>
                     ))}
                   </ul>
-                  {podeGerirEmpresa && (
+                  {(podeEditar || podeExcluir) && (
                     <div className="flex justify-end gap-1 mt-3 pt-2 border-t border-gray-50">
-                      <button onClick={() => abrirEdicaoCombo(c)} className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Editar">
-                        <Pencil size={14} />
-                      </button>
-                      <button onClick={() => setComboExcluir(c)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Excluir">
-                        <Trash2 size={14} />
-                      </button>
+                      {podeEditar && (
+                        <button onClick={() => abrirEdicaoCombo(c)} className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Editar">
+                          <Pencil size={14} />
+                        </button>
+                      )}
+                      {podeExcluir && (
+                        <button onClick={() => setComboExcluir(c)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Excluir">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

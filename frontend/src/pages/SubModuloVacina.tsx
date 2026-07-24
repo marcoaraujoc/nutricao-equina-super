@@ -10,6 +10,7 @@ import { formatDate } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import {
   imprimirPrescricao as imprimirPrescricaoPrint,
@@ -464,6 +465,7 @@ const FILTROS: { key: FiltroStatus; label: string }[] = [
 export default function SubModuloVacina({ animalId, animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { user } = useAuth();
 
   void contextoAtivo;
 
@@ -629,6 +631,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const podeCriar    = isGestor || podeExecutar('atendimento.vacinas.criar');
   const podeDeletar  = isGestor || podeExecutar('atendimento.vacinas.deletar');
   const podeImprimir = isGestor || podeExecutar('atendimento.vacinas.imprimir');
+  // Só o gestor exclui vacina de outro; os demais só as que registraram.
+  const podeExcluirVac = (v: VacinaClinica) => podeDeletar && (isGestor || v.veterinario?.id === user?.id);
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
@@ -1317,7 +1321,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                         <Printer size={11} /> Imprimir
                       </button>
                     )}
-                    {podeDeletar && v.ativo && (
+                    {podeExcluirVac(v) && v.ativo && (
                       <button onClick={() => handleExcluirSolicitado(v.id)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                         <Trash2 size={11} /> Inativar
@@ -1402,7 +1406,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                               <Printer size={14} />
                             </button>
                           )}
-                          {podeDeletar && v.ativo && (
+                          {podeExcluirVac(v) && v.ativo && (
                             <button onClick={() => handleExcluirSolicitado(v.id)} title="Inativar"
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                               <Trash2 size={14} />

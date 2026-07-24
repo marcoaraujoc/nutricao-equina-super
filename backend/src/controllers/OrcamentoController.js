@@ -13,7 +13,10 @@ const {
 } = require('../lib/proprietarioPerfil');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { registrarAuditoria } = require('../lib/auditoria');
-const { recalcularTotal } = require('../lib/faturaUtils');
+const { recalcularTotal, normalizarDesconto, descontoDoItem } = require('../lib/faturaUtils');
+const {
+  garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa, normalizarEspecies,
+} = require('../lib/catalogoManual');
 const { enviarDocumentoWhatsApp } = require('../services/documentoWhatsappService');
 const { gerarHtmlOrcamentoCliente } = require('../templates/orcamentoHtml');
 
@@ -38,10 +41,15 @@ const TIPOS = ['PROCEDIMENTO', 'COMBO', 'MEDICAMENTO', 'VACINA', 'OUTROS'];
 // de propósito: o destino dele é a fatura, não a evolução.
 const TIPOS_CLINICOS = ['PROCEDIMENTO', 'COMBO', 'MEDICAMENTO', 'VACINA'];
 
+// Tipos que aceitam posologia orçada (duração em dias + frequência) — os que viram
+// prescrição. Vacina usa doses (quantidade) e OUTROS é cobrança avulsa.
+const TIPOS_COM_POSOLOGIA = ['MEDICAMENTO', 'PROCEDIMENTO', 'COMBO'];
+
 const ITEM_SELECT = {
   id: true, animalId: true, tipo: true, refId: true, especialidade: true,
   descricao: true, quantidade: true, unidade: true, dias: true, frequencia: true,
-  valorUnitario: true, valorTotal: true, statusItem: true, importadoEm: true,
+  valorUnitario: true, descontoTipo: true, descontoValor: true,
+  valorTotal: true, statusItem: true, importadoEm: true,
   animal: { select: { id: true, nome: true } },
 };
 
@@ -111,9 +119,13 @@ function validarEspecialidade(item) {
 function dadosDoItem(item, orcamentoId, refId) {
   const qtd = Number(item.quantidade) || 1;
   const vu  = Number(item.valorUnitario) || 0;
-  // dias/frequência só fazem sentido no medicamento (posologia orçada)
-  const ehMedicamento = item.tipo === 'MEDICAMENTO';
-  const dias = ehMedicamento && Number(item.dias) > 0 ? Math.trunc(Number(item.dias)) : null;
+  // Posologia orçada — vale para medicamento E procedimento/combo (duração + frequência)
+  const temPosologia = TIPOS_COM_POSOLOGIA.includes(item.tipo);
+  const dias = temPosologia && Number(item.dias) > 0 ? Math.trunc(Number(item.dias)) : null;
+  // Desconto do item (mesma regra da fatura): lança 400 quando a entrada é inválida
+  const desconto = normalizarDesconto(item.descontoTipo, item.descontoValor);
+  const bruto    = qtd * vu;
+  const liquido  = bruto - descontoDoItem({ valor: vu, quantidade: qtd, ...desconto });
   return {
     orcamentoId,
     animalId:      item.animalId ? Number(item.animalId) : null,
@@ -124,9 +136,11 @@ function dadosDoItem(item, orcamentoId, refId) {
     quantidade:    qtd,
     unidade:       item.unidade || null,
     dias,
-    frequencia:    ehMedicamento && item.frequencia ? String(item.frequencia).slice(0, 50) : null,
+    frequencia:    temPosologia && item.frequencia ? String(item.frequencia).slice(0, 50) : null,
     valorUnitario: vu,
-    valorTotal:    Math.round(qtd * vu * 100) / 100,
+    descontoTipo:  desconto.descontoTipo,
+    descontoValor: desconto.descontoValor,
+    valorTotal:    Math.round(liquido * 100) / 100,
     statusItem:    'PENDENTE',
   };
 }
@@ -135,43 +149,46 @@ function dadosDoItem(item, orcamentoId, refId) {
 // (tipo + descrição). O mesmo item manual chega repetido quando o orçamento cobre
 // vários animais (uma linha por animal) — sem o cache, cada linha geraria uma
 // duplicata no catálogo da empresa. `cache` vive por transação.
-async function resolverCatalogoManual(tx, item, empresaId, cache) {
+async function resolverCatalogoManual(tx, item, empresaId, cache, nomePorEspecie) {
   const chave = `${item.tipo}|${String(item.descricao).trim().toLowerCase()}`;
-  if (!cache.has(chave)) cache.set(chave, await criarCatalogoManual(tx, item, empresaId));
+  if (!cache.has(chave)) cache.set(chave, await criarCatalogoManual(tx, item, empresaId, nomePorEspecie));
   return cache.get(chave);
 }
 
-// Cria a entrada de catálogo escopada à empresa para um item manual (sem refId).
-async function criarCatalogoManual(tx, item, empresaId) {
-  if (item.tipo === 'PROCEDIMENTO') {
-    const p = await tx.procedimentoVeterinario.create({
-      data: {
-        nome:          String(item.descricao).slice(0, 255),
-        categoria:     'Orçamento',
-        especialidade: item.especialidade || null,
-        valorVenda:    Number(item.valorUnitario) || 0,
-        especie:       null, // genérico — não some pelo filtro de espécie
-        empresaId,
-        ativo:         true,
-      },
-    });
-    return p.id;
+// Cria (ou reaproveita) a entrada de catálogo da empresa para um item manual.
+// As ESPÉCIES vêm da tela — são as que a empresa atende (com mais de uma, o usuário
+// escolhe quais). Sem elas o item não voltaria nas buscas seguintes.
+// MEDICAMENTO e VACINA compartilham tb_medicamentos; a vacina é distinguida por
+// classificacao contendo "vacina" (mesmo critério de paraAtendimento).
+async function criarCatalogoManual(tx, item, empresaId, nomePorEspecie) {
+  const especieIds = normalizarEspecies(item.especieIds);
+  if (item.tipo === 'PROCEDIMENTO' || item.tipo === 'COMBO') {
+    return garantirProcedimentoDaEmpresa(tx, {
+      nome:          item.descricao,
+      especialidade: item.especialidade,
+      valor:         item.valorUnitario,
+      // uma espécie → grava o nome; várias → genérico (o campo é único, em texto)
+      especieNome:   especieIds.length === 1 ? nomePorEspecie.get(especieIds[0]) ?? null : null,
+    }, empresaId);
   }
-  // MEDICAMENTO e VACINA compartilham a tabela tb_medicamentos; a vacina é
-  // distinguida por classificacao contendo "vacina" (mesmo critério de paraAtendimento).
-  const isVacina = item.tipo === 'VACINA';
-  const m = await tx.medicamento.create({
-    data: {
-      nome:              String(item.descricao).slice(0, 90),
-      formaFarmaceutica: 'Manual',
-      unidade:           item.unidade || (isVacina ? 'dose' : 'un'),
-      apresentacao:      'Manual',
-      classificacao:     isVacina ? 'Vacina' : null,
-      empresaId,
-      ativo:             true,
-    },
+  return garantirMedicamentoDaEmpresa(tx, {
+    nome:    item.descricao,
+    unidade: item.unidade,
+    vacina:  item.tipo === 'VACINA',
+    especieIds,
+  }, empresaId);
+}
+
+// Nome de cada espécie usada pelos itens manuais (o catálogo de procedimento guarda
+// a espécie como texto).
+async function nomesDasEspecies(itens) {
+  const ids = normalizarEspecies(itens.flatMap(i => i.especieIds ?? []));
+  if (ids.length === 0) return new Map();
+  const especies = await prisma.especie.findMany({
+    where:  { id: { in: ids } },
+    select: { id: true, nome: true },
   });
-  return m.id;
+  return new Map(especies.map(e => [e.id, e.nome]));
 }
 
 const OrcamentoController = {
@@ -224,10 +241,14 @@ const OrcamentoController = {
         if (!it.descricao?.trim())    return res.status(400).json({ error: 'Item sem descrição.' });
         const erroEsp = validarEspecialidade(it);
         if (erroEsp) return res.status(400).json({ error: erroEsp });
+        // Desconto do item — valida antes de abrir a transação
+        try { normalizarDesconto(it.descontoTipo, it.descontoValor); }
+        catch (e) { return res.status(400).json({ error: e.message }); }
       }
       const prop = await prisma.user.findUnique({ where: { id: Number(proprietarioId) }, select: { id: true } });
       if (!prop) return res.status(404).json({ error: 'Proprietário não encontrado.' });
 
+      const nomePorEspecie = await nomesDasEspecies(itens);
       const criado = await prisma.$transaction(async (tx) => {
         const numero = await proximoNumero(tx, req.empresaId);
         const orc = await tx.orcamento.create({
@@ -247,7 +268,7 @@ const OrcamentoController = {
           let refId = item.refId ? Number(item.refId) : null;
           // Item manual (procedimento/medicamento/vacina fora do catálogo) → cria escopado à empresa
           if (item.manual && TIPOS_MANUAIS.includes(item.tipo)) {
-            refId = await resolverCatalogoManual(tx, item, req.empresaId, cacheManual);
+            refId = await resolverCatalogoManual(tx, item, req.empresaId, cacheManual, nomePorEspecie);
           }
           await tx.orcamentoItem.create({ data: dadosDoItem(item, orc.id, refId) });
         }
@@ -278,15 +299,19 @@ const OrcamentoController = {
         if (!TIPOS.includes(it.tipo)) return res.status(400).json({ error: `Tipo de item inválido: ${it.tipo}` });
         const erroEsp = validarEspecialidade(it);
         if (erroEsp) return res.status(400).json({ error: erroEsp });
+        // Desconto do item — valida antes de abrir a transação
+        try { normalizarDesconto(it.descontoTipo, it.descontoValor); }
+        catch (e) { return res.status(400).json({ error: e.message }); }
       }
 
+      const nomePorEspecie = await nomesDasEspecies(itens);
       const atualizado = await prisma.$transaction(async (tx) => {
         await tx.orcamentoItem.deleteMany({ where: { orcamentoId: id } });
         const cacheManual = new Map();
         for (const item of itens) {
           let refId = item.refId ? Number(item.refId) : null;
           if (item.manual && TIPOS_MANUAIS.includes(item.tipo)) {
-            refId = await resolverCatalogoManual(tx, item, req.empresaId, cacheManual);
+            refId = await resolverCatalogoManual(tx, item, req.empresaId, cacheManual, nomePorEspecie);
           }
           await tx.orcamentoItem.create({ data: dadosDoItem(item, id, refId) });
         }
@@ -572,6 +597,9 @@ const OrcamentoController = {
               descricao:       `[ORC-${formatNumero(item.orcamento.numero)}] ${item.descricao}`,
               valor:           item.valorUnitario ?? 0,
               quantidade:      item.quantidade ?? 1,
+              // O desconto negociado no orçamento acompanha o item na fatura
+              descontoTipo:    item.descontoTipo ?? null,
+              descontoValor:   item.descontoValor ?? 0,
               veterinarioId:   req.user.id,
               orcamentoItemId: item.id,
             },

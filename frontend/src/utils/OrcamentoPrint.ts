@@ -8,9 +8,12 @@ export interface PrintOrcamentoItem {
   especialidade: string | null;
   quantidade:    number;
   unidade:       string | null;
-  /** MEDICAMENTO — posologia orçada (dias + frequência) */
+  /** MEDICAMENTO/PROCEDIMENTO — posologia orçada (dias + frequência) */
   dias?:         number | null;
   frequencia?:   string | null;
+  /** Desconto negociado no item (valorTotal já vem líquido) */
+  descontoTipo?: 'PERCENTUAL' | 'VALOR' | null;
+  descontoValor?: number | null;
   valorUnitario: number;
   valorTotal:    number;
   statusItem:    'PENDENTE' | 'ACEITO' | 'REJEITADO';
@@ -87,16 +90,21 @@ const FREQUENCIA_LABEL: Record<string, string> = {
   seNecessario: 'se necessário', SOS: 'SOS',
 };
 
-// Detalhe abaixo da descrição: medicamento mostra dias + frequência; vacina, as doses.
+// Detalhe abaixo da descrição: medicamento/procedimento mostram dias + frequência;
+// vacina mostra as doses. O desconto do item, quando houver, entra no fim da linha.
 function detalheItem(i: PrintOrcamentoItem): string {
-  if (i.tipo === 'MEDICAMENTO') {
-    return [
-      i.dias ? `${i.dias} dia${i.dias > 1 ? 's' : ''}` : null,
-      i.frequencia ? (FREQUENCIA_LABEL[i.frequencia] ?? i.frequencia) : null,
-    ].filter(Boolean).join(' · ');
+  const partes: string[] = [];
+  if (i.tipo === 'MEDICAMENTO' || i.tipo === 'PROCEDIMENTO' || i.tipo === 'COMBO') {
+    if (i.dias)       partes.push(`${i.dias} dia${i.dias > 1 ? 's' : ''}`);
+    if (i.frequencia) partes.push(FREQUENCIA_LABEL[i.frequencia] ?? i.frequencia);
   }
-  if (i.tipo === 'VACINA') return i.quantidade > 0 ? `${i.quantidade} dose${i.quantidade > 1 ? 's' : ''}` : '';
-  return '';
+  if (i.tipo === 'VACINA' && i.quantidade > 0) {
+    partes.push(`${i.quantidade} dose${i.quantidade > 1 ? 's' : ''}`);
+  }
+  if (i.descontoValor && i.descontoValor > 0) {
+    partes.push(`desconto ${i.descontoTipo === 'PERCENTUAL' ? `${i.descontoValor}%` : brl(i.descontoValor)}`);
+  }
+  return partes.join(' · ');
 }
 
 // Item sem animal é de nível proprietário (o orçamento pode ter itens gerais).

@@ -269,9 +269,44 @@ async function gravarExpedienteTrabalho(membroId, exp) {
 }
 
 // ─── Locais de trabalho do MEMBRO (múltiplos por membro) ──────────────────────
-// Valida a lista body.locaisTrabalho = [{ localizacaoId, diasTrabalho, horaInicioTrabalho, horaFimTrabalho }].
+// Valida a lista body.locaisTrabalho = [{ localizacaoId, diasTrabalho, horaInicioTrabalho, horaFimTrabalho, especialidadeIds }].
 // undefined = não altera; [] = limpa todos. Cada local reaproveita a validação de
 // dias/horário do expediente único.
+const DIAS_LABEL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+// CSV de IDs ("3,7,12") → [3,7,12]. Vazio/null → [].
+function csvParaIds(csv) {
+  if (!csv) return [];
+  return String(csv).split(',').map(s => Number(s.trim())).filter(Number.isInteger);
+}
+
+// Dois locais do MESMO profissional não podem coincidir: se compartilham algum dia da
+// semana e as faixas de horário se cruzam, ele estaria em dois lugares ao mesmo tempo.
+// Local sem dias definidos não entra no confronto (não está agendado em dia nenhum);
+// local sem horário é tratado como o dia inteiro.
+function conflitoEntreLocais(locais) {
+  const diasDe = (l) => (l.diasTrabalho ? String(l.diasTrabalho).split(',').map(Number) : []);
+  const faixaDe = (l) => [l.horaInicioTrabalho || '00:00', l.horaFimTrabalho || '23:59'];
+
+  for (let i = 0; i < locais.length; i++) {
+    for (let j = i + 1; j < locais.length; j++) {
+      const diasA = diasDe(locais[i]);
+      const diasB = diasDe(locais[j]);
+      const comuns = diasA.filter(d => diasB.includes(d));
+      if (comuns.length === 0) continue;
+
+      const [iniA, fimA] = faixaDe(locais[i]);
+      const [iniB, fimB] = faixaDe(locais[j]);
+      if (iniA < fimB && iniB < fimA) {
+        const dias = comuns.sort((a, b) => a - b).map(d => DIAS_LABEL[d]).join(', ');
+        return `Os locais de trabalho não podem coincidir: há sobreposição em ${dias} `
+             + `(${iniA}–${fimA} e ${iniB}–${fimB}).`;
+      }
+    }
+  }
+  return null;
+}
+
 function parseLocaisTrabalho(body) {
   if (body.locaisTrabalho === undefined) return { locais: undefined };
   if (!Array.isArray(body.locaisTrabalho)) return { erro: 'locaisTrabalho deve ser uma lista.' };
@@ -285,13 +320,23 @@ function parseLocaisTrabalho(body) {
     // Reusa a mesma validação de dias/horário do expediente único
     const exp = parseExpedienteTrabalho(l);
     if (exp.erro) return { erro: exp.erro };
+    // Especialidades POR LOCAL (IDs do catálogo tb_especialidades) → CSV
+    const espIds = [...new Set(
+      (Array.isArray(l?.especialidadeIds) ? l.especialidadeIds : [])
+        .map(Number).filter(Number.isInteger),
+    )];
     locais.push({
       localizacaoId,
       diasTrabalho:       exp.diasTrabalho       ?? null,
       horaInicioTrabalho: exp.horaInicioTrabalho ?? null,
       horaFimTrabalho:    exp.horaFimTrabalho    ?? null,
+      especialidadesIds:  espIds.length ? espIds.join(',') : null,
     });
   }
+  // Ninguém trabalha em dois lugares ao mesmo tempo
+  const conflito = conflitoEntreLocais(locais);
+  if (conflito) return { erro: conflito };
+
   // Um mesmo local não deve se repetir (usaria duas linhas para o mesmo lugar)
   const vistos = new Set();
   for (const l of locais) {
@@ -336,6 +381,46 @@ async function gravarLocaisTrabalho(client, membroId, locais) {
   await gravarExpedienteTrabalho(membroId, agregarExpediente(locais));
 }
 
+// Valida cada local de trabalho contra o EXPEDIENTE DA EMPRESA (EmpresaConfiguracao):
+// os dias devem estar entre os dias de atendimento e o horário dentro da faixa da empresa.
+// Todo membro fica RESTRITO ao dia/horário da empresa. Empresa sem restrição (campos
+// null) → não limita. Retorna a 1ª mensagem de erro encontrada ou null (tudo ok).
+async function validarLocaisContraExpedienteEmpresa(req, locais) {
+  if (!Array.isArray(locais) || locais.length === 0) return null;
+  const escopo = await resolverEscopoConfiguracaoMembro(req);
+  if (!escopo) return null;
+  const config = await buscarConfiguracao(escopo);
+  if (!config) return null;
+
+  const diasEmpresa = config.diasAtendimento
+    ? String(config.diasAtendimento).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+    : null; // null/vazio = todos os dias
+  const iniEmpresa = config.horaInicioAtendimento || null;
+  const fimEmpresa = config.horaFimAtendimento || null;
+  if ((!diasEmpresa || diasEmpresa.length === 0) && !iniEmpresa && !fimEmpresa) return null;
+
+  for (const l of locais) {
+    const dias = l.diasTrabalho
+      ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+      : [];
+    if (diasEmpresa && diasEmpresa.length > 0) {
+      const fora = dias.filter(d => !diasEmpresa.includes(d));
+      if (fora.length > 0) {
+        const permit = [...diasEmpresa].sort((a, b) => a - b).map(d => DIAS_LABEL[d]).join(', ');
+        return `Dias fora do expediente da empresa (permitido: ${permit}).`;
+      }
+    }
+    // Horário vazio no local = herda o expediente da empresa (dentro do limite, ok).
+    if (iniEmpresa && l.horaInicioTrabalho && l.horaInicioTrabalho < iniEmpresa) {
+      return `Horário de entrada antes do expediente da empresa (a partir de ${iniEmpresa}).`;
+    }
+    if (fimEmpresa && l.horaFimTrabalho && l.horaFimTrabalho > fimEmpresa) {
+      return `Horário de saída após o expediente da empresa (até ${fimEmpresa}).`;
+    }
+  }
+  return null;
+}
+
 // Carrega os locais de cada membro (com nome da localização) e anexa em `locaisTrabalho`.
 async function anexarLocaisTrabalho(membros) {
   const ids = membros.map(m => m.id).filter(Boolean);
@@ -354,6 +439,7 @@ async function anexarLocaisTrabalho(membros) {
       diasTrabalho:       r.diasTrabalho,
       horaInicioTrabalho: r.horaInicioTrabalho,
       horaFimTrabalho:    r.horaFimTrabalho,
+      especialidadeIds:   csvParaIds(r.especialidadesIds),
     });
   }
   return membros.map(m => ({ ...m, locaisTrabalho: porMembro.get(m.id) ?? [] }));
@@ -1042,7 +1128,41 @@ const EquipeController = {
       const empresa = await getEmpresaDoGestor(vetUserId, req.empresaId);
       const isGestor = !!empresa;
 
-      if (!empresa) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
+      if (!empresa) {
+        // Não é gestor, mas PODE ser MEMBRO de uma equipe (ex.: vet convidado). Devolve o
+        // roster da equipe dele (contexto ativo) para telas como a Agenda poderem listar
+        // os profissionais — SEM privilégios de gestão (isGestor:false) e com dados enxutos
+        // (sem contato) por privacidade. Isolado à equipe do próprio membro.
+        let vinculo = null;
+        if (equipeIdParam) {
+          vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId, equipeId: equipeIdParam }, select: { equipeId: true } });
+        }
+        if (!vinculo && req.equipeId) {
+          vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId, equipeId: Number(req.equipeId) }, select: { equipeId: true } });
+        }
+        if (!vinculo && req.empresaId) {
+          vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId, equipe: { empresaId: Number(req.empresaId) } }, orderBy: { createdAt: 'desc' }, select: { equipeId: true } });
+        }
+        if (!vinculo) {
+          vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId }, orderBy: { createdAt: 'asc' }, select: { equipeId: true } });
+        }
+        if (!vinculo) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
+
+        const membrosDaEquipe = await prisma.membroEquipe.findMany({
+          where:   { equipeId: vinculo.equipeId, NOT: { user: { role: 'ADMIN' } } },
+          include: {
+            user:   { select: { id: true, fullName: true, ativo: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            equipe: { select: { nome: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        return res.json({
+          sucesso:  true,
+          dados:    await anexarLocaisTrabalho(await anexarExpedienteTrabalho(membrosDaEquipe)),
+          equipeId: vinculo.equipeId,
+          isGestor: false,
+        });
+      }
 
       const equipes = await prisma.equipe.findMany({ where: { empresaId: empresa.id }, orderBy: { createdAt: 'asc' } });
       if (equipes.length === 0) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
@@ -1368,6 +1488,9 @@ const EquipeController = {
       const locaisParsed = parseLocaisTrabalho(req.body);
       if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
       if (locaisParsed.locais !== undefined) {
+        // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
+        const erroExp = await validarLocaisContraExpedienteEmpresa(req, locaisParsed.locais);
+        if (erroExp) return res.status(400).json({ sucesso: false, mensagem: erroExp });
         await gravarLocaisTrabalho(prisma, Number(id), locaisParsed.locais);
       } else {
         await gravarExpedienteTrabalho(Number(id), expediente);
@@ -1731,6 +1854,11 @@ const EquipeController = {
       // Locais de trabalho (múltiplos) — valida antes de gravar qualquer coisa
       const locaisParsed = parseLocaisTrabalho(req.body);
       if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
+      // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
+      if (locaisParsed.locais !== undefined) {
+        const erroExp = await validarLocaisContraExpedienteEmpresa(req, locaisParsed.locais);
+        if (erroExp) return res.status(400).json({ sucesso: false, mensagem: erroExp });
+      }
 
       // Fornecedor selecionado já vinculado a OUTRA conta não pode ser reutilizado
       if (fornecedorVinculo?.userId && (!usuarioCheck || fornecedorVinculo.userId !== usuarioCheck.id)) {
@@ -2991,3 +3119,9 @@ module.exports = EquipeController;
 // Reuso do escopo de configuração (empresa CNPJ ou equipe de empresa pessoal)
 // por outros controllers — ex.: WhatsappController (Evolution API).
 module.exports.resolverEscopoConfiguracao = resolverEscopoConfiguracao;
+// Locais de trabalho do membro — reusados pelo Cadastro Pessoal (UserController.updateMe),
+// para que a validação (inclusive a de horários coincidentes) seja a MESMA das duas telas.
+module.exports.parseLocaisTrabalho  = parseLocaisTrabalho;
+module.exports.gravarLocaisTrabalho = gravarLocaisTrabalho;
+module.exports.csvParaIds           = csvParaIds;
+module.exports.validarLocaisContraExpedienteEmpresa = validarLocaisContraExpedienteEmpresa;

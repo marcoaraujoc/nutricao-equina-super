@@ -8,6 +8,7 @@ const { setAuthCookies } = require('../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { whereProprietarioNoEscopo } = require('./ProprietarioController');
+const { parseLocaisTrabalho, gravarLocaisTrabalho, csvParaIds, validarLocaisContraExpedienteEmpresa } = require('./EquipeController');
 const {
   salvarPerfil: salvarPerfilProprietario,
   aplicarPerfil: aplicarPerfilProprietario,
@@ -161,6 +162,25 @@ const UserController = {
         }
       } catch { /* colunas ainda não migradas — ignora */ }
 
+      // Locais de trabalho já cadastrados (pelo gestor, ao incluir o membro, ou pelo
+      // próprio profissional) — o Cadastro Pessoal abre com eles preenchidos.
+      let locaisTrabalho = [];
+      if (membroExp) {
+        const rows = await prisma.membroLocalTrabalho.findMany({
+          where:   { membroEquipeId: membroExp.id },
+          include: { localizacao: { select: { id: true, nome: true } } },
+          orderBy: { id: 'asc' },
+        });
+        locaisTrabalho = rows.map(r => ({
+          localizacaoId:      r.localizacaoId,
+          localizacaoNome:    r.localizacao?.nome ?? null,
+          diasTrabalho:       r.diasTrabalho,
+          horaInicioTrabalho: r.horaInicioTrabalho,
+          horaFimTrabalho:    r.horaFimTrabalho,
+          especialidadeIds:   csvParaIds(r.especialidadesIds),
+        }));
+      }
+
       const { vetPerfil, especialidades, ...userBruto } = user;
       // PROPRIETÁRIO: mostra o cadastro da EMPRESA ATIVA (cada clínica mantém o seu)
       const userData = userBruto.userType === 'PROPRIETARIO'
@@ -174,6 +194,7 @@ const UserController = {
         diasTrabalho:       expediente.diasTrabalho,
         horaInicioTrabalho: expediente.horaInicioTrabalho,
         horaFimTrabalho:    expediente.horaFimTrabalho,
+        locaisTrabalho,
         crmv:              vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
         subespecialidades: vetPerfil?.subespecialidades.map(s => s.nome) ?? [],
@@ -216,6 +237,7 @@ const UserController = {
         diasTrabalho,
         horaInicioTrabalho,
         horaFimTrabalho,
+        locaisTrabalho,
       } = req.body;
 
       // Determina se é usuário convidado (userType foi definido pelo convite)
@@ -352,6 +374,20 @@ const UserController = {
           vals.push(updatedUser.id);
           await prisma.$executeRawUnsafe(`UPDATE schs2vet.tb_membros_equipe SET ${sets.join(', ')} WHERE "userId"=$${i}`, ...vals);
         }
+      }
+
+      // Locais de trabalho (local + dias + horário). Diferente do expediente único,
+      // ficam no vínculo do CONTEXTO ATIVO — a localização pertence à empresa. Usa o
+      // mesmo parser da tela de Equipe, então a regra de horários que não podem
+      // coincidir vale igual aqui.
+      if (locaisTrabalho !== undefined) {
+        const { locais, erro } = parseLocaisTrabalho({ locaisTrabalho });
+        if (erro) return res.status(400).json({ success: false, error: erro });
+        // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
+        const erroExp = await validarLocaisContraExpedienteEmpresa(req, locais);
+        if (erroExp) return res.status(400).json({ success: false, error: erroExp });
+        const membroCtx = await resolverMembroDoContexto(updatedUser.id, req);
+        if (membroCtx) await gravarLocaisTrabalho(prisma, membroCtx.id, locais);
       }
 
       // Especialidades (catálogo por espécie) — fonte única para VET e FORNECEDOR.

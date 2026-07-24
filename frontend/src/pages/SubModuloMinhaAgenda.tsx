@@ -14,7 +14,7 @@ import InlineError from '../components/InlineError';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO';
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA';
 
 interface Agendamento {
   id:          number;
@@ -54,12 +54,14 @@ const TIPOS: Record<TipoAgendamento, { label: string; cls: string }> = {
 
 const TIPOS_LIST: TipoAgendamento[] = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 
+// Mesmas cores/rótulos da tela /agendamentos
 const STATUS_CLS: Record<StatusAgendamento, string> = {
   AGENDADO:     'bg-amber-100 text-amber-700',
   EM_ANDAMENTO: 'bg-blue-100 text-blue-700',
   CONCLUIDO:    'bg-green-100 text-green-700',
   FINALIZADO:   'bg-green-100 text-green-700',
-  CANCELADO:    'bg-red-100 text-red-600',
+  CANCELADO:    'bg-red-100 text-red-700',
+  ATRASADA:     'bg-orange-100 text-orange-700',
 };
 
 const STATUS_LABEL: Record<StatusAgendamento, string> = {
@@ -68,6 +70,7 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   CONCLUIDO:    'CONCLUÍDO',
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
+  ATRASADA:     'ATRASADA',
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -136,8 +139,9 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
     try {
       const res = await api.get(`/clinica/agendamentos?data=${hoje}`);
       const todos: Agendamento[] = res.data?.dados ?? [];
-      // Mostra todos os agendamentos do dia — inclusive os que já passaram e os CONCLUIDO
-      setAgendamentos(todos.filter(ag => ag.status !== 'CANCELADO'));
+      // Todos os agendamentos do dia, incluindo CONCLUIDO e CANCELADO (este aparece
+      // esmaecido, com o motivo) — mesma visão da tela /agendamentos.
+      setAgendamentos(todos);
     } catch {
       setErroInline('Erro ao carregar agenda do dia');
     } finally {
@@ -177,7 +181,9 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       await api.patch(`/clinica/agendamentos/${id}/status`, { status: 'CANCELADO', motivo });
       toast.success('Agendamento cancelado');
       setCancelandoId(null);
-      setAgendamentos(prev => prev.filter(a => a.id !== id));
+      setAgendamentos(prev => prev.map(a => a.id === id
+        ? { ...a, status: 'CANCELADO' as StatusAgendamento, observacao: motivo }
+        : a));
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setErroInline(msg ?? 'Erro ao cancelar agendamento');
@@ -321,10 +327,13 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
           </thead>
           <tbody className="divide-y divide-gray-50">
             {agendamentosFiltrados.map(ag => {
-              const isAgendado  = ag.status === 'AGENDADO';
-              const isConcluido = ag.status === 'CONCLUIDO';
+              // ATRASADA é variante de AGENDADO (ainda não ocorreu) — mesmas ações.
+              const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
+              const isConcluido   = ag.status === 'CONCLUIDO';
+              const isCancelado   = ag.status === 'CANCELADO';
+              const isEmAndamento = ag.status === 'EM_ANDAMENTO';
               return (
-                <tr key={ag.id} className={`hover:bg-gray-50 transition-colors ${isConcluido ? 'opacity-70' : ''}`}>
+                <tr key={ag.id} className={`hover:bg-gray-50 transition-colors ${isConcluido || isCancelado ? 'opacity-60' : ''}`}>
 
                   <td className="px-4 py-3">
                     <button onClick={() => onSelecionarAnimal(ag.animal.id)} className="text-left group">
@@ -343,7 +352,9 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                   <td className="px-4 py-3">
                     <p className="text-sm text-gray-800">{ag.titulo}</p>
                     {ag.observacao && (
-                      <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{ag.observacao}</p>
+                      <p className={`text-xs mt-0.5 line-clamp-1 ${isCancelado ? 'text-red-500 italic' : 'text-gray-400'}`}>
+                        {isCancelado ? `Motivo: ${ag.observacao}` : ag.observacao}
+                      </p>
                     )}
                     {ag.veterinario && (
                       <p className="text-xs text-gray-400 mt-0.5">{ag.veterinario.fullName}</p>
@@ -368,6 +379,12 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                           <Stethoscope size={13} />
                         </button>
                       )}
+                      {isEmAndamento && (
+                        <button onClick={() => handleIniciarAtendimento(ag)} title="Continuar atendimento"
+                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors">
+                          <Stethoscope size={13} />
+                        </button>
+                      )}
                       {isAgendado && podeEditar && (
                         <button onClick={() => abrirEditar(ag)} title="Alterar"
                           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
@@ -380,7 +397,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                           <CheckCircle2 size={13} />
                         </button>
                       )}
-                      {isAgendado && podeEditar && vets.length > 0 && (
+                      {isAgendado && isGestor && vets.length > 0 && (
                         <button onClick={() => abrirTrocarVet(ag)} title="Trocar profissional"
                           className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Users size={13} />
@@ -405,10 +422,13 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
       {/* ── Mobile cards ──────────────────────────────────────────────────── */}
       <div className="md:hidden divide-y divide-gray-50">
         {agendamentosFiltrados.map(ag => {
-          const isAgendado  = ag.status === 'AGENDADO';
-          const isConcluido = ag.status === 'CONCLUIDO';
+          // ATRASADA é variante de AGENDADO (ainda não ocorreu) — mesmas ações.
+          const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
+          const isConcluido   = ag.status === 'CONCLUIDO';
+          const isCancelado   = ag.status === 'CANCELADO';
+          const isEmAndamento = ag.status === 'EM_ANDAMENTO';
           return (
-            <div key={ag.id} className={`px-4 py-3 ${isConcluido ? 'opacity-70' : ''}`}>
+            <div key={ag.id} className={`px-4 py-3 ${isConcluido || isCancelado ? 'opacity-60' : ''}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <button onClick={() => onSelecionarAnimal(ag.animal.id)}
@@ -433,9 +453,18 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
               {ag.veterinario && (
                 <p className="text-xs text-gray-400 mt-0.5">{ag.veterinario.fullName}</p>
               )}
+              {isCancelado && ag.observacao && (
+                <p className="text-xs text-red-500 mt-0.5 italic">Motivo: {ag.observacao}</p>
+              )}
 
               <div className="flex items-center justify-between mt-2">
                 <span className="font-mono text-sm font-semibold text-gray-800">{formatHora(ag.dataHora)}</span>
+                {isEmAndamento && (
+                  <button onClick={() => handleIniciarAtendimento(ag)}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors">
+                    <Stethoscope size={11} /> Continuar
+                  </button>
+                )}
                 {isAgendado && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     <button onClick={() => handleIniciarAtendimento(ag)}

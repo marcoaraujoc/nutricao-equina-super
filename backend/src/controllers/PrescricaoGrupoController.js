@@ -4,7 +4,8 @@
 const prisma = require('../lib/prisma').default;
 const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
+const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
@@ -572,6 +573,18 @@ const criar = async (req, res) => {
     if (!Array.isArray(itens) || itens.length === 0)
       return res.status(400).json({ error: 'Inclua ao menos um item na prescrição.' });
 
+    // Medicamento sem dosagem não pode ser prescrito (o item importado do orçamento
+    // chega sem dosagem — a regra vale para qualquer origem).
+    const semDosagem = itens.find(
+      i => (i.tipo ?? 'MEDICAMENTO') === 'MEDICAMENTO' && !String(i.dosagem ?? '').trim(),
+    );
+    if (semDosagem) {
+      return res.status(400).json({
+        error: `Informe a dosagem de "${semDosagem.medicamento ?? 'medicamento'}".`,
+        code:  'DOSAGEM_OBRIGATORIA',
+      });
+    }
+
     // Valida que a evolução existe e pertence ao animal
     const evolucao = await prisma.evolucaoClinica.findFirst({
       where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
@@ -607,9 +620,18 @@ const criar = async (req, res) => {
     for (const item of itens) buckets[categoriaDoItem(item)].push(item);
     const categoriasComItens = ORDEM_CATEGORIAS.filter(c => buckets[c].length > 0);
 
+    // Espécie do animal atendido — usada para cadastrar no catálogo da empresa o item
+    // que o vet digitou à mão (sem ela, o novo item não voltaria nas buscas).
+    const animalDaPrescricao = await prisma.animal.findUnique({
+      where:  { id: Number(animalId) },
+      select: { especieId: true, especie: { select: { nome: true } } },
+    });
+    const empresaDoGrupo = empresaId ? Number(empresaId) : (req.empresaId ?? null);
+
     const gruposCriados = await prisma.$transaction(async (tx) => {
       let numero = await proximoNumero(tx, Number(animalId));
       const idsCriados = [];
+      const cacheCatalogo = new Map(); // não recadastra o mesmo nome duas vezes
 
       for (const categoria of categoriasComItens) {
         const grp = await tx.prescricaoGrupo.create({
@@ -624,12 +646,35 @@ const criar = async (req, res) => {
         });
 
         for (const item of buckets[categoria]) {
+          // Item fora do catálogo (digitado à mão) → cadastra para a EMPRESA e, no
+          // caso de medicamento, já vincula a prescrição ao registro criado.
+          let medicamentoCatId = item.medicamentoCatId ? Number(item.medicamentoCatId) : null;
+          const tipoItem = item.tipo ?? 'MEDICAMENTO';
+          const nomeItem = String(item.medicamento ?? '').trim();
+          const chaveCatalogo = `${tipoItem}|${nomeItem.toLowerCase()}`;
+          if (!medicamentoCatId && nomeItem) {
+            if (!cacheCatalogo.has(chaveCatalogo)) {
+              cacheCatalogo.set(chaveCatalogo, tipoItem === 'PROCEDIMENTO'
+                ? await garantirProcedimentoDaEmpresa(tx, {
+                    nome:        nomeItem,
+                    especieNome: animalDaPrescricao?.especie?.nome ?? null,
+                  }, empresaDoGrupo)
+                : await garantirMedicamentoDaEmpresa(tx, {
+                    nome:       nomeItem,
+                    unidade:    item.unidade,
+                    especieIds: animalDaPrescricao?.especieId ? [animalDaPrescricao.especieId] : [],
+                  }, empresaDoGrupo));
+            }
+            // Só o medicamento tem FK na prescrição; o procedimento é guardado pelo nome
+            if (tipoItem !== 'PROCEDIMENTO') medicamentoCatId = cacheCatalogo.get(chaveCatalogo);
+          }
+
           await tx.prescricao.create({
             data: {
               animalId:           Number(animalId),
               veterinarioId,
               grupoId:            grp.id,
-              medicamentoCatId:   item.medicamentoCatId ? Number(item.medicamentoCatId) : null,
+              medicamentoCatId,
               tipo:               item.tipo             ?? 'MEDICAMENTO',
               medicamento:        String(item.medicamento ?? ''),
               dosagem:            item.dosagem           ?? null,
@@ -642,6 +687,12 @@ const criar = async (req, res) => {
               dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
               status:             'RASCUNHO',
               medicamentoCliente: item.medicamentoCliente === true,
+              // Importado do orçamento: guarda o valor UNITÁRIO aceito pelo cliente —
+              // é ele que vai para a fatura, e não o preço do catálogo/estoque.
+              orcamentoItemId:    item.orcamentoItemId ? Number(item.orcamentoItemId) : null,
+              valorOrcado:        item.valorOrcado != null && item.valorOrcado !== ''
+                ? Number(item.valorOrcado)
+                : null,
             },
           });
         }
@@ -987,7 +1038,10 @@ const finalizar = async (req, res) => {
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
-      include: { itens: { where: { ativo: true } } },
+      include: {
+        itens:    { where: { ativo: true } },
+        evolucao: { select: { tipoAtendimento: true, numero: true } },
+      },
     });
 
     if (!grupo)                   return res.status(404).json({ error: 'Prescrição não encontrada.' });
@@ -1013,6 +1067,14 @@ const finalizar = async (req, res) => {
 
     const agora = new Date();
 
+    const animal = await prisma.animal.findUnique({
+      where: { id: grupo.animalId }, select: { userId: true },
+    });
+    const proprietarioId = animal?.userId ?? null;
+    const atendNum = grupo.evolucao
+      ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
+      : null;
+
     await prisma.$transaction(async (tx) => {
       await tx.prescricao.updateMany({
         where: { grupoId, ativo: true },
@@ -1032,6 +1094,37 @@ const finalizar = async (req, res) => {
       // Reserva o curso completo no estoque (multi-lote FEFO) — liberado ao
       // cancelar e abatido conforme a execução diária debita o estoque.
       await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
+
+      // Lança na fatura JÁ na finalização (mesma premissa do exame): o que foi
+      // prescrito aparece para o financeiro sem depender da execução da enfermagem.
+      // PROCEDIMENTO já entra com o valor do catálogo/combo (não depende de dose);
+      // MEDICAMENTO entra ZERADO e a 1ª execução preenche o valor da dose debitada
+      // (ver `executar`) — assim o total cobrado continua sendo o efetivamente aplicado.
+      if (proprietarioId) {
+        const fatura = await getOrCreateFatura(tx, proprietarioId);
+        for (const item of grupo.itens) {
+          // Medicamento do cliente não é cobrado — segue sem item de fatura
+          if (item.medicamentoCliente) continue;
+          const jaLancado = await tx.faturaItem.findFirst({ where: { prescricaoId: item.id } });
+          if (jaLancado) continue;
+          await adicionarFaturaItem(tx, {
+            faturaId:     fatura.id,
+            animalId:     grupo.animalId,
+            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+            descricao:    descricaoItemFatura(item, atendNum),
+            // Valor aceito no orçamento manda; sem orçamento, procedimento sai pelo
+            // catálogo/combo e medicamento fica zerado até a execução debitar a dose.
+            valor:        item.valorOrcado != null
+              ? item.valorOrcado
+              : (item.tipo === 'PROCEDIMENTO'
+                  ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
+                  : 0),
+            quantidade:   1,
+            veterinarioId,
+            prescricaoId: item.id,
+          });
+        }
+      }
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -1134,6 +1227,11 @@ const cancelarNaExecucao = async (req, res) => {
     const houveExecucao = grupo.itens.some(i => i.executadoEm);
     await prisma.$transaction(async (tx) => {
       await liberarReservas(tx, grupoId);
+      // O item foi lançado na fatura na finalização; cancelado sem execução, sai da
+      // fatura (nunca foi aplicado). Itens já executados permanecem faturados.
+      for (const item of grupo.itens.filter(i => !i.executadoEm)) {
+        await removerFaturaItensDaOrigem(tx, 'prescricaoId', item.id);
+      }
       // Cancela só os itens ainda NÃO executados (preserva os executados/faturados).
       await tx.prescricao.updateMany({
         where: { grupoId, ativo: true, executadoEm: null },
@@ -1159,6 +1257,9 @@ const cancelarNaExecucao = async (req, res) => {
 
     return res.json({ dados: { message: 'Prescrição cancelada.' } });
   } catch (err) {
+    if (err.code === 'FATURA_PAGA') {
+      return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+    }
     console.error('PrescricaoGrupoController.cancelarNaExecucao:', err);
     return res.status(500).json({ error: 'Erro ao cancelar prescrição.' });
   }
@@ -1195,6 +1296,10 @@ const reabrirParaEdicao = async (req, res) => {
 
     await prisma.$transaction(async (tx) => {
       await liberarReservas(tx, grupoId);
+      // Volta a ser rascunho → sai da fatura (será relançada na próxima finalização)
+      for (const item of grupo.itens) {
+        await removerFaturaItensDaOrigem(tx, 'prescricaoId', item.id);
+      }
       await tx.prescricao.updateMany({ where: { grupoId, ativo: true }, data: { status: 'RASCUNHO' } });
       await tx.prescricaoGrupo.update({ where: { id: grupoId }, data: { status: 'SALVO', veterinarioId: userId } });
     });
@@ -1202,6 +1307,9 @@ const reabrirParaEdicao = async (req, res) => {
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
     return res.json({ dados: { ...grupoAtualizado, numeroFormatado: formatNumero(grupoAtualizado.numero) } });
   } catch (err) {
+    if (err.code === 'FATURA_PAGA') {
+      return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+    }
     console.error('PrescricaoGrupoController.reabrirParaEdicao:', err);
     return res.status(500).json({ error: 'Erro ao reabrir prescrição.' });
   }
@@ -1221,6 +1329,15 @@ function executadoHojeItem(item, hojeStr) {
   const d = new Date(item.executadoEm);
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === hojeStr;
+}
+
+// Descrição do item na fatura — mesma forma no lançamento da finalização e na execução
+function descricaoItemFatura(item, atendNum) {
+  const dose = item.dosagem
+    ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
+    : item.frequencia;
+  const base = item.tipo === 'MEDICAMENTO' ? `${item.medicamento} — ${dose}` : item.medicamento;
+  return atendNum ? `[${atendNum}] ${base}` : base;
 }
 
 // Valor de um item PROCEDIMENTO na fatura, resolvido pelo NOME (o item guarda só o
@@ -1319,31 +1436,45 @@ const executar = async (req, res) => {
         // precos já contém o valor proporcional da dose (regra de 3)
         // MEDICAMENTO sem estoque no sistema → valor 0 na fatura (lança para o financeiro saber)
         // PROCEDIMENTO → valor do combo/valor da empresa/catálogo (Cadastro > Procedimentos)
-        const valorDaDose = item.tipo === 'PROCEDIMENTO'
-          ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
-          : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0);
-        const dose = item.dosagem
-          ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
-          : item.frequencia;
-        const descBase = item.tipo === 'MEDICAMENTO'
-          ? `${item.medicamento} — ${dose}`
-          : item.medicamento;
-        const descricao = atendNum ? `[${atendNum}] ${descBase}` : descBase;
+        // Valor da dose: o que foi ACEITO no orçamento tem precedência; sem orçamento,
+        // procedimento sai pelo catálogo/combo e medicamento pelo preço do lote debitado.
+        const valorDaDose = item.valorOrcado != null
+          ? item.valorOrcado
+          : (item.tipo === 'PROCEDIMENTO'
+              ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
+              : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0));
+        const descricao = descricaoItemFatura(item, atendNum);
 
         // Medicamento fornecido pelo cliente NÃO é cobrado — não gera item na fatura,
         // mesmo após executado. (A seringa/agulha da aplicação, insumos da clínica,
         // continuam sendo lançados abaixo quando a via for injetável.)
         if (!item.medicamentoCliente) {
-          await adicionarFaturaItem(tx, {
-            faturaId:     fatura.id,
-            animalId:     grupo.animalId,
-            tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
-            descricao,
-            valor:        valorDaDose,  // valor total da dose (regra de 3)
-            quantidade:   1,
-            veterinarioId,
-            prescricaoId: item.id,
-          });
+          // A finalização já lançou este item na fatura. Na PRIMEIRA execução, essa
+          // linha é aproveitada (só confirma o valor); nos dias seguintes, cada dose
+          // entra como uma nova linha — o total continua sendo o efetivamente aplicado.
+          // `item.executadoEm` ainda reflete o estado ANTES desta execução (a marcação
+          // acontece adiante no laço) e `itensHoje` já excluiu quem executou hoje.
+          const primeiraExecucao = !item.executadoEm;
+          const lancamentoDaFinalizacao = primeiraExecucao
+            ? await tx.faturaItem.findFirst({ where: { prescricaoId: item.id }, orderBy: { id: 'asc' } })
+            : null;
+          if (lancamentoDaFinalizacao) {
+            await tx.faturaItem.update({
+              where: { id: lancamentoDaFinalizacao.id },
+              data:  { descricao, valor: valorDaDose },
+            });
+          } else {
+            await adicionarFaturaItem(tx, {
+              faturaId:     fatura.id,
+              animalId:     grupo.animalId,
+              tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+              descricao,
+              valor:        valorDaDose,  // valor total da dose (regra de 3)
+              quantidade:   1,
+              veterinarioId,
+              prescricaoId: item.id,
+            });
+          }
         }
 
         // Via injetável (IV/IM/ID/SC/EV): 1 seringa + 1 agulha por dose aplicada.
@@ -1398,6 +1529,10 @@ const executar = async (req, res) => {
         // Curso concluído: libera eventuais reservas remanescentes do grupo
         await liberarReservas(tx, grupoId);
       }
+
+      // O preenchimento do valor do item já lançado na finalização é um UPDATE —
+      // não passa pelo incremento de `adicionarFaturaItem`. Recalcula para fechar.
+      await recalcularTotal(tx, fatura.id);
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });

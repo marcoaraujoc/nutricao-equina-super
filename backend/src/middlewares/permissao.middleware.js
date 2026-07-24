@@ -196,6 +196,8 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
 
       // ADMIN: bypass total — checa role (campo legado) OU userType (campo canônico)
       if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') {
+        req.permissaoNivel = 'FULL';   // opera qualquer registro (podeOperarRegistro)
+        req.membroCargo    = 'GESTOR';
         return next();
       }
 
@@ -372,19 +374,26 @@ function checkPermissaoProprietario(funcionalidade) {
 
 /**
  * Helper utilitário para uso dentro dos services/controllers:
- * Verifica se o usuário pode operar sobre um registro de outro usuário.
+ * Verifica se o usuário pode operar (alterar/excluir/finalizar) sobre um registro
+ * CLÍNICO de outro usuário (Evolução, Prescrição, Exame, Encaminhamento).
+ *
+ * REGRA (2026-07): SOMENTE o gestor (nível FULL, obtido por bypass de GESTOR/dono/
+ * ADMIN) altera/exclui/finaliza registros de QUALQUER membro. Todos os demais —
+ * mesmo com nível EQUIPE concedido na matriz — só operam o que eles próprios criaram.
+ * Por isso EQUIPE aqui é tratado como PROPRIO (só o próprio); apenas FULL libera geral.
  *
  * Retorna true se:
- *  - nível é EQUIPE ou FULL (pode operar sobre qualquer registro)
- *  - nível é PROPRIO E o registro pertence ao próprio usuário
+ *  - nível é FULL (gestor/dono/ADMIN via bypass) → qualquer registro
+ *  - nível é EQUIPE ou PROPRIO → apenas registros do próprio usuário
  *
- * REGRA DE OURO (2026-07-10): controllers NÃO devem checar cargo/userType
- * (GESTOR, FORNECEDOR, ...) para decidir autoria — a única regra fixa no backend
- * é o bypass de ADMIN. Use req.permissaoNivel + este helper; a matriz RBAC decide.
+ * REGRA DE OURO: controllers NÃO devem checar cargo/userType diretamente — passam
+ * req.permissaoNivel (setado pelo checkPermission) a este helper.
  */
 function podeOperarRegistro(nivelPermissao, registroCriadorId, userIdAtual) {
-  if (nivelPermissao === 'EQUIPE' || nivelPermissao === 'FULL') return true;
-  if (nivelPermissao === 'PROPRIO') return Number(registroCriadorId) === Number(userIdAtual);
+  if (nivelPermissao === 'FULL') return true;
+  if (nivelPermissao === 'EQUIPE' || nivelPermissao === 'PROPRIO') {
+    return Number(registroCriadorId) === Number(userIdAtual);
+  }
   return false;
 }
 

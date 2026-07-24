@@ -126,6 +126,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     init();
   }, []);
 
+  // ── Re-sincroniza a identidade quando a janela volta ao foco ────────────────
+  // Cookies de sessão são por PERFIL do navegador (não por aba/janela): abrir outra
+  // janela do mesmo perfil e logar com outro usuário troca o cookie COMPARTILHADO.
+  // Ao focar esta janela (ou a aba ficar visível), re-buscamos /me e adotamos a
+  // identidade REAL da sessão — evita exibir um usuário e operar como outro.
+  useEffect(() => {
+    const sincronizar = async () => {
+      if (!temDicaDeSessao()) { setUser(prev => (prev ? null : prev)); return; }
+      let me = await fetchMe();
+      if (!me) { const ok = await tryRefreshSession(); if (ok) me = await fetchMe(); }
+      if (me) {
+        const atual = me;
+        // Só re-renderiza quando a identidade muda de fato (id diferente)
+        setUser(prev => (prev && prev.id === atual.id ? prev : atual));
+      }
+    };
+    const onFocus = () => { void sincronizar(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void sincronizar(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
+
   // ── Logout automático por inatividade (1 hora sem interação) ───────────────
   useEffect(() => {
     if (!user) return;

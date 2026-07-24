@@ -29,18 +29,19 @@ const FREQUENCIA_LABEL = {
 // Linha de detalhe abaixo da descrição: medicamento mostra dias + frequência,
 // vacina mostra o nº de doses. Vazio para os demais tipos.
 function detalheDoItem(i) {
-  if (i.tipo === 'MEDICAMENTO') {
-    const partes = [
-      i.dias ? `${i.dias} dia${i.dias > 1 ? 's' : ''}` : null,
-      i.frequencia ? (FREQUENCIA_LABEL[i.frequencia] ?? i.frequencia) : null,
-    ].filter(Boolean);
-    return partes.join(' · ');
+  const partes = [];
+  if (['MEDICAMENTO', 'PROCEDIMENTO', 'COMBO'].includes(i.tipo)) {
+    if (i.dias)       partes.push(`${i.dias} dia${i.dias > 1 ? 's' : ''}`);
+    if (i.frequencia) partes.push(FREQUENCIA_LABEL[i.frequencia] ?? i.frequencia);
   }
   if (i.tipo === 'VACINA') {
     const doses = Number(i.quantidade ?? 0);
-    return doses > 0 ? `${doses} dose${doses > 1 ? 's' : ''}` : '';
+    if (doses > 0) partes.push(`${doses} dose${doses > 1 ? 's' : ''}`);
   }
-  return '';
+  if (i.descontoValor > 0) {
+    partes.push(`desconto ${i.descontoTipo === 'PERCENTUAL' ? `${i.descontoValor}%` : brl(i.descontoValor)}`);
+  }
+  return partes.join(' · ');
 }
 
 const brl = (v) => Number(v ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });

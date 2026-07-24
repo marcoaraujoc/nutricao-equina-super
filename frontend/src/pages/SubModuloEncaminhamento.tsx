@@ -533,7 +533,6 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
   const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
   // FORNECEDOR só cancela/edita encaminhamentos que ele próprio criou
-  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
   const [loading,          setLoading]         = useState(true);
@@ -665,7 +664,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
                 <EncaminhamentoCard
                   key={enc.id}
                   enc={enc}
-                  podeEditar={podeEditar && (!isFornecedor || eAutor)}
+                  podeEditar={podeEditar && (isGestor || eAutor)}
                   onStatus={handleStatus}
                 />
               );
@@ -692,7 +691,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
                     <EncaminhamentoRow
                       key={enc.id}
                       enc={enc}
-                      podeEditar={podeEditar && (!isFornecedor || eAutor)}
+                      podeEditar={podeEditar && (isGestor || eAutor)}
                       onStatus={handleStatus}
                     />
                   );

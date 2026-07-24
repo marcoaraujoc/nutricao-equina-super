@@ -6,7 +6,6 @@ const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria }                      = require('../lib/auditoria');
-const { podeOperarRegistro, NIVEL_ORDINAL }       = require('../middlewares/permissao.middleware');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
@@ -26,9 +25,25 @@ const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
 };
 
+// SÓ o GESTOR (bypass FULL / cargo GESTOR) e o ADMIN operam a agenda de OUTRO
+// profissional (criar, trocar profissional, cancelar…). Os demais perfis — mesmo com
+// nível EQUIPE concedido na matriz — só a PRÓPRIA agenda.
+function souGestorAgenda(req) {
+  return req.membroCargo === 'GESTOR'
+      || req.permissaoNivel === 'FULL'
+      || req.user?.userType === 'ADMIN'
+      || req.user?.role === 'ADMIN';
+}
+
+// "Minha agenda" = sou o profissional responsável OU quem criou o agendamento.
+function ehMinhaAgenda(req, item) {
+  return Number(item.veterinarioId) === Number(req.user.id)
+      || Number(item.criadoPorId)   === Number(req.user.id);
+}
+
 function podeOperarAgendamento(req, item) {
-  return podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)
-      || podeOperarRegistro(req.permissaoNivel, item.criadoPorId,   req.user.id);
+  // Gestor/Admin: qualquer agendamento. Demais: só o próprio (não basta ter EQUIPE).
+  return souGestorAgenda(req) || ehMinhaAgenda(req, item);
 }
 
 // Dia da semana (0=Dom…6=Sáb) e HH:MM de um instante, sempre no fuso de Brasília —
@@ -254,6 +269,11 @@ const AgendamentoController = {
       const quando = new Date(dataHora);
       if (isNaN(quando.getTime())) {
         return res.status(400).json({ error: 'dataHora inválida' });
+      }
+
+      // Só o gestor agenda para OUTRO profissional; os demais só para si mesmos.
+      if (!souGestorAgenda(req) && veterinarioId && Number(veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Apenas o gestor pode agendar para outro profissional. Você só pode agendar para você mesmo.' });
       }
 
       const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
@@ -486,6 +506,10 @@ const AgendamentoController = {
       const novoVetId = veterinarioId !== undefined
         ? (veterinarioId === null ? null : Number(veterinarioId))
         : undefined;
+      // Trocar o profissional do agendamento é exclusivo do gestor.
+      if (novoVetId !== undefined && novoVetId !== item.veterinarioId && !souGestorAgenda(req)) {
+        return res.status(403).json({ error: 'Apenas o gestor pode trocar o profissional do agendamento.' });
+      }
       const dataHoraMudou = !!data.dataHora;
       const vetEfetivo = novoVetId !== undefined ? novoVetId : item.veterinarioId;
       if (vetEfetivo != null && (dataHoraMudou || (novoVetId !== undefined && novoVetId !== item.veterinarioId))) {
@@ -757,10 +781,10 @@ const AgendamentoController = {
         return res.status(400).json({ error: 'Profissional de origem e destino devem ser diferentes' });
       }
 
-      // Autoria via RBAC: PROPRIO transfere apenas a própria agenda;
-      // EQUIPE/FULL transfere a agenda de qualquer profissional da equipe.
-      if ((NIVEL_ORDINAL[req.permissaoNivel] ?? 0) < NIVEL_ORDINAL.EQUIPE && Number(deVetId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Seu nível de permissão só permite transferir a sua própria agenda.' });
+      // Transferir/trocar profissional da agenda é exclusivo do gestor (move os
+      // agendamentos para OUTRO profissional, deVetId → paraVetId).
+      if (!souGestorAgenda(req)) {
+        return res.status(403).json({ error: 'Apenas o gestor pode transferir/trocar o profissional da agenda.' });
       }
 
       const doDia = await prisma.agendamentoClinico.findMany({

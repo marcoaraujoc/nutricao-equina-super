@@ -1,5 +1,5 @@
 // src/pages/Animal.tsx
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -266,6 +266,8 @@ const Animal = () => {
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erros por campo — preenchidos durante a digitação (onBlur) e no submit
+  const [erros, setErros] = useState<Record<string, string>>({});
   const [vets,           setVets]           = useState<Vet[]>([]);
   const [vetsFiltrados,  setVetsFiltrados]  = useState<Vet[]>([]);
   const [vetOriginalId,  setVetOriginalId]  = useState<number | null>(null);
@@ -310,6 +312,10 @@ const Animal = () => {
     pelagem: '', altura: '', registroPassaporte: '', finalidades: [],
     seguradora: '',
   });
+
+  // Localização com que o animal foi carregado (edição) — ao TROCAR a localidade,
+  // exige-se nova baia e novo tratador. null = criação / sem localização.
+  const localizacaoOriginalRef = useRef<number | null>(null);
 
   // Checagem da baia enquanto o usuário digita (regra: única por local + empresa).
   // A validação definitiva continua no backend ao salvar — esta só antecipa o erro.
@@ -546,6 +552,8 @@ const Animal = () => {
             finalidades:       a.finalidade ? a.finalidade.split('|') : [],
             seguradora:        a.seguradora ?? '',
           });
+          // Guarda a localização original — trocar exige nova baia e novo tratador
+          localizacaoOriginalRef.current = a.localizacaoId ?? null;
           // Pré-preenche o texto da busca de localização
           if (a.localizacao?.nome) {
             setLocBusca(a.localizacao.nome);
@@ -733,6 +741,57 @@ const Animal = () => {
     }
   };
 
+  // ── Validação por campo ────────────────────────────────────────────────────
+  // Roda DURANTE o preenchimento (onBlur/onChange de cada campo) e de novo no submit.
+  // A mensagem aparece embaixo do próprio campo — o erro fica onde o usuário está.
+  const CAMPOS_ANIMAL = [
+    'nome', 'sexo', 'especieId', 'racaId', 'localizacaoId',
+    'peso', 'idade', 'categoriaAnimal', 'tipoExercicio',
+  ] as const;
+  const CAMPOS_PROPRIETARIO = ['propNome', 'propEmail', 'propTelefone'] as const;
+
+  const erroDoCampo = (campo: string): string | null => {
+    const digitosTel = formProp.telefone.replace(/\D/g, '');
+    switch (campo) {
+      case 'nome':            return formData.nome?.trim() ? null : 'Informe o nome do animal';
+      case 'sexo':            return formData.sexo ? null : 'Selecione o sexo';
+      case 'especieId':       return formData.especieId ? null : 'Selecione a espécie';
+      case 'racaId':          return formData.racaId ? null : 'Selecione a raça';
+      case 'localizacaoId':   return formData.localizacaoId ? null : 'Selecione ou crie o local do animal';
+      case 'peso':            return formData.peso && Number(formData.peso) <= 0 ? 'O peso deve ser positivo' : null;
+      case 'idade':
+        if (!formData.dataNascimento && !formData.idadeAnos) return 'Informe a data de nascimento ou a idade';
+        if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) return 'A idade deve ser positiva';
+        return null;
+      case 'categoriaAnimal': return isEquino && !formData.categoriaAnimal ? 'Obrigatória para equinos' : null;
+      case 'tipoExercicio':   return isEquino && !formData.tipoExercicio   ? 'Obrigatório para equinos' : null;
+      case 'propNome':        return formProp.nomeCompleto.trim() ? null : 'Informe o nome do proprietário';
+      case 'propEmail':
+        if (!formProp.email.trim()) return 'Informe o e-mail do proprietário';
+        return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(formProp.email.trim()) ? null : 'E-mail inválido';
+      case 'propTelefone':
+        return digitosTel && (digitosTel.length < 10 || digitosTel.length > 11)
+          ? 'Telefone inválido — use (00) 00000-0000' : null;
+      default: return null;
+    }
+  };
+
+  // Marca/limpa o erro de um campo (usado no onBlur de cada campo)
+  const validarCampo = (campo: string) =>
+    setErros(prev => {
+      const msg = erroDoCampo(campo);
+      if (!msg) {
+        if (!(campo in prev)) return prev;
+        const { [campo]: _removido, ...resto } = prev;
+        return resto;
+      }
+      return prev[campo] === msg ? prev : { ...prev, [campo]: msg };
+    });
+
+  // Erro exibido embaixo do campo
+  const ErroCampo = ({ campo }: { campo: string }) =>
+    erros[campo] ? <p className="mt-1 text-xs text-red-600">{erros[campo]}</p> : null;
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -745,38 +804,49 @@ const Animal = () => {
       return;
     }
 
-    setSubmitting(true);
-
-    if (!formData.nome?.trim())      { setErroInline('Nome do animal é obrigatório'); setSubmitting(false); return; }
-    if (!formData.especieId)         { setErroInline('Espécie é obrigatória'); setSubmitting(false); return; }
-    if (!formData.sexo)              { setErroInline('Sexo é obrigatório'); setSubmitting(false); return; }
-    if (!formData.localizacaoId)     { setErroInline('Selecione ou crie o local do animal'); setSubmitting(false); return; }
-    if (!formData.racaId)            { setErroInline('Raça é obrigatória'); setSubmitting(false); return; }
-    if (baiaStatus.estado === 'ocupada') {
-      setErroInline(`${labelBaia ?? 'Baia'} já ocupada por ${baiaStatus.por}. Escolha outra.`);
-      setSubmitting(false); return;
-    }
-    if (!formData.dataNascimento && !formData.idadeAnos) { setErroInline('Informe a data de nascimento ou a idade'); setSubmitting(false); return; }
-    if (formData.peso && Number(formData.peso) <= 0)     { setErroInline('O peso deve ser positivo'); setSubmitting(false); return; }
-    if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) { setErroInline('A idade deve ser positiva'); setSubmitting(false); return; }
-    if (isEquino && (!formData.categoriaAnimal || !formData.tipoExercicio)) {
-      setErroInline('Categoria e tipo são obrigatórios para equinos'); setSubmitting(false); return;
-    }
-
     // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
     // registro (duplicado) para este veterinário — mesmo fluxo do não encontrado.
     const criandoNovoRegistro = isVet && !isEditMode
       && (statusBuscaAnimal === 'nao_encontrado' || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet');
 
-    // Vet criando animal novo — valida dados do proprietário
-    if (criandoNovoRegistro) {
-      if (!formProp.nomeCompleto.trim()) { setErroInline('Nome do proprietário é obrigatório'); setSubmitting(false); return; }
-      if (!formProp.email.trim())        { setErroInline('E-mail do proprietário é obrigatório'); setSubmitting(false); return; }
-      const digsTel = formProp.telefone.replace(/\D/g, '');
-      if (digsTel && (digsTel.length < 10 || digsTel.length > 11)) {
-        setErroInline('Telefone inválido — use (00) 00000-0000'); setSubmitting(false); return;
+    // Valida TODOS os campos de uma vez: cada um recebe a própria mensagem, em vez
+    // de parar no primeiro erro com um aviso solto no topo da página.
+    const campos = [...CAMPOS_ANIMAL, ...(criandoNovoRegistro ? CAMPOS_PROPRIETARIO : [])];
+    const novosErros: Record<string, string> = {};
+    for (const campo of campos) {
+      const msg = erroDoCampo(campo);
+      if (msg) novosErros[campo] = msg;
+    }
+    // Ao TROCAR a localidade, exige nova baia (quando aplicável) e novo tratador.
+    const trocouLocalidade = isEditMode
+      && formData.localizacaoId != null
+      && formData.localizacaoId !== localizacaoOriginalRef.current;
+    if (trocouLocalidade) {
+      if (labelBaia && !formData.baia.trim()) {
+        novosErros.baia = `Informe a nova ${labelBaia.toLowerCase()} para o local escolhido`;
+      }
+      if (!formData.tratadorId) {
+        novosErros.tratador = 'Informe o tratador para o local escolhido';
       }
     }
+    setErros(novosErros);
+
+    const pendentes = Object.keys(novosErros);
+    if (pendentes.length > 0) {
+      setErroInline(pendentes.length === 1
+        ? novosErros[pendentes[0]]
+        : `Há ${pendentes.length} campos a corrigir — veja as mensagens em vermelho.`);
+      // Leva o usuário até o primeiro campo com problema
+      document.querySelector(`[data-campo="${pendentes[0]}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (baiaStatus.estado === 'ocupada') {
+      setErroInline(`${labelBaia ?? 'Baia'} já ocupada por ${baiaStatus.por}. Escolha outra.`);
+      return;
+    }
+    setErroInline(null);
+    setSubmitting(true);
 
     try {
       const vetSelecionado = formData.veterinarioUserId
@@ -918,13 +988,12 @@ const Animal = () => {
   }
 
   const inputClass = 'w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 transition-colors';
+  // Mesma caixa, em vermelho — usada enquanto o campo estiver inválido
+  const inputClassErro = 'w-full border border-red-400 bg-red-50/40 rounded-2xl px-4 py-3 text-gray-900 focus:outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-colors';
 
   return (
     <>
     <PageContainer maxWidth="2xl">
-      <InlineError message={erroInline} className="mb-4" />
-
-
       <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
 
       {isEditMode && animalBloqueado && (
@@ -997,9 +1066,10 @@ const Animal = () => {
                           setProprietarioExistente(null);
                         }
                       }}
-                      onBlur={e => isVet && !isEditMode && buscarAnimalExistente(e.target.value)}
+                      onBlur={e => { validarCampo('nome'); if (isVet && !isEditMode) buscarAnimalExistente(e.target.value); }}
                       placeholder="Ex: Trovão, Mel, Rex..."
-                      className={inputClass}
+                      data-campo="nome"
+                      className={erros.nome ? inputClassErro : inputClass}
                     />
                     {buscandoAnimal && (
                       <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1007,18 +1077,22 @@ const Animal = () => {
                       </div>
                     )}
                   </div>
+                  <ErroCampo campo="nome" />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
                   <select
                     value={formData.sexo}
-                    onChange={e => setFormData({ ...formData, sexo: e.target.value })}
-                    className={inputClass}
+                    onChange={e => { setFormData({ ...formData, sexo: e.target.value }); setErros(p => { const { sexo: _s, ...r } = p; return r; }); }}
+                    onBlur={() => validarCampo('sexo')}
+                    data-campo="sexo"
+                    className={erros.sexo ? inputClassErro : inputClass}
                   >
                     <option value="" disabled>Selecione o sexo</option>
                     <option value="Macho">Macho</option>
                     <option value="Fêmea">Fêmea</option>
                   </select>
+                  <ErroCampo campo="sexo" />
                 </div>
               </div>
 
@@ -1069,10 +1143,11 @@ const Animal = () => {
                       if (formData.localizacaoId !== null) setFormData(p => ({ ...p, localizacaoId: null }));
                     }}
                     onFocus={() => setLocDropdownOpen(true)}
-                    onBlur={() => setTimeout(() => setLocDropdownOpen(false), 200)}
+                    onBlur={() => { setTimeout(() => { setLocDropdownOpen(false); validarCampo('localizacaoId'); }, 200); }}
                     placeholder={formData.especieId ? 'Buscar local...' : 'Selecione a espécie primeiro'}
                     disabled={!formData.especieId}
-                    className={`${inputClass} pr-8 ${!formData.especieId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                    data-campo="localizacaoId"
+                    className={`${erros.localizacaoId ? inputClassErro : inputClass} pr-8 ${!formData.especieId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                     autoComplete="off"
                   />
                   {formData.localizacaoId
@@ -1094,7 +1169,12 @@ const Animal = () => {
                     {filteredLocs.map(loc => (
                       <button key={loc.id} type="button"
                         onMouseDown={() => {
-                          setFormData(p => ({ ...p, localizacaoId: loc.id }));
+                          // Trocar a localidade zera baia e tratador — devem ser reinformados
+                          setFormData(p => p.localizacaoId === loc.id
+                            ? { ...p, localizacaoId: loc.id }
+                            : { ...p, localizacaoId: loc.id, baia: '', tratadorId: null });
+                          if (formData.localizacaoId !== loc.id) setTratBusca('');
+                          setErros(prev => ({ ...prev, baia: '', tratador: '' }));
                           setLocBusca(loc.nome);
                           setLocDropdownOpen(false);
                         }}
@@ -1117,9 +1197,10 @@ const Animal = () => {
                     <input
                       type="text"
                       value={formData.baia}
-                      onChange={e => setFormData({ ...formData, baia: e.target.value })}
+                      onChange={e => { setFormData({ ...formData, baia: e.target.value }); if (erros.baia) setErros(prev => ({ ...prev, baia: '' })); }}
                       placeholder={isEquino ? 'Ex: B-12' : 'Ex: L-03'}
-                      className={`${inputClass} pr-9 ${
+                      data-campo="baia"
+                      className={`${erros.baia ? inputClassErro : inputClass} pr-9 ${
                         baiaStatus.estado === 'ocupada' ? 'border-red-300 focus:border-red-500' : ''
                       }`}
                     />
@@ -1135,6 +1216,7 @@ const Animal = () => {
                       {locBusca.trim() ? ` (${locBusca.trim()})` : ''}.
                     </p>
                   )}
+                  {erros.baia && <p className="mt-1 text-xs text-red-600">{erros.baia}</p>}
                 </div>
               )}
             </div>
@@ -1145,12 +1227,15 @@ const Animal = () => {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
                 <select
                   value={formData.especieId}
-                  onChange={e => setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null })}
-                  className={inputClass}
+                  onChange={e => { setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null }); setErros(p => { const { especieId: _e, ...r } = p; return r; }); }}
+                  onBlur={() => validarCampo('especieId')}
+                  data-campo="especieId"
+                  className={erros.especieId ? inputClassErro : inputClass}
                 >
                   <option value={0} disabled>Selecione a espécie</option>
                   {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                 </select>
+                <ErroCampo campo="especieId" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -1158,12 +1243,15 @@ const Animal = () => {
                 </label>
                 <select
                   value={formData.racaId || ''}
-                  onChange={e => setFormData({ ...formData, racaId: parseInt(e.target.value) })}
-                  className={inputClass}
+                  onChange={e => { setFormData({ ...formData, racaId: parseInt(e.target.value) }); setErros(p => { const { racaId: _r, ...rest } = p; return rest; }); }}
+                  onBlur={() => validarCampo('racaId')}
+                  data-campo="racaId"
+                  className={erros.racaId ? inputClassErro : inputClass}
                 >
                   <option value="">Selecione</option>
                   {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
                 </select>
+                <ErroCampo campo="racaId" />
               </div>
             </div>
 
@@ -1178,8 +1266,11 @@ const Animal = () => {
                   type="number" step="0.1" min="0.1" placeholder="Ex: 450"
                   value={formData.peso}
                   onChange={e => setFormData({ ...formData, peso: e.target.value })}
-                  className={inputClass}
+                  onBlur={() => validarCampo('peso')}
+                  data-campo="peso"
+                  className={erros.peso ? inputClassErro : inputClass}
                 />
+                <ErroCampo campo="peso" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -1190,8 +1281,11 @@ const Animal = () => {
                   value={formData.idadeAnos}
                   disabled={!!formData.dataNascimento}
                   onChange={e => setFormData({ ...formData, idadeAnos: e.target.value })}
-                  className={`${inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                  onBlur={() => validarCampo('idade')}
+                  data-campo="idade"
+                  className={`${erros.idade ? inputClassErro : inputClass} ${formData.dataNascimento ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                 />
+                <ErroCampo campo="idade" />
                 {formData.dataNascimento && <p className="text-xs text-gray-400 mt-1">Calculada pela data</p>}
               </div>
               <div className="col-span-2 sm:col-span-1">
@@ -1338,13 +1432,16 @@ const Animal = () => {
                     </label>
                     <select
                       value={formData.categoriaAnimal}
-                      onChange={e => setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' })}
+                      onChange={e => { setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' }); setErros(p => { const { categoriaAnimal: _c, ...r } = p; return r; }); }}
+                      onBlur={() => validarCampo('categoriaAnimal')}
                       disabled={!temIdadeOuData}
-                      className={`${inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                      data-campo="categoriaAnimal"
+                      className={`${erros.categoriaAnimal ? inputClassErro : inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                     >
                       <option value="">Selecione a categoria</option>
                       {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
+                    <ErroCampo campo="categoriaAnimal" />
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -1386,7 +1483,8 @@ const Animal = () => {
                   onBlur={() => setTimeout(() => setTratDropdownOpen(false), 200)}
                   placeholder={formData.localizacaoId ? 'Buscar ou incluir tratador…' : 'Selecione o local primeiro'}
                   disabled={!formData.localizacaoId}
-                  className={`${inputClass} pr-8 ${!formData.localizacaoId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                  data-campo="tratador"
+                  className={`${erros.tratador ? inputClassErro : inputClass} pr-8 ${!formData.localizacaoId ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                   autoComplete="off"
                 />
                 {formData.tratadorId
@@ -1413,6 +1511,7 @@ const Animal = () => {
                         setFormData(p => ({ ...p, tratadorId: t.id }));
                         setTratBusca(t.nome);
                         setTratDropdownOpen(false);
+                        if (erros.tratador) setErros(prev => ({ ...prev, tratador: '' }));
                       }}
                       className="w-full text-left px-4 py-2.5 hover:bg-emerald-50 flex items-center justify-between text-sm border-b border-gray-50 last:border-0">
                       <span className="font-medium text-gray-800">{t.nome}</span>
@@ -1430,6 +1529,7 @@ const Animal = () => {
                   </button>
                 </div>
               )}
+              {erros.tratador && <p className="mt-1 text-xs text-red-600">{erros.tratador}</p>}
             </div>
 
             {/* ── 8. Proprietário (apenas vets) ────────────────────────────── */}
@@ -1455,10 +1555,11 @@ const Animal = () => {
                               setProprietarioExistente(null);
                             }
                           }}
-                          onBlur={e => buscarProprietarioPorEmail(e.target.value)}
+                          onBlur={e => { validarCampo('propEmail'); buscarProprietarioPorEmail(e.target.value); }}
                           placeholder="email@exemplo.com"
                           disabled={isEditMode}
-                          className={`${inputClass} ${isEditMode ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                          data-campo="propEmail"
+                          className={`${erros.propEmail ? inputClassErro : inputClass} ${isEditMode ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                         />
                         {buscandoProprietario && (
                           <span className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -1471,6 +1572,7 @@ const Animal = () => {
                           </span>
                         )}
                       </div>
+                      <ErroCampo campo="propEmail" />
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -1480,10 +1582,13 @@ const Animal = () => {
                         type="text"
                         value={formProp.nomeCompleto}
                         onChange={e => setFormProp(p => ({ ...p, nomeCompleto: e.target.value }))}
+                        onBlur={() => validarCampo('propNome')}
                         placeholder="Nome do proprietário"
                         disabled={isEditMode || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        data-campo="propNome"
+                        className={`${erros.propNome ? inputClassErro : inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
+                      <ErroCampo campo="propNome" />
                     </div>
                   </div>
                   {/* Telefones */}
@@ -1494,10 +1599,13 @@ const Animal = () => {
                         type="tel"
                         value={formProp.telefone}
                         onChange={e => setFormProp(p => ({ ...p, telefone: mascaraTelefone(e.target.value) }))}
+                        onBlur={() => validarCampo('propTelefone')}
                         placeholder="(00) 00000-0000"
                         disabled={isEditMode || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        data-campo="propTelefone"
+                        className={`${erros.propTelefone ? inputClassErro : inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                       />
+                      <ErroCampo campo="propTelefone" />
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">Telefone 2</label>
@@ -1511,12 +1619,6 @@ const Animal = () => {
                       />
                     </div>
                   </div>
-                  {!isEditMode && proprietarioExistente === true && (
-                    <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
-                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>Proprietário já cadastrado nesta empresa. Dados preenchidos automaticamente.</span>
-                    </div>
-                  )}
                   {!isEditMode && proprietarioExistente === false && statusBuscaAnimal === 'nao_encontrado' && (
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
@@ -1612,6 +1714,15 @@ const Animal = () => {
             <p className="text-xs text-gray-400">
               <span className="text-red-500">*</span> Campos obrigatórios
             </p>
+
+            {/* Erro da ação — fica GRUDADO na base da janela enquanto o formulário
+                está visível, junto do botão que o usuário acabou de clicar. Antes
+                ficava no topo da página (acima do "Voltar"), fora da vista. */}
+            {erroInline && (
+              <div className="sticky bottom-2 z-20">
+                <InlineError message={erroInline} className="shadow-lg" />
+              </div>
+            )}
 
             {/* Submit */}
             <button

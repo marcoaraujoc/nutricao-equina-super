@@ -5,6 +5,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isSubespecialidadeValida } from '../utils/subespecialidades';
@@ -47,6 +48,8 @@ interface AnimalOption {
   nome:    string;
   especie: { nome: string } | null;
   user:    { id: number; fullName: string; email: string; phone?: string; cpf?: string } | null;
+  // Localização atual do animal (LocalizacaoAnimal) — filtra por onde o vet atende
+  localizacaoId: number | null;
 }
 
 interface BookingInfo {
@@ -71,6 +74,8 @@ interface VetMembro {
   diasTrab:   number[] | null;
   horaIni:    string | null;
   horaFim:    string | null;
+  // Locais onde o profissional atende (localizacaoId + dias) — filtra os animais
+  locais:     { localizacaoId: number; dias: number[] | null }[];
 }
 
 type VozEtapa = 'IDLE' | 'GRAVANDO' | 'PROCESSANDO' | 'DISPONIVEL' | 'INDISPONIVEL' | 'ERRO';
@@ -381,8 +386,12 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
 // ─── Componente Principal ─────────────────────────────────────────────────────
 
 export default function Agendamentos() {
-  const { podeExecutar, loading: loadingPerms }     = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { user }                                    = useAuth();
   const { contextoAtivo }                           = useEmpresa();
+  const meuUserId                                   = user?.id ?? null;
+  // Só o gestor agenda/opera para OUTRO profissional; os demais só para si mesmos.
+  const podeAgendarParaOutro                        = isGestor;
   const location                                    = useLocation();
   const navigate                                    = useNavigate();
   const nomeEquipe                                  = contextoAtivo?.label ?? 'sua equipe';
@@ -412,12 +421,6 @@ export default function Agendamentos() {
     return list;
   }, [animais]);
 
-  // Filtra animais pelo proprietário selecionado
-  const animaisFiltradosBar = useMemo(
-    () => selectedProprId ? animais.filter(a => String(a.user?.id) === selectedProprId) : animais,
-    [animais, selectedProprId]
-  );
-
   // Contato exibido: do animal ou do proprietário selecionado
   const contatoInfo = selectedAnimal?.user
     ?? proprietarios.find(p => String(p.id) === selectedProprId)
@@ -434,6 +437,42 @@ export default function Agendamentos() {
     const p = new URLSearchParams(location.search);
     return p.get('date') ?? hoje();
   });
+
+  // ── Filtro de animais por LOCAL + DIA de atendimento do profissional ──────────
+  // Traz só os animais localizados onde o veterinário atende no dia selecionado.
+  // Dia da semana (0=Dom…6=Sáb) do dia selecionado — meio-dia evita desvio de fuso.
+  const diaSemanaSelecionado = useMemo(() => {
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    return new Date(y, m - 1, d, 12).getDay();
+  }, [selectedDate]);
+  // Profissional-alvo: o filtrado na visão da agenda; senão o próprio usuário logado.
+  const vetAlvoId = filtroVetId ? Number(filtroVetId) : meuUserId;
+  // Localizações onde o profissional-alvo atende no dia. null = sem restrição
+  // (ex.: gestor/sem locais configurados) → não filtra os animais.
+  const locaisPermitidos = useMemo<Set<number> | null>(() => {
+    const vet = vets.find(v => v.userId === vetAlvoId);
+    if (!vet || vet.locais.length === 0) return null;
+    const set = new Set<number>();
+    for (const l of vet.locais) {
+      // Local sem dias definidos = atende todos os dias ali
+      if (!l.dias || l.dias.length === 0 || l.dias.includes(diaSemanaSelecionado)) {
+        set.add(l.localizacaoId);
+      }
+    }
+    return set;
+  }, [vets, vetAlvoId, diaSemanaSelecionado]);
+  // Animais no local/dia de atendimento (base para os seletores de animal)
+  const animaisNoLocal = useMemo(
+    () => locaisPermitidos
+      ? animais.filter(a => a.localizacaoId != null && locaisPermitidos.has(a.localizacaoId))
+      : animais,
+    [animais, locaisPermitidos],
+  );
+  // Filtra ainda pelo proprietário selecionado (barra superior)
+  const animaisFiltradosBar = useMemo(
+    () => selectedProprId ? animaisNoLocal.filter(a => String(a.user?.id) === selectedProprId) : animaisNoLocal,
+    [animaisNoLocal, selectedProprId],
+  );
   const [agendamentos, setAgendamentos] = useState<AgendamentoGlobal[]>([]);
   const [loading, setLoading]           = useState(false);
   const [busca, setBusca]               = useState('');
@@ -547,7 +586,8 @@ export default function Agendamentos() {
     try {
       const res = await api.get('/animais');
       if (!res.data) return;
-      setAnimais((res.data.dados ?? res.data) as AnimalOption[]);
+      const brutos = (res.data.dados ?? res.data) as Array<AnimalOption & { localizacao?: { id: number } | null }>;
+      setAnimais(brutos.map(a => ({ ...a, localizacaoId: a.localizacao?.id ?? a.localizacaoId ?? null })));
     } catch { /* silencioso */ }
     finally { setLoadingAnimais(false); }
   }, []);
@@ -561,6 +601,7 @@ export default function Agendamentos() {
         diasTrabalho?: string | null;
         horaInicioTrabalho?: string | null;
         horaFimTrabalho?: string | null;
+        locaisTrabalho?: Array<{ localizacaoId: number; diasTrabalho: string | null }> | null;
         user: {
           id: number; fullName: string; userType: string;
           vetPerfil?: { subespecialidades?: { nome: string }[] } | null;
@@ -601,6 +642,12 @@ export default function Agendamentos() {
               : null,
             horaIni: m.horaInicioTrabalho ?? null,
             horaFim: m.horaFimTrabalho ?? null,
+            locais: (m.locaisTrabalho ?? []).map(l => ({
+              localizacaoId: l.localizacaoId,
+              dias: l.diasTrabalho
+                ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+                : null,
+            })),
           };
         })
       );
@@ -779,7 +826,7 @@ export default function Agendamentos() {
     () => filtroVetId ? vets.filter(v => String(v.userId) === filtroVetId) : vets,
     [vets, filtroVetId]
   );
-  const animaisCombo = animais.filter(a => !comboQuery || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
+  const animaisCombo = animaisNoLocal.filter(a => !comboQuery || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
   // ── Conflict check ────────────────────────────────────────────────────────────
   // Verifica se o animal já tem QUALQUER agendamento no dia selecionado (qualquer vet, qualquer hora)
@@ -819,6 +866,11 @@ export default function Agendamentos() {
 
   async function handleSlotClick(vetId: number, vetName: string, hora: string) {
     setOpenSlotVetId(null);
+    // Só o gestor agenda para outro profissional; os demais só para a própria coluna.
+    if (!podeAgendarParaOutro && meuUserId != null && vetId !== meuUserId) {
+      setErroInline('Você só pode agendar para você mesmo. Agendar para outro profissional é exclusivo do gestor.');
+      return;
+    }
     if (selectedAnimalId && selectedAnimal) {
       const conflito = findConflictAnimal(Number(selectedAnimalId));
       if (conflito) {
@@ -1470,7 +1522,7 @@ export default function Agendamentos() {
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
           <div className="flex items-center gap-2">
-            {podeGerenciar && vets.length > 1 && (
+            {podeAgendarParaOutro && vets.length > 1 && (
               <button
                 onClick={() => { setTransferindoDia(true); setTransDeVetId(filtroVetId); setTransParaVetId(''); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold transition-colors border border-blue-200 whitespace-nowrap"
@@ -1556,7 +1608,7 @@ export default function Agendamentos() {
                             <RefreshCw size={11} /> Reagendar
                           </button>
                         )}
-                        {isAgendado && vets.length > 0 && (
+                        {isAgendado && vets.length > 0 && podeAgendarParaOutro && (
                           <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold">
                             <UserCheck size={11} /> Trocar prof.
                           </button>
@@ -1665,7 +1717,7 @@ export default function Agendamentos() {
                                   <RefreshCw size={13} />
                                 </button>
                               )}
-                              {isAgendado && vets.length > 0 && (
+                              {isAgendado && vets.length > 0 && podeAgendarParaOutro && (
                                 <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} title="Trocar profissional"
                                   className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-colors">
                                   <UserCheck size={13} />

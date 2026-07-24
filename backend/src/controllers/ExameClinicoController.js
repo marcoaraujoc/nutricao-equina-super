@@ -123,6 +123,11 @@ const ExameClinicoController = {
         observacaoFinal = JSON.stringify(extra);
       }
 
+      // Proprietário do animal — o exame é lançado na fatura já na solicitação
+      const animalDoExame = await prisma.animal.findUnique({
+        where: { id: Number(animalId) }, select: { userId: true },
+      });
+
       const item = await prisma.$transaction(async (tx) => {
         const maxResult = await tx.exameClinico.aggregate({
           where: { animalId: Number(animalId) },
@@ -130,7 +135,7 @@ const ExameClinicoController = {
         });
         const proximoNumero = (maxResult._max.numero ?? 0) + 1;
 
-        return tx.exameClinico.create({
+        const criado = await tx.exameClinico.create({
           data: {
             animalId:        Number(animalId),
             veterinarioId:   req.user.id,
@@ -146,6 +151,13 @@ const ExameClinicoController = {
           },
           include: INCLUDE,
         });
+
+        // Lança na fatura (valor zerado) JÁ na solicitação. Antes isso só acontecia ao
+        // FINALIZAR a evolução ou ao concluir o exame — exame pedido depois da evolução
+        // finalizada, ou que nunca foi concluído, nunca chegava ao financeiro.
+        // `lancarExameNaFatura` é idempotente: os outros gatilhos não duplicam.
+        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null);
+        return criado;
       });
 
       res.status(201).json({ dados: item });

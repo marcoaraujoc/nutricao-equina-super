@@ -3,6 +3,7 @@ const prisma = require('../lib/prisma').default;
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -252,7 +253,10 @@ async function registrar(req, res) {
 
     // Lança na fatura quando não for vacina do cliente.
     // Sem lote (sem estoque debitado) → valor 0, para o financeiro saber o que foi aplicado.
-    if (!isCliente) setImmediate(async () => {
+    // Feito ANTES de responder (era setImmediate): o front recarrega a fatura logo em
+    // seguida e o item precisa já existir. Falha aqui não desfaz o registro da vacina,
+    // mas passou a ser LOGADA — o catch silencioso escondia cobranças perdidas.
+    if (!isCliente) {
       try {
         const animal = await prisma.animal.findUnique({
           where:  { id: Number(animalId) },
@@ -277,8 +281,11 @@ async function registrar(req, res) {
             });
           });
         }
-      } catch { /* silencioso — fatura não bloqueia o registro */ }
-    }); // end if (!isCliente)
+      } catch (errFatura) {
+        // Não bloqueia o registro da vacina, mas fica registrado no log
+        console.error('registrar vacina — falha ao lançar na fatura:', errFatura);
+      }
+    } // end if (!isCliente)
 
     res.status(201).json({ dados: criada });
   } catch (err) {
@@ -322,6 +329,11 @@ async function excluir(req, res) {
     const vacina = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) } });
     if (!vacina) return res.status(404).json({ error: 'Registro não encontrado' });
     if (!vacina.ativo) return res.status(400).json({ error: 'Registro já está inativo' });
+
+    // Autoria: só o gestor (FULL) exclui vacina de outro; os demais só as que registraram.
+    if (!podeOperarRegistro(req.permissaoNivel, vacina.veterinarioId, req.user.id)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite excluir vacinas que você registrou.' });
+    }
 
     await prisma.$transaction(async (tx) => {
       // Remove o FaturaItem vinculado, se houver (vacina do cliente nunca gerou um).
