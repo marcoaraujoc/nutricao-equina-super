@@ -15,6 +15,12 @@ router.get('/por-modelo',      authenticate, authorize('ADMIN'), AiUsageControll
 router.get('/log-recente',     authenticate, authorize('ADMIN'), AiUsageController.logRecente);
 router.get('/projecao-mensal', authenticate, AiUsageController.projecaoMensal);
 
+// Metering por cliente (empresa) + plano de consumo — ADMIN.
+// Rota literal antes de /planos/:empresaId para o Express não confundir os paths.
+router.get('/por-empresa',          authenticate, authorize('ADMIN'), AiUsageController.porEmpresa);
+router.get('/planos/:empresaId',    authenticate, authorize('ADMIN'), AiUsageController.obterPlano);
+router.put('/planos/:empresaId',    authenticate, authorize('ADMIN'), AiUsageController.salvarPlano);
+
 module.exports = router;
 
 

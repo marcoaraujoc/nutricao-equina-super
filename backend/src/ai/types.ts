@@ -1,6 +1,7 @@
 // src/ai/types.ts
 // Interface que todos os provedores de IA devem implementar.
-// Trocar de Groq para OpenAI/Gemini/Anthropic = implementar esta interface.
+// Provider ativo: Google Gemini. Para trocar/empilhar outro fornecedor,
+// implemente esta interface e registre-o em src/ai/index.ts (buildChain).
 
 export interface AICompletionOptions {
   modelo?:      string;

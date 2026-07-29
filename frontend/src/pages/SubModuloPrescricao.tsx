@@ -147,11 +147,14 @@ const getConversaoUnidade = (u: string | null): { subunidade: string; opcoes: st
 
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   SALVO:                { label: 'Salvo',               cls: 'bg-amber-100 text-amber-700'    },
-  FINALIZADO:           { label: 'Finalizado',          cls: 'bg-emerald-100 text-emerald-700' },
+  FINALIZADO:           { label: 'Em Execução',         cls: 'bg-emerald-100 text-emerald-700' },
   EXECUTADO:            { label: 'Executado',           cls: 'bg-blue-100 text-blue-700'      },
   CANCELADO:            { label: 'Cancelado',           cls: 'bg-red-100 text-red-700'        },
   CANCELADO_PARCIALMENTE: { label: 'Cancel. Parcial',  cls: 'bg-orange-100 text-orange-700'  },
 };
+
+// Ordem das abas de filtro por status no histórico
+const STATUS_ORDER: StatusGrupo[] = ['SALVO', 'FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE', 'CANCELADO'];
 
 // Categoria de uma prescrição a partir dos seus itens. Como a criação separa por
 // categoria, normalmente cada grupo é homogêneo; 'Misto' cobre grupos legados/editados.
@@ -1806,6 +1809,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [loading,            setLoading]            = useState(false);
   const [total,              setTotal]              = useState(0);
   const [salvos,             setSalvos]             = useState(0);
+  const [contagens,          setContagens]          = useState<Record<string, number>>({});
+  const [filtroStatus,       setFiltroStatus]       = useState<'todos' | StatusGrupo>('todos');
   const [page,               setPage]               = useState(1);
   const [limit]                                     = useState(10);
   const [showEditModal,      setShowEditModal]      = useState(false);
@@ -1821,13 +1826,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/clinica/prescricoes/grupos/animal/${animalId}?page=${page}&limit=${limit}`);
+      const statusParam = filtroStatus !== 'todos' ? `&status=${filtroStatus}` : '';
+      const res = await api.get(`/clinica/prescricoes/grupos/animal/${animalId}?page=${page}&limit=${limit}${statusParam}`);
       setGrupos(res.data.dados ?? []);
       setTotal(res.data.total ?? 0);
       setSalvos(res.data.salvos ?? 0);
+      setContagens(res.data.contagens ?? {});
     } catch { setErroInline('Erro ao carregar prescrições'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit]);
+  }, [animalId, page, limit, filtroStatus]);
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
@@ -2048,6 +2055,31 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
       </div>
 
+      {/* Filtros por status */}
+      {(() => {
+        const totalGeral  = Object.values(contagens).reduce((a, b) => a + b, 0);
+        const statusTabs  = STATUS_ORDER.filter(s => (contagens[s] ?? 0) > 0 || filtroStatus === s);
+        if (totalGeral === 0) return null;
+        return (
+          <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
+            {(['todos', ...statusTabs] as ('todos' | StatusGrupo)[]).map(key => {
+              const isActive = filtroStatus === key;
+              const label    = key === 'todos' ? 'Todos' : STATUS_GRUPO[key].label;
+              const count    = key === 'todos' ? totalGeral : (contagens[key] ?? 0);
+              return (
+                <button key={key} onClick={() => { setFiltroStatus(key); setPage(1); }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    isActive ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                  }`}>
+                  {label}
+                  <span className={isActive ? 'text-emerald-100' : 'text-gray-400'}>({count})</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 size={22} className="animate-spin text-emerald-600" />
@@ -2055,7 +2087,11 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       ) : grupos.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-300">
           <FileText size={38} className="mb-3" />
-          <p className="text-sm text-gray-400">Nenhuma prescrição encontrada</p>
+          <p className="text-sm text-gray-400">
+            {filtroStatus === 'todos'
+              ? 'Nenhuma prescrição encontrada'
+              : `Nenhuma prescrição com status "${STATUS_GRUPO[filtroStatus].label}"`}
+          </p>
         </div>
       ) : (
       <>

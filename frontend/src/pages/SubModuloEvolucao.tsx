@@ -957,6 +957,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       if (filtroDataFim)     params.set('dataFim',       filtroDataFim);
       if (filtroResponsavel) params.set('responsavelId', filtroResponsavel);
       const res = await api.get(`/clinica/evolucoes/animal/${animalId}?${params}`);
+      // GET 403 → o interceptor resolve com data null (armadilha #23 do CLAUDE.md).
+      // Sem este guard, `res.data.dados` estourava TypeError e caía no catch,
+      // exibindo "Erro ao carregar evoluções" para um caso de permissão/contexto.
+      if (!res.data) { setEvolucoes([]); setTotal(0); onEvolucaoChange?.(null); return; }
       const dados: EvolucaoItem[] = res.data.dados ?? [];
       setEvolucoes(dados);
       setTotal(res.data.total ?? 0);

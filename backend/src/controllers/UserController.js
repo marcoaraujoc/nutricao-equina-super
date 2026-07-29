@@ -8,11 +8,19 @@ const { setAuthCookies } = require('../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { whereProprietarioNoEscopo } = require('./ProprietarioController');
-const { parseLocaisTrabalho, gravarLocaisTrabalho, csvParaIds, validarLocaisContraExpedienteEmpresa } = require('./EquipeController');
+const { parseLocaisTrabalho, gravarLocaisTrabalho, csvParaIds, validarLocaisContraExpedienteEmpresa,
+        especialidadesPadraoVeterinario } = require('./EquipeController');
 const {
   salvarPerfil: salvarPerfilProprietario,
   aplicarPerfil: aplicarPerfilProprietario,
 } = require('../lib/proprietarioPerfil');
+// Cadastro do PROFISSIONAL é por empresa (mesma regra do proprietário) — nome, contato,
+// endereço e CRMV nunca voltam a ser gravados no User.
+const {
+  salvarPerfil:  salvarPerfilProfissional,
+  aplicarPerfil: aplicarPerfilProfissional,
+  obterPerfil:   obterPerfilProfissional,
+} = require('../lib/profissionalPerfil');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
@@ -56,20 +64,22 @@ const parseExpedienteBody = (body) => {
 // Resolve o MembroEquipe do CONTEXTO ATIVO: equipe selecionada > equipe dentro da
 // empresa ativa > primeiro vínculo do usuário. Assim o expediente editado/exibido é
 // sempre o da empresa/equipe em que o usuário está trabalhando (não um vínculo aleatório).
+// `cargo` vem junto: quem decide se há especialidade/tempo de consulta é o CARGO na
+// equipe (o GESTOR tem userType VETERINARIO mas não preenche dados profissionais).
 const resolverMembroDoContexto = async (userId, req) => {
   if (req.equipeId) {
-    const m = await prisma.membroEquipe.findFirst({ where: { userId, equipeId: Number(req.equipeId) }, select: { id: true } });
+    const m = await prisma.membroEquipe.findFirst({ where: { userId, equipeId: Number(req.equipeId) }, select: { id: true, cargo: true } });
     if (m) return m;
   }
   if (req.empresaId) {
     const m = await prisma.membroEquipe.findFirst({
       where:   { userId, equipe: { empresaId: Number(req.empresaId) } },
       orderBy: { createdAt: 'desc' },
-      select:  { id: true },
+      select:  { id: true, cargo: true },
     });
     if (m) return m;
   }
-  return prisma.membroEquipe.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+  return prisma.membroEquipe.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' }, select: { id: true, cargo: true } });
 };
 
 const UserController = {
@@ -107,7 +117,12 @@ const UserController = {
               subespecialidades: { select: { nome: true } },
             },
           },
-          especialidades: { select: { especialidadeId: true } },
+          // Especialidade é por empresa; sem contexto (vet autônomo) lê todas as dele.
+          // Legado (empresaId null) continua visível para o próprio dono do cadastro.
+          especialidades: {
+            where:  req.empresaId ? { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] } : {},
+            select: { especialidadeId: true },
+          },
         },
       });
 
@@ -178,14 +193,21 @@ const UserController = {
           horaInicioTrabalho: r.horaInicioTrabalho,
           horaFimTrabalho:    r.horaFimTrabalho,
           especialidadeIds:   csvParaIds(r.especialidadesIds),
+          // SEM isto o Cadastro Pessoal reabria sem o tempo de consulta e o salvava
+          // vazio — apagando o que o gestor tinha configurado na inclusão do membro.
+          temposConsulta:     r.temposConsulta ?? {},
         }));
       }
 
       const { vetPerfil, especialidades, ...userBruto } = user;
-      // PROPRIETÁRIO: mostra o cadastro da EMPRESA ATIVA (cada clínica mantém o seu)
+      // Cadastro da EMPRESA ATIVA — cada clínica mantém o seu, para proprietário
+      // (ProprietarioPerfil) e para profissional (ProfissionalPerfil).
       const userData = userBruto.userType === 'PROPRIETARIO'
         ? await aplicarPerfilProprietario(userBruto, req.empresaId)
-        : userBruto;
+        : await aplicarPerfilProfissional(userBruto, req.empresaId);
+      const perfilProf = userBruto.userType === 'PROPRIETARIO'
+        ? null
+        : await obterPerfilProfissional(user.id, req.empresaId);
       return res.status(200).json({
         ...userData,
         isConvidado,
@@ -195,7 +217,8 @@ const UserController = {
         horaInicioTrabalho: expediente.horaInicioTrabalho,
         horaFimTrabalho:    expediente.horaFimTrabalho,
         locaisTrabalho,
-        crmv:              vetPerfil?.crmv ?? null,
+        // CRMV do cadastro DESTA empresa; sem perfil (legado/autônomo) cai no VetPerfil
+        crmv:              perfilProf?.crmv ?? vetPerfil?.crmv ?? null,
         especiesAtendidas: vetPerfil?.especies.map(e => e.especieId) ?? [],
         subespecialidades: vetPerfil?.subespecialidades.map(s => s.nome) ?? [],
         especialidadeIds:  especialidades?.map(e => e.especialidadeId) ?? [],
@@ -300,11 +323,11 @@ const UserController = {
         },
       });
 
-      // PROPRIETÁRIO editando os próprios dados: reflete no cadastro que a EMPRESA
-      // ATIVA mantém dele (é esse o cadastro que a clínica enxerga). Sem contexto de
-      // empresa, fica só no User — as clínicas seguem com os cadastros delas.
-      if (updatedUser.userType === 'PROPRIETARIO' && req.empresaId) {
-        await salvarPerfilProprietario(prisma, updatedUser.id, req.empresaId, {
+      // Editando os próprios dados: reflete no cadastro que a EMPRESA ATIVA mantém
+      // dele — é esse o cadastro que a clínica enxerga, e o da outra clínica não muda.
+      // Sem contexto de empresa (profissional autônomo), fica só no User.
+      if (req.empresaId) {
+        const dadosCadastro = {
           ...(fullName    !== undefined ? { fullName }    : {}),
           ...(phone       !== undefined ? { phone }       : {}),
           ...(cep         !== undefined ? { cep }         : {}),
@@ -313,7 +336,15 @@ const UserController = {
           ...(bairro      !== undefined ? { bairro }      : {}),
           ...(cidade      !== undefined ? { cidade }      : {}),
           ...(estado      !== undefined ? { estado }      : {}),
-        });
+        };
+        if (updatedUser.userType === 'PROPRIETARIO') {
+          await salvarPerfilProprietario(prisma, updatedUser.id, req.empresaId, dadosCadastro);
+        } else {
+          await salvarPerfilProfissional(prisma, updatedUser.id, req.empresaId, {
+            ...dadosCadastro,
+            ...(crmv !== undefined ? { crmv: crmv ? normalizarCRMV(crmv) : null } : {}),
+          });
+        }
       }
 
       // Salvar dados do veterinário
@@ -380,24 +411,63 @@ const UserController = {
       // ficam no vínculo do CONTEXTO ATIVO — a localização pertence à empresa. Usa o
       // mesmo parser da tela de Equipe, então a regra de horários que não podem
       // coincidir vale igual aqui.
+      // Especialidade só existe para VETERINARIO e FORNECEDOR. O vet que não informar
+      // nenhuma assume Clínica Médica; o fornecedor pode ficar sem. Demais perfis não
+      // têm especialidade nem tempo de consulta — inclusive o GESTOR, que tem userType
+      // VETERINARIO mas não preenche dados profissionais (mesma regra do formulário).
+      const membroCtx  = await resolverMembroDoContexto(updatedUser.id, req);
+      const ehGestor   = membroCtx?.cargo === 'GESTOR';
+      const ehVet      = updatedUser.userType === 'VETERINARIO' && !ehGestor;
+      const perfilComEspecialidade = ehVet || updatedUser.userType === 'FORNECEDOR';
+      const especPadrao = ehVet
+        // Fallback nas espécies que ELE informou: o vet autônomo pode não ter empresa
+        // com espécies configuradas, mas acabou de escolher as que atende.
+        ? await especialidadesPadraoVeterinario(req, null,
+            Array.isArray(especiesAtendidas) ? especiesAtendidas : [])
+        : [];
+
       if (locaisTrabalho !== undefined) {
-        const { locais, erro } = parseLocaisTrabalho({ locaisTrabalho });
+        const { locais, erro } = parseLocaisTrabalho({ locaisTrabalho }, {
+          especialidadesPadrao: especPadrao,
+          semEspecialidade:     !perfilComEspecialidade,
+        });
         if (erro) return res.status(400).json({ success: false, error: erro });
         // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
         const erroExp = await validarLocaisContraExpedienteEmpresa(req, locais);
         if (erroExp) return res.status(400).json({ success: false, error: erroExp });
-        const membroCtx = await resolverMembroDoContexto(updatedUser.id, req);
         if (membroCtx) await gravarLocaisTrabalho(prisma, membroCtx.id, locais);
       }
 
-      // Especialidades (catálogo por espécie) — fonte única para VET e FORNECEDOR.
-      // Recria o vínculo do usuário (delete + insert). Array vazio = limpa.
+      // Especialidades (catálogo por espécie) — fonte única para VET e FORNECEDOR e
+      // escopadas por EMPRESA: o que ele exerce na outra clínica não é tocado aqui.
+      // Sem contexto de empresa (autônomo), mexe só nos vínculos sem empresa.
+      const escopoEspec = req.empresaId
+        ? { empresaId: Number(req.empresaId) }
+        : { empresaId: null };
       if (Array.isArray(especialidadeIds)) {
-        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
-        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: updatedUser.id } });
+        let ids = perfilComEspecialidade
+          ? [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger)
+          : [];
+        if (perfilComEspecialidade && ids.length === 0) ids = [...especPadrao];
+        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: updatedUser.id, ...escopoEspec } });
         if (ids.length > 0) {
           await prisma.usuarioEspecialidade.createMany({
-            data: ids.map(especialidadeId => ({ userId: updatedUser.id, especialidadeId })),
+            data: ids.map(especialidadeId => ({ userId: updatedUser.id, especialidadeId, ...escopoEspec })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      // Garantia: veterinário nunca fica sem especialidade NESTA empresa — Clínica Médica.
+      // (Cobre o caso em que especialidadeIds nem foi enviado, ex.: o cadastro define
+      // a especialidade por local e o profissional não marcou nenhuma.)
+      if (ehVet && especPadrao.length > 0) {
+        const jaTem = await prisma.usuarioEspecialidade.count({
+          where: { userId: updatedUser.id, ...escopoEspec },
+        });
+        if (jaTem === 0) {
+          await prisma.usuarioEspecialidade.createMany({
+            data: especPadrao.map(especialidadeId => ({ userId: updatedUser.id, especialidadeId, ...escopoEspec })),
             skipDuplicates: true,
           });
         }

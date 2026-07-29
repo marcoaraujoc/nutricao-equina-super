@@ -242,6 +242,9 @@ app.use('/api/dashboard',             dashboardRoutes);
 app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
+// Configuração global de segurança (2FA da plataforma) — ADMIN
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+app.use('/api/seguranca',             require('./routes/seguranca'));
 
 // Servir arquivos de upload (fotos, mídias clínicas).
 // Acesso por capability URL: os nomes são gerados com crypto.randomBytes (não enumeráveis).
@@ -315,7 +318,22 @@ app.use((_req: Request, res: Response) => {
 });
 
 // ===================== GLOBAL ERROR HANDLER =====================
-app.use((err: Error & { status?: number; statusCode?: number }, req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { status?: number; statusCode?: number; code?: string; detalhe?: unknown }, req: Request, res: Response, _next: NextFunction) => {
+  // Quota de IA estourada não é erro do servidor: é limite de plano do cliente.
+  // 429 + code para o front tratar sem cair no interceptor genérico de erro.
+  if (err.code === 'IA_QUOTA_EXCEDIDA') {
+    logger.warn(`${req.method} ${req.path} — quota de IA excedida`, {
+      requestId: req.requestId, message: err.message,
+    });
+    return res.status(429).json({
+      sucesso:  false,
+      code:     'IA_QUOTA_EXCEDIDA',
+      mensagem: err.message,
+      error:    err.message,
+      detalhe:  err.detalhe ?? null,
+    });
+  }
+
   logger.error(`${req.method} ${req.path}`, {
     requestId: req.requestId,
     message:   err.message,
@@ -776,6 +794,21 @@ registrarJob('cancelar_prescricoes_nao_executadas', {
   nome: 'Cancelamento de prescrições não executadas',
   exprPadrao: '40 23 * * *', // diariamente às 23:40
   fn: () => comAlerta('Cancelamento de prescrições não executadas', cancelarPrescricoesNaoExecutadas),
+});
+
+// ===================== CRON — HIGIENE DOS DESAFIOS DE 2FA =====================
+// Remove desafios de segundo fator vencidos/consumidos com mais de 24h. Sem isso
+// a tabela cresce indefinidamente (um registro por tentativa de login).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { limparDesafiosAntigos } = require('./services/mfaService');
+registrarJob('limpeza_desafios_2fa', {
+  nome: 'Limpeza de desafios de 2FA',
+  exprPadrao: '15 4 * * *', // diariamente às 04:15
+  fn: () => comAlerta('Limpeza de desafios de 2FA', async () => {
+    const removidos = await limparDesafiosAntigos();
+    // notificar só quando houve trabalho — evita e-mail diário de rotina
+    return removidos > 0 ? { ok: true, notificar: true, resumo: `${removidos} desafios removidos.` } : undefined;
+  }),
 });
 
 export default app;

@@ -235,7 +235,7 @@ const ComposicaoAlimentarController = {
 
     try {
       const parser = require('../services/composicaoParserService');
-      const resultado = await parser.processarArquivo(req.file.path, req.file.mimetype);
+      const resultado = await parser.processarArquivo(req.file.path, req.file.mimetype, req.user?.id ?? null, null, req.empresaId ?? null);
       res.json({ sucesso: true, dados: resultado });
     } catch (error) {
       console.error('Erro na análise LLM de composição:', error);

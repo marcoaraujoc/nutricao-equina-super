@@ -12,6 +12,12 @@ const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_RE
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
+// Cadastro do profissional é POR EMPRESA — nunca gravar nome/contato/endereço/CRMV
+// direto no User (vaza entre clínicas). Ver lib/profissionalPerfil.js.
+const {
+  salvarPerfil:           salvarPerfilProfissional,
+  aplicarPerfilEmRelacao: aplicarPerfilProfEmRelacao,
+} = require('../lib/profissionalPerfil');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -132,6 +138,97 @@ async function buscarConfiguracao(escopo) {
   return prisma.empresaConfiguracao.findFirst({
     where: { empresaId: escopo.empresaId, equipeId: escopo.equipeId },
   });
+}
+
+// Espécies atendidas no escopo (Configurações da empresa; sem elas, as espécies do
+// perfil do DONO da empresa — evita listar o catálogo inteiro). `equipeIdParam` permite
+// a tela de gestão consultar uma equipe ≠ da do contexto ativo, desde que tenha acesso.
+async function resolverEspeciesAtendidas(req, equipeIdParam = null) {
+  let escopo = null;
+  if (equipeIdParam) {
+    const eq = await prisma.equipe.findUnique({
+      where:  { id: Number(equipeIdParam) },
+      select: { id: true, empresaId: true, empresa: { select: { cnpj: true } } },
+    });
+    if (eq) {
+      const acessoOk = eq.empresaId === req.empresaId
+        || !!(await getEmpresaDoGestor(req.user.id, eq.empresaId));
+      if (acessoOk) {
+        escopo = eq.empresa?.cnpj
+          ? { empresaId: eq.empresaId, equipeId: null }
+          : { empresaId: eq.empresaId, equipeId: eq.id };
+      }
+    }
+  }
+  if (!escopo) escopo = await resolverEscopoConfiguracaoMembro(req);
+  // Dono/gestor sem MembroEquipe (sem req.empresaId resolvido) — usa o escopo de gestor
+  if (!escopo) escopo = await resolverEscopoConfiguracao(req);
+  if (!escopo) return [];
+
+  const config = await buscarConfiguracao(escopo);
+  const especies = parseEspeciesAtendidas(config?.especiesAtendidas);
+  if (especies.length > 0) return especies;
+
+  const emp = await prisma.empresa.findUnique({
+    where:  { id: escopo.empresaId },
+    select: { ownerId: true },
+  });
+  if (!emp?.ownerId) return [];
+  const perfilDono = await prisma.vetPerfil.findUnique({
+    where:  { userId: emp.ownerId },
+    select: { especies: { select: { especieId: true } } },
+  });
+  return perfilDono?.especies.map(e => e.especieId) ?? [];
+}
+
+// VETERINÁRIO que não informa especialidade assume CLÍNICA MÉDICA. O catálogo é POR
+// ESPÉCIE e cada uma tem seu rótulo ("Clínica Médica", "Clínica Médica de Felinos",
+// "Clínica Médica (Buiatria)"), por isso o casamento é por PREFIXO e devolve uma
+// especialidade por espécie atendida. Empresa sem espécies configuradas → [] (não há
+// catálogo de onde tirar o padrão).
+// FORNECEDOR NÃO usa este padrão: para ele especialidade nula é válida.
+const PREFIXO_ESPECIALIDADE_PADRAO = 'clínica médica';
+
+// `especiesFallback` cobre o cadastro do vet autônomo: a empresa pode não ter espécies
+// configuradas, mas ele acabou de informar as que atende no próprio formulário.
+async function especialidadesPadraoVeterinario(req, equipeIdParam = null, especiesFallback = []) {
+  try {
+    let especies = await resolverEspeciesAtendidas(req, equipeIdParam);
+    if (especies.length === 0) {
+      especies = [...new Set((especiesFallback ?? []).map(Number))].filter(Number.isInteger);
+    }
+    if (especies.length === 0) return [];
+    const rows = await prisma.especialidade.findMany({
+      where:   { ativo: true, especieId: { in: especies } },
+      select:  { id: true, nome: true, especieId: true },
+      orderBy: { id: 'asc' },
+    });
+    const porEspecie = new Map();
+    for (const r of rows) {
+      if (porEspecie.has(r.especieId)) continue;
+      if (r.nome.trim().toLowerCase().startsWith(PREFIXO_ESPECIALIDADE_PADRAO)) {
+        porEspecie.set(r.especieId, r.id);
+      }
+    }
+    return [...porEspecie.values()];
+  } catch {
+    return [];
+  }
+}
+
+// Tempo de consulta (min) que vale para toda especialidade SEM tempo próprio no local:
+// o padrão configurado pela empresa do contexto; sem ele, o padrão do sistema (60).
+// Herança dinâmica — nunca copiar este valor para dentro do local.
+async function tempoConsultaPadraoDaEmpresa(req) {
+  try {
+    const escopo = await resolverEscopoConfiguracaoMembro(req);
+    if (!escopo) return TEMPO_CONSULTA_PADRAO_SISTEMA;
+    const config = await buscarConfiguracao(escopo);
+    const min = Number(config?.tempoConsultaPadraoMin);
+    return Number.isInteger(min) && min > 0 ? min : TEMPO_CONSULTA_PADRAO_SISTEMA;
+  } catch {
+    return TEMPO_CONSULTA_PADRAO_SISTEMA;
+  }
 }
 
 // ─── Helper: onboarding de vet convidado ─────────────────────────────────────
@@ -274,6 +371,14 @@ async function gravarExpedienteTrabalho(membroId, exp) {
 // dias/horário do expediente único.
 const DIAS_LABEL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
+// Tempo de consulta por especialidade (minutos). O teto de 8h evita bloquear o dia
+// inteiro por engano de digitação; o piso de 5min evita grades absurdas.
+const TEMPO_CONSULTA_MIN = 5;
+const TEMPO_CONSULTA_MAX = 480;
+// Sem tempo próprio no local e sem padrão na empresa: a grade de 1h que a agenda
+// sempre teve (espelhado em PASSO_PADRAO_MIN/DURACAO_PADRAO_MIN).
+const TEMPO_CONSULTA_PADRAO_SISTEMA = 60;
+
 // CSV de IDs ("3,7,12") → [3,7,12]. Vazio/null → [].
 function csvParaIds(csv) {
   if (!csv) return [];
@@ -307,10 +412,16 @@ function conflitoEntreLocais(locais) {
   return null;
 }
 
-function parseLocaisTrabalho(body) {
+// opts.especialidadesPadrao — IDs assumidos no local que não informar especialidade
+//   (só o VETERINÁRIO passa este parâmetro; ver especialidadesPadraoVeterinario).
+// opts.semEspecialidade — perfil sem atuação clínica (estagiário, enfermeiro, secretaria,
+//   financeiro…): o local nunca guarda especialidade nem tempo de consulta.
+function parseLocaisTrabalho(body, opts = {}) {
   if (body.locaisTrabalho === undefined) return { locais: undefined };
   if (!Array.isArray(body.locaisTrabalho)) return { erro: 'locaisTrabalho deve ser uma lista.' };
 
+  const padrao = opts.semEspecialidade || !Array.isArray(opts.especialidadesPadrao)
+    ? [] : opts.especialidadesPadrao;
   const locais = [];
   for (const l of body.locaisTrabalho) {
     const localizacaoId = Number(l?.localizacaoId);
@@ -320,17 +431,44 @@ function parseLocaisTrabalho(body) {
     // Reusa a mesma validação de dias/horário do expediente único
     const exp = parseExpedienteTrabalho(l);
     if (exp.erro) return { erro: exp.erro };
-    // Especialidades POR LOCAL (IDs do catálogo tb_especialidades) → CSV
-    const espIds = [...new Set(
+    // Especialidades POR LOCAL (IDs do catálogo tb_especialidades) → CSV.
+    // Vazio + padrão informado (veterinário) → assume Clínica Médica.
+    let espIds = opts.semEspecialidade ? [] : [...new Set(
       (Array.isArray(l?.especialidadeIds) ? l.especialidadeIds : [])
         .map(Number).filter(Number.isInteger),
     )];
+    if (espIds.length === 0 && padrao.length > 0) espIds = [...padrao];
+
+    // Tempo de consulta POR especialidade — OPCIONAL. O que não for informado herda o
+    // padrão configurado na empresa (EmpresaConfiguracao.tempoConsultaPadraoMin) na hora
+    // de montar a grade; por isso a ausência é gravada como ausência, e não congelada
+    // aqui — mudou o padrão da empresa, muda a agenda de quem não configurou.
+    const temposIn = (l?.temposConsulta && typeof l.temposConsulta === 'object') ? l.temposConsulta : {};
+    const tempos = {};
+    for (const id of espIds) {
+      const bruto = temposIn[id] ?? temposIn[String(id)];
+      if (bruto === undefined || bruto === null || bruto === '') continue; // herda o padrão da empresa
+      const min = Number(bruto);
+      if (!Number.isInteger(min) || min < TEMPO_CONSULTA_MIN || min > TEMPO_CONSULTA_MAX) {
+        return { erro: `O tempo de consulta deve ficar entre ${TEMPO_CONSULTA_MIN} e ${TEMPO_CONSULTA_MAX} minutos (deixe em branco para usar o padrão da empresa).` };
+      }
+      // Múltiplo de 5 apenas — a grade é regerada a partir do início do expediente
+      // a cada dia, então tempos que não fecham a hora (45, 90…) são válidos e não
+      // desalinham nada. Espelha TEMPOS_CONSULTA do UsuarioFormModal.
+      if (min % 5 !== 0) {
+        return { erro: 'O tempo de consulta deve ser um múltiplo de 5 minutos.' };
+      }
+      tempos[String(id)] = min;
+    }
+
     locais.push({
       localizacaoId,
+      // Dias/horário em branco = herda o expediente da empresa (mesma regra do tempo).
       diasTrabalho:       exp.diasTrabalho       ?? null,
       horaInicioTrabalho: exp.horaInicioTrabalho ?? null,
       horaFimTrabalho:    exp.horaFimTrabalho    ?? null,
       especialidadesIds:  espIds.length ? espIds.join(',') : null,
+      temposConsulta:     Object.keys(tempos).length ? tempos : null,
     });
   }
   // Ninguém trabalha em dois lugares ao mesmo tempo
@@ -440,6 +578,7 @@ async function anexarLocaisTrabalho(membros) {
       horaInicioTrabalho: r.horaInicioTrabalho,
       horaFimTrabalho:    r.horaFimTrabalho,
       especialidadeIds:   csvParaIds(r.especialidadesIds),
+      temposConsulta:     r.temposConsulta ?? {},
     });
   }
   return membros.map(m => ({ ...m, locaisTrabalho: porMembro.get(m.id) ?? [] }));
@@ -665,6 +804,9 @@ const EquipeController = {
           horaInicioAtendimento: config?.horaInicioAtendimento ?? null,
           horaFimAtendimento:    config?.horaFimAtendimento    ?? null,
           especiesAtendidas:     parseEspeciesAtendidas(config?.especiesAtendidas),
+          // null = ainda não configurado; o sistema aplica TEMPO_CONSULTA_PADRAO_SISTEMA
+          tempoConsultaPadraoMin: config?.tempoConsultaPadraoMin ?? null,
+          tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
         },
       });
     } catch (err) {
@@ -677,49 +819,7 @@ const EquipeController = {
   // (usado no Cadastro Pessoal do membro convidado para filtrar as especialidades).
   obterEspeciesAtendidas: async (req, res) => {
     try {
-      // equipeId explícito (tela de gestão pode gerenciar equipe ≠ contexto ativo):
-      // usa o escopo da equipe informada, desde que o usuário tenha acesso a ela.
-      let escopo = null;
-      const equipeIdParam = req.query.equipeId ? Number(req.query.equipeId) : null;
-      if (equipeIdParam) {
-        const eq = await prisma.equipe.findUnique({
-          where:  { id: equipeIdParam },
-          select: { id: true, empresaId: true, empresa: { select: { cnpj: true } } },
-        });
-        if (eq) {
-          const acessoOk = eq.empresaId === req.empresaId
-            || !!(await getEmpresaDoGestor(req.user.id, eq.empresaId));
-          if (acessoOk) {
-            escopo = eq.empresa?.cnpj
-              ? { empresaId: eq.empresaId, equipeId: null }
-              : { empresaId: eq.empresaId, equipeId: eq.id };
-          }
-        }
-      }
-      if (!escopo) escopo = await resolverEscopoConfiguracaoMembro(req);
-      // Dono/gestor sem MembroEquipe (sem req.empresaId resolvido) — usa o escopo de gestor
-      if (!escopo) escopo = await resolverEscopoConfiguracao(req);
-      if (!escopo) return res.json({ sucesso: true, dados: { especiesAtendidas: [] } });
-      const config = await buscarConfiguracao(escopo);
-
-      let especies = parseEspeciesAtendidas(config?.especiesAtendidas);
-      if (especies.length === 0) {
-        // Sem configuração explícita em Configurações: usa as espécies escolhidas
-        // na CRIAÇÃO da empresa (perfil do dono — VetEspecie). Evita que o seletor
-        // de especialidades mostre TODAS as espécies do catálogo.
-        const emp = await prisma.empresa.findUnique({
-          where:  { id: escopo.empresaId },
-          select: { ownerId: true },
-        });
-        if (emp?.ownerId) {
-          const perfilDono = await prisma.vetPerfil.findUnique({
-            where:  { userId: emp.ownerId },
-            select: { especies: { select: { especieId: true } } },
-          });
-          especies = perfilDono?.especies.map(e => e.especieId) ?? [];
-        }
-      }
-
+      const especies = await resolverEspeciesAtendidas(req, req.query.equipeId ? Number(req.query.equipeId) : null);
       return res.json({ sucesso: true, dados: { especiesAtendidas: especies } });
     } catch (err) {
       console.error('Erro ao obter espécies atendidas:', err);
@@ -732,15 +832,23 @@ const EquipeController = {
   obterHorarioAtendimento: async (req, res) => {
     try {
       const escopo = await resolverEscopoConfiguracaoMembro(req);
-      const vazio = { diasAtendimento: null, horaInicioAtendimento: null, horaFimAtendimento: null };
+      // tempoConsultaPadrao vem sempre resolvido (nunca null): é o que a Agenda e o
+      // cadastro de locais usam para a especialidade sem tempo próprio.
+      const vazio = {
+        diasAtendimento: null, horaInicioAtendimento: null, horaFimAtendimento: null,
+        tempoConsultaPadrao: TEMPO_CONSULTA_PADRAO_SISTEMA,
+      };
       if (!escopo) return res.json({ sucesso: true, dados: vazio });
       const config = await buscarConfiguracao(escopo);
+      const tempoPadrao = Number(config?.tempoConsultaPadraoMin);
       return res.json({
         sucesso: true,
         dados: {
           diasAtendimento:       config?.diasAtendimento       ?? null,
           horaInicioAtendimento: config?.horaInicioAtendimento ?? null,
           horaFimAtendimento:    config?.horaFimAtendimento    ?? null,
+          tempoConsultaPadrao:   Number.isInteger(tempoPadrao) && tempoPadrao > 0
+            ? tempoPadrao : TEMPO_CONSULTA_PADRAO_SISTEMA,
         },
       });
     } catch (err) {
@@ -778,8 +886,27 @@ const EquipeController = {
       const {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
-        especiesAtendidas,
+        especiesAtendidas, tempoConsultaPadraoMin,
       } = req.body;
+
+      // Tempo de consulta padrão da empresa. undefined = não altera; vazio = remove
+      // (volta ao padrão do sistema). Mesmas regras do tempo por especialidade.
+      let tempoPadraoFinal;
+      if (tempoConsultaPadraoMin !== undefined) {
+        const s = String(tempoConsultaPadraoMin).trim();
+        if (s === '') {
+          tempoPadraoFinal = null;
+        } else {
+          const n = Number(s);
+          if (!Number.isInteger(n) || n < TEMPO_CONSULTA_MIN || n > TEMPO_CONSULTA_MAX || n % 5 !== 0) {
+            return res.status(400).json({
+              sucesso: false,
+              mensagem: `Tempo de consulta padrão inválido — informe múltiplos de 5 entre ${TEMPO_CONSULTA_MIN} e ${TEMPO_CONSULTA_MAX} minutos.`,
+            });
+          }
+          tempoPadraoFinal = n;
+        }
+      }
 
       // Espécies atendidas — aceita array [1,2] ou CSV "1,2". undefined = não altera;
       // vazio = null (todas as espécies). Persiste como CSV de IDs.
@@ -893,6 +1020,7 @@ const EquipeController = {
               ...(horaInicioFinal  !== undefined && { horaInicioAtendimento: horaInicioFinal }),
               ...(horaFimFinal     !== undefined && { horaFimAtendimento: horaFimFinal }),
               ...(especiesFinal    !== undefined && { especiesAtendidas: especiesFinal }),
+              ...(tempoPadraoFinal !== undefined && { tempoConsultaPadraoMin: tempoPadraoFinal }),
             },
           })
         : await prisma.empresaConfiguracao.create({
@@ -907,6 +1035,7 @@ const EquipeController = {
               horaInicioAtendimento: horaInicioFinal ?? null,
               horaFimAtendimento:    horaFimFinal    ?? null,
               especiesAtendidas:     especiesFinal   ?? null,
+              tempoConsultaPadraoMin: tempoPadraoFinal ?? null,
             },
           });
 
@@ -921,6 +1050,8 @@ const EquipeController = {
           horaInicioAtendimento: config.horaInicioAtendimento,
           horaFimAtendimento:    config.horaFimAtendimento,
           especiesAtendidas:     parseEspeciesAtendidas(config.especiesAtendidas),
+          tempoConsultaPadraoMin: config.tempoConsultaPadraoMin ?? null,
+          tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
         },
       });
     } catch (err) {
@@ -1109,7 +1240,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -1117,7 +1248,10 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          dados:        await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true }))), // ADMIN da plataforma vê tudo
+          // Cadastro do profissional é o DESTA empresa (ver lib/profissionalPerfil.js)
+          dados:        await aplicarPerfilProfEmRelacao(
+            await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true }))), // ADMIN da plataforma vê tudo
+            'user', equipe.empresaId),
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -1148,17 +1282,23 @@ const EquipeController = {
         }
         if (!vinculo) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
 
+        const equipeDoVinculo = await prisma.equipe.findUnique({
+          where: { id: vinculo.equipeId }, select: { empresaId: true },
+        });
+
         const membrosDaEquipe = await prisma.membroEquipe.findMany({
           where:   { equipeId: vinculo.equipeId, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, ativo: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, ativo: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipeDoVinculo?.empresaId ?? -1 }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
         });
         return res.json({
           sucesso:  true,
-          dados:    await anexarLocaisTrabalho(await anexarExpedienteTrabalho(membrosDaEquipe)),
+          dados:    await aplicarPerfilProfEmRelacao(
+            await anexarLocaisTrabalho(await anexarExpedienteTrabalho(membrosDaEquipe)),
+            'user', equipeDoVinculo?.empresaId ?? null),
           equipeId: vinculo.equipeId,
           isGestor: false,
         });
@@ -1174,7 +1314,7 @@ const EquipeController = {
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: empresa.id }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -1182,7 +1322,9 @@ const EquipeController = {
       res.json({
         sucesso: true,
         // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
-        dados:        await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id }))),
+        dados:        await aplicarPerfilProfEmRelacao(
+          await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id }))),
+          'user', empresa.id),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -1217,9 +1359,12 @@ const EquipeController = {
         orderBy: { createdAt: 'desc' },
       });
       // Perfis restritos à empresa desta equipe (ADMIN da plataforma vê tudo)
-      const dados = await anexarPerfisGlobais(
-        membros,
-        isAdminReq ? { todos: true } : { empresaId: equipe?.empresaId ?? null },
+      const dados = await aplicarPerfilProfEmRelacao(
+        await anexarPerfisGlobais(
+          membros,
+          isAdminReq ? { todos: true } : { empresaId: equipe?.empresaId ?? null },
+        ),
+        'user', equipe?.empresaId ?? null,
       );
       res.json({ sucesso: true, dados });
     } catch (err) {
@@ -1385,7 +1530,10 @@ const EquipeController = {
   adicionarMembro: async (req, res) => {
     try {
       const vetUserId                  = req.user.id;
-      const { fullName, email, phone, cargo, senha } = req.body;
+      // `senha` do body é ignorada de propósito: quem define a credencial de alguém é o
+      // ADMIN ou a própria pessoa. Conta criada aqui nasce com a senha padrão e troca
+      // obrigatória no primeiro acesso.
+      const { fullName, email, phone, cargo } = req.body;
 
       if (!fullName || !email || !cargo) {
         return res.status(400).json({ sucesso: false, mensagem: 'fullName, email e cargo são obrigatórios' });
@@ -1400,7 +1548,7 @@ const EquipeController = {
       const emailNorm = normalizeEmail(email);
       let usuario = await findUserByEmail(prisma, emailNorm);
       if (!usuario) {
-        const senhaHash = await bcrypt.hash(senha || 'Inicial#001', 10);
+        const senhaHash = await bcrypt.hash('Inicial_001', 10);
         usuario = await prisma.user.create({
           data: {
             fullName, email: emailNorm,
@@ -1408,6 +1556,7 @@ const EquipeController = {
             passwordHash: senhaHash,
             role:         'USER',
             userType:     cargo === 'ESTAGIARIO' ? 'ESTAGIARIO' : 'VETERINARIO',
+            mustChangePassword: true,
           },
         });
       }
@@ -1468,6 +1617,17 @@ const EquipeController = {
       }
 
       if (senha) {
+        // Senha é da PESSOA: só o ADMIN da plataforma e o próprio dono da conta a alteram.
+        // O gestor administra a equipe, não a credencial de quem está nela — quem esqueceu
+        // a senha usa "esqueci minha senha"; conta nova nasce com a padrão + troca no 1º acesso.
+        const ehAdmin   = req.user.role === 'ADMIN' || req.user.userType === 'ADMIN';
+        const ehProprio = Number(req.user.id) === Number(membro.userId);
+        if (!ehAdmin && !ehProprio) {
+          return res.status(403).json({
+            sucesso:  false,
+            mensagem: 'Apenas o administrador ou o próprio usuário podem alterar a senha.',
+          });
+        }
         if (senha.length < 8)            return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 8 caracteres' });
         if (!/[A-Z]/.test(senha))        return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos uma letra maiúscula' });
         if (!/\d/.test(senha))           return res.status(400).json({ sucesso: false, mensagem: 'A senha deve ter ao menos 1 número' });
@@ -1483,9 +1643,21 @@ const EquipeController = {
       const expediente = parseExpedienteTrabalho(req.body);
       if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
 
+      // Especialidade só existe para VETERINÁRIO e FORNECEDOR; o vet sem especialidade
+      // informada assume Clínica Médica (o fornecedor aceita nula). O cargo vale o que
+      // está sendo salvo agora (body) e, na falta dele, o atual do membro.
+      const cargoEfetivo = cargo || membro.cargo;
+      const perfilComEspecialidade = cargoEfetivo === 'VETERINARIO' || cargoEfetivo === 'FORNECEDOR';
+      const especPadrao = cargoEfetivo === 'VETERINARIO'
+        ? await especialidadesPadraoVeterinario(req, membro.equipeId)
+        : [];
+
       // Locais de trabalho (múltiplos). Quando enviados, são a fonte do expediente
       // (a agregação sincroniza os campos únicos); senão mantém o expediente único.
-      const locaisParsed = parseLocaisTrabalho(req.body);
+      const locaisParsed = parseLocaisTrabalho(req.body, {
+        especialidadesPadrao: especPadrao,
+        semEspecialidade:     !perfilComEspecialidade,
+      });
       if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
       if (locaisParsed.locais !== undefined) {
         // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
@@ -1496,22 +1668,33 @@ const EquipeController = {
         await gravarExpedienteTrabalho(Number(id), expediente);
       }
 
+      // No User ficam só IDENTIDADE e credencial: e-mail, senha e o ativo global.
+      // Nome, contato e endereço são do PERFIL DA EMPRESA — gravá-los aqui mudaria o
+      // cadastro do profissional nas outras clínicas em que ele atua.
       const dadosUser = {};
-      if (fullName !== undefined && fullName.trim()) dadosUser.fullName = fullName.trim();
-      if (email    !== undefined && email.trim())    dadosUser.email    = email.trim().toLowerCase();
-      if (phone       !== undefined) dadosUser.phone       = phone?.trim()       || null;
-      if (cep         !== undefined) dadosUser.cep         = cep?.trim()         || null;
-      if (endereco    !== undefined) dadosUser.endereco    = endereco?.trim()    || null;
-      if (complemento !== undefined) dadosUser.complemento = complemento?.trim() || null;
-      if (bairro      !== undefined) dadosUser.bairro      = bairro?.trim()      || null;
-      if (cidade      !== undefined) dadosUser.cidade      = cidade?.trim()      || null;
-      if (estado      !== undefined) dadosUser.estado      = estado?.trim()      || null;
-      if (ativo       !== undefined) dadosUser.ativo       = Boolean(ativo);
-      if (senha)                     dadosUser.passwordHash = await bcrypt.hash(senha, 10);
+      if (email !== undefined && email.trim()) dadosUser.email = email.trim().toLowerCase();
+      if (ativo !== undefined)                 dadosUser.ativo = Boolean(ativo);
+      if (senha)                               dadosUser.passwordHash = await bcrypt.hash(senha, 10);
       if (Object.keys(dadosUser).length > 0) {
         await prisma.user.update({ where: { id: membro.userId }, data: dadosUser });
       }
       if (senha) await registrarTrocaSenha(membro.userId, membro.user.passwordHash);
+
+      // Cadastro desta empresa
+      const empresaDoMembro = membro.equipe?.empresaId ?? null;
+      if (empresaDoMembro) {
+        await salvarPerfilProfissional(prisma, membro.userId, empresaDoMembro, {
+          ...(fullName    !== undefined && fullName.trim() ? { fullName: fullName.trim() } : {}),
+          ...(phone       !== undefined && { phone:       phone?.trim()       || null }),
+          ...(cep         !== undefined && { cep:         cep?.trim()         || null }),
+          ...(endereco    !== undefined && { endereco:    endereco?.trim()    || null }),
+          ...(complemento !== undefined && { complemento: complemento?.trim() || null }),
+          ...(bairro      !== undefined && { bairro:      bairro?.trim()      || null }),
+          ...(cidade      !== undefined && { cidade:      cidade?.trim()      || null }),
+          ...(estado      !== undefined && { estado:      estado?.trim()      || null }),
+          ...(ativo       !== undefined && { ativo:       Boolean(ativo) }),
+        });
+      }
 
       // Sincroniza com o cadastro Fornecedor vinculado (quando o membro é PRESTADOR)
       const dadosFornecedor = {};
@@ -1540,15 +1723,27 @@ const EquipeController = {
       }
 
       // Especialidades (catálogo por espécie) — sincroniza quando enviadas (delete + insert).
-      if (Array.isArray(especialidadeIds)) {
-        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+      // Perfil sem atuação clínica (estagiário, enfermeiro, secretaria, financeiro) zera;
+      // veterinário sem nenhuma cai no padrão (Clínica Médica).
+      // Ressalva: `UsuarioEspecialidade` é GLOBAL (por usuário, não por equipe). Quem é
+      // veterinário/fornecedor por identidade (userType) não perde as especialidades só
+      // porque ocupa um cargo sem atuação clínica NESTA equipe — senão a edição aqui
+      // apagaria o cadastro dele na outra empresa.
+      if (Array.isArray(especialidadeIds) && empresaDoMembro) {
+        let ids = perfilComEspecialidade
+          ? [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger)
+          : [];
+        if (perfilComEspecialidade && ids.length === 0) ids = [...especPadrao];
         const rows = ids.length > 0
           ? await prisma.especialidade.findMany({ where: { id: { in: ids }, ativo: true }, select: { id: true, nome: true } })
           : [];
-        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: membro.userId } });
+        // Escopo por EMPRESA: o que ele exerce nas outras clínicas fica intacto.
+        await prisma.usuarioEspecialidade.deleteMany({
+          where: { userId: membro.userId, empresaId: empresaDoMembro },
+        });
         if (rows.length > 0) {
           await prisma.usuarioEspecialidade.createMany({
-            data: rows.map(r => ({ userId: membro.userId, especialidadeId: r.id })),
+            data: rows.map(r => ({ userId: membro.userId, especialidadeId: r.id, empresaId: empresaDoMembro })),
             skipDuplicates: true,
           });
         }
@@ -1563,6 +1758,21 @@ const EquipeController = {
           await prisma.fornecedor.update({
             where: { id: fornecedorEspec.id },
             data:  { tipoServico: rows[0].nome.slice(0, 50) },
+          });
+        }
+      }
+
+      // Garantia: veterinário nunca fica sem especialidade NESTA empresa — Clínica Médica.
+      if (cargoEfetivo === 'VETERINARIO' && especPadrao.length > 0 && empresaDoMembro) {
+        const jaTem = await prisma.usuarioEspecialidade.count({
+          where: { userId: membro.userId, empresaId: empresaDoMembro },
+        });
+        if (jaTem === 0) {
+          await prisma.usuarioEspecialidade.createMany({
+            data: especPadrao.map(especialidadeId => ({
+              userId: membro.userId, especialidadeId, empresaId: empresaDoMembro,
+            })),
+            skipDuplicates: true,
           });
         }
       }
@@ -1809,19 +2019,27 @@ const EquipeController = {
           if (!fornecedorVinculo) {
             return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
           }
-        } else {
-          const { TIPOS_SERVICO_VALIDOS } = require('./FornecedorController');
-          const temEspec = Array.isArray(especialidadeIds) && especialidadeIds.length > 0;
-          if (!temEspec && (!tipoServico?.trim() || !TIPOS_SERVICO_VALIDOS.includes(tipoServico))) {
-            return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade para o fornecedor' });
-          }
         }
+        // Fornecedor SEM especialidade é permitido (regra 2026-07-28): o cadastro nasce
+        // com tipoServico 'Prestador' e o gestor completa depois, se quiser.
       }
+
+      // Perfis sem atuação clínica (estagiário, enfermeiro, secretaria, financeiro…)
+      // não têm especialidade nem tempo de consulta: o que vier no body é ignorado.
+      const perfilComEspecialidade = cargo === 'VETERINARIO' || cargo === 'FORNECEDOR';
+      // Veterinário que não informa especialidade assume Clínica Médica; fornecedor não.
+      const especPadrao = cargo === 'VETERINARIO'
+        ? await especialidadesPadraoVeterinario(req, equipeIdBody ?? null)
+        : [];
+      let especEnviadas = perfilComEspecialidade && Array.isArray(especialidadeIds)
+        ? [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger)
+        : [];
+      if (perfilComEspecialidade && especEnviadas.length === 0) especEnviadas = [...especPadrao];
 
       // Especialidades do catálogo (se enviadas) — fonte única; derivam o tipoServico legado.
       let especResolvidas = null;
-      if (Array.isArray(especialidadeIds) && especialidadeIds.length > 0) {
-        const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
+      if (especEnviadas.length > 0) {
+        const ids = especEnviadas;
         const rows = await prisma.especialidade.findMany({
           where: { id: { in: ids }, ativo: true }, select: { id: true, nome: true },
         });
@@ -1851,8 +2069,13 @@ const EquipeController = {
       const expediente = parseExpedienteTrabalho(req.body);
       if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
 
-      // Locais de trabalho (múltiplos) — valida antes de gravar qualquer coisa
-      const locaisParsed = parseLocaisTrabalho(req.body);
+      // Locais de trabalho (múltiplos) — valida antes de gravar qualquer coisa.
+      // Local sem especialidade: veterinário assume Clínica Médica; demais perfis ficam
+      // sem especialidade (e sem tempo de consulta) mesmo.
+      const locaisParsed = parseLocaisTrabalho(req.body, {
+        especialidadesPadrao: especPadrao,
+        semEspecialidade:     !perfilComEspecialidade,
+      });
       if (locaisParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locaisParsed.erro });
       // Todo membro fica restrito ao dia/horário da empresa (EmpresaConfiguracao)
       if (locaisParsed.locais !== undefined) {
@@ -1935,6 +2158,21 @@ const EquipeController = {
       membroCriadoId = novoMembro.id;
       membroUserId   = usuario.id;
 
+      // Cadastro do profissional NESTA empresa. Profissional que já existe (cadastrado
+      // por outra clínica) entra como cadastro NOVO: o que vale é o que ESTA empresa
+      // informou agora — nada é herdado do cadastro da outra.
+      await salvarPerfilProfissional(prisma, usuario.id, equipe.empresaId, {
+        fullName:    fullName.trim(),
+        phone:       phone.trim(),
+        cep:         cep?.trim()         || null,
+        endereco:    endereco?.trim()    || null,
+        complemento: complemento?.trim() || null,
+        bairro:      bairro?.trim()      || null,
+        cidade:      cidade?.trim()      || null,
+        estado:      estado?.trim()      || null,
+        ativo:       true,
+      });
+
       // Locais de trabalho (múltiplos). Quando enviados, eles são a fonte do
       // expediente — a agregação sincroniza os campos únicos que a Agenda lê. Sem
       // locais, cai no expediente único informado diretamente (compat).
@@ -1974,12 +2212,17 @@ const EquipeController = {
         }
       }
 
-      // Especialidades (catálogo por espécie) — grava no usuário e, se fornecedor, no cadastro.
+      // Especialidades (catálogo por espécie) — POR EMPRESA: o que o profissional exerce
+      // nas outras clínicas não é lido nem apagado aqui.
       if (especResolvidas) {
-        await prisma.usuarioEspecialidade.deleteMany({ where: { userId: usuario.id } });
+        await prisma.usuarioEspecialidade.deleteMany({
+          where: { userId: usuario.id, empresaId: equipe.empresaId },
+        });
         if (especResolvidas.ids.length > 0) {
           await prisma.usuarioEspecialidade.createMany({
-            data: especResolvidas.ids.map(especialidadeId => ({ userId: usuario.id, especialidadeId })),
+            data: especResolvidas.ids.map(especialidadeId => ({
+              userId: usuario.id, especialidadeId, empresaId: equipe.empresaId,
+            })),
             skipDuplicates: true,
           });
         }
@@ -3125,3 +3368,9 @@ module.exports.parseLocaisTrabalho  = parseLocaisTrabalho;
 module.exports.gravarLocaisTrabalho = gravarLocaisTrabalho;
 module.exports.csvParaIds           = csvParaIds;
 module.exports.validarLocaisContraExpedienteEmpresa = validarLocaisContraExpedienteEmpresa;
+// Padrão da empresa para a especialidade sem tempo próprio no local (AgendamentoController).
+module.exports.tempoConsultaPadraoDaEmpresa = tempoConsultaPadraoDaEmpresa;
+module.exports.TEMPO_CONSULTA_PADRAO_SISTEMA = TEMPO_CONSULTA_PADRAO_SISTEMA;
+// Clínica Médica assumida para o veterinário sem especialidade (UserController.updateMe).
+module.exports.especialidadesPadraoVeterinario = especialidadesPadraoVeterinario;
+module.exports.resolverEspeciesAtendidas       = resolverEspeciesAtendidas;

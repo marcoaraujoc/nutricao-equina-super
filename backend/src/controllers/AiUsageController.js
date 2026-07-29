@@ -2,6 +2,7 @@
 // Retorna métricas de uso de LLM para o dashboard de monitoramento
 
 const prisma = require('../lib/prisma').default;
+const { situacao, inicioDoMes } = require('../services/iaQuotaService');
 
 const AiUsageController = {
 
@@ -19,6 +20,7 @@ const AiUsageController = {
         mediaLatencia,
         taxaErro,
         topOperacoes,
+        porModulo,
       ] = await Promise.all([
 
         // Total de chamadas no período
@@ -58,6 +60,15 @@ const AiUsageController = {
           orderBy: { _sum: { custoUsd: 'desc' } },
           take: 5,
         }),
+
+        // Consumo por MÓDULO — quem chamou a LLM no período
+        prisma.aiUsageLog.groupBy({
+          by: ['modulo'],
+          _sum: { custoUsd: true, tokensTotal: true, tokensEntrada: true, tokensSaida: true },
+          _count: { id: true },
+          where: { createdAt: { gte: dataInicio } },
+          orderBy: { _sum: { custoUsd: 'desc' } },
+        }),
       ]);
 
       const custoTotalUsd = totalCustoResult._sum.custoUsd ?? 0;
@@ -80,6 +91,17 @@ const AiUsageController = {
             chamadas:    op._count.id,
             tokens:      op._sum.tokensTotal ?? 0,
             custoUsd:    Number((op._sum.custoUsd ?? 0).toFixed(6)),
+          })),
+          porModulo: porModulo.map(m => ({
+            modulo:        m.modulo,
+            chamadas:      m._count.id,
+            tokens:        m._sum.tokensTotal   ?? 0,
+            tokensEntrada: m._sum.tokensEntrada ?? 0,
+            tokensSaida:   m._sum.tokensSaida   ?? 0,
+            custoUsd:      Number((m._sum.custoUsd ?? 0).toFixed(6)),
+            mediaTokens:   m._count.id > 0
+              ? Math.round((m._sum.tokensTotal ?? 0) / m._count.id)
+              : 0,
           })),
         },
       });
@@ -159,11 +181,13 @@ const AiUsageController = {
   // ── Log recente (tabela) ───────────────────────────────────────────────────
   logRecente: async (req, res) => {
     try {
-      const { page = 1, limit = 50, operacao, sucesso } = req.query;
+      const { page = 1, limit = 50, operacao, modulo, sucesso, periodo } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
 
       const where = {};
       if (operacao) where.operacao = operacao;
+      if (modulo)   where.modulo   = modulo;
+      if (periodo)  where.createdAt = { gte: calcularDataInicio(periodo) };
       if (sucesso !== undefined) where.sucesso = sucesso === 'true';
 
       const [logs, total] = await Promise.all([
@@ -182,10 +206,13 @@ const AiUsageController = {
         dados: logs.map(log => ({
           id:          log.id,
           createdAt:   log.createdAt,
-          operacao:    log.operacao,
-          modelo:      log.modelo,
-          provedor:    log.provedor,
-          tokensTotal: log.tokensTotal,
+          operacao:      log.operacao,
+          modulo:        log.modulo,
+          modelo:        log.modelo,
+          provedor:      log.provedor,
+          tokensEntrada: log.tokensEntrada,
+          tokensSaida:   log.tokensSaida,
+          tokensTotal:   log.tokensTotal,
           custoUsd:    Number(log.custoUsd.toFixed(6)),
           latenciaMs:  log.latenciaMs,
           sucesso:     log.sucesso,
@@ -200,6 +227,130 @@ const AiUsageController = {
       });
     } catch (error) {
       console.error('Erro ao buscar log recente:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Consumo por CLIENTE (empresa) — base do metering ──────────────────────
+  // Modelo "conta única + medição interna": o custo é centralizado no Google e
+  // atribuído aqui a cada tenant, junto do plano contratado e do % consumido.
+  porEmpresa: async (req, res) => {
+    try {
+      const { periodo = 'mes' } = req.query;
+      const dataInicio = calcularDataInicio(periodo);
+
+      const agregados = await prisma.aiUsageLog.groupBy({
+        by: ['empresaId'],
+        _sum: { custoUsd: true, tokensTotal: true, tokensEntrada: true, tokensSaida: true },
+        _count: { id: true },
+        where: { createdAt: { gte: dataInicio }, sucesso: true },
+        orderBy: { _sum: { tokensTotal: 'desc' } },
+      });
+
+      const ids = agregados.map(a => a.empresaId).filter(Boolean);
+      const [empresas, planos] = await Promise.all([
+        ids.length ? prisma.empresa.findMany({ where: { id: { in: ids } }, select: { id: true, nome: true, cnpj: true } }) : [],
+        ids.length ? prisma.iaPlanoEmpresa.findMany({ where: { empresaId: { in: ids } } }) : [],
+      ]);
+      const nomePorId  = new Map(empresas.map(e => [e.id, e]));
+      const planoPorId = new Map(planos.map(p => [p.empresaId, p]));
+
+      // O plano é apurado no MÊS corrente; quando o período pedido é o mês, o
+      // consumo exibido é o mesmo que o gate usa — os números batem com a quota.
+      const noMes = periodo === 'mes';
+
+      const dados = agregados.map(a => {
+        const plano  = a.empresaId ? planoPorId.get(a.empresaId) : null;
+        const tokens = a._sum.tokensTotal ?? 0;
+        const chamadas = a._count.id ?? 0;
+        const pct = (usado, limite) =>
+          limite && limite > 0 ? Number(((usado / limite) * 100).toFixed(1)) : null;
+        return {
+          empresaId:         a.empresaId,
+          empresaNome:       a.empresaId ? (nomePorId.get(a.empresaId)?.nome ?? `Empresa #${a.empresaId}`) : 'Sem empresa (ADMIN/legado)',
+          cnpj:              a.empresaId ? (nomePorId.get(a.empresaId)?.cnpj ?? null) : null,
+          chamadas,
+          tokens,
+          tokensEntrada:     a._sum.tokensEntrada ?? 0,
+          tokensSaida:       a._sum.tokensSaida   ?? 0,
+          custoUsd:          Number((a._sum.custoUsd ?? 0).toFixed(6)),
+          mediaTokens:       chamadas > 0 ? Math.round(tokens / chamadas) : 0,
+          plano:             plano?.plano ?? null,
+          limiteTokensMes:   plano?.limiteTokensMes   ?? null,
+          limiteChamadasMes: plano?.limiteChamadasMes ?? null,
+          bloquearAoExceder: plano?.bloquearAoExceder ?? null,
+          planoAtivo:        plano?.ativo ?? null,
+          pctTokens:         noMes ? pct(tokens, plano?.limiteTokensMes) : null,
+          pctChamadas:       noMes ? pct(chamadas, plano?.limiteChamadasMes) : null,
+        };
+      });
+
+      res.json({
+        sucesso: true,
+        dados,
+        meta: { periodo, apuracaoDoPlano: noMes, desde: dataInicio, mesCorrenteDesde: inicioDoMes() },
+      });
+    } catch (error) {
+      console.error('Erro ao buscar consumo por empresa:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Plano de IA de uma empresa (ADMIN) ────────────────────────────────────
+  obterPlano: async (req, res) => {
+    try {
+      const empresaId = Number(req.params.empresaId);
+      if (!Number.isInteger(empresaId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'empresaId inválido' });
+      }
+      res.json({ sucesso: true, dados: await situacao(empresaId) });
+    } catch (error) {
+      console.error('Erro ao obter plano de IA:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  salvarPlano: async (req, res) => {
+    try {
+      const empresaId = Number(req.params.empresaId);
+      if (!Number.isInteger(empresaId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'empresaId inválido' });
+      }
+
+      const empresa = await prisma.empresa.findUnique({ where: { id: empresaId }, select: { id: true } });
+      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      // null/'' = sem limite naquela dimensão. Valor negativo é rejeitado.
+      const limite = (v) => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) return undefined; // sinaliza inválido
+        return Math.floor(n);
+      };
+
+      const limiteTokensMes   = limite(req.body.limiteTokensMes);
+      const limiteChamadasMes = limite(req.body.limiteChamadasMes);
+      if (limiteTokensMes === undefined || limiteChamadasMes === undefined) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Limites devem ser números não negativos' });
+      }
+
+      const dados = {
+        plano:             String(req.body.plano ?? 'PADRAO').slice(0, 40),
+        limiteTokensMes,
+        limiteChamadasMes,
+        bloquearAoExceder: req.body.bloquearAoExceder !== false,
+        ativo:             req.body.ativo !== false,
+      };
+
+      await prisma.iaPlanoEmpresa.upsert({
+        where:  { empresaId },
+        create: { empresaId, ...dados },
+        update: dados,
+      });
+
+      res.json({ sucesso: true, dados: await situacao(empresaId) });
+    } catch (error) {
+      console.error('Erro ao salvar plano de IA:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },

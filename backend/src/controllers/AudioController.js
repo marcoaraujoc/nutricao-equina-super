@@ -1,100 +1,78 @@
 // backend/src/controllers/AudioController.js
-// Recebe blob de áudio do frontend
-// 1. Transcreve com Groq Whisper-large-v3 (áudio → texto)
-// 2. Analisa com Groq LLM (texto → evolucaoTexto + acoes faturáveis)
-// Chave Groq fica APENAS aqui — nunca exposta no browser
+// Recebe blob de áudio do frontend:
+//   1. Transcreve com Gemini (áudio → texto)
+//   2. Analisa com Gemini (texto → evolucaoTexto + ações faturáveis)
+// A chave da API fica APENAS no backend — nunca exposta no browser.
+//
+// NOTA: a rota /api/clinica/audio ainda não está montada em server.ts. O
+// controller é mantido funcional para quando o fluxo de ditado longo for ligado.
 
 const fs   = require('fs');
 const path = require('path');
 
-// ─── Prompt de análise clínica ────────────────────────────────────────────────
+const { callAI, MODULOS_IA }   = require('../ai');
+const { buildPrompt }          = require('../ai/prompts');
+const { transcreverAudio }     = require('../ai/geminiClient');
+const { logAiUsage }           = require('../services/aiLogger.service');
+const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 
-const buildPrompt = (texto) => `
-Você é um assistente clínico veterinário. Analise a nota clínica abaixo.
-Retorne APENAS um JSON válido, sem markdown, sem texto adicional:
+// ─── Transcrição via Gemini ───────────────────────────────────────────────────
 
-{
-  "evolucaoTexto": "texto limpo e organizado para o prontuário",
-  "acoes": [
-    { "tipo": "MEDICAMENTO",    "descricao": "Amoxicilina 500mg 2x/dia 7 dias", "valor": 45.00 },
-    { "tipo": "PROCEDIMENTO",   "descricao": "Curativo membro anterior direito", "valor": 80.00 },
-    { "tipo": "EXAME",          "descricao": "Hemograma completo",               "valor": 120.00 },
-    { "tipo": "ENCAMINHAMENTO", "descricao": "Ortopedia — suspeita de fratura",  "valor": 0.00  }
-  ]
-}
+async function transcrever(filePath, originalname, mimetypeOriginal, userId, empresaId) {
+  const ext              = path.extname(originalname || '').toLowerCase();
+  // WebM/Opus (gravação do app) e Ogg (WhatsApp) não são aceitos — converte p/ MP3.
+  const precisaConverter = EXTS_INCOMPATIVEIS_SAFARI.has(ext) || !ext;
+  const audioPath        = precisaConverter ? `${filePath}.mp3` : filePath;
+  const mimeType         = precisaConverter ? 'audio/mp3' : (mimetypeOriginal || 'audio/mp3');
 
-Regras:
-- acoes deve conter APENAS itens explicitamente mencionados na nota
-- Se não houver itens acionáveis, retorne acoes: []
-- evolucaoTexto deve ser o texto organizado, sem repetições
-- Tipos válidos: MEDICAMENTO, PROCEDIMENTO, EXAME, ENCAMINHAMENTO
-- Valores devem ser estimativas em reais baseadas na tabela veterinária brasileira
-- Nunca invente itens que não foram mencionados
-
-Nota clínica:
-${texto}
-`.trim();
-
-// ─── Transcrição via Groq Whisper ─────────────────────────────────────────────
-
-async function transcreverComGroq(filePath) {
-  const fileBuffer = fs.readFileSync(filePath);
-  const fileName   = path.basename(filePath);
-
-  // Groq Whisper aceita multipart/form-data
-  const FormData = (await import('node-fetch')).default
-    ? null
-    : null; // node-fetch não é necessário — usamos fetch nativo do Node 18+
-
-  const blob     = new Blob([fileBuffer], { type: 'audio/webm' });
-  const formData = new globalThis.FormData();
-  formData.append('file',  blob, fileName);
-  formData.append('model', 'whisper-large-v3');
-  formData.append('language', 'pt');
-  formData.append('response_format', 'json');
-
-  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method:  'POST',
-    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-    body:    formData,
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Groq Whisper error ${response.status}: ${err}`);
+  if (precisaConverter) {
+    await transcodeParaMp3(filePath, audioPath);
+    try { fs.unlinkSync(filePath); } catch { /* ignora */ }
   }
 
-  const data = await response.json();
-  return data.text?.trim() ?? '';
+  const inicio = Date.now();
+  try {
+    const buffer = fs.readFileSync(audioPath);
+    const r      = await transcreverAudio(buffer, mimeType);
+
+    await logAiUsage({
+      operacao:         'transcricao_audio@v1',
+      modulo:           MODULOS_IA.TRANSCRICAO,
+      modelo:           r.modelo,
+      provedor:         r.provedor,
+      promptTexto:      '',
+      respostaTexto:    r.text,
+      tokensEntradaApi: r.tokensEntrada ?? undefined,
+      tokensSaidaApi:   r.tokensSaida   ?? undefined,
+      latenciaMs:       Date.now() - inicio,
+      userId,
+      empresaId,
+      sucesso:          true,
+    });
+
+    return (r.text ?? '').trim();
+  } finally {
+    try { fs.unlinkSync(audioPath); } catch { /* ignora */ }
+  }
 }
 
-// ─── Análise via Groq LLM ─────────────────────────────────────────────────────
+// ─── Análise da nota clínica ──────────────────────────────────────────────────
 
-async function analisarComLLM(texto) {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      Authorization:   `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model:       'llama-3.3-70b-versatile',
-      messages:    [{ role: 'user', content: buildPrompt(texto) }],
-      temperature: 0.1,
-      max_tokens:  800,
-    }),
+async function analisarComLLM(texto, userId, empresaId) {
+  const { operacaoVers, prompt } = buildPrompt('analise_nota_clinica', texto);
+
+  const raw = await callAI({
+    operacao:    operacaoVers,
+    modulo:      MODULOS_IA.ATENDIMENTO,
+    prompt,
+    maxTokens:   800,
+    temperature: 0.1,
+    userId,
+    empresaId,
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Groq LLM error ${response.status}: ${err}`);
-  }
-
-  const data  = await response.json();
-  const raw   = data.choices[0].message.content.trim();
   const match = raw.match(/\{[\s\S]*\}/);
-
-  if (!match) throw new Error('LLM não retornou JSON válido');
+  if (!match) throw new Error('Modelo não retornou JSON válido');
 
   const parsed = JSON.parse(match[0]);
   return {
@@ -120,11 +98,14 @@ const AudioController = {
       });
     }
 
-    const filePath = req.file.path;
+    const userId    = req.user?.id ?? null;
+    const empresaId = req.empresaId ?? null;
 
     try {
-      // Passo 1 — Whisper: áudio → texto
-      const textoTranscrito = await transcreverComGroq(filePath);
+      // Passo 1 — áudio → texto
+      const textoTranscrito = await transcrever(
+        req.file.path, req.file.originalname, req.file.mimetype, userId, empresaId,
+      );
 
       if (!textoTranscrito) {
         return res.status(422).json({
@@ -133,8 +114,8 @@ const AudioController = {
         });
       }
 
-      // Passo 2 — LLM: texto → evolucaoTexto + acoes
-      const { evolucaoTexto, acoes } = await analisarComLLM(textoTranscrito);
+      // Passo 2 — texto → evolucaoTexto + acoes
+      const { evolucaoTexto, acoes } = await analisarComLLM(textoTranscrito, userId, empresaId);
 
       res.json({
         sucesso: true,
@@ -142,15 +123,13 @@ const AudioController = {
       });
 
     } catch (error) {
+      // Garante a limpeza mesmo se a falha for antes do finally do transcrever
+      try { fs.unlinkSync(req.file.path); } catch { /* ignora */ }
       console.error('AudioController.processar error:', error);
       res.status(500).json({
         sucesso:  false,
         mensagem: error.message ?? 'Erro ao processar áudio',
       });
-
-    } finally {
-      // Remove arquivo temporário do disco em qualquer caso
-      try { fs.unlinkSync(filePath); } catch { /* ignora */ }
     }
   },
 

@@ -12,8 +12,20 @@ import {
   TrendingUp, BarChart2, RefreshCw, CheckCircle, XCircle,
 } from 'lucide-react';
 import { formatDateShort, formatDateTime } from '../utils/dateUtils';
+import PageContainer from '../components/PageContainer';
+import ConsumoPorClienteIA from '../components/ConsumoPorClienteIA';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ModuloUso {
+  modulo:        string;
+  chamadas:      number;
+  tokens:        number;
+  tokensEntrada: number;
+  tokensSaida:   number;
+  custoUsd:      number;
+  mediaTokens:   number;
+}
 
 interface Resumo {
   periodo: string;
@@ -25,6 +37,7 @@ interface Resumo {
   totalErros: number;
   taxaErroPercent: number;
   topOperacoes: { operacao: string; chamadas: number; tokens: number; custoUsd: number }[];
+  porModulo: ModuloUso[];
 }
 
 interface DiaEvol {
@@ -45,8 +58,11 @@ interface LogItem {
   id: number;
   createdAt: string;
   operacao: string;
+  modulo: string;
   modelo: string;
   provedor: string;
+  tokensEntrada: number;
+  tokensSaida: number;
   tokensTotal: number;
   custoUsd: number;
   latenciaMs: number;
@@ -66,13 +82,53 @@ const formatTokens = (v: number) =>
   v >= 1_000     ? `${(v / 1_000).toFixed(1)}k` :
   String(v);
 
+// A operação logada carrega a versão do prompt (ex.: 'parse_laudo@v5') — o
+// rótulo é resolvido pela chave, sem a versão.
 const OPERACAO_LABEL: Record<string, string> = {
-  parse_laudo:           'Parse de Laudo',
-  relatorio_nutricional: 'Relatório Nutricional',
-  parse_composicao:      'Parse Composição',
+  parse_laudo:                     'Parse de laudo',
+  parse_composicao_texto:          'Composição (PDF)',
+  parse_composicao_visao:          'Composição (imagem)',
+  interpretacao_clinica:           'Interpretação clínica',
+  resumo_historico:                'Resumo do histórico',
+  memoria_clinica:                 'Memória clínica',
+  analise_financeira:              'Análise financeira',
+  interpretacao_agendamento:       'Interpretação de agendamento',
+  analise_nota_clinica:            'Nota clínica ditada',
+  transcricao_audio:               'Transcrição de áudio',
+  extrair_resultado_sessao_equino: 'Laudo equino (body-map)',
+  relatorio_nutricional:           'Relatório nutricional',
 };
 
-const labelOperacao = (op: string) => OPERACAO_LABEL[op] ?? op;
+const labelOperacao = (op: string) => {
+  const chave = op.split('@')[0];
+  return OPERACAO_LABEL[chave] ?? chave;
+};
+
+const MODULO_LABEL: Record<string, string> = {
+  ATENDIMENTO:     'Atendimento',
+  MEMORIA_CLINICA: 'Memória clínica',
+  FINANCEIRO:      'Financeiro',
+  EXAMES:          'Exames',
+  NUTRICAO:        'Nutrição',
+  AGENDA:          'Agenda',
+  TRANSCRICAO:     'Transcrição',
+  LEGADO:          'Anterior ao registro de módulo',
+  OUTROS:          'Outros',
+};
+
+const labelModulo = (m: string) => MODULO_LABEL[m] ?? m;
+
+const MODULO_COR: Record<string, string> = {
+  ATENDIMENTO:     'bg-emerald-100 text-emerald-700',
+  MEMORIA_CLINICA: 'bg-violet-100 text-violet-700',
+  FINANCEIRO:      'bg-amber-100 text-amber-700',
+  EXAMES:          'bg-blue-100 text-blue-700',
+  NUTRICAO:        'bg-lime-100 text-lime-700',
+  AGENDA:          'bg-sky-100 text-sky-700',
+  TRANSCRICAO:     'bg-fuchsia-100 text-fuchsia-700',
+};
+
+const corModulo = (m: string) => MODULO_COR[m] ?? 'bg-gray-100 text-gray-600';
 
 const PERIODO_LABEL: Record<Periodo, string> = {
   '7d':  'Últimos 7 dias',
@@ -182,6 +238,7 @@ export default function AiUsageDashboard() {
   const [refreshing,setRefreshing]= useState(false);
   const [logPage,   setLogPage]   = useState(1);
   const [logTotal,  setLogTotal]  = useState(0);
+  const [filtroMod, setFiltroMod] = useState<string>('');
 
   const carregar = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -197,9 +254,13 @@ export default function AiUsageDashboard() {
       setProjecao(projRes.data.dados);
 
       if (isAdmin) {
-        const logRes = await api.get(`/ai-usage/log-recente?page=${logPage}&limit=20`);
-        setLogs(logRes.data.dados ?? []);
-        setLogTotal(logRes.data.paginacao?.total ?? 0);
+        const qs = new URLSearchParams({ page: String(logPage), limit: '20', periodo });
+        if (filtroMod) qs.set('modulo', filtroMod);
+        const logRes = await api.get(`/ai-usage/log-recente?${qs.toString()}`);
+        if (logRes.data) {
+          setLogs(logRes.data.dados ?? []);
+          setLogTotal(logRes.data.paginacao?.total ?? 0);
+        }
       }
     } catch (err) {
       console.error('Erro ao carregar dashboard de IA:', err);
@@ -207,15 +268,16 @@ export default function AiUsageDashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [periodo, logPage, isAdmin]);
+  }, [periodo, logPage, isAdmin, filtroMod]);
 
   useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { setLogPage(1); }, [filtroMod, periodo]);
 
   const maxCustoOperacao = Math.max(...(resumo?.topOperacoes.map(o => o.custoUsd) ?? [0]));
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="w-full px-6">
+    <PageContainer maxWidth="7xl">
+      <div className="w-full">
 
         {/* Voltar */}
         <button onClick={() => navigate('/')}
@@ -309,6 +371,83 @@ export default function AiUsageDashboard() {
           </div>
         </div>
 
+        {/* ── Consumo por cliente (metering) — ADMIN ── */}
+        {isAdmin && (
+          <ConsumoPorClienteIA periodo={periodo} formatTokens={formatTokens} formatUsd={formatUsd} />
+        )}
+
+        {/* ── Consumo por módulo ── */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-6">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">Consumo por módulo</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Quem chamou a LLM em {PERIODO_LABEL[periodo].toLowerCase()}</p>
+            </div>
+            <span className="text-xs text-gray-400">{resumo?.porModulo?.length ?? 0} módulos</span>
+          </div>
+
+          {loading ? (
+            <p className="text-center py-10 text-gray-400 text-sm">Carregando...</p>
+          ) : (resumo?.porModulo?.length ?? 0) === 0 ? (
+            <p className="text-center py-10 text-gray-300 text-sm">Nenhuma chamada no período</p>
+          ) : (
+            <>
+              {/* Mobile: cards */}
+              <div className="md:hidden divide-y divide-gray-50">
+                {resumo?.porModulo.map(m => (
+                  <div key={m.modulo} className="px-5 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg ${corModulo(m.modulo)}`}>
+                        {labelModulo(m.modulo)}
+                      </span>
+                      <span className="text-xs font-semibold text-emerald-700">{formatUsd(m.custoUsd)}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mt-2 text-xs text-gray-500">
+                      <span>{m.chamadas} chamadas</span>
+                      <span>{formatTokens(m.tokens)} tokens</span>
+                      <span>{formatTokens(m.mediaTokens)}/chamada</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop: tabela */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="text-left  px-5 py-3 text-xs font-medium text-gray-400">Módulo</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Chamadas</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Tokens entrada</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Tokens saída</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Total</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Média/chamada</th>
+                      <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Custo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resumo?.porModulo.map(m => (
+                      <tr key={m.modulo} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-5 py-3">
+                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg ${corModulo(m.modulo)}`}>
+                            {labelModulo(m.modulo)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-gray-700 text-right font-medium">{m.chamadas}</td>
+                        <td className="px-5 py-3 text-xs text-gray-500 text-right">{formatTokens(m.tokensEntrada)}</td>
+                        <td className="px-5 py-3 text-xs text-gray-500 text-right">{formatTokens(m.tokensSaida)}</td>
+                        <td className="px-5 py-3 text-xs text-gray-700 text-right font-medium">{formatTokens(m.tokens)}</td>
+                        <td className="px-5 py-3 text-xs text-gray-500 text-right">{formatTokens(m.mediaTokens)}</td>
+                        <td className="px-5 py-3 text-xs text-emerald-700 text-right font-semibold">{formatUsd(m.custoUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+
         {/* ── Projeção mensal ── */}
         {projecao && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-6">
@@ -352,9 +491,24 @@ export default function AiUsageDashboard() {
         {/* ── Log recente (apenas ADMIN) ── */}
         {isAdmin && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-800">Log de chamadas recentes</h2>
-              <span className="text-xs text-gray-400">{logTotal} registros no total</span>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-800">Log de chamadas</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Tokens de entrada e saída por chamada</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={filtroMod}
+                  onChange={e => setFiltroMod(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-gray-200 text-xs text-gray-600 bg-white"
+                >
+                  <option value="">Todos os módulos</option>
+                  {resumo?.porModulo.map(m => (
+                    <option key={m.modulo} value={m.modulo}>{labelModulo(m.modulo)}</option>
+                  ))}
+                </select>
+                <span className="text-xs text-gray-400">{logTotal} registros</span>
+              </div>
             </div>
 
             {loading ? (
@@ -368,10 +522,13 @@ export default function AiUsageDashboard() {
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-100">
                         <th className="text-left px-5 py-3 text-xs font-medium text-gray-400">Data/hora</th>
+                        <th className="text-left px-5 py-3 text-xs font-medium text-gray-400">Módulo</th>
                         <th className="text-left px-5 py-3 text-xs font-medium text-gray-400">Operação</th>
                         <th className="text-left px-5 py-3 text-xs font-medium text-gray-400">Modelo</th>
                         <th className="text-left px-5 py-3 text-xs font-medium text-gray-400">Usuário</th>
-                        <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Tokens</th>
+                        <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Entrada</th>
+                        <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Saída</th>
+                        <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Total</th>
                         <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Custo</th>
                         <th className="text-right px-5 py-3 text-xs font-medium text-gray-400">Latência</th>
                         <th className="text-center px-5 py-3 text-xs font-medium text-gray-400">Status</th>
@@ -383,13 +540,24 @@ export default function AiUsageDashboard() {
                           <td className="px-5 py-3 text-xs text-gray-500">
                             {formatDateTime(log.createdAt)}
                           </td>
+                          <td className="px-5 py-3">
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg whitespace-nowrap ${corModulo(log.modulo)}`}>
+                              {labelModulo(log.modulo)}
+                            </span>
+                          </td>
                           <td className="px-5 py-3 text-xs font-medium text-gray-700">
                             {labelOperacao(log.operacao)}
                           </td>
                           <td className="px-5 py-3 text-xs text-gray-500 font-mono">
-                            {log.modelo.split('-').slice(0, 3).join('-')}
+                            {log.modelo}
                           </td>
                           <td className="px-5 py-3 text-xs text-gray-500">{log.usuario}</td>
+                          <td className="px-5 py-3 text-xs text-gray-500 text-right">
+                            {formatTokens(log.tokensEntrada)}
+                          </td>
+                          <td className="px-5 py-3 text-xs text-gray-500 text-right">
+                            {formatTokens(log.tokensSaida)}
+                          </td>
                           <td className="px-5 py-3 text-xs text-gray-700 text-right font-medium">
                             {formatTokens(log.tokensTotal)}
                           </td>
@@ -439,6 +607,6 @@ export default function AiUsageDashboard() {
         )}
 
       </div>
-    </div>
+    </PageContainer>
   );
 }

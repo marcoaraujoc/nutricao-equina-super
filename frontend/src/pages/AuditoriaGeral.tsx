@@ -10,7 +10,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban,
+  ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO';
 
 const ENTIDADE_LABEL: Record<string, string> = {
   EVOLUCAO:          'Evolução',
@@ -48,6 +48,7 @@ const ENTIDADE_LABEL: Record<string, string> = {
   MEDICAMENTO:       'Medicamento (catálogo)',
   PROCEDIMENTO:      'Procedimento (catálogo)',
   DIETA_ITEM:        'Item de dieta',
+  CONFIGURACAO_SEGURANCA: 'Configuração de segurança',
 };
 
 const fmtDataHora = (iso: string) => {
@@ -64,6 +65,11 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
   if (categoria === 'CANCELAMENTO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
       <Ban size={9} /> CANCELAMENTO
+    </span>
+  );
+  if (categoria === 'CONFIGURACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
+      <ShieldCheck size={9} /> CONFIGURAÇÃO
     </span>
   );
   return (
@@ -160,7 +166,7 @@ export default function AuditoriaGeral() {
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key

@@ -30,6 +30,7 @@ interface Membro {
     horaInicioTrabalho: string | null;
     horaFimTrabalho:    string | null;
     especialidadeIds?:  number[];
+    temposConsulta?:    Record<number, number>;
   }>;
   user: {
     id:       number;
@@ -64,6 +65,7 @@ const mapLocaisParaPayload = (locais?: LocalTrabalhoValue[]) =>
       horaInicioTrabalho: l.horaInicioTrabalho || '',
       horaFimTrabalho:    l.horaFimTrabalho || '',
       especialidadeIds:   l.especialidadeIds ?? [],
+      temposConsulta:     l.temposConsulta ?? {},
     }));
 
 // Especialidades do membro (catálogo por espécie) — fallback para tipoServico legado do Fornecedor
@@ -150,6 +152,9 @@ export default function Equipe() {
   const [membros,       setMembros]                       = useState<Membro[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do cadastro de membro — vai para DENTRO do modal (é lá que a ação acontece);
+  // no topo da página ficaria escondido atrás dele.
+  const [erroModal,  setErroModal]  = useState<string | null>(null);
   const [equipeId,      setEquipeId]                      = useState<number | null>(null);
   const [isGestor,       setIsGestor]                       = useState(false);
   const [loading,       setLoading]                       = useState(true);
@@ -200,6 +205,7 @@ export default function Equipe() {
 
   const handleIncluirMembro = async (values: UsuarioFormValues) => {
     setEnviando(true);
+    setErroModal(null);
     try {
       await api.post('/equipes/incluir-membro', {
         email:        values.email,
@@ -220,9 +226,11 @@ export default function Equipe() {
       });
       toast.success('Membro incluído com sucesso!');
       setShowConvite(false);
+      // Busca em aberto esconderia justamente quem acabou de ser incluído
+      setBusca('');
       carregarMembros();
     } catch (err: unknown) {
-      setErroInline((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro');
+      setErroModal((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro');
     } finally { setEnviando(false); }
   };
 
@@ -240,6 +248,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     if (!membroEditando) return;
     setSalvandoEdicao(true);
     setErroSenhaEdicao('');
+    setErroModal(null);
     try {
       const cargos = values.cargos?.length ? values.cargos : [values.perfil];
       await api.put(`/equipes/membros/${membroEditando.id}`, {
@@ -263,11 +272,12 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
       }
       toast.success('Perfil atualizado');
       setMembroEditando(null);
+      setBusca('');
       carregarMembros();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao atualizar perfil';
       if (/senha/i.test(msg)) setErroSenhaEdicao(msg);
-      else setErroInline(msg);
+      else setErroModal(msg);
     } finally {
       setSalvandoEdicao(false);
     }
@@ -352,10 +362,14 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          {/* name/autoComplete neutros: sem isso o navegador trata como campo de nome
+              e reoferece/preenche o nome digitado no cadastro que acabou de ser salvo */}
           <input
             type="text"
             name="busca-equipe"
             autoComplete="off"
+            data-lpignore="true"
+            data-form-type="other"
             placeholder="Buscar por nome, e-mail ou tipo de serviço..."
             value={busca}
             onChange={e => setBusca(e.target.value)}
@@ -586,24 +600,28 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           comFornecedor
           comExpediente
           salvando={enviando}
-          onClose={() => setShowConvite(false)}
+          erroServidor={erroModal}
+          onClose={() => { setShowConvite(false); setErroModal(null); }}
           onSubmit={handleIncluirMembro}
         />
       )}
 
-      {/* Modal Editar Membro — mesmo formulário do Incluir, com opção de senha */}
+      {/* Modal Editar Membro — mesmo formulário do Incluir.
+          Senha NÃO aparece aqui: só o ADMIN e a própria pessoa alteram a senha de uma
+          conta. O gestor edita o cadastro do membro, nunca a credencial dele. */}
       {membroEditando && (
         <UsuarioFormModal
           titulo="Editar Membro"
           modoEdicao
           equipeId={equipeId}
-          permitirSenha={isGestor}
+          permitirSenha={membroEditando.user.id === user?.id}
           erroSenhaServidor={erroSenhaEdicao}
           ocultarPerfil
           comExpediente
           textoBotao="Salvar"
           salvando={salvandoEdicao}
-          onClose={() => { setMembroEditando(null); setErroSenhaEdicao(''); }}
+          erroServidor={erroModal}
+          onClose={() => { setMembroEditando(null); setErroSenhaEdicao(''); setErroModal(null); }}
           onSubmit={handleSalvarEdicao}
           initial={{
             fullName:    membroEditando.user.fullName,
@@ -627,6 +645,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               horaInicioTrabalho: l.horaInicioTrabalho ?? '',
               horaFimTrabalho:    l.horaFimTrabalho    ?? '',
               especialidadeIds:   l.especialidadeIds   ?? [],
+              temposConsulta:     l.temposConsulta     ?? {},
             })),
             especialidadeIds:   (membroEditando.user.especialidades ?? []).map(e => e.especialidadeId),
           }}

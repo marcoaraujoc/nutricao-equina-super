@@ -29,6 +29,10 @@ router.get('/agendamentos/ocupacao',          authenticate, checkPermission('ate
 router.get('/agendamentos/animal/:animalId',  authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarPorAnimal);
 router.post('/agendamentos',                  authenticate, checkPermission('atendimento.agendamentos.criar',  'PROPRIO'), AgendamentoController.criar);
 router.patch('/agendamentos/transferir-dia',  authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.transferirDia);
+// Assumir o atendimento de outro veterinário da equipe — literal ANTES de /:id.
+// Nível PROPRIO basta: a regra de "qualquer veterinário assume" é validada no controller
+// (é um puxar para si, não a edição do agendamento alheio).
+router.patch('/agendamentos/:id/assumir',     authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.assumir);
 router.patch('/agendamentos/:id/status',      authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.atualizarStatus);
 router.patch('/agendamentos/:id',             authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.atualizar);
 router.delete('/agendamentos/:id',            authenticate, checkPermission('atendimento.agendamentos.deletar','PROPRIO'), AgendamentoController.excluir);

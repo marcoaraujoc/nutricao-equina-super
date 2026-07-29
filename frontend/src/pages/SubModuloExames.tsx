@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FlaskConical, Scan, Trash2, Eye, Loader2, X,
+  FlaskConical, Scan, Ban, Eye, Loader2, X,
   ChevronLeft, ChevronRight, FileText, Check, Plus,
-  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2,
+  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
@@ -86,15 +87,22 @@ interface PendingExamGroup {
   labNomeDisplay:   string;
 }
 
+interface ExameResultadoItem { id: number; parametro: string; valor: string | null; unidade: string | null; referencia: string | null; ordem: number }
+interface ExameImagemAnexo  { id: number; nome: string | null; arquivoUrl: string }
+
 interface ExameClinico {
   id:              number;
   numero:          number | null;
   tipo:            TipoExame;
   descricao:       string;
   status:          string;
+  ativo:           boolean;
   observacao:      string | null;
   qtdAmostra:      number | null;
   dataSolicitacao: string;
+  resultado?:      string | null;
+  resultadoItens?: ExameResultadoItem[];
+  imagens?:        ExameImagemAnexo[];
   veterinario:     { id: number; fullName: string } | null;
 }
 
@@ -196,19 +204,175 @@ const TIPOS_META: Record<TipoExame, { badge: string }> = {
   Compra:       { badge: 'bg-amber-100 text-amber-700' },
 };
 
-const STATUS_EXAME: Record<string, { label: string; cls: string }> = {
-  SOLICITADO:  { label: 'Solicitado',  cls: 'bg-amber-100 text-amber-700' },
-  COLETADO:    { label: 'Coletado',    cls: 'bg-blue-100 text-blue-700' },
-  EM_ANALISE:  { label: 'Em Análise',  cls: 'bg-violet-100 text-violet-700' },
-  RESULTADO:   { label: 'Resultado',   cls: 'bg-emerald-100 text-emerald-700' },
-  CANCELADO:   { label: 'Cancelado',   cls: 'bg-red-100 text-red-700' },
-};
+// Ciclo do PEDIDO de exame: SALVA (solicitado) → FINALIZADA (concluído) /
+// REALIZADA (resultado carregado). CANCELADA = pedido cancelado (soft delete).
+type StatusExameUI    = 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
+type FiltroStatusExame = 'todos' | 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
+
+function getStatusExame(ex: ExameClinico): StatusExameUI {
+  if (!ex.ativo) return 'CANCELADA';
+  if (ex.status === 'REALIZADO') return 'REALIZADA';
+  return ex.status === 'CONCLUIDO' ? 'FINALIZADA' : 'SALVA';
+}
+
+const FILTROS_EXAME: { key: FiltroStatusExame; label: string }[] = [
+  { key: 'todos',      label: 'Todos'       },
+  { key: 'SALVA',      label: 'Salvas'      },
+  { key: 'FINALIZADA', label: 'Finalizadas' },
+  { key: 'REALIZADA',  label: 'Realizados'  },
+  { key: 'CANCELADA',  label: 'Canceladas'  },
+];
+
+function StatusExameBadge({ status }: { status: StatusExameUI }) {
+  if (status === 'CANCELADA') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-600">
+        <Ban size={9} /> CANCELADA
+      </span>
+    );
+  }
+  if (status === 'REALIZADA') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
+        <CheckCircle2 size={9} /> REALIZADA
+      </span>
+    );
+  }
+  if (status === 'FINALIZADA') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+        <CheckCircle2 size={9} /> FINALIZADA
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">
+      <Clock size={9} /> SALVA
+    </span>
+  );
+}
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start gap-2">
       <span className="text-xs text-gray-400 w-32 flex-shrink-0 pt-0.5">{label}</span>
       <span className="text-sm text-gray-800 font-medium">{value}</span>
+    </div>
+  );
+}
+
+// ─── CarregarResultadoModal — carregar resultado/laudo de um exame ─────────────
+// ex != null: exame PEDIDO (SOLICITADO). ex == null: exame NÃO PEDIDO (informa tipo+descrição).
+// Laboratorial/Bioquímico: upload de arquivo → o laudo é lido em tabela. Imagem: laudo
+// VERBATIM (sem interpretação) + imagens anexadas. Ao salvar → exame vira Realizado.
+function CarregarResultadoModal({ ex, saving, onClose, onSalvar }: {
+  ex:       ExameClinico | null;
+  saving:   boolean;
+  onClose:  () => void;
+  onSalvar: (data: { tipo: TipoExame; descricao: string; laudo: string; arquivos: File[] }) => void;
+}) {
+  const [tipo,      setTipo]      = useState<TipoExame>(ex?.tipo ?? 'Laboratorial');
+  const [descricao, setDescricao] = useState(ex?.descricao ?? '');
+  const [laudo,     setLaudo]     = useState('');
+  const [arquivos,  setArquivos]  = useState<File[]>([]);
+  const [erro,      setErro]      = useState<string | null>(null);
+
+  const tipoEfetivo = ex ? ex.tipo : tipo;
+  const isImagem    = tipoEfetivo === 'Imagem';
+
+  const confirmar = () => {
+    if (!ex && !descricao.trim()) { setErro('Informe a descrição do exame'); return; }
+    if (isImagem && laudo.trim().length === 0 && arquivos.length === 0) { setErro('Informe o laudo ou anexe imagens'); return; }
+    if (!isImagem && arquivos.length === 0) { setErro('Anexe o arquivo do laudo'); return; }
+    setErro(null);
+    onSalvar({ tipo: tipoEfetivo, descricao: descricao.trim(), laudo: laudo.trim(), arquivos });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg border border-gray-100 max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {isImagem ? <Scan size={16} className="text-blue-600 flex-shrink-0" /> : <FlaskConical size={16} className="text-blue-600 flex-shrink-0" />}
+            <div className="min-w-0">
+              <h3 className="font-bold text-gray-900">Carregar resultado</h3>
+              <p className="text-[11px] text-gray-500 truncate">{ex ? `${ex.tipo} · ${ex.descricao}` : 'Exame não pedido na evolução'}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto">
+          {!ex && (
+            <>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Tipo do exame</label>
+                <select value={tipo} onChange={e => setTipo(e.target.value as TipoExame)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 bg-white">
+                  <option value="Laboratorial">Laboratorial</option>
+                  <option value="Bioquímico">Bioquímico</option>
+                  <option value="Imagem">Imagem</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Descrição *</label>
+                <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
+                  placeholder="Ex: Hemograma completo, Raio-X de tórax..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400" />
+              </div>
+            </>
+          )}
+
+          {isImagem ? (
+            <>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laudo (exatamente como escrito)</label>
+                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={6}
+                  placeholder="Cole/digite o laudo do exame de imagem — salvo literalmente, sem interpretação da IA."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Imagens</label>
+                <input type="file" accept="image/*,application/pdf" multiple
+                  onChange={e => setArquivos(Array.from(e.target.files ?? []))}
+                  className="w-full text-xs text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-xs file:font-semibold" />
+                {arquivos.length > 0 && <p className="text-[11px] text-gray-500 mt-1">{arquivos.length} arquivo(s) selecionado(s)</p>}
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Arquivo do laudo (PDF/imagem) *</label>
+                <input type="file" accept="image/*,application/pdf"
+                  onChange={e => setArquivos(e.target.files?.[0] ? [e.target.files[0]] : [])}
+                  className="w-full text-xs text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-xs file:font-semibold" />
+                {arquivos.length > 0 && <p className="text-[11px] text-gray-500 mt-1">{arquivos[0].name}</p>}
+                <p className="text-[11px] text-gray-400 mt-1">O laudo é lido e salvo em tabela (parâmetro / valor / referência) e o arquivo fica armazenado.</p>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
+                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
+                  placeholder="Notas adicionais sobre o resultado..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none" />
+              </div>
+            </>
+          )}
+
+          <InlineError message={erro} />
+        </div>
+
+        <div className="flex gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={confirmar} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            Salvar resultado
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -230,9 +394,6 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
   }
   const temBlocos = labOrder.length > 0;
 
-  // Status display
-  const statusInfo = STATUS_EXAME[ex.status];
-
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg border border-gray-100">
@@ -250,11 +411,7 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
               {ex.tipo}
             </span>
-            {statusInfo && (
-              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusInfo.cls}`}>
-                {statusInfo.label}
-              </span>
-            )}
+            <StatusExameBadge status={getStatusExame(ex)} />
             <span className="text-xs text-gray-400 ml-auto">{formatDate(ex.dataSolicitacao)}</span>
           </div>
 
@@ -327,7 +484,9 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
               {extra.laboratorio      && <Row label="Laboratório"       value={extra.laboratorio} />}
               {extra.dataHoraColeta   && <Row label="Data/Hora Coleta"  value={new Date(extra.dataHoraColeta).toLocaleString('pt-BR')} />}
               {extra.tipoAmostra      && <Row label="Tipo de Amostra"   value={extra.tipoAmostra} />}
-              {ex.qtdAmostra != null  && <Row label="Qtd. de Amostras"  value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />}
+              {ex.qtdAmostra != null && (ex.tipo === 'Imagem'
+                ? <Row label="Qtd. de Imagens"  value={`${ex.qtdAmostra} imagem${ex.qtdAmostra !== 1 ? 's' : ''}`} />
+                : <Row label="Qtd. de Amostras" value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />)}
               {extra.indicacaoClinica && <Row label="Indicação Clínica" value={extra.indicacaoClinica} />}
               {extra.obs              && <Row label="Preparo / Obs."    value={extra.obs} />}
               <div>
@@ -345,6 +504,62 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
             <p className="text-[11px] text-gray-400 pt-1">
               Solicitado por <span className="font-medium text-gray-600">{ex.veterinario.fullName}</span>
             </p>
+          )}
+
+          {/* ── Resultado carregado ─────────────────────────────────────── */}
+          {((ex.resultadoItens?.length ?? 0) > 0 || (ex.imagens?.length ?? 0) > 0 || (ex.resultado ?? '').trim()) && (
+            <div className="border-t border-gray-100 pt-3 space-y-3">
+              <p className="text-xs font-semibold text-teal-700 uppercase tracking-wide flex items-center gap-1.5">
+                <CheckCircle2 size={13} /> Resultado
+              </p>
+
+              {(ex.resultadoItens?.length ?? 0) > 0 && (
+                <div className="overflow-x-auto rounded-xl border border-gray-100">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-500">
+                        <th className="text-left px-3 py-2 font-semibold">Parâmetro</th>
+                        <th className="text-left px-3 py-2 font-semibold">Valor</th>
+                        <th className="text-left px-3 py-2 font-semibold">Unidade</th>
+                        <th className="text-left px-3 py-2 font-semibold">Referência</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {ex.resultadoItens!.map(it => (
+                        <tr key={it.id}>
+                          <td className="px-3 py-2 text-gray-800 font-medium">{it.parametro}</td>
+                          <td className="px-3 py-2 text-gray-700">{it.valor ?? '—'}</td>
+                          <td className="px-3 py-2 text-gray-500">{it.unidade ?? '—'}</td>
+                          <td className="px-3 py-2 text-gray-500">{it.referencia ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {(ex.resultado ?? '').trim() && (
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Laudo</p>
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{ex.resultado}</p>
+                </div>
+              )}
+
+              {(ex.imagens?.length ?? 0) > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Imagens ({ex.imagens!.length})</p>
+                  <div className="flex flex-wrap gap-2">
+                    {ex.imagens!.map(img => (
+                      <a key={img.id} href={img.arquivoUrl} target="_blank" rel="noreferrer"
+                        className="block w-20 h-20 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 hover:border-blue-300 transition-colors"
+                        title={img.nome ?? 'Imagem'}>
+                        <img src={img.arquivoUrl} alt={img.nome ?? 'Imagem'} className="w-full h-full object-cover" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -407,6 +622,7 @@ export default function SubModuloExames({
   animalId, animal, evolucaoId, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed,
 }: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { user } = useAuth();
 
   const procDropdownRef    = useRef<HTMLDivElement>(null);
   const procSearchRef      = useRef<HTMLInputElement>(null);
@@ -449,6 +665,7 @@ export default function SubModuloExames({
   // ── Selection ──────────────────────────────────────────────────────────────
   const [selectedExams,   setSelectedExams]   = useState<string[]>([]);
   const [customExamText,  setCustomExamText]  = useState('');
+  const [customExamCategoria, setCustomExamCategoria] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
 
   // ── Common form fields ────────────────────────────────────────────────────
@@ -460,12 +677,16 @@ export default function SubModuloExames({
   const [observacao,       setObservacao]       = useState('');
 
   // ── Data state ─────────────────────────────────────────────────────────────
-  const [historico,   setHistorico]   = useState<ExameClinico[]>([]);
-  const [total,       setTotal]       = useState(0);
-  const [loadingHist, setLoadingHist] = useState(true);
-  const [saving,      setSaving]      = useState(false);
-  const [viewingEx,   setViewingEx]   = useState<ExameClinico | null>(null);
-  const [confirmId,   setConfirmId]   = useState<number | null>(null);
+  const [historico,    setHistorico]    = useState<ExameClinico[]>([]);
+  const [loadingHist,  setLoadingHist]  = useState(true);
+  const [saving,       setSaving]       = useState(false);
+  const [viewingEx,    setViewingEx]    = useState<ExameClinico | null>(null);
+  const [confirmId,    setConfirmId]    = useState<number | null>(null);
+  const [finalizandoId, setFinalizandoId] = useState<number | null>(null);
+  const [filtroStatus, setFiltroStatus] = useState<FiltroStatusExame>('todos');
+  // Carregar resultado: exame PEDIDO (ExameClinico) ou 'novo' (não pedido na evolução)
+  const [carregandoResultado, setCarregandoResultado] = useState<ExameClinico | 'novo' | null>(null);
+  const [savingResultado, setSavingResultado] = useState(false);
   // Visualização vinda do Histórico de Evolução Clínica: popula os campos do
   // formulário da página em SOMENTE LEITURA (sem abrir popup).
   const [exameVisualizando, setExameVisualizando] = useState<ExameClinico | null>(null);
@@ -474,15 +695,37 @@ export default function SubModuloExames({
 
   const [page,      setPage]    = useState(1);
   const limit                   = 10;
-  const totalPags               = Math.ceil(total / limit);
 
-  const podeCriar   = isGestor || podeExecutar('atendimento.exames.criar');
-  const podeDeletar = isGestor || podeExecutar('atendimento.exames.deletar');
-  // Controle por TIPO de exame (espelha o enforcement do backend):
-  // aba Laboratorial → exames.laboratorial.criar ; aba Imagem → exames.imagem.criar.
-  // Exige o slug geral (atendimento.exames.criar) E o do tipo específico.
-  const podeCriarLab = podeCriar && (isGestor || podeExecutar('exames.laboratorial.criar'));
-  const podeCriarImg = podeCriar && (isGestor || podeExecutar('exames.imagem.criar'));
+  // Filtro por status + paginação no cliente (mesmo padrão da tela de Vacina)
+  const historicoFiltrado = historico.filter(ex =>
+    filtroStatus === 'todos' ? true : getStatusExame(ex) === filtroStatus);
+  const totalPags     = Math.ceil(historicoFiltrado.length / limit);
+  const historicoPage = historicoFiltrado.slice((page - 1) * limit, page * limit);
+  const counts = historico.reduce(
+    (acc, ex) => { acc[getStatusExame(ex)]++; return acc; },
+    { SALVA: 0, FINALIZADA: 0, REALIZADA: 0, CANCELADA: 0 } as Record<StatusExameUI, number>,
+  );
+
+  const podeCriar     = isGestor || podeExecutar('atendimento.exames.criar');
+  const podeDeletar   = isGestor || podeExecutar('atendimento.exames.deletar');
+  const podeFinalizar = isGestor || podeExecutar('atendimento.exames.finalizar');
+  // Só o gestor finaliza/exclui exame de outro; os demais só os que solicitaram.
+  const podeFinalizarEx = (ex: ExameClinico) => podeFinalizar && (isGestor || ex.veterinario?.id === user?.id);
+  // O PEDIDO de exame (Laboratorial e Imagem) é controlado APENAS por
+  // `atendimento.exames.*` — mesmo padrão de evolução/prescrição/vacina/encaminhamento.
+  // Os slugs `exames.laboratorial.*` / `exames.imagem.*` pertencem a outro fluxo
+  // (o RESULTADO/laudo do exame) e não gateiam o pedido.
+  const podeCriarLab = podeCriar;
+  const podeCriarImg = podeCriar;
+
+  // RESULTADO/laudo — gate distinto do pedido (item #7). Lab/Bioquímico usa
+  // exames.laboratorial.editar; Imagem usa exames.imagem.editar.
+  const podeResultadoLab = isGestor || podeExecutar('exames.laboratorial.editar');
+  const podeResultadoImg = isGestor || podeExecutar('exames.imagem.editar');
+  const podeCarregarResultado = (ex: ExameClinico) =>
+    ex.tipo === 'Imagem' ? podeResultadoImg : (ex.tipo === 'Compra' ? false : podeResultadoLab);
+  // Exames PEDIDOS (SOLICITADO) do animal aguardando resultado, que o usuário pode carregar
+  const examesPendentes = historico.filter(ex => ex.ativo && getStatusExame(ex) === 'SALVA' && podeCarregarResultado(ex));
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
@@ -703,21 +946,23 @@ export default function SubModuloExames({
 
   // ── Loader ─────────────────────────────────────────────────────────────────
 
-  const carregarHistorico = useCallback(async (p = 1) => {
+  const carregarHistorico = useCallback(async () => {
     setLoadingHist(true);
     try {
-      const res = await api.get(`/clinica/exames/animal/${animalId}?page=${p}&limit=${limit}`);
+      const res = await api.get(`/clinica/exames/animal/${animalId}`);
       if (!res.data) return;
       setHistorico(res.data?.dados ?? []);
-      setTotal(res.data?.meta?.total ?? 0);
     } catch { /* silencioso */ }
     finally { setLoadingHist(false); }
   }, [animalId]);
 
   useEffect(() => {
     if (loadingPerms) return;
-    carregarHistorico(page);
-  }, [carregarHistorico, loadingPerms, page]);
+    carregarHistorico();
+  }, [carregarHistorico, loadingPerms]);
+
+  // Volta para a primeira página ao trocar o filtro de status
+  useEffect(() => { setPage(1); }, [filtroStatus]);
 
   useEffect(() => {
     if (!openItemId) return;
@@ -771,7 +1016,7 @@ export default function SubModuloExames({
     setLabId(null); setOutroLabNome('');
     setGrupoId(null); setGrupoNome(''); setExamesCat([]);
     setImagemGrupoId(null); setImagemGrupoNome('');
-    setSelectedExams([]); setCustomExamText(''); setShowCustomInput(false);
+    setSelectedExams([]); setCustomExamText(''); setCustomExamCategoria(''); setShowCustomInput(false);
     setDataSolicitacao(hoje());
     setDataHoraColeta('');
     setTipoAmostra(''); setQtdAmostra(1); setIndicacaoClinica(''); setObservacao('');
@@ -783,7 +1028,16 @@ export default function SubModuloExames({
     const trimmed = customExamText.trim();
     if (!trimmed) return;
     if (!selectedExams.includes(trimmed)) setSelectedExams(prev => [...prev, trimmed]);
+    // Categoria informada para o exame NÃO LISTADO → define a categoria do grupo
+    // (grupoNome no laboratorial, imagemGrupoNome na imagem) quando ainda vazia,
+    // para o pedido sair categorizado mesmo sem estar no catálogo.
+    const cat = customExamCategoria.trim();
+    if (cat) {
+      if (mainTab === 'imagem') { if (!imagemGrupoNome.trim()) setImagemGrupoNome(cat); }
+      else                      { if (!grupoNome.trim())       setGrupoNome(cat); }
+    }
     setCustomExamText('');
+    setCustomExamCategoria('');
     setShowCustomInput(false);
   };
 
@@ -824,7 +1078,8 @@ export default function SubModuloExames({
       laboratorio:      laboratorioNomeSalvo.trim() || null,
       dataHoraColeta:   dataHoraColeta || null,
       tipoAmostra:      tipoAmostra.trim() || null,
-      qtdAmostra:       mainTab === 'laboratorial' ? qtdAmostra : null,
+      // qtdAmostra guarda a quantidade: nº de amostras (laboratorial) ou nº de imagens (imagem)
+      qtdAmostra:       (mainTab === 'laboratorial' || mainTab === 'imagem') ? qtdAmostra : null,
       indicacaoClinica: indicacaoClinica.trim() || null,
       observacao:       observacao.trim() || null,
       grupoNome:        mainTab === 'laboratorial' ? (grupoNome || null) : (imagemGrupoNome || null),
@@ -863,6 +1118,7 @@ export default function SubModuloExames({
     // Estados transitórios de UI — para o Inserir limpar a tela por completo.
     setShowCustomInput(false);
     setCustomExamText('');
+    setCustomExamCategoria('');
     setShowProcDrop(false);
     setProcSearch('');
     setShowImagemProcDrop(false);
@@ -943,7 +1199,7 @@ export default function SubModuloExames({
       setPendingGroups([]);
       resetCurrentForm();
       setPage(1);
-      carregarHistorico(1);
+      carregarHistorico();
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -952,7 +1208,7 @@ export default function SubModuloExames({
   };
 
   const handleExcluirSolicitado = (id: number) => {
-    if (!podeDeletar) { semPermissao('excluir registros de exame'); return; }
+    if (!podeDeletar) { semPermissao('cancelar exame'); return; }
     setConfirmId(id);
   };
 
@@ -962,12 +1218,65 @@ export default function SubModuloExames({
     setConfirmId(null);
     try {
       await api.delete(`/clinica/exames/${id}`, { data: { motivo } });
-      toast.success('Registro removido');
-      carregarHistorico(page);
+      toast.success('Exame cancelado');
+      carregarHistorico();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setErroInline(msg ?? 'Erro ao remover');
     }
+  };
+
+  const handleFinalizarExame = async (ex: ExameClinico) => {
+    if (!podeFinalizarEx(ex)) { semPermissao('finalizar exame'); return; }
+    setFinalizandoId(ex.id);
+    try {
+      await api.patch(`/clinica/exames/${ex.id}/finalizar`);
+      toast.success('Exame finalizado');
+      carregarHistorico();
+      onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao finalizar exame');
+    } finally { setFinalizandoId(null); }
+  };
+
+  // Carregar resultado — exame PEDIDO ou 'novo' (não pedido). No 'novo', cria o pedido
+  // primeiro (POST /clinica/exames com a evolução do atendimento) e então carrega o resultado.
+  const handleSalvarResultado = async (data: { tipo: TipoExame; descricao: string; laudo: string; arquivos: File[] }) => {
+    const alvo = carregandoResultado;
+    if (!alvo) return;
+    setSavingResultado(true);
+    try {
+      let exameId: number;
+      if (alvo === 'novo') {
+        if (!evolucaoId) {
+          setErroInline('Para carregar um exame não pedido, abra o atendimento (evolução) do paciente.');
+          return;
+        }
+        const criado = await api.post('/clinica/exames', {
+          animalId, tipo: data.tipo, evolucaoId, descricao: data.descricao,
+        });
+        exameId = criado.data?.dados?.id as number;
+      } else {
+        if (!podeCarregarResultado(alvo)) { semPermissao('carregar resultado'); return; }
+        exameId = alvo.id;
+      }
+      if (!exameId) { setErroInline('Não foi possível identificar o exame'); return; }
+
+      const fd = new FormData();
+      if (data.laudo) fd.append('resultado', data.laudo);
+      for (const f of data.arquivos) fd.append('arquivos', f);
+      await api.patch(`/clinica/exames/${exameId}/resultado`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success('Resultado carregado — exame Realizado');
+      setCarregandoResultado(null);
+      carregarHistorico();
+      onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao carregar resultado');
+    } finally { setSavingResultado(false); }
   };
 
   const imprimirExame = (ex: ExameClinico) => imprimirExameUtil(ex, animal);
@@ -1611,15 +1920,23 @@ export default function SubModuloExames({
                         Adicionar exame não listado
                       </button>
                       {showCustomInput && (
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-col sm:flex-row items-stretch gap-2">
                           <input
                             type="text"
                             value={customExamText}
                             onChange={e => setCustomExamText(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomExam(); } }}
-                            placeholder="Nome do exame (Enter ou Adicionar)..."
+                            placeholder="Nome do exame..."
                             autoFocus
                             className="flex-1 border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400"
+                          />
+                          <input
+                            type="text"
+                            value={customExamCategoria}
+                            onChange={e => setCustomExamCategoria(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomExam(); } }}
+                            placeholder="Categoria do exame (opcional)"
+                            className="sm:w-56 border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-indigo-400"
                           />
                           <button
                             type="button"
@@ -1632,6 +1949,23 @@ export default function SubModuloExames({
                         </div>
                       )}
                     </div>
+
+                    {/* Quantidade de imagens (só na aba Imagem) */}
+                    {mainTab === 'imagem' && (
+                      <div className="w-40">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                          Quantidade de imagens
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={999}
+                          value={qtdAmostra}
+                          onChange={e => setQtdAmostra(Math.max(1, Number(e.target.value) || 1))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 text-center focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    )}
 
                     {/* Indicação / Suspeita Clínica */}
                     <div>
@@ -1715,11 +2049,74 @@ export default function SubModuloExames({
         </div>
       )}
 
+      {/* ── Carregar resultado — seletor dos exames pedidos (+ não pedido) ──── */}
+      {(podeResultadoLab || podeResultadoImg) && (
+        <div className="px-4 py-3 border-b border-gray-100 bg-teal-50/40 flex flex-col sm:flex-row sm:items-center gap-2">
+          <label className="text-xs font-semibold text-gray-600 flex items-center gap-1.5 flex-shrink-0">
+            <FlaskConical size={13} className="text-teal-600" /> Carregar resultado
+          </label>
+          <select
+            value=""
+            onChange={e => {
+              const v = e.target.value;
+              if (!v) return;
+              if (v === '__novo__') { setCarregandoResultado('novo'); return; }
+              const ex = examesPendentes.find(x => String(x.id) === v);
+              if (ex) setCarregandoResultado(ex);
+            }}
+            className="flex-1 border border-teal-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
+            <option value="">
+              {examesPendentes.length > 0 ? 'Selecione o exame pedido…' : 'Nenhum exame pedido pendente'}
+            </option>
+            {examesPendentes.map(ex => (
+              <option key={ex.id} value={String(ex.id)}>{fmtNumero(ex.numero)} · {ex.tipo} · {ex.descricao}</option>
+            ))}
+            <option value="__novo__">➕ Carregar exame não pedido…</option>
+          </select>
+        </div>
+      )}
+
       {/* ── Histórico ──────────────────────────────────────────────────────── */}
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Histórico de Exames</p>
-        <span className="text-xs text-gray-400">{total} requisição{total !== 1 ? 'ões' : ''}</span>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Exames</p>
+        <span className="text-xs text-gray-400">{historico.length} requisição{historico.length !== 1 ? 'ões' : ''}</span>
       </div>
+
+      {/* Filtros de status (mesmo padrão da Vacina) */}
+      {historico.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
+          {FILTROS_EXAME.map(f => {
+            const count = f.key === 'todos' ? historico.length : counts[f.key as StatusExameUI];
+            const isActive = filtroStatus === f.key;
+            let activeClass = 'bg-blue-600 text-white border-blue-600';
+            if (f.key === 'SALVA'     && isActive) activeClass = 'bg-amber-500 text-white border-amber-500';
+            if (f.key === 'CANCELADA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
+            return (
+              <button
+                key={f.key}
+                onClick={() => setFiltroStatus(f.key)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                  isActive ? activeClass : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                }`}>
+                {f.label}
+                {f.key === 'SALVA' && !isActive && counts.SALVA > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {counts.SALVA}
+                  </span>
+                )}
+                {f.key === 'CANCELADA' && !isActive && counts.CANCELADA > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {counts.CANCELADA}
+                  </span>
+                )}
+                {f.key === 'todos' && !isActive && (
+                  <span className="text-gray-400">({historico.length})</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {loadingHist ? (
         <div className="flex items-center justify-center py-16">
@@ -1730,31 +2127,28 @@ export default function SubModuloExames({
           <FlaskConical size={36} className="mb-3" />
           <p className="text-sm text-gray-400">Nenhum exame registrado</p>
         </div>
+      ) : historicoFiltrado.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-gray-300">
+          <FlaskConical size={28} className="mb-2" />
+          <p className="text-sm text-gray-400">Nenhum exame com status "{filtroStatus}"</p>
+        </div>
       ) : (
         <>
           {/* Mobile */}
           <div className="md:hidden divide-y divide-gray-50">
-            {historico.map(ex => {
+            {historicoPage.map(ex => {
               const extra    = parseExtra(ex.observacao);
               const examCount = (ex.descricao.match(/,/g) ?? []).length + 1;
               const tiposUnicos: TipoExame[] = extra.grupos && extra.grupos.length > 0
                 ? [...new Set(extra.grupos.map(g => g.tipo))]
                 : [ex.tipo];
               return (
-                <div key={ex.id} className="px-4 py-3">
+                <div key={ex.id} className={`px-4 py-3 ${!ex.ativo ? 'opacity-60' : ''}`}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0">
                       {fmtNumero(ex.numero)}
                     </span>
-                    {ex.status && (STATUS_EXAME[ex.status] ? (
-                      <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
-                        {STATUS_EXAME[ex.status].label}
-                      </span>
-                    ) : (
-                      <span className="inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
-                        {ex.status}
-                      </span>
-                    ))}
+                    <StatusExameBadge status={getStatusExame(ex)} />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -1781,6 +2175,12 @@ export default function SubModuloExames({
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
+                    {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
+                      <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
+                        {finalizandoId === ex.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Finalizar
+                      </button>
+                    )}
                     <button onClick={() => imprimirExame(ex)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                       <Printer size={11} /> Imprimir
@@ -1793,10 +2193,10 @@ export default function SubModuloExames({
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                       <Mail size={11} /> E-mail
                     </button>
-                    {podeDeletar && (
+                    {podeDeletar && ex.ativo && (
                       <button onClick={() => handleExcluirSolicitado(ex.id)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Trash2 size={11} /> Remover
+                        <Ban size={11} /> Cancelar
                       </button>
                     )}
                   </div>
@@ -1810,26 +2210,26 @@ export default function SubModuloExames({
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Nº Exame</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tipo</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Exames</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Laboratório</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Amostra</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Status</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest">Solicitante</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº Exame</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exames</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Laboratório</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amostra</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Solicitante</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {historico.map(ex => {
+                {historicoPage.map(ex => {
                   const extra    = parseExtra(ex.observacao);
                   const examCount = (ex.descricao.match(/,/g) ?? []).length + 1;
                   const tiposUnicos: TipoExame[] = extra.grupos && extra.grupos.length > 0
                     ? [...new Set(extra.grupos.map(g => g.tipo))]
                     : [ex.tipo];
                   return (
-                    <tr key={ex.id} className="hover:bg-gray-50/60 transition-colors">
+                    <tr key={ex.id} className={`hover:bg-gray-50/60 transition-colors ${!ex.ativo ? 'opacity-60' : ''}`}>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200">
                           {fmtNumero(ex.numero)}
@@ -1861,15 +2261,7 @@ export default function SubModuloExames({
                         {formatDate(ex.dataSolicitacao)}
                       </td>
                       <td className="px-4 py-3">
-                        {ex.status && (STATUS_EXAME[ex.status] ? (
-                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_EXAME[ex.status].cls}`}>
-                            {STATUS_EXAME[ex.status].label}
-                          </span>
-                        ) : (
-                          <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
-                            {ex.status}
-                          </span>
-                        ))}
+                        <StatusExameBadge status={getStatusExame(ex)} />
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {ex.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
@@ -1880,6 +2272,12 @@ export default function SubModuloExames({
                             className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
+                          {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
+                            <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id} title="Finalizar"
+                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                              {finalizandoId === ex.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                            </button>
+                          )}
                           <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
                             className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                             <Printer size={14} />
@@ -1892,10 +2290,10 @@ export default function SubModuloExames({
                             className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
                             <Mail size={14} />
                           </button>
-                          {podeDeletar && (
-                            <button onClick={() => handleExcluirSolicitado(ex.id)} title="Remover"
+                          {podeDeletar && ex.ativo && (
+                            <button onClick={() => handleExcluirSolicitado(ex.id)} title="Cancelar exame"
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                              <Trash2 size={14} />
+                              <Ban size={14} />
                             </button>
                           )}
                         </div>
@@ -1909,7 +2307,7 @@ export default function SubModuloExames({
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
-              <span className="text-xs text-gray-400">{total} requisição{total !== 1 ? 'ões' : ''}</span>
+              <span className="text-xs text-gray-400">{historicoFiltrado.length} requisição{historicoFiltrado.length !== 1 ? 'ões' : ''}</span>
               <div className="flex items-center gap-3">
                 <button disabled={page === 1} onClick={() => setPage(p => p - 1)}
                   className="p-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">
@@ -1928,11 +2326,20 @@ export default function SubModuloExames({
 
       {viewingEx && <ViewModal ex={viewingEx} onFechar={() => setViewingEx(null)} />}
 
+      {carregandoResultado && (
+        <CarregarResultadoModal
+          ex={carregandoResultado === 'novo' ? null : carregandoResultado}
+          saving={savingResultado}
+          onClose={() => { if (!savingResultado) setCarregandoResultado(null); }}
+          onSalvar={handleSalvarResultado}
+        />
+      )}
+
       <ModalJustificativa
         aberto={confirmId != null}
-        titulo="Remover requisição de exame"
-        descricao="Esta ação não pode ser desfeita. Informe o motivo da exclusão."
-        acaoLabel="Remover"
+        titulo="Cancelar exame"
+        descricao="O pedido será marcado como CANCELADO. Informe o motivo do cancelamento."
+        acaoLabel="Cancelar exame"
         onConfirmar={handleExcluirConfirmado}
         onFechar={() => setConfirmId(null)}
       />

@@ -10,8 +10,10 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import {
-  LocalizacaoCombobox, conflitoEntreLocais, HoraInput, resumoLocal,
-  RASCUNHO_LOCAL_VAZIO, uniaoEspecialidadesLocais, type LocalTrabalhoForm,
+  conflitoEntreLocais, resumoLocal,
+  RASCUNHO_LOCAL_VAZIO, uniaoEspecialidadesLocais, PERFIS_COM_ESPECIALIDADE,
+  TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields,
+  type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
 import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2 } from 'lucide-react';
 import InlineError from '../components/InlineError';
@@ -127,6 +129,8 @@ export default function CadastroPessoal() {
 
   // Expediente da EMPRESA — todo membro fica restrito a esses dias/horário
   const [expedienteEmpresa, setExpedienteEmpresa] = useState<{ dias: number[] | null; ini: string | null; fim: string | null }>({ dias: null, ini: null, fim: null });
+  // Tempo de consulta padrão da empresa — vale para a especialidade sem tempo próprio
+  const [tempoPadraoEmpresa, setTempoPadraoEmpresa] = useState(TEMPO_CONSULTA_PADRAO_SISTEMA);
   useEffect(() => {
     if (loadingPerms) return;
     api.get('/equipes/horario-atendimento')
@@ -138,6 +142,7 @@ export default function CadastroPessoal() {
           ini:  d.horaInicioAtendimento || null,
           fim:  d.horaFimAtendimento    || null,
         });
+        if (Number(d.tempoConsultaPadrao) > 0) setTempoPadraoEmpresa(Number(d.tempoConsultaPadrao));
       })
       .catch(() => {});
   }, [loadingPerms]);
@@ -185,6 +190,21 @@ export default function CadastroPessoal() {
     ? especiesEmpresa
     : form.especiesAtendidas;
 
+  // Só VETERINARIO e FORNECEDOR têm especialidade (e tempo de consulta). Estagiário,
+  // enfermeiro, secretaria, financeiro e gestor informam APENAS local e horário de
+  // trabalho. (Depois do useState do form — ver comentário acima sobre TDZ.)
+  const perfilComEspecialidade =
+    PERFIS_COM_ESPECIALIDADE.includes(form.tipoUsuario) && !isGestorEquipe;
+
+  // Rótulos do que a EMPRESA preenche quando o campo do local fica em branco
+  const diasEmpresaLabel = expedienteEmpresa.dias && expedienteEmpresa.dias.length > 0
+    ? [...expedienteEmpresa.dias].sort((a, b) => a - b)
+        .map(d => DIAS_SEMANA_ATEND.find(x => x.v === d)?.l ?? d).join(', ')
+    : 'todos os dias';
+  const horarioEmpresaLabel = expedienteEmpresa.ini || expedienteEmpresa.fim
+    ? `${expedienteEmpresa.ini ?? '00:00'}–${expedienteEmpresa.fim ?? '24:00'}`
+    : 'dia inteiro';
+
   useEffect(() => {
     if (loadingPerms) return;
     const loadUserData = async () => {
@@ -199,6 +219,7 @@ export default function CadastroPessoal() {
             localizacaoId: number; localizacaoNome: string | null;
             diasTrabalho: string | null; horaInicioTrabalho: string | null; horaFimTrabalho: string | null;
             especialidadeIds?: number[];
+            temposConsulta?: Record<number, number>;
           }) => ({
             localizacaoId:   l.localizacaoId,
             localizacaoNome: l.localizacaoNome ?? '',
@@ -208,10 +229,12 @@ export default function CadastroPessoal() {
             horaInicioTrabalho: l.horaInicioTrabalho || '',
             horaFimTrabalho:    l.horaFimTrabalho    || '',
             especialidadeIds:   Array.isArray(l.especialidadeIds) ? l.especialidadeIds : [],
+            temposConsulta:     l.temposConsulta ?? {},
           }));
           // Snapshot imutável do bound (cópia — não muda quando o form é editado)
           setLocaisBase(locaisCarregados.map(l => ({
             ...l, diasTrabalho: [...l.diasTrabalho], especialidadeIds: [...l.especialidadeIds],
+            temposConsulta: { ...l.temposConsulta },
           })));
           setForm({
             nomeCompleto:      data.fullName          || '',
@@ -353,12 +376,8 @@ export default function CadastroPessoal() {
         }
         return '';
       case 'especialidadeIds':
-        // Só quando NÃO há equipe (seletor standalone). Com equipe, a especialidade
-        // é definida POR LOCAL e validada em 'locaisTrabalho'.
-        if ((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe
-            && !temEquipe && form.especialidadeIds.length === 0) {
-          return 'Selecione ao menos uma especialidade';
-        }
+        // Especialidade é OPCIONAL: o veterinário que não informar nenhuma assume
+        // Clínica Médica (aplicado no backend) e o fornecedor pode ficar sem.
         return '';
       case 'locaisTrabalho':
         if (temEquipe) {
@@ -367,13 +386,8 @@ export default function CadastroPessoal() {
           }
           const conflito = conflitoEntreLocais(form.locaisTrabalho);
           if (conflito) return conflito;
-          // Especialidade agora vive no local — VET/FORNECEDOR precisa de ao menos uma.
-          // Legado (já tem especialidades na união, sem por local) não é forçado.
-          if ((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe
-              && uniaoEspecialidadesLocais(form.locaisTrabalho).length === 0
-              && form.especialidadeIds.length === 0) {
-            return 'Adicione ao menos uma especialidade em algum local de trabalho.';
-          }
+          // Especialidade no local é OPCIONAL — veterinário sem nenhuma assume Clínica
+          // Médica (backend) e fornecedor pode ficar sem.
         }
         return '';
       default:
@@ -476,8 +490,9 @@ export default function CadastroPessoal() {
         subespecialidades: form.subespecialidades,
       }),
       // Especialidades do profissional (VET e FORNECEDOR): COM equipe = união das
-      // especialidades dos locais; SEM equipe = seletor standalone.
-      ...((form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && {
+      // especialidades dos locais; SEM equipe = seletor standalone. Estagiário e demais
+      // perfis não enviam especialidade nenhuma — só local e horário.
+      ...(perfilComEspecialidade && !isGestorEquipe && {
         // Com equipe: união dos locais. Vazia (legado sem especialidade por local) →
         // undefined para não apagar as especialidades já cadastradas.
         especialidadeIds: temEquipe
@@ -496,7 +511,9 @@ export default function CadastroPessoal() {
             diasTrabalho:       l.diasTrabalho,
             horaInicioTrabalho: l.horaInicioTrabalho || '',
             horaFimTrabalho:    l.horaFimTrabalho    || '',
-            especialidadeIds:   l.especialidadeIds   ?? [],
+            // Perfil sem atuação clínica leva o local "pelado": local, dias e horário
+            especialidadeIds:   perfilComEspecialidade ? (l.especialidadeIds ?? []) : [],
+            temposConsulta:     perfilComEspecialidade ? (l.temposConsulta   ?? {}) : {},
           })),
       }),
     };
@@ -820,11 +837,11 @@ export default function CadastroPessoal() {
               Com equipe, a especialidade é definida POR LOCAL (abaixo). ── */}
           {(form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && !temEquipe && (
             <div className="pt-2 border-t border-gray-100" id="campo-especialidadeIds">
-              <Label text="Especialidade" required />
+              <Label text="Especialidade" optional />
               <p className="text-xs text-gray-400 mb-2">
-                {(isConvidadoFlag || temEquipe) && especiesEmpresa.length > 0
-                  ? 'Especialidades das espécies que a empresa atende. Selecione uma ou mais.'
-                  : 'Selecione as espécies atendidas acima para listar as especialidades. Uma ou mais.'}
+                {form.tipoUsuario === 'VETERINARIO'
+                  ? 'Sem nenhuma selecionada, você assume Clínica Médica.'
+                  : 'Opcional — o fornecedor pode ficar sem especialidade.'}
               </p>
               <EspecialidadeSelector
                 value={form.especialidadeIds}
@@ -862,7 +879,7 @@ export default function CadastroPessoal() {
                           <div className="flex flex-wrap gap-1 mt-1">
                             {lt.especialidadeIds.map(id => (
                               <span key={id} className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-medium">
-                                {espNomeById[id] ?? `#${id}`}
+                                {espNomeById[id] ?? `#${id}`} · {lt.temposConsulta?.[id] ?? tempoPadraoEmpresa} min
                               </span>
                             ))}
                           </div>
@@ -913,66 +930,26 @@ export default function CadastroPessoal() {
               {/* Formulário do novo local: local + dias + horas em UMA linha;
                   os botões ficam numa linha própria abaixo. */}
               {mostrarFormLocal && (
-                <div className="p-3 bg-gray-50/60 border border-gray-200 rounded-2xl">
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex-1 min-w-[140px]">
-                      <label className="block text-xs text-gray-500 mb-1">Local</label>
-                      <LocalizacaoCombobox
-                        value={rascunhoLocal.localizacaoId || null}
-                        nome={rascunhoLocal.localizacaoNome}
-                        onSelect={(id, nome) => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, localizacaoId: id, localizacaoNome: nome })); }}
-                      />
-                    </div>
-                    <div className="min-w-[168px]">
-                      <label className="block text-xs text-gray-500 mb-1">Dias da semana</label>
-                      <div className="flex flex-wrap gap-1">
-                        {DIAS_SEMANA_ATEND.map(d => {
-                          const on = rascunhoLocal.diasTrabalho.includes(d.v);
-                          return (
-                            <button key={d.v} type="button"
-                              onClick={() => { setErroLocal(null); setRascunhoLocal(r => ({
-                                ...r,
-                                diasTrabalho: on ? r.diasTrabalho.filter(x => x !== d.v)
-                                                 : [...r.diasTrabalho, d.v].sort((a, b) => a - b),
-                              })); }}
-                              className={`px-2 py-1 rounded-lg text-xs font-bold border transition-colors ${
-                                on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                              }`}>
-                              {d.l}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div className="w-20">
-                      <label className="block text-xs text-gray-500 mb-1">Entra às</label>
-                      <HoraInput value={rascunhoLocal.horaInicioTrabalho}
-                        onChange={v => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, horaInicioTrabalho: v })); }}
-                        className="w-full px-2.5 py-2 rounded-xl border border-gray-200 focus:border-emerald-500 focus:outline-none text-sm" />
-                    </div>
-                    <div className="w-20">
-                      <label className="block text-xs text-gray-500 mb-1">Sai às</label>
-                      <HoraInput value={rascunhoLocal.horaFimTrabalho}
-                        onChange={v => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, horaFimTrabalho: v })); }}
-                        className="w-full px-2.5 py-2 rounded-xl border border-gray-200 focus:border-emerald-500 focus:outline-none text-sm" />
-                    </div>
-                  </div>
+                <div className="p-3 bg-gray-50/60 border border-gray-200 rounded-2xl space-y-3">
+                  {/* MESMO formulário do "Incluir/Editar Membro" — componente único
+                      (LocalTrabalhoFields): mesma distribuição de campos, classes e textos. */}
+                  <LocalTrabalhoFields
+                    rascunho={rascunhoLocal}
+                    onChange={fn => setRascunhoLocal(fn)}
+                    onDirty={() => setErroLocal(null)}
+                    comEspecialidades={perfilComEspecialidade}
+                    especieIds={especiesFiltroEspecialidade}
+                    espNomeById={espNomeById}
+                    tempoPadraoEmpresa={tempoPadraoEmpresa}
+                    diasEmpresaLabel={diasEmpresaLabel}
+                    horarioEmpresaLabel={horarioEmpresaLabel}
+                    textoEspecialidade={form.tipoUsuario === 'VETERINARIO'
+                      ? 'sem nenhuma, você assume Clínica Médica'
+                      : 'opcional'}
+                    emptyTextEspecialidade="Selecione as espécies atendidas para listar as especialidades."
+                  />
 
-                  {/* Especialidades exercidas NESTE local (multi-seleção) */}
-                  {(form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && (
-                    <div className="mt-3">
-                      <label className="block text-xs text-gray-500 mb-1">Especialidades neste local</label>
-                      <EspecialidadeSelector
-                        variant="dropdown"
-                        value={rascunhoLocal.especialidadeIds}
-                        onChange={ids => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, especialidadeIds: ids })); }}
-                        especieIds={especiesFiltroEspecialidade}
-                        emptyText="Selecione as espécies atendidas para listar as especialidades."
-                      />
-                    </div>
-                  )}
-
-                  <div className="flex justify-end gap-2 mt-3">
+                  <div className="flex justify-end gap-2">
                     <button type="button"
                       onClick={() => { setMostrarFormLocal(false); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setErroLocal(null); setEditIndex(null); }}
                       className="px-3 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-100">

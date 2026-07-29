@@ -62,10 +62,29 @@ const refreshTokenRules = [
     .isString().withMessage('Refresh token inválido'),
 ];
 
+// 2FA por e-mail — o desafioId é opaco (hex de 32 bytes) e o código tem 6 dígitos.
+const verificar2faRules = [
+  body('desafioId')
+    .isString().withMessage('Desafio inválido')
+    .isLength({ min: 16, max: 128 }).withMessage('Desafio inválido'),
+  body('codigo')
+    .isString().withMessage('Código inválido')
+    .trim()
+    .matches(/^\d{6}$/).withMessage('O código tem 6 dígitos'),
+];
+
+const reenviar2faRules = [
+  body('desafioId')
+    .isString().withMessage('Desafio inválido')
+    .isLength({ min: 16, max: 128 }).withMessage('Desafio inválido'),
+];
+
 module.exports = {
   loginRules,
   registerRules,
   forgotPasswordRules,
   resetPasswordRules,
   refreshTokenRules,
+  verificar2faRules,
+  reenviar2faRules,
 };

@@ -9,7 +9,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import InlineError from '../components/InlineError';
-import { HoraInput } from '../components/UsuarioFormModal';
+import { HoraInput, TEMPOS_CONSULTA, TEMPO_CONSULTA_PADRAO_SISTEMA } from '../components/UsuarioFormModal';
 
 // ─── Utilitário de compressão (mesmo padrão de Animal.tsx) ───────────────────
 const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise<File> =>
@@ -161,6 +161,8 @@ export default function Configuracoes() {
   const [diasAtend,  setDiasAtend]  = useState<number[]>([]);
   const [horaInicio, setHoraInicio] = useState('');
   const [horaFim,    setHoraFim]    = useState('');
+  // Tempo de consulta padrão da empresa ('' = padrão do sistema)
+  const [tempoConsultaPadrao, setTempoConsultaPadrao] = useState('');
 
   const [especies,          setEspecies]          = useState<{ id: number; nome: string }[]>([]);
   const [especiesAtendidas, setEspeciesAtendidas] = useState<number[]>([]);
@@ -180,6 +182,7 @@ export default function Configuracoes() {
         setHoraInicio(dados.horaInicioAtendimento ?? '');
         setHoraFim(dados.horaFimAtendimento ?? '');
         setEspeciesAtendidas(Array.isArray(dados.especiesAtendidas) ? dados.especiesAtendidas : []);
+        setTempoConsultaPadrao(dados.tempoConsultaPadraoMin ? String(dados.tempoConsultaPadraoMin) : '');
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -297,6 +300,7 @@ export default function Configuracoes() {
       fd.append('horaInicioAtendimento', horaInicio);          // vazio = sem restrição
       fd.append('horaFimAtendimento', horaFim);
       fd.append('especiesAtendidas', especiesAtendidas.join(',')); // vazio = todas as espécies
+      fd.append('tempoConsultaPadraoMin', tempoConsultaPadrao);    // vazio = padrão do sistema
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -578,6 +582,28 @@ export default function Configuracoes() {
             <p className="text-xs text-gray-400 mt-1">
               O Agendamento libera horários apenas nos dias e na faixa selecionados. Deixe os dias sem seleção
               ou os horários em branco para não restringir.
+            </p>
+          </div>
+
+          {/* Tempo de consulta padrão — vale para toda especialidade que o profissional
+              não configurar no card "Locais de trabalho" */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Tempo de consulta padrão
+            </label>
+            <select
+              value={tempoConsultaPadrao}
+              onChange={e => setTempoConsultaPadrao(e.target.value)}
+              className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            >
+              <option value="">Padrão do sistema ({TEMPO_CONSULTA_PADRAO_SISTEMA} min)</option>
+              {TEMPOS_CONSULTA.map(m => (
+                <option key={m} value={m}>{m} min</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Passo da agenda para a especialidade em que o profissional não informar um
+              tempo próprio nos locais de trabalho dele.
             </p>
           </div>
 

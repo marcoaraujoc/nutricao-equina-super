@@ -1,8 +1,8 @@
 // backend/src/services/clinicaLLMService.js
 'use strict';
 
-const { callAI }      = require('../ai');
-const { buildPrompt } = require('../ai/prompts');
+const { callAI, MODULOS_IA } = require('../ai');
+const { buildPrompt }        = require('../ai/prompts');
 
 // =====================================================================
 // EXPORTAÇÃO PRINCIPAL
@@ -14,18 +14,21 @@ const { buildPrompt } = require('../ai/prompts');
  * @param {string} texto      — texto da evolução clínica
  * @param {number} [userId]   — id do usuário (para log)
  * @param {number} [animalId] — id do animal (para log)
+ * @param {number} [empresaId] — cliente a quem o consumo de IA é atribuído
  * @returns {Promise<{ acoes: Array }>}
  */
-async function interpretarEvolucao(texto, userId = null, animalId = null) {
+async function interpretarEvolucao(texto, userId = null, animalId = null, empresaId = null) {
   const { operacaoVers, prompt } = buildPrompt('interpretacao_clinica', texto);
   try {
     const respostaTexto = await callAI({
       operacao:    operacaoVers,
+      modulo:      MODULOS_IA.ATENDIMENTO,
       prompt,
       maxTokens:   1000,
       temperature: 0.1,
       userId,
       animalId,
+      empresaId,
     });
 
     const jsonMatch = respostaTexto.match(/\{[\s\S]*\}/);
@@ -53,20 +56,23 @@ async function interpretarEvolucao(texto, userId = null, animalId = null) {
  * @param {Array}  eventos  — array de eventos do HistoricoController
  * @param {number} [userId]
  * @param {number} [animalId]
+ * @param {number} [empresaId] — cliente a quem o consumo de IA é atribuído
  * @returns {Promise<string[]>} — array de resumos (mesmo tamanho que eventos), fallback para titulo em caso de falha
  */
-async function resumirHistorico(eventos, userId = null, animalId = null) {
+async function resumirHistorico(eventos, userId = null, animalId = null, empresaId = null) {
   if (!eventos || eventos.length === 0) return [];
 
   const { operacaoVers, prompt } = buildPrompt('resumo_historico', eventos);
   try {
     const respostaTexto = await callAI({
       operacao:    operacaoVers,
+      modulo:      MODULOS_IA.ATENDIMENTO,
       prompt,
       maxTokens:   600,
       temperature: 0.2,
       userId,
       animalId,
+      empresaId,
     });
 
     const jsonMatch = respostaTexto.match(/\[[\s\S]*\]/);

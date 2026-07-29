@@ -1,7 +1,8 @@
 // backend/src/services/agendamentoLLMService.js
 'use strict';
 
-const { callAI } = require('../ai');
+const { callAI, MODULOS_IA } = require('../ai');
+const { buildPrompt }        = require('../ai/prompts');
 
 const HORARIOS_PADRAO = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00'];
 
@@ -18,7 +19,7 @@ const HORARIOS_PADRAO = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00'
  * }} param
  * @returns {Promise<{data, hora, animalId, vetId, animalNomeNaoEncontrado, vetNomeNaoEncontrado, confianca, resumo} | null>}
  */
-async function interpretarAgendamento({ texto, vets, animais, dataReferencia, vetHint, horaHint }) {
+async function interpretarAgendamento({ texto, vets, animais, dataReferencia, vetHint, horaHint, userId = null, empresaId = null }) {
   const animaisLimitados = animais.slice(0, 120);
 
   const vetsStr = vets.length
@@ -33,46 +34,23 @@ async function interpretarAgendamento({ texto, vets, animais, dataReferencia, ve
   if (vetHint)  hints.push(`Se o usuário não mencionar veterinário, use ID ${vetHint}.`);
   if (horaHint) hints.push(`Se o usuário não mencionar horário, use "${horaHint}".`);
 
-  const prompt = `Você é um assistente de agendamento veterinário. Analise a solicitação em português e extraia as informações de agendamento.
-
-DATA DE REFERÊNCIA (hoje): ${dataReferencia}
-
-VETERINÁRIOS DISPONÍVEIS:
-${vetsStr}
-
-ANIMAIS CADASTRADOS:
-${animaisStr}
-
-${hints.length ? hints.join('\n') + '\n\n' : ''}REGRAS:
-- "amanhã" → data de referência + 1 dia
-- "próxima segunda" → próxima segunda-feira
-- Sem data → use data de referência
-- "9h", "09:00", "nove horas" → "09:00"; "14h30" → "14:30"
-- Horários permitidos: 08:00 a 18:00 (inteiros)
-- Combine nomes por similaridade fonética (ex: "Belinha" ≈ "Belinha", "Dr. João" ≈ "João Silva")
-- Se animal não encontrado nos cadastrados, coloque o nome mencionado em animalNomeNaoEncontrado
-- Se veterinário não encontrado na lista, coloque o nome mencionado em vetNomeNaoEncontrado
-
-SOLICITAÇÃO: "${texto}"
-
-Responda APENAS com JSON válido (sem markdown):
-{
-  "data": "YYYY-MM-DD ou null",
-  "hora": "HH:MM ou null",
-  "animalId": numero_ou_null,
-  "vetId": numero_ou_null,
-  "animalNomeNaoEncontrado": "nome_ou_null",
-  "vetNomeNaoEncontrado": "nome_ou_null",
-  "confianca": 0.0_a_1.0,
-  "resumo": "frase curta do que foi entendido"
-}`;
+  const { operacaoVers, prompt } = buildPrompt('interpretacao_agendamento', {
+    texto,
+    vetsStr,
+    animaisStr,
+    dataReferencia,
+    hints: hints.join('\n'),
+  });
 
   try {
     const resposta = await callAI({
-      operacao:    'agendamento_interpretacao@v1',
+      operacao:    operacaoVers,
+      modulo:      MODULOS_IA.AGENDA,
       prompt,
       maxTokens:   400,
       temperature: 0.05,
+      userId,
+      empresaId,
     });
 
     const jsonMatch = resposta.match(/\{[\s\S]*\}/);

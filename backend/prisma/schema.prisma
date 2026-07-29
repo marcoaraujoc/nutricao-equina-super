@@ -41,6 +41,11 @@ model User {
   mustChangePassword   Boolean   @default(false)
   isConvidado          Boolean   @default(false)
   refreshToken         String?   @db.VarChar(512)
+  // 2FA por e-mail no login com senha. Ligado por padrão; desligar por usuário
+  // aqui, ou globalmente via MFA_EMAIL_ENABLED=false (kill-switch de emergência).
+  mfaAtivo             Boolean   @default(true) @map("mfa_ativo")
+  mfaDesafios          MfaDesafio[] @relation("UserMfaDesafios")
+  configSegurancaAtualizada ConfiguracaoSeguranca[] @relation("ConfigSegurancaAtualizadoPor")
   cpf               String?  @db.VarChar(14)
   cnpj              String?  @db.VarChar(18)
   mensalista        Boolean  @default(false)
@@ -79,6 +84,7 @@ model User {
   permissoesMembro       PermissaoMembro[]
   permissoesProprietario PermissaoProprietario[]
   proprietarioPerfis       ProprietarioPerfil[]    @relation("ProprietarioPerfilUser")
+  profissionalPerfis       ProfissionalPerfil[]    @relation("ProfissionalPerfilUser")
   fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
   encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
   designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
@@ -370,18 +376,21 @@ model ExameNutricional {
 // Anexos da página Resultado de Exame · Imagem — arquivo interpretado pela LLM:
 // laudo (dados extraídos) vira ExameNutricional; imagem é apenas ARMAZENADA aqui.
 model ExameImagemAnexo {
-  id          Int      @id @default(autoincrement())
-  animalId    Int
-  nome        String?  @db.Text
-  arquivoUrl  String   @db.Text
-  dataExame   DateTime @default(now())
-  criadoPorId Int?
-  ativo       Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  animalId       Int
+  exameClinicoId Int?     @map("exame_clinico_id")
+  nome           String?  @db.Text
+  arquivoUrl     String   @db.Text
+  dataExame      DateTime @default(now())
+  criadoPorId    Int?
+  ativo          Boolean  @default(true)
+  createdAt      DateTime @default(now())
 
-  animal Animal @relation("AnimalExameImagens", fields: [animalId], references: [id], onDelete: Cascade)
+  animal Animal        @relation("AnimalExameImagens",   fields: [animalId],       references: [id], onDelete: Cascade)
+  exame  ExameClinico? @relation("ExameClinicoImagens",  fields: [exameClinicoId], references: [id], onDelete: SetNull)
 
   @@index([animalId])
+  @@index([exameClinicoId])
   @@map("tb_exame_imagem_anexos")
   @@schema("schs2vet")
 }
@@ -403,14 +412,36 @@ model ExameClinico {
   numero          Int?
   ativo           Boolean   @default(true)
 
-  animal      Animal           @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?            @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
-  evolucao    EvolucaoClinica? @relation("EvolucaoExames",          fields: [evolucaoId],    references: [id], onDelete: SetNull)
-  faturaItens FaturaItem[]     @relation("FaturaItemExameClinico")
+  animal        Animal           @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
+  veterinario   User?            @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  evolucao      EvolucaoClinica? @relation("EvolucaoExames",          fields: [evolucaoId],    references: [id], onDelete: SetNull)
+  faturaItens   FaturaItem[]     @relation("FaturaItemExameClinico")
+  resultadoItens ExameClinicoResultadoItem[] @relation("ExameClinicoResultados")
+  imagens        ExameImagemAnexo[]          @relation("ExameClinicoImagens")
 
   @@index([animalId])
   @@index([evolucaoId])
   @@map("tb_exames_clinicos")
+  @@schema("schs2vet")
+}
+
+// Resultado ESTRUTURADO do exame clínico laboratorial (uma linha por parâmetro).
+// O laudo/arquivo fica em ExameClinico (resultado verbatim + arquivoUrl); as imagens
+// do exame de imagem usam ExameImagemAnexo. Migration 20260730000000.
+model ExameClinicoResultadoItem {
+  id             Int      @id @default(autoincrement())
+  exameClinicoId Int      @map("exame_clinico_id")
+  parametro      String   @db.Text
+  valor          String?  @db.Text
+  unidade        String?  @db.VarChar(50)
+  referencia     String?  @db.Text
+  ordem          Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  exame ExameClinico @relation("ExameClinicoResultados", fields: [exameClinicoId], references: [id], onDelete: Cascade)
+
+  @@index([exameClinicoId])
+  @@map("tb_exame_clinico_resultado_itens")
   @@schema("schs2vet")
 }
 
@@ -679,6 +710,7 @@ model VacinaClinica {
   quantidade       Int?      @default(1)
   valor            Decimal?  @db.Decimal(10, 2)
   cliente          Boolean   @default(false)
+  status           String    @default("SALVA") @db.VarChar(20) // SALVA (rascunho) | FINALIZADA
   dataAplicacao      DateTime  @default(now())
   dataReforco        DateTime?
   observacao         String?   @db.Text
@@ -723,10 +755,17 @@ model AgendamentoClinico {
   // Lembretes 1h / 15min antes (proprietário + veterinário) — idempotência por flag.
   lembreteWa1hEnviadoEm    DateTime? @map("lembrete_wa_1h_em")
   lembreteWa15minEnviadoEm DateTime? @map("lembrete_wa_15min_em")
+  // Especialidade do atendimento — define o passo da grade e a duração do slot.
+  especialidadeId Int?   @map("especialidade_id")
+  // Snapshot da duração em minutos. NÃO derivar na leitura: se o profissional mudar
+  // o tempo da especialidade depois, os agendamentos já marcados mantêm o seu.
+  // null = anterior à migration 20260804000000 (a agenda trata como 60min).
+  duracaoMin    Int?     @map("duracao_min")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt      @map("updated_at")
 
-  animal      Animal               @relation("AnimalAgendamentos",     fields: [animalId],      references: [id], onDelete: Cascade)
+  animal        Animal         @relation("AnimalAgendamentos",     fields: [animalId],      references: [id], onDelete: Cascade)
+  especialidade Especialidade? @relation("AgendamentoEspecialidade", fields: [especialidadeId], references: [id], onDelete: SetNull)
   veterinario User?                @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
   criadoPor   User?                @relation("AgendamentoCriadoPor",   fields: [criadoPorId],   references: [id], onDelete: SetNull)
   evolucoes   EvolucaoClinica[]    @relation("AgendamentoEvolucoes")
@@ -735,6 +774,7 @@ model AgendamentoClinico {
   @@index([animalId, dataHora])
   @@index([empresaId, dataHora])
   @@index([equipeId, dataHora])
+  @@index([especialidadeId])
   @@map("tb_agendamentos_clinicos")
   @@schema("schs2vet")
 }
@@ -921,8 +961,11 @@ model AiUsageLog {
   id           Int      @id @default(autoincrement())
   createdAt    DateTime @default(now())
   operacao     String
+  // Módulo de origem da chamada (ver MODULOS_IA em src/ai) — alimenta o
+  // relatório de consumo em /ai-usage. 'LEGADO' = registros anteriores à coluna.
+  modulo       String   @default("LEGADO") @db.VarChar(40)
   modelo       String
-  provedor     String   @default("groq")
+  provedor     String   @default("google")
   tokensEntrada Int
   tokensSaida  Int
   tokensTotal  Int
@@ -930,6 +973,9 @@ model AiUsageLog {
   latenciaMs   Int
   userId       Int?
   animalId     Int?
+  // Cliente (tenant) a quem o consumo é atribuído — base do metering/faturamento.
+  // Sem FK de propósito: o log sobrevive à exclusão da empresa (igual AuditLog).
+  empresaId    Int?     @map("empresa_id")
   sucesso      Boolean  @default(true)
   erroMensagem String?
 
@@ -938,6 +984,10 @@ model AiUsageLog {
   @@index([createdAt])
   @@index([userId])
   @@index([operacao])
+  @@index([modulo])
+  @@index([modulo, createdAt])
+  @@index([empresaId])
+  @@index([empresaId, createdAt])
   @@map("tb_ai_usage_logs")
   @@schema("schs2vet")
 }
@@ -1000,6 +1050,7 @@ model Especialidade {
   especie      Especie                   @relation(fields: [especieId], references: [id], onDelete: Cascade)
   usuarios     UsuarioEspecialidade[]
   fornecedores FornecedorEspecialidade[]
+  agendamentos AgendamentoClinico[]      @relation("AgendamentoEspecialidade")
 
   @@unique([nome, especieId])
   @@index([especieId])
@@ -1009,15 +1060,20 @@ model Especialidade {
 
 // Especialidades de um usuário (VETERINARIO/FORNECEDOR com login). Multi-especialidade.
 model UsuarioEspecialidade {
-  id              Int @id @default(autoincrement())
-  userId          Int @map("user_id")
-  especialidadeId Int @map("especialidade_id")
+  id              Int  @id @default(autoincrement())
+  userId          Int  @map("user_id")
+  especialidadeId Int  @map("especialidade_id")
+  // Especialidade é POR EMPRESA: o mesmo profissional pode ser ortopedista numa
+  // clínica e clínico geral na outra. null = vínculo legado (anterior à 20260807000000).
+  empresaId       Int? @map("empresa_id")
 
   user          User          @relation(fields: [userId],          references: [id], onDelete: Cascade)
   especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
+  empresa       Empresa?      @relation("UsuarioEspecialidadeEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, especialidadeId])
+  @@unique([userId, especialidadeId, empresaId], map: "tb_usuario_especialidades_user_esp_empresa_key")
   @@index([userId])
+  @@index([empresaId])
   @@map("tb_usuario_especialidades")
   @@schema("schs2vet")
 }
@@ -1214,6 +1270,65 @@ model OrcamentoItem {
   @@schema("schs2vet")
 }
 
+// Plano de consumo de IA por cliente (empresa). Conta única no Google + medição
+// interna: o custo é centralizado e rateado/limitado por tenant aqui.
+// SEM LINHA = sem limite (apenas medição). Limite null = ilimitado na dimensão.
+model IaPlanoEmpresa {
+  id                Int      @id @default(autoincrement())
+  empresaId         Int      @unique @map("empresa_id")
+  plano             String   @default("PADRAO") @db.VarChar(40)
+  limiteTokensMes   Int?     @map("limite_tokens_mes")
+  limiteChamadasMes Int?     @map("limite_chamadas_mes")
+  // false = modo observação (deixa passar, apenas sinaliza no painel)
+  bloquearAoExceder Boolean  @default(true) @map("bloquear_ao_exceder")
+  ativo             Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  empresa Empresa @relation("EmpresaIaPlano", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("tb_ia_plano_empresa")
+  @@schema("schs2vet")
+}
+
+// Configuração global de segurança (linha única, id = 1) — chave mestra do ADMIN
+// da plataforma. Tira o 2FA da dependência exclusiva de variável de ambiente.
+// Ordem de resolução em services/mfaService.js:
+//   MFA_EMAIL_ENABLED=false (kill-switch) > mfaEmailAtivo (aqui) > User.mfaAtivo
+model ConfiguracaoSeguranca {
+  id              Int      @id @default(1)
+  mfaEmailAtivo   Boolean  @default(false) @map("mfa_email_ativo")
+  atualizadoPorId Int?     @map("atualizado_por_id")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  atualizadoPor User? @relation("ConfigSegurancaAtualizadoPor", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+
+  @@map("tb_configuracao_seguranca")
+  @@schema("schs2vet")
+}
+
+// Desafio de 2FA pendente entre a senha correta e a emissão dos cookies de sessão.
+// O código nunca é persistido em claro — só o hash SHA-256.
+model MfaDesafio {
+  id         String   @id
+  userId     Int      @map("user_id")
+  codigoHash String   @map("codigo_hash")
+  expiraEm   DateTime @map("expira_em")
+  tentativas Int      @default(0)
+  reenvios   Int      @default(0)
+  consumido  Boolean  @default(false)
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now())
+
+  user User @relation("UserMfaDesafios", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiraEm])
+  @@map("tb_mfa_desafios")
+  @@schema("schs2vet")
+}
+
 model Empresa {
   id        Int      @id @default(autoincrement())
   nome      String
@@ -1225,8 +1340,11 @@ model Empresa {
   updatedAt DateTime @updatedAt
 
   owner           User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  iaPlano         IaPlanoEmpresa?  @relation("EmpresaIaPlano")
   proprietarios   User[]           @relation("ProprietarioEmpresa")
   proprietarioPerfis ProprietarioPerfil[] @relation("ProprietarioPerfilEmpresa")
+  profissionalPerfis ProfissionalPerfil[] @relation("ProfissionalPerfilEmpresa")
+  especialidadesMembros UsuarioEspecialidade[] @relation("UsuarioEspecialidadeEmpresa")
   equipes         Equipe[]
   animais         Animal[]         @relation("EmpresaAnimais")
   estoques    EstoqueClinica[] @relation("EmpresaEstoque")
@@ -1254,6 +1372,41 @@ model Empresa {
 // REGRA DE LEITURA (lib/proprietarioPerfil.js): quando existe perfil para a empresa do
 // contexto, ele é a AUTORIDADE de todos os seus campos — null aqui significa "vazio
 // nesta empresa", e NÃO cai de volta no User. Sem perfil (dado legado), lê-se o User.
+/// Cadastro do PROFISSIONAL por EMPRESA (migration 20260807000000).
+/// Mesma regra do ProprietarioPerfil: `User` é só IDENTIDADE (e-mail, senha, userType,
+/// ativo global) e o cadastro — nome, contato, endereço, CRMV — vive aqui, um registro
+/// por empresa. O mesmo profissional pode atuar em várias clínicas com cadastros
+/// INDEPENDENTES; ao ser incluído numa empresa nova, nada é pré-carregado da outra.
+/// LEITURA/ESCRITA: sempre via `lib/profissionalPerfil.js`.
+model ProfissionalPerfil {
+  id        Int @id @default(autoincrement())
+  userId    Int @map("user_id")
+  empresaId Int @map("empresa_id")
+
+  fullName    String? @map("full_name") @db.VarChar(255)
+  phone       String? @db.VarChar(30)
+  cep         String? @db.VarChar(10)
+  endereco    String? @db.VarChar(255)
+  complemento String? @db.VarChar(100)
+  bairro      String? @db.VarChar(100)
+  cidade      String? @db.VarChar(100)
+  estado      String? @db.VarChar(2)
+  // CRMV aqui (e não em VetPerfil, que é @unique global) — cada empresa informa o seu
+  crmv        String? @db.VarChar(20)
+  // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation("ProfissionalPerfilUser",    fields: [userId],    references: [id], onDelete: Cascade)
+  empresa Empresa @relation("ProfissionalPerfilEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, empresaId])
+  @@index([empresaId])
+  @@map("tb_profissional_perfis")
+  @@schema("schs2vet")
+}
+
 model ProprietarioPerfil {
   id        Int @id @default(autoincrement())
   userId    Int @map("user_id")
@@ -1337,6 +1490,10 @@ model EmpresaConfiguracao {
   // Espécies que a empresa atende — CSV de IDs de Especie (ex: "1,2"). null/"" = todas.
   // Usado para filtrar as especialidades oferecidas no cadastro de membros/fornecedores.
   especiesAtendidas     String?  @map("especies_atendidas")
+  // Tempo de consulta PADRÃO da empresa (minutos). É o que vale para a especialidade
+  // que o profissional não configurou no card "Locais de trabalho" — herança dinâmica,
+  // não snapshot. null = padrão do sistema (60 min).
+  tempoConsultaPadraoMin Int?    @map("tempo_consulta_padrao_min")
   // Evolution API — instância exclusiva de WhatsApp da clínica (migration 20260718170000).
   // waInstance: identificador da instância (nunca exposto ao frontend);
   // waStatus: DESCONECTADO | AGUARDANDO_QR | CONECTADO | ERRO.
@@ -1454,6 +1611,10 @@ model MembroLocalTrabalho {
   horaInicioTrabalho String?  @db.VarChar(5)   // HH:MM
   horaFimTrabalho    String?  @db.VarChar(5)   // HH:MM
   especialidadesIds  String?  @db.VarChar(255) // CSV de IDs de tb_especialidades (por local)
+  // Tempo de consulta POR especialidade NESTE local: { "<especialidadeId>": minutos }.
+  // Toda especialidade em `especialidadesIds` tem entrada aqui (obrigatório na app).
+  // É o que define o passo da grade de horários — ver AgendamentoController.
+  temposConsulta     Json?    @map("tempos_consulta")
   createdAt          DateTime @default(now())
 
   membro      MembroEquipe      @relation(fields: [membroEquipeId], references: [id], onDelete: Cascade)

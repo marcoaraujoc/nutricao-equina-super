@@ -14,6 +14,14 @@ export default defineConfig({
     open: false,
     allowedHosts: true,
 
+    // Atrás de um túnel HTTPS (Tailscale Funnel / Cloudflare), a página é servida em
+    // :443 mas o cliente de HMR tentaria abrir o websocket na porta do dev server
+    // (5173) e falharia — o navegador fica reclamando no console e o hot reload morre.
+    // Só ativa quando VITE_TUNEL=1 para não quebrar o acesso normal por localhost.
+    ...(process.env.VITE_TUNEL === '1'
+      ? { hmr: { protocol: 'wss' as const, clientPort: 443 } }
+      : {}),
+
     proxy: {
       '/api': {
         target: 'http://localhost:3001',

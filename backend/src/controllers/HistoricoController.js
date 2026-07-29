@@ -93,6 +93,7 @@ const HistoricoController = {
           badge:             e.especialidade || 'Clínica Geral',
           status:            e.status,
           responsavel:       e.veterinario?.fullName ?? null,
+          veterinarioId:     e.veterinario?.id ?? null,
           resumo:            e.texto,
           evolucaoId:        e.id,
           dataFim:           e.dataFim,
@@ -318,7 +319,7 @@ const HistoricoController = {
       const recentes = eventos.slice(0, limit);
 
       // Gera resumos via LLM (fallback para titulo em caso de falha)
-      const resumos = await resumirHistorico(recentes, req.user.id, animalId);
+      const resumos = await resumirHistorico(recentes, req.user.id, animalId, req.empresaId ?? null);
 
       const dados = recentes.map((ev, i) => ({
         data:   new Date(ev.data).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),

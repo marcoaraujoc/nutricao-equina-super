@@ -14,7 +14,8 @@ import InlineError from '../components/InlineError';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA';
+// TRANSFERIDO = reagendado para outra data (o horário antigo foi liberado)
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA' | 'TRANSFERIDO';
 
 interface Agendamento {
   id:          number;
@@ -62,6 +63,7 @@ const STATUS_CLS: Record<StatusAgendamento, string> = {
   FINALIZADO:   'bg-green-100 text-green-700',
   CANCELADO:    'bg-red-100 text-red-700',
   ATRASADA:     'bg-orange-100 text-orange-700',
+  TRANSFERIDO:  'bg-violet-100 text-violet-700',
 };
 
 const STATUS_LABEL: Record<StatusAgendamento, string> = {
@@ -71,6 +73,7 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
   ATRASADA:     'ATRASADA',
+  TRANSFERIDO:  'TRANSFERIDO',
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -330,7 +333,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
               // ATRASADA é variante de AGENDADO (ainda não ocorreu) — mesmas ações.
               const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
               const isConcluido   = ag.status === 'CONCLUIDO';
-              const isCancelado   = ag.status === 'CANCELADO';
+              const isTransferido = ag.status === 'TRANSFERIDO';
+              const isCancelado   = ag.status === 'CANCELADO' || isTransferido;
               const isEmAndamento = ag.status === 'EM_ANDAMENTO';
               return (
                 <tr key={ag.id} className={`hover:bg-gray-50 transition-colors ${isConcluido || isCancelado ? 'opacity-60' : ''}`}>
@@ -352,8 +356,10 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                   <td className="px-4 py-3">
                     <p className="text-sm text-gray-800">{ag.titulo}</p>
                     {ag.observacao && (
-                      <p className={`text-xs mt-0.5 line-clamp-1 ${isCancelado ? 'text-red-500 italic' : 'text-gray-400'}`}>
-                        {isCancelado ? `Motivo: ${ag.observacao}` : ag.observacao}
+                      <p className={`text-xs mt-0.5 line-clamp-1 ${
+                        isTransferido ? 'text-violet-600 italic' : isCancelado ? 'text-red-500 italic' : 'text-gray-400'
+                      }`}>
+                        {isTransferido ? ag.observacao : isCancelado ? `Motivo: ${ag.observacao}` : ag.observacao}
                       </p>
                     )}
                     {ag.veterinario && (
@@ -425,7 +431,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
           // ATRASADA é variante de AGENDADO (ainda não ocorreu) — mesmas ações.
           const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
           const isConcluido   = ag.status === 'CONCLUIDO';
-          const isCancelado   = ag.status === 'CANCELADO';
+          const isTransferido = ag.status === 'TRANSFERIDO';
+          const isCancelado   = ag.status === 'CANCELADO' || isTransferido;
           const isEmAndamento = ag.status === 'EM_ANDAMENTO';
           return (
             <div key={ag.id} className={`px-4 py-3 ${isConcluido || isCancelado ? 'opacity-60' : ''}`}>
@@ -454,7 +461,9 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                 <p className="text-xs text-gray-400 mt-0.5">{ag.veterinario.fullName}</p>
               )}
               {isCancelado && ag.observacao && (
-                <p className="text-xs text-red-500 mt-0.5 italic">Motivo: {ag.observacao}</p>
+                <p className={`text-xs mt-0.5 italic ${isTransferido ? 'text-violet-600' : 'text-red-500'}`}>
+                  {isTransferido ? ag.observacao : `Motivo: ${ag.observacao}`}
+                </p>
               )}
 
               <div className="flex items-center justify-between mt-2">

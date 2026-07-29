@@ -1,7 +1,7 @@
 // frontend/src/pages/SubModuloVacina.tsx — registro clínico de vacinas
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Syringe, Trash2, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
+import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
@@ -71,6 +71,7 @@ interface VacinaClinica {
   valor:             number | null;
   cliente:           boolean;
   ativo:             boolean;
+  status:            string | null;   // SALVA (rascunho) | FINALIZADA
   dataAplicacao:     string;
   dataReforco:       string | null;
   observacao:        string | null;
@@ -80,8 +81,12 @@ interface VacinaClinica {
   loteVacina:        { id: number; lote: string; validade: string } | null;
 }
 
-type StatusVacina = 'VIGENTE' | 'VENCIDA' | 'INATIVA';
-type FiltroStatus = 'todos' | 'VIGENTE' | 'VENCIDA' | 'INATIVA';
+// Ciclo de vida da vacina — mesma lógica da Prescrição:
+// SALVA (rascunho) → FINALIZADA (vai para a Execução de Prescrição) →
+// EXECUTADA (aplicada no plantão: debita estoque + lança na fatura).
+// CANCELADA = registro cancelado (soft delete com justificativa).
+type StatusVacina = 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA';
+type FiltroStatus = 'todos' | 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -160,7 +165,7 @@ function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
   const grupo: PrintGrupoPrescricao = {
     numero:          v.numero ?? 0,
     numeroFormatado: vcNum ?? `VC-${String(v.id).padStart(4, '0')}`,
-    status:          status === 'INATIVA' ? 'CANCELADA' : 'FINALIZADA',
+    status:          status === 'CANCELADA' ? 'CANCELADA' : status === 'SALVA' ? 'SALVO' : status === 'EXECUTADA' ? 'EXECUTADO' : 'FINALIZADA',
     finalizadoEm:    null,
     finalizadoPor:   null,
     executadoPor:    v.veterinario ? { fullName: v.veterinario.fullName } : null,
@@ -195,31 +200,44 @@ const formatVcNum = (num: number | null, tipo: string | null) =>
   num != null ? `${tipo ?? 'VC'}-${String(num).padStart(4, '0')}` : null;
 
 function getStatus(v: VacinaClinica): StatusVacina {
-  if (!v.ativo) return 'INATIVA';
-  if (v.dataReforco && new Date(v.dataReforco) < new Date()) return 'VENCIDA';
-  return 'VIGENTE';
+  if (!v.ativo) return 'CANCELADA';
+  if (v.status === 'EXECUTADA')  return 'EXECUTADA';
+  if (v.status === 'FINALIZADA') return 'FINALIZADA';
+  return 'SALVA';
 }
+
+// Reforço com data no passado — apenas destaque visual da data (independente do
+// ciclo SALVA/FINALIZADA), preservando o alerta de reforço vencido.
+const reforcoVencido = (v: VacinaClinica): boolean =>
+  !!v.dataReforco && new Date(v.dataReforco) < new Date();
 
 // ─── StatusBadge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: StatusVacina }) {
-  if (status === 'INATIVA') {
+  if (status === 'CANCELADA') {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
-        <X size={8} /> INATIVA
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">
+        <Ban size={8} /> CANCELADA
       </span>
     );
   }
-  if (status === 'VENCIDA') {
+  if (status === 'EXECUTADA') {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">
-        <AlertCircle size={8} /> VENCIDA
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+        <CheckCircle size={8} /> EXECUTADA
+      </span>
+    );
+  }
+  if (status === 'FINALIZADA') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+        <CheckCircle size={8} /> EM EXECUÇÃO
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700">
-      <CheckCircle size={8} /> VIGENTE
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+      <Clock size={8} /> SALVA
     </span>
   );
 }
@@ -281,9 +299,9 @@ function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) 
           {v.dataReforco && <Row label="Reforço"        value={formatDate(v.dataReforco)} />}
           {v.veterinario && <Row label="Executor"       value={v.veterinario.fullName} />}
           {v.observacao  && <Row label="Obs."           value={v.observacao} />}
-          {status === 'INATIVA' && v.motivoInativacao && (
+          {status === 'CANCELADA' && v.motivoInativacao && (
             <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
-              <p className="text-xs font-semibold text-gray-500 mb-1">MOTIVO DA INATIVAÇÃO</p>
+              <p className="text-xs font-semibold text-gray-500 mb-1">MOTIVO DO CANCELAMENTO</p>
               <p className="text-sm text-gray-700">{v.motivoInativacao}</p>
             </div>
           )}
@@ -404,14 +422,14 @@ function ExcluirModal({
         <div className="p-6">
           <div className="flex items-start gap-4 mb-4">
             <div className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-red-100">
-              <Trash2 size={20} className="text-red-600" />
+              <Ban size={20} className="text-red-600" />
             </div>
             <div className="pt-1.5">
-              <h3 className="text-base font-bold text-gray-900 leading-snug">Inativar registro de vacina</h3>
+              <h3 className="text-base font-bold text-gray-900 leading-snug">Cancelar vacina</h3>
             </div>
           </div>
           <p className="text-sm text-gray-500 ml-14 mb-4">
-            O registro será marcado como <span className="font-semibold text-gray-700">INATIVO</span>. Informe o motivo:
+            A vacina será marcada como <span className="font-semibold text-gray-700">CANCELADA</span>. Informe o motivo:
           </p>
           <textarea
             ref={inputRef}
@@ -422,20 +440,20 @@ function ExcluirModal({
             className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-red-400 resize-none"
           />
           {motivo.trim().length === 0 && (
-            <p className="text-xs text-red-500 mt-1">Justificativa obrigatória para inativar</p>
+            <p className="text-xs text-red-500 mt-1">Justificativa obrigatória para cancelar</p>
           )}
         </div>
         <div className="flex flex-col-reverse sm:flex-row gap-2 px-6 pb-6 pt-0">
           <button
             onClick={onCancelar}
             className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-            Cancelar
+            Fechar
           </button>
           <button
             onClick={() => { if (motivo.trim()) onConfirmar(motivo.trim()); }}
             disabled={!motivo.trim()}
             className="flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold text-white transition-colors bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
-            Inativar
+            Cancelar vacina
           </button>
         </div>
       </div>
@@ -456,10 +474,11 @@ interface Props {
 }
 
 const FILTROS: { key: FiltroStatus; label: string }[] = [
-  { key: 'todos',    label: 'Todos'    },
-  { key: 'VIGENTE',  label: 'Vigentes' },
-  { key: 'VENCIDA',  label: 'Vencidas' },
-  { key: 'INATIVA',  label: 'Inativas' },
+  { key: 'todos',      label: 'Todos'       },
+  { key: 'SALVA',      label: 'Salvas'      },
+  { key: 'FINALIZADA', label: 'Em Execução'  },
+  { key: 'EXECUTADA',  label: 'Executadas'  },
+  { key: 'CANCELADA',  label: 'Canceladas'  },
 ];
 
 export default function SubModuloVacina({ animalId, animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
@@ -504,6 +523,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const [saving,      setSaving]      = useState(false);
   const [viewingV,    setViewingV]    = useState<VacinaClinica | null>(null);
   const [excluindoId, setExcluindoId] = useState<number | null>(null);
+  const [finalizandoId, setFinalizandoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('todos');
 
   const [page, setPage] = useState(1);
@@ -628,11 +648,13 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const totalPags    = Math.ceil(historicoFiltrado.length / limit);
   const historicoPage = historicoFiltrado.slice((page - 1) * limit, page * limit);
 
-  const podeCriar    = isGestor || podeExecutar('atendimento.vacinas.criar');
-  const podeDeletar  = isGestor || podeExecutar('atendimento.vacinas.deletar');
-  const podeImprimir = isGestor || podeExecutar('atendimento.vacinas.imprimir');
-  // Só o gestor exclui vacina de outro; os demais só as que registraram.
-  const podeExcluirVac = (v: VacinaClinica) => podeDeletar && (isGestor || v.veterinario?.id === user?.id);
+  const podeCriar     = isGestor || podeExecutar('atendimento.vacinas.criar');
+  const podeDeletar   = isGestor || podeExecutar('atendimento.vacinas.deletar');
+  const podeImprimir  = isGestor || podeExecutar('atendimento.vacinas.imprimir');
+  const podeFinalizar = isGestor || podeExecutar('atendimento.vacinas.finalizar');
+  // Só o gestor exclui/finaliza vacina de outro; os demais só as que registraram.
+  const podeExcluirVac   = (v: VacinaClinica) => podeDeletar   && (isGestor || v.veterinario?.id === user?.id);
+  const podeFinalizarVac = (v: VacinaClinica) => podeFinalizar && (isGestor || v.veterinario?.id === user?.id);
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
@@ -870,8 +892,22 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     executarSalvar();
   };
 
+  const handleFinalizar = async (v: VacinaClinica) => {
+    if (!podeFinalizarVac(v)) { semPermissao('finalizar vacina'); return; }
+    setFinalizandoId(v.id);
+    try {
+      await api.patch(`/clinica/vacinas/${v.id}/finalizar`);
+      toast.success('Vacina finalizada');
+      carregarHistorico();
+      onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao finalizar vacina');
+    } finally { setFinalizandoId(null); }
+  };
+
   const handleExcluirSolicitado = (id: number) => {
-    if (!podeDeletar) { semPermissao('excluir registros de vacina'); return; }
+    if (!podeDeletar) { semPermissao('cancelar vacina'); return; }
     setExcluindoId(id);
   };
 
@@ -881,11 +917,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     setExcluindoId(null);
     try {
       await api.delete(`/clinica/vacinas/${id}`, { data: { motivo } });
-      toast.success('Registro inativado');
+      toast.success('Vacina cancelada');
       carregarHistorico();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao inativar');
+      setErroInline(msg ?? 'Erro ao cancelar');
     }
   };
 
@@ -904,7 +940,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
   const counts = historico.reduce(
     (acc, v) => { acc[getStatus(v)]++; return acc; },
-    { VIGENTE: 0, VENCIDA: 0, INATIVA: 0 } as Record<StatusVacina, number>
+    { SALVA: 0, FINALIZADA: 0, EXECUTADA: 0, CANCELADA: 0 } as Record<StatusVacina, number>
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1161,8 +1197,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                         {emEdicao ? <Check size={13} /> : <Pencil size={12} />}
                       </button>
                       <button onClick={() => { setItensImport(prev => prev.filter(x => x.key !== item.key)); if (emEdicao) cancelarEdicaoForm(); }}
-                        title="Remover" className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                        <Trash2 size={12} />
+                        title="Cancelar" className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                        <Ban size={12} />
                       </button>
                     </div>
                   </div>
@@ -1224,8 +1260,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
               : counts[f.key as StatusVacina];
             const isActive = filtroStatus === f.key;
             let activeClass = 'bg-teal-600 text-white border-teal-600';
-            if (f.key === 'VENCIDA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
-            if (f.key === 'INATIVA' && isActive) activeClass = 'bg-gray-500 text-white border-gray-500';
+            if (f.key === 'SALVA'     && isActive) activeClass = 'bg-amber-500 text-white border-amber-500';
+            if (f.key === 'EXECUTADA' && isActive) activeClass = 'bg-blue-600 text-white border-blue-600';
+            if (f.key === 'CANCELADA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
             return (
               <button
                 key={f.key}
@@ -1234,14 +1271,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                   isActive ? activeClass : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                 }`}>
                 {f.label}
-                {f.key === 'VENCIDA' && !isActive && counts.VENCIDA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.VENCIDA}
+                {f.key === 'SALVA' && !isActive && counts.SALVA > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {counts.SALVA}
                   </span>
                 )}
-                {f.key === 'INATIVA' && !isActive && counts.INATIVA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-gray-400 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.INATIVA}
+                {f.key === 'CANCELADA' && !isActive && counts.CANCELADA > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {counts.CANCELADA}
                   </span>
                 )}
                 {f.key === 'todos' && !isActive && (
@@ -1296,8 +1333,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                   </p>
                   {v.lote && <p className="text-[11px] text-gray-400 mt-0.5">Lote: {v.lote}</p>}
                   {v.dataReforco && (
-                    <p className={`text-[11px] mt-0.5 ${status === 'VENCIDA' ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
-                      Reforço: {formatDate(v.dataReforco)} {status === 'VENCIDA' && '⚠'}
+                    <p className={`text-[11px] mt-0.5 ${reforcoVencido(v) ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                      Reforço: {formatDate(v.dataReforco)} {reforcoVencido(v) && '⚠'}
                     </p>
                   )}
                   {v.veterinario && <p className="text-[11px] text-gray-400 mt-0.5">Por: {v.veterinario.fullName}</p>}
@@ -1307,6 +1344,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
+                    {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
+                      <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
+                        {finalizandoId === v.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />} Finalizar
+                      </button>
+                    )}
                     <button onClick={() => abrirWhatsApp(montarTextoVacina(v))}
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
                       <MessageCircle size={11} /> WhatsApp
@@ -1324,7 +1367,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                     {podeExcluirVac(v) && v.ativo && (
                       <button onClick={() => handleExcluirSolicitado(v.id)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Trash2 size={11} /> Inativar
+                        <Ban size={11} /> Cancelar
                       </button>
                     )}
                   </div>
@@ -1383,8 +1426,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                       <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
                         {formatDate(v.dataAplicacao)}
                         {v.dataReforco && (
-                          <p className={`text-[10px] mt-0.5 ${status === 'VENCIDA' ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
-                            Reforço: {formatDate(v.dataReforco)} {status === 'VENCIDA' && '⚠'}
+                          <p className={`text-[10px] mt-0.5 ${reforcoVencido(v) ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                            Reforço: {formatDate(v.dataReforco)} {reforcoVencido(v) && '⚠'}
                           </p>
                         )}
                       </td>
@@ -1400,6 +1443,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                             className="p-1.5 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
+                          {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
+                            <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id} title="Finalizar"
+                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                              {finalizandoId === v.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                            </button>
+                          )}
                           {podeImprimir && (
                             <button onClick={() => imprimirVacina(v, animal)} title="Imprimir"
                               className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
@@ -1407,9 +1456,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                             </button>
                           )}
                           {podeExcluirVac(v) && v.ativo && (
-                            <button onClick={() => handleExcluirSolicitado(v.id)} title="Inativar"
+                            <button onClick={() => handleExcluirSolicitado(v.id)} title="Cancelar"
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                              <Trash2 size={14} />
+                              <Ban size={14} />
                             </button>
                           )}
                         </div>

@@ -31,7 +31,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB — limite do Groq Whisper
+    fileSize: 25 * 1024 * 1024, // 25MB
   },
   fileFilter: (_req, file, cb) => {
     const allowed = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg'];

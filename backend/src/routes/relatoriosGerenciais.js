@@ -8,11 +8,15 @@ const { authenticate }    = require('../middlewares/auth');
 const { checkPermission } = require('../middlewares/permissao.middleware');
 const { gerencial }       = require('../controllers/RelatorioGerencialController');
 const Relatorios          = require('../controllers/RelatoriosController');
+const AnaliseFinanceira   = require('../controllers/AnaliseFinanceiraController');
 
 const perm = checkPermission('relatorios.gerencial.ler', 'LEITURA');
 
 // GET /api/relatorios/gerencial — cards de governança (legado)
 router.get('/gerencial',    authenticate, perm, gerencial);
+
+// IA Financeira — análise gerencial do período (rota literal antes de /financeiro)
+router.get('/financeiro/analise-ia', authenticate, perm, AnaliseFinanceira.analisar);
 
 // Relatórios por categoria
 router.get('/financeiro',   authenticate, perm, Relatorios.financeiro);

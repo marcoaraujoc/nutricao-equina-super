@@ -15,7 +15,7 @@
  */
 import { z } from 'zod';
 import * as promptsModule from '../ai/prompts';
-import { callAI } from '../ai';
+import { callAI, MODULOS_IA } from '../ai';
 import {
   resultadoSessaoSchema,
   achadoExameSchema,
@@ -149,7 +149,7 @@ async function tentarExtrairEValidar<S extends z.ZodTypeAny>(
   promptBase: string,
   operacaoVers: string,
   schema: S,
-  opts: { userId: number | null; animalId: number | null; maxTokens: number }
+  opts: { userId: number | null; animalId: number | null; empresaId?: number | null; maxTokens: number }
 ): Promise<ResultadoTentativa<z.infer<S>>> {
   let promptTentativa = promptBase;
   let ultimoErro = '';
@@ -158,11 +158,13 @@ async function tentarExtrairEValidar<S extends z.ZodTypeAny>(
     try {
       const resposta = await callAI({
         operacao: operacaoVers,
+        modulo: MODULOS_IA.ATENDIMENTO,
         prompt: promptTentativa,
         maxTokens: opts.maxTokens,
         temperature: 0.1,
         userId: opts.userId,
         animalId: opts.animalId,
+        empresaId: opts.empresaId ?? null,
       });
 
       const bruto = normalizarBruto(extrairJson(resposta));
@@ -192,6 +194,8 @@ export interface ExtrairResultadoSessaoOptions {
   texto: string;
   userId?: number | null;
   animalId?: number | null;
+  /** Cliente (tenant) a quem o consumo de IA é atribuído. */
+  empresaId?: number | null;
 }
 
 /**
@@ -202,14 +206,15 @@ export interface ExtrairResultadoSessaoOptions {
 export async function extrairResultadoSessao(
   opts: ExtrairResultadoSessaoOptions
 ): Promise<ResultadoSessao> {
-  const { texto, userId = null, animalId = null } = opts;
+  const { texto, userId = null, animalId = null, empresaId = null } = opts;
   if (!texto?.trim()) return { registros: [], completo: true, avisos: [] };
 
   const { operacaoVers, prompt } = buildPrompt(PROMPT_KEY, texto);
   const resultado = await tentarExtrairEValidar(prompt, operacaoVers, resultadoSessaoParser, {
     userId,
     animalId,
-    // Groq on-demand: prompt + maxTokens contam juntos no teto de 12k tokens/min
+    empresaId,
+    // Gemini: janela ampla, mas a saída deste schema é curta — teto conservador.
     maxTokens: 2500,
   });
 
@@ -235,6 +240,8 @@ export interface ExtrairResumoAtendimentoOptions {
   texto: string;
   userId?: number | null;
   animalId?: number | null;
+  /** Cliente (tenant) a quem o consumo de IA é atribuído. */
+  empresaId?: number | null;
 }
 
 /**
@@ -246,14 +253,15 @@ export interface ExtrairResumoAtendimentoOptions {
 export async function extrairResumoAtendimento(
   opts: ExtrairResumoAtendimentoOptions
 ): Promise<ResumoAtendimento> {
-  const { texto, userId = null, animalId = null } = opts;
+  const { texto, userId = null, animalId = null, empresaId = null } = opts;
   if (!texto?.trim()) return { registros: [], completo: true, avisos: [] };
 
   const { operacaoVers, prompt } = buildPrompt(PROMPT_KEY, texto);
   const resultado = await tentarExtrairEValidar(prompt, operacaoVers, resumoAtendimentoParser, {
     userId,
     animalId,
-    // Groq on-demand: prompt + maxTokens contam juntos no teto de 12k tokens/min
+    empresaId,
+    // Gemini: janela ampla, mas a saída deste schema é curta — teto conservador.
     maxTokens: 2500,
   });
 

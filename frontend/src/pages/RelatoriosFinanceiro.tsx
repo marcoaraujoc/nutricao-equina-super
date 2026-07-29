@@ -9,6 +9,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
+import AnaliseFinanceiraIA from '../components/relatorios/AnaliseFinanceiraIA';
 import {
   Card, Tabela, StatTiles, RankBars, EmptyState,
   CarregandoRelatorio, ErroRelatorio, formatBRL, formatMesRef,
@@ -73,6 +74,9 @@ export default function RelatoriosFinanceiro() {
 
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
+
+          {/* IA Financeira — leitura dos indicadores do período (sob demanda) */}
+          <AnaliseFinanceiraIA granularidade={granularidade} dataRef={dataRef} />
 
           {/* Faturamento */}
           <StatTiles cols={2} tiles={[

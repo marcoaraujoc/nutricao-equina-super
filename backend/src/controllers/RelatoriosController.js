@@ -81,8 +81,10 @@ function categoriaDoItem(i) {
   return 'Outros';
 }
 
-const financeiro = async (req, res) => {
-  try {
+// Apuração financeira do período. Extraída do handler para ser reusada pela
+// análise de IA (AnaliseFinanceiraController) sem duplicar regra de cálculo.
+const computarFinanceiro = async (req) => {
+  {
     const { empresaId, propWhere } = await resolverEscopo(req);
     const { inicio, fim, refDate, mesRef, granularidade } = resolverPeriodo(req);
     const anoInicio = new Date(refDate.getFullYear(), 0, 1, 0, 0, 0, 0);
@@ -185,17 +187,21 @@ const financeiro = async (req, res) => {
     const lucroBruto = faturamentoPeriodo - custoProdutos;
     const margemPct  = faturamentoPeriodo > 0 ? (lucroBruto / faturamentoPeriodo) * 100 : 0;
 
-    return res.json({
-      dados: {
-        faturamento: { periodo: faturamentoPeriodo, ano: faturamentoAno, granularidade },
-        ticketMedio: { porAtendimento: ticketPorAtendimento, porCliente: ticketPorCliente, atendimentosPeriodo: evolucoesPeriodo, clientesPeriodo: clientesDoPeriodo.size },
-        porEspecialidade: mapaParaLista(porEspecialidade, 'especialidade', 'receita'),
-        porCategoria:     mapaParaLista(porCategoria,     'categoria',     'receita'),
-        contasReceber, contasVencidas, inadimplencia,
-        fluxoCaixa: { mediaMensal, historico: ultimos3.reverse(), projecao },
-        lucroBruto: { receita: faturamentoPeriodo, custoProdutos, lucro: lucroBruto, margemPct },
-      },
-    });
+    return {
+      faturamento: { periodo: faturamentoPeriodo, ano: faturamentoAno, granularidade },
+      ticketMedio: { porAtendimento: ticketPorAtendimento, porCliente: ticketPorCliente, atendimentosPeriodo: evolucoesPeriodo, clientesPeriodo: clientesDoPeriodo.size },
+      porEspecialidade: mapaParaLista(porEspecialidade, 'especialidade', 'receita'),
+      porCategoria:     mapaParaLista(porCategoria,     'categoria',     'receita'),
+      contasReceber, contasVencidas, inadimplencia,
+      fluxoCaixa: { mediaMensal, historico: ultimos3.reverse(), projecao },
+      lucroBruto: { receita: faturamentoPeriodo, custoProdutos, lucro: lucroBruto, margemPct },
+    };
+  }
+};
+
+const financeiro = async (req, res) => {
+  try {
+    return res.json({ dados: await computarFinanceiro(req) });
   } catch (err) {
     console.error('RelatoriosController.financeiro:', err);
     return res.status(500).json({ error: 'Erro ao gerar relatório financeiro.' });
@@ -480,4 +486,4 @@ const orcamentos = async (req, res) => {
   }
 };
 
-module.exports = { financeiro, atendimento, cadastro, farmacia, orcamentos };
+module.exports = { financeiro, computarFinanceiro, atendimento, cadastro, farmacia, orcamentos };

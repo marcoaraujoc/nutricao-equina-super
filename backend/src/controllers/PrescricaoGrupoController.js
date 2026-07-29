@@ -507,10 +507,9 @@ const listarPorAnimal = async (req, res) => {
     const { animalId } = req.params;
     const { page = 1, limit = 20, status } = req.query;
 
-    const where = { animalId: Number(animalId) };
-    if (status) where.status = status;
     // Segregação multi-clínica: cada empresa vê só as próprias prescrições do animal
-    where.AND = [escopoPrescricaoGrupoWhere(req)];
+    const whereBase = { animalId: Number(animalId), AND: [escopoPrescricaoGrupoWhere(req)] };
+    const where = status ? { ...whereBase, status } : whereBase;
 
     const [grupos, total] = await Promise.all([
       prisma.prescricaoGrupo.findMany({
@@ -523,12 +522,21 @@ const listarPorAnimal = async (req, res) => {
       prisma.prescricaoGrupo.count({ where }),
     ]);
 
-    const salvos = await prisma.prescricaoGrupo.count({ where: { animalId: Number(animalId), status: 'SALVO', AND: [escopoPrescricaoGrupoWhere(req)] } });
+    // Contagem por status (sempre sobre TODOS os registros do animal, ignorando o
+    // filtro atual) — alimenta as abas de filtro por status do histórico no front.
+    const contagensRaw = await prisma.prescricaoGrupo.groupBy({
+      by:     ['status'],
+      where:  whereBase,
+      _count: { _all: true },
+    });
+    const contagens = Object.fromEntries(contagensRaw.map((c) => [c.status, c._count._all]));
+    const salvos = contagens.SALVO ?? 0;
 
     return res.json({
       dados:   grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
       total,
       salvos,
+      contagens,
     });
   } catch (err) {
     console.error('PrescricaoGrupoController.listarPorAnimal:', err);

@@ -14,14 +14,16 @@ import {
   X, Clock, User as UserIcon, RefreshCw, Search,
   ChevronDown, ChevronUp, AlertTriangle, Loader2, Calendar,
   Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
-  CheckCircle2, AlertCircle, UserCheck, CalendarDays,
+  CheckCircle2, AlertCircle, UserCheck, CalendarDays, MapPin,
 } from 'lucide-react';
 import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA';
+// TRANSFERIDO = foi REAGENDADO: o horário some da grade e a observação guarda para
+// quando o atendimento foi movido (diferente de CANCELADO, que é desistência).
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA' | 'TRANSFERIDO';
 type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
 type ViewMode          = 'MES' | 'SEMANA';
 
@@ -33,6 +35,9 @@ interface AgendamentoGlobal {
   dataHora:    string;
   observacao:  string | null;
   status:      StatusAgendamento;
+  /** Minutos que o atendimento ocupa. null = agendamento antigo (tratado como 60). */
+  duracaoMin:  number | null;
+  especialidade: { id: number; nome: string } | null;
   veterinario: { id: number; fullName: string } | null;
   criadoPor:   { id: number; fullName: string } | null;
   animal: {
@@ -65,17 +70,37 @@ interface BookingForm {
   cpf:              string;
 }
 
+/** Especialidade do catálogo com o tempo de consulta que o profissional pratica. */
+interface EspecialidadeVet {
+  id:       number;
+  nome:     string;
+  tempoMin: number;
+}
+
 interface VetMembro {
   userId:        number;
   fullName:      string;
   cargo:         string;
   especialidades: string[];
+  /** Do catálogo, com tempo por especialidade (card "Locais de trabalho").
+   *  Vazio = profissional sem tempo configurado → grade de 1h (comportamento antigo). */
+  especialidadesCat: EspecialidadeVet[];
   // Expediente próprio do profissional (null = herda o da empresa)
   diasTrab:   number[] | null;
   horaIni:    string | null;
   horaFim:    string | null;
-  // Locais onde o profissional atende (localizacaoId + dias) — filtra os animais
-  locais:     { localizacaoId: number; dias: number[] | null }[];
+  // Locais onde o profissional atende. Cada local tem dias, horário e as
+  // especialidades (com tempo) exercidas ALI — é a base de uma linha da tabela.
+  locais: LocalAtendimento[];
+}
+
+interface LocalAtendimento {
+  localizacaoId:  number;
+  localizacaoNome: string;
+  dias:    number[] | null;
+  horaIni: string | null;
+  horaFim: string | null;
+  especialidades: EspecialidadeVet[];
 }
 
 type VozEtapa = 'IDLE' | 'GRAVANDO' | 'PROCESSANDO' | 'DISPONIVEL' | 'INDISPONIVEL' | 'ERRO';
@@ -115,7 +140,35 @@ const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
   { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600'  },
 ];
 
+// Espelha STATUS_LIVRES do AgendamentoController: não ocupam mais a grade.
+const STATUS_LIVRES: StatusAgendamento[] = ['CANCELADO', 'TRANSFERIDO'];
+
 const HORARIOS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+
+// Duração usada quando não há especialidade/tempo configurado — é a grade de 1h
+// que a agenda sempre teve, então nada muda para quem não configurar tempos.
+const PASSO_PADRAO_MIN = 60;
+
+const hhmmParaMin = (h: string): number => {
+  const [hh, mm] = h.split(':').map(Number);
+  return (hh || 0) * 60 + (mm || 0);
+};
+const minParaHHMM = (m: number): string =>
+  `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+/**
+ * Slots do dia de `passo` em `passo` minutos dentro da faixa do expediente.
+ * O atendimento INTEIRO precisa caber (m + passo <= fim) — oferecer um horário que
+ * termina depois do expediente só levaria a um 409 do backend na hora de salvar.
+ */
+function gerarSlots(horaIni: string | null, horaFim: string | null, passoMin: number): string[] {
+  const passo = passoMin > 0 ? passoMin : PASSO_PADRAO_MIN;
+  const ini   = horaIni ? hhmmParaMin(horaIni) : 0;
+  const fim   = horaFim ? hhmmParaMin(horaFim) : 24 * 60;
+  const out: string[] = [];
+  for (let m = ini; m + passo <= fim; m += passo) out.push(minParaHHMM(m));
+  return out;
+}
 
 const MESES_PT      = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DIAS_PT       = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
@@ -169,6 +222,7 @@ const STATUS_COR: Record<StatusAgendamento, string> = {
   FINALIZADO:   'bg-green-100 text-green-700',
   CANCELADO:    'bg-red-100 text-red-700',
   ATRASADA:     'bg-orange-100 text-orange-700',
+  TRANSFERIDO:  'bg-violet-100 text-violet-700',
 };
 const STATUS_LABEL: Record<StatusAgendamento, string> = {
   AGENDADO:     'AGENDADO',
@@ -177,6 +231,7 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
   ATRASADA:     'ATRASADA',
+  TRANSFERIDO:  'TRANSFERIDO',
 };
 function formatarDataPT(dateStr: string) {
   const [a, m, d] = dateStr.split('-').map(Number);
@@ -201,9 +256,12 @@ interface CalendarioProps {
   selectedDate: string;
   onChange:     (date: string) => void;
   statusPorDia: Map<string, DiaStatus>;
+  /** Data mínima selecionável (YYYY-MM-DD). Dias anteriores ficam desabilitados —
+   *  usado no reagendamento, que não pode cair num dia que já passou. */
+  minDate?:     string;
 }
 
-function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: CalendarioProps) {
+function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate }: CalendarioProps) {
   const [ano, mes] = selectedDate.split('-').map(Number);
   const [viewAno, setViewAno]   = useState(ano);
   const [viewMes, setViewMes]   = useState(mes - 1);
@@ -259,11 +317,14 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
   const navNext  = () => viewMode === 'MES' ? navMes(1)  : navSemana(1);
   const header   = viewMode === 'MES' ? `${MESES_PT[viewMes]} ${viewAno}` : weekLabel(weekDays);
 
+  // Comparação lexicográfica funciona no formato YYYY-MM-DD
+  const bloqueado = (dStr: string) => !!minDate && dStr < minDate;
+
   function dayBtn(dStr: string, label: React.ReactNode, isFaded = false) {
     const isSelected = dStr === selectedDate;
     const isToday    = dStr === dataHoje;
     const status     = statusPorDia.get(dStr) ?? null;
-    return { dStr, isSelected, isToday, status, isFaded };
+    return { dStr, isSelected, isToday, status, isFaded, isBloqueado: bloqueado(dStr) };
   }
 
   return (
@@ -306,17 +367,22 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
             {dias.map((dia, idx) => {
               const dStr     = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
               const isCur    = dia.getMonth() === viewMes;
-              const { isSelected, isToday, status } = dayBtn(dStr, dia.getDate(), !isCur);
+              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr, dia.getDate(), !isCur);
+              const clicavel = isCur && !isBloqueado;
               return (
                 <button
                   key={idx}
-                  onClick={() => isCur && onChange(dStr)}
+                  disabled={!clicavel}
+                  title={isBloqueado ? 'Dia já passou' : undefined}
+                  onClick={() => clicavel && onChange(dStr)}
                   className={[
                     'relative flex flex-col items-center justify-center h-9 rounded-xl text-xs font-semibold transition-all',
-                    !isCur ? 'text-gray-200 cursor-default' : 'cursor-pointer',
-                    isSelected && isCur  ? 'bg-emerald-600 text-white shadow-sm' : '',
-                    !isSelected && isCur && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
-                    !isSelected && isCur && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
+                    !isCur ? 'text-gray-200 cursor-default' : '',
+                    isCur && isBloqueado ? 'text-gray-300 line-through cursor-not-allowed' : '',
+                    clicavel ? 'cursor-pointer' : '',
+                    isSelected && clicavel  ? 'bg-emerald-600 text-white shadow-sm' : '',
+                    !isSelected && clicavel && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
+                    !isSelected && clicavel && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   {dia.getDate()}
@@ -334,16 +400,19 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
           <div className="grid grid-cols-7 gap-0.5">
             {weekDays.map((dia, idx) => {
               const dStr = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
-              const { isSelected, isToday, status } = dayBtn(dStr, dia.getDate());
+              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr, dia.getDate());
               return (
                 <button
                   key={idx}
-                  onClick={() => onChange(dStr)}
+                  disabled={isBloqueado}
+                  title={isBloqueado ? 'Dia já passou' : undefined}
+                  onClick={() => !isBloqueado && onChange(dStr)}
                   className={[
-                    'relative flex flex-col items-center justify-center h-12 rounded-xl text-xs font-semibold transition-all cursor-pointer',
-                    isSelected ? 'bg-emerald-600 text-white shadow-sm' : '',
-                    !isSelected && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
-                    !isSelected && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
+                    'relative flex flex-col items-center justify-center h-12 rounded-xl text-xs font-semibold transition-all',
+                    isBloqueado ? 'text-gray-300 line-through cursor-not-allowed' : 'cursor-pointer',
+                    isSelected && !isBloqueado ? 'bg-emerald-600 text-white shadow-sm' : '',
+                    !isSelected && !isBloqueado && isToday ? 'ring-2 ring-emerald-400 text-emerald-700' : '',
+                    !isSelected && !isBloqueado && !isToday ? 'text-gray-700 hover:bg-gray-100' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   <span className="text-[9px] opacity-60">{MESES_PT[dia.getMonth()].slice(0,3)}</span>
@@ -399,9 +468,25 @@ export default function Agendamentos() {
   const podeEditarAgendamento                       = podeExecutar('atendimento.agendamentos.editar');
   const podeDeletarAgendamento                      = podeExecutar('atendimento.agendamentos.deletar');
   const podeGerenciar                               = podeCriarAgendamento || podeEditarAgendamento || podeDeletarAgendamento;
+  // Veterinário (inclusive gestor, que é vet por cargo): pode ASSUMIR o atendimento de
+  // outro vet da equipe e TRANSFERIR os seus (o gestor transfere os de qualquer um).
+  const souVeterinario                              = user?.userType === 'VETERINARIO' || isGestor;
+  // Transferir: gestor move o de qualquer profissional; o profissional move o DELE.
+  const podeTransferir = (ag: AgendamentoGlobal) =>
+    podeAgendarParaOutro || (souVeterinario && ag.veterinario?.id === meuUserId);
+  // Assumir: qualquer veterinário puxa para si o atendimento de OUTRO vet.
+  const podeAssumir = (ag: AgendamentoGlobal) =>
+    souVeterinario && !!ag.veterinario?.id && ag.veterinario.id !== meuUserId;
 
   // Erro de ação exibido inline (substitui o toast de erro)
+  // Erro fica NA SUPERFÍCIE onde a ação foi disparada — no topo da página (colado no
+  // botão Voltar) o usuário não vê o retorno do que acabou de clicar.
+  // erroInline = carga da página; erroGrade = grade de horários/agendamento novo;
+  // erroLista = ações da lista do dia; erroModal = o modal que estiver aberto.
   const [erroInline, setErroInline]             = useState<string | null>(null);
+  const [erroGrade,  setErroGrade]              = useState<string | null>(null);
+  const [erroLista,  setErroLista]              = useState<string | null>(null);
+  const [erroModal,  setErroModal]              = useState<string | null>(null);
 
   // ── Animal / Proprietário ────────────────────────────────────────────────────
   const [animais, setAnimais]                   = useState<AnimalOption[]>([]);
@@ -429,8 +514,15 @@ export default function Agendamentos() {
   // ── Vets ────────────────────────────────────────────────────────────────────
   const [vets, setVets]               = useState<VetMembro[]>([]);
   const [filtroVetId, setFiltroVetId] = useState('');
-  const [filtroTipo, setFiltroTipo]   = useState('');
-  const [openSlotVetId, setOpenSlotVetId] = useState<number | null>(null);
+  // Filtro por especialidade: restringe os profissionais listados E fixa a
+  // especialidade de cada um, para a grade sair no tempo daquela especialidade.
+  const [filtroEspId, setFiltroEspId] = useState('');
+  const [filtroLocalId, setFiltroLocalId] = useState('');
+  const [filtroTurno, setFiltroTurno] = useState<'' | 'MANHA' | 'TARDE' | 'NOITE'>('');
+
+  // Chave da linha com o menu de horários aberto. É por LINHA (vet+local+especialidade),
+  // não por profissional: o mesmo vet aparece em várias linhas.
+  const [openSlotKey, setOpenSlotKey] = useState<string | null>(null);
 
   // ── Calendar + agendamentos ─────────────────────────────────────────────────
   const [selectedDate, setSelectedDate] = useState<string>(() => {
@@ -478,9 +570,14 @@ export default function Agendamentos() {
   const [busca, setBusca]               = useState('');
   const [agendamentosMes, setAgendamentosMes] = useState<AgendamentoGlobal[]>([]);
   const [mesCarregado, setMesCarregado] = useState('');
-  // Ocupação GLOBAL do profissional no dia (todas as empresas) — para descontar os slots
-  // em que ele já está agendado em QUALQUER empresa. Map<vetUserId, Set<'HH:MM'>>.
-  const [ocupacaoGlobal, setOcupacaoGlobal] = useState<Map<number, Set<string>>>(new Map());
+  // Ocupação GLOBAL do profissional no dia (todas as empresas) — para descontar os
+  // slots em que ele já está agendado em QUALQUER empresa. Guardado como INTERVALO
+  // (início + duração): com tempo por especialidade, uma consulta de 60min ocupa
+  // também os slots de 30min que caem dentro dela.
+  const [ocupacaoGlobal, setOcupacaoGlobal] =
+    useState<Map<number, Array<{ iniMin: number; fimMin: number }>>>(new Map());
+  // Especialidade escolhida por profissional — define o passo da grade dele.
+  const [espSelPorVet, setEspSelPorVet] = useState<Map<number, number>>(new Map());
 
   // ── Modais ──────────────────────────────────────────────────────────────────
   const [booking, setBooking]             = useState<BookingInfo | null>(null);
@@ -490,7 +587,12 @@ export default function Agendamentos() {
   const [bookingForm, setBookingForm]     = useState<BookingForm>({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
   const [salvando, setSalvando]           = useState(false);
   const [reagendando, setReagendando]     = useState<AgendamentoGlobal | null>(null);
-  const [novaDataHora, setNovaDataHora]   = useState('');
+  // Reagendamento: dia e horário escolhidos na MESMA agenda da tela principal
+  // (calendário + grade de horários livres), em vez de um datetime-local solto.
+  const [reagData, setReagData]           = useState('');   // YYYY-MM-DD
+  const [reagHora, setReagHora]           = useState('');   // HH:MM
+  const [reagOcupados, setReagOcupados]   = useState<Array<{ iniMin: number; fimMin: number }>>([]);
+  const [reagLoading, setReagLoading]     = useState(false);
   const [salvandoReag, setSalvandoReag]   = useState(false);
   const [cancelando, setCancelando]       = useState<number | null>(null);
   // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
@@ -527,14 +629,14 @@ export default function Agendamentos() {
   const [slotPos, setSlotPos]   = useState<{ top: number; left: number } | null>(null);
   const slotCloseRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function openSlotMenu(vetId: number, el: HTMLElement) {
+  function openSlotMenu(key: string, el: HTMLElement) {
     if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
     const rect = el.getBoundingClientRect();
     setSlotPos({ top: rect.top, left: rect.left });
-    setOpenSlotVetId(vetId);
+    setOpenSlotKey(key);
   }
   function scheduleCloseSlot() {
-    slotCloseRef.current = setTimeout(() => { setOpenSlotVetId(null); setSlotPos(null); }, 80);
+    slotCloseRef.current = setTimeout(() => { setOpenSlotKey(null); setSlotPos(null); }, 80);
   }
   function cancelCloseSlot() {
     if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
@@ -562,7 +664,7 @@ export default function Agendamentos() {
     const vetId = Number(filtroVetId);
     const contagem = new Map<string, number>();
     agendamentosMes.forEach(ag => {
-      if (ag.status === 'CANCELADO' || ag.veterinario?.id !== vetId) return;
+      if (STATUS_LIVRES.includes(ag.status) || ag.veterinario?.id !== vetId) return;
       const d = ag.dataHora.slice(0, 10);
       contagem.set(d, (contagem.get(d) ?? 0) + 1);
     });
@@ -594,19 +696,37 @@ export default function Agendamentos() {
 
   const fetchVets = useCallback(async () => {
     try {
-      const res = await api.get('/equipes/membros');
+      // Catálogo id→nome buscado junto: o nome da especialidade configurada no local
+      // pode não existir no vínculo UsuarioEspecialidade do membro (ex.: fornecedor),
+      // e "Especialidade #4" na tela não ajuda ninguém.
+      const [res, resCat] = await Promise.all([
+        api.get('/equipes/membros'),
+        api.get('/especialidades').catch(() => null),
+      ]);
       if (!res.data) return;
+      const catalogo: Record<number, string> = {};
+      for (const e of (resCat?.data?.dados ?? []) as Array<{ id: number; nome: string }>) {
+        catalogo[e.id] = e.nome;
+      }
       const membros = (res.data.dados ?? []) as Array<{
         cargo: string;
         diasTrabalho?: string | null;
         horaInicioTrabalho?: string | null;
         horaFimTrabalho?: string | null;
-        locaisTrabalho?: Array<{ localizacaoId: number; diasTrabalho: string | null }> | null;
+        locaisTrabalho?: Array<{
+          localizacaoId: number;
+          localizacaoNome?: string | null;
+          diasTrabalho: string | null;
+          horaInicioTrabalho?: string | null;
+          horaFimTrabalho?: string | null;
+          especialidadeIds?: number[];
+          temposConsulta?: Record<string, number>;
+        }> | null;
         user: {
           id: number; fullName: string; userType: string;
           vetPerfil?: { subespecialidades?: { nome: string }[] } | null;
           fornecedorPerfil?: { tipoServico?: string | null } | null;
-          especialidades?: { especialidade?: { nome?: string | null } | null }[] | null;
+          especialidades?: { especialidadeId?: number; especialidade?: { id?: number; nome?: string | null } | null }[] | null;
         };
       }>;
       setVets(membros
@@ -632,21 +752,71 @@ export default function Agendamentos() {
             const esp = doCatalogo.length > 0 ? doCatalogo : legado;
             especialidades = esp.length > 0 ? esp : ['Clínica Geral'];
           }
+          // Tempo por especialidade vem dos LOCAIS. Profissional que atende a mesma
+          // especialidade em mais de um local usa o MENOR tempo (cabe em qualquer um).
+          // Especialidade do local SEM tempo próprio entra com 0 e é resolvida na hora
+          // de montar a grade pelo padrão da empresa (passoDe) — nunca some da agenda.
+          const tempoPorEsp = new Map<number, number>();
+          for (const l of m.locaisTrabalho ?? []) {
+            for (const id of l.especialidadeIds ?? []) {
+              if (Number.isInteger(id) && !tempoPorEsp.has(id)) tempoPorEsp.set(id, 0);
+            }
+            for (const [idStr, min] of Object.entries(l.temposConsulta ?? {})) {
+              const id = Number(idStr);
+              const t  = Number(min);
+              if (!Number.isInteger(id) || !(t > 0)) continue;
+              const atual = tempoPorEsp.get(id);
+              if (atual === undefined || atual === 0 || t < atual) tempoPorEsp.set(id, t);
+            }
+          }
+          // Nome do catálogo — vem do vínculo UsuarioEspecialidade do próprio membro
+          const nomePorEsp = new Map<number, string>();
+          for (const e of m.user.especialidades ?? []) {
+            const id   = e.especialidade?.id ?? e.especialidadeId;
+            const nome = e.especialidade?.nome?.trim();
+            if (Number.isInteger(id) && nome) nomePorEsp.set(Number(id), nome);
+          }
+          const especialidadesCat: EspecialidadeVet[] = [...tempoPorEsp.entries()]
+            .map(([id, tempoMin]) => ({
+              id,
+              nome: nomePorEsp.get(id) ?? catalogo[id] ?? `Especialidade #${id}`,
+              tempoMin,
+            }))
+            .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
           return {
             userId: m.user.id,
             fullName: m.user.fullName,
             cargo: m.cargo,
             especialidades,
+            especialidadesCat,
             diasTrab: m.diasTrabalho
               ? String(m.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
               : null,
             horaIni: m.horaInicioTrabalho ?? null,
             horaFim: m.horaFimTrabalho ?? null,
             locais: (m.locaisTrabalho ?? []).map(l => ({
-              localizacaoId: l.localizacaoId,
+              localizacaoId:   l.localizacaoId,
+              localizacaoNome: l.localizacaoNome ?? 'Local não informado',
               dias: l.diasTrabalho
                 ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
                 : null,
+              horaIni: l.horaInicioTrabalho ?? null,
+              horaFim: l.horaFimTrabalho    ?? null,
+              // Especialidades DESTE local, com o tempo praticado aqui. Sem tempo
+              // próprio → 0 = herda o padrão da empresa na montagem da grade.
+              especialidades: [...new Set([
+                ...(l.especialidadeIds ?? []).map(Number),
+                ...Object.keys(l.temposConsulta ?? {}).map(Number),
+              ])]
+                .filter(Number.isInteger)
+                .map(id => ({
+                  id,
+                  nome: nomePorEsp.get(id) ?? catalogo[id] ?? `Especialidade #${id}`,
+                  tempoMin: Number(l.temposConsulta?.[String(id)]) > 0
+                    ? Number(l.temposConsulta?.[String(id)]) : 0,
+                }))
+                .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
             })),
           };
         })
@@ -672,11 +842,13 @@ export default function Agendamentos() {
     try {
       const res = await api.get('/clinica/agendamentos/ocupacao', { params: { data: date, vetIds: vetIds.join(',') } });
       if (!res.data) { setOcupacaoGlobal(new Map()); return; }
-      const map = new Map<number, Set<string>>();
-      for (const o of (res.data.dados ?? []) as { veterinarioId: number | null; dataHora: string }[]) {
+      const map = new Map<number, Array<{ iniMin: number; fimMin: number }>>();
+      for (const o of (res.data.dados ?? []) as
+           { veterinarioId: number | null; dataHora: string; duracaoMin: number | null }[]) {
         if (o.veterinarioId == null) continue;
-        if (!map.has(o.veterinarioId)) map.set(o.veterinarioId, new Set());
-        map.get(o.veterinarioId)!.add(formatarHora(o.dataHora));
+        const ini = hhmmParaMin(formatarHora(o.dataHora));
+        if (!map.has(o.veterinarioId)) map.set(o.veterinarioId, []);
+        map.get(o.veterinarioId)!.push({ iniMin: ini, fimMin: ini + (o.duracaoMin ?? PASSO_PADRAO_MIN) });
       }
       setOcupacaoGlobal(map);
     } catch { /* silencioso — cai no fallback do contexto ativo */ }
@@ -722,6 +894,9 @@ export default function Agendamentos() {
   const [expediente, setExpediente] = useState<{ dias: number[] | null; horaInicio: string | null; horaFim: string | null }>({
     dias: null, horaInicio: null, horaFim: null,
   });
+  // Tempo de consulta padrão da empresa (Configurações) — vale para a especialidade
+  // que o profissional não configurou no local de trabalho.
+  const [tempoPadraoEmpresa, setTempoPadraoEmpresa] = useState(PASSO_PADRAO_MIN);
   useEffect(() => {
     api.get('/equipes/horario-atendimento')
       .then(res => {
@@ -732,9 +907,14 @@ export default function Agendamentos() {
           horaInicio: d.horaInicioAtendimento ?? null,
           horaFim:    d.horaFimAtendimento ?? null,
         });
+        if (Number(d.tempoConsultaPadrao) > 0) setTempoPadraoEmpresa(Number(d.tempoConsultaPadrao));
       })
       .catch(() => {});
   }, []);
+
+  // Passo efetivo: tempo próprio da especialidade ou, na falta dele, o padrão da empresa.
+  const passoDe = (tempoMin?: number | null): number =>
+    Number(tempoMin) > 0 ? Number(tempoMin) : tempoPadraoEmpresa;
 
   // Expediente EFETIVO do profissional na equipe = INTERSEÇÃO do expediente pessoal
   // dele com o expediente da equipe/empresa (a equipe é o limitador).
@@ -758,60 +938,55 @@ export default function Agendamentos() {
     return { dias, horaInicio, horaFim };
   };
 
-  // Horários liberados para uma data conforme o expediente do PROFISSIONAL (dias + faixa).
+  // Especialidade ativa do profissional na grade. Sem escolha explícita, usa a
+  // primeira do catálogo dele; sem catálogo configurado, null (grade de 1h).
+  const espDoVet = (vetId: number): EspecialidadeVet | null => {
+    const v = vets.find(x => x.userId === vetId);
+    const cat = v?.especialidadesCat ?? [];
+    if (cat.length === 0) return null;
+    // Filtro global vence a escolha por linha: filtrando por Ortopedia, todas as
+    // grades saem no tempo de Ortopedia.
+    if (filtroEspId) {
+      const doFiltro = cat.find(e => e.id === Number(filtroEspId));
+      if (doFiltro) return doFiltro;
+    }
+    const escolhido = espSelPorVet.get(vetId);
+    return cat.find(e => e.id === escolhido) ?? cat[0];
+  };
+
+  // Passo da grade = tempo de consulta da especialidade selecionada (ou o padrão da empresa).
+  const passoDoVet = (vetId: number): number => passoDe(espDoVet(vetId)?.tempoMin);
+
+  // Horários liberados para uma data conforme o expediente do PROFISSIONAL (dias + faixa)
+  // e o tempo de consulta da especialidade selecionada.
   const horariosDoDia = (vetId: number, dateStr: string): string[] => {
     const exp = expedienteDoVet(vetId);
     const wd = new Date(`${dateStr}T00:00:00`).getDay();
     // dias null = todos; array (mesmo vazio) = só os listados (vazio → nenhum dia)
     if (exp.dias && !exp.dias.includes(wd)) return [];
-    const hi = exp.horaInicio ? parseInt(exp.horaInicio.slice(0, 2), 10) : 0;
-    const hf = exp.horaFim    ? parseInt(exp.horaFim.slice(0, 2), 10)    : 24;
-    return HORARIOS.filter(h => { const hour = parseInt(h.slice(0, 2), 10); return hour >= hi && hour < hf; });
-  };
-
-  // Rótulos do expediente por profissional (coluna "Período"/"Dias").
-  // Cada lado é independente: início ausente = 00:00, fim ausente = 24:00.
-  // (Antes, se só um dos dois estava definido, caía no default "00:00 — 24:00".)
-  const labelPeriodoVet = (vetId: number): string => {
-    const exp = expedienteDoVet(vetId);
-    const ini = exp.horaInicio ? exp.horaInicio.slice(0, 5) : '00:00';
-    const fim = exp.horaFim    ? exp.horaFim.slice(0, 5)    : '24:00';
-    return `${ini} — ${fim}`;
-  };
-  const labelDiasVet = (vetId: number): string => {
-    const exp = expedienteDoVet(vetId);
-    if (exp.dias === null) return 'Todos os dias';   // sem restrição
-    if (exp.dias.length === 0) return 'Nenhum';       // interseção vazia
-    return exp.dias.slice().sort((a, b) => a - b).map(d => DIAS_PT[d]).join(', ');
+    return gerarSlots(exp.horaInicio, exp.horaFim, passoDoVet(vetId));
   };
 
   // ── Slots ────────────────────────────────────────────────────────────────────
-  function slotsOcupados(vetId: number): Set<string> {
-    // Ocupado = agendamentos do contexto ativo + ocupação GLOBAL do profissional
-    // (mesmo horário agendado em outra empresa também bloqueia o slot).
-    const local  = agendamentos.filter(ag => ag.veterinario?.id === vetId && ag.status !== 'CANCELADO').map(ag => formatarHora(ag.dataHora));
-    const global = ocupacaoGlobal.get(vetId);
-    return new Set(global ? [...local, ...global] : local);
+  // Ocupado = agendamentos do contexto ativo + ocupação GLOBAL do profissional
+  // (o mesmo horário agendado em outra empresa também bloqueia).
+  // Cada um vira um INTERVALO [início, fim) em minutos: com tempo por especialidade
+  // um atendimento de 60min tem de bloquear também os slots de 30min dentro dele.
+  function ocupacoesDoVet(vetId: number): Array<{ iniMin: number; fimMin: number }> {
+    const out: Array<{ iniMin: number; fimMin: number }> = [];
+    for (const ag of agendamentos) {
+      if (ag.veterinario?.id !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
+      const ini = hhmmParaMin(formatarHora(ag.dataHora));
+      out.push({ iniMin: ini, fimMin: ini + (ag.duracaoMin ?? PASSO_PADRAO_MIN) });
+    }
+    for (const g of ocupacaoGlobal.get(vetId) ?? []) out.push(g);
+    return out;
   }
-  function slotsLivres(vetId: number): string[] {
-    const ocp   = slotsOcupados(vetId);
-    const base  = horariosDoDia(vetId, selectedDate);
-    const eHoje = selectedDate === hoje();
-    const agora = eHoje ? new Date() : null;
-    return base.filter(h => {
-      if (ocp.has(h)) return false;
-      if (agora) {
-        const [hh, mm] = h.split(':').map(Number);
-        return hh * 60 + mm > agora.getHours() * 60 + agora.getMinutes();
-      }
-      return true;
-    });
-  }
+
 
   // ── Filtros locais ───────────────────────────────────────────────────────────
   const listaFiltrada = useMemo(() => agendamentos.filter(ag => {
     if (filtroVetId && ag.veterinario?.id !== Number(filtroVetId)) return false;
-    if (filtroTipo  && ag.tipo !== filtroTipo) return false;
     if (!busca.trim()) return true;
     const q = busca.toLowerCase();
     return (
@@ -820,12 +995,159 @@ export default function Agendamentos() {
       ag.veterinario?.fullName.toLowerCase().includes(q) ||
       ag.animal?.user?.fullName.toLowerCase().includes(q)
     );
-  }), [agendamentos, filtroVetId, filtroTipo, busca]);
+  }), [agendamentos, filtroVetId, busca]);
 
-  const vetsFiltrados = useMemo(
-    () => filtroVetId ? vets.filter(v => String(v.userId) === filtroVetId) : vets,
-    [vets, filtroVetId]
-  );
+  // Especialidades oferecidas pela equipe — união do catálogo de todos os profissionais
+  const especialidadesDisponiveis = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const v of vets) for (const e of v.especialidadesCat) m.set(e.id, e.nome);
+    return [...m.entries()]
+      .map(([id, nome]) => ({ id, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }, [vets]);
+
+  const vetsFiltrados = useMemo(() => {
+    let lista = filtroVetId ? vets.filter(v => String(v.userId) === filtroVetId) : vets;
+    if (filtroEspId) {
+      const id = Number(filtroEspId);
+      lista = lista.filter(v => v.especialidadesCat.some(e => e.id === id));
+    }
+    return lista;
+  }, [vets, filtroVetId, filtroEspId]);
+
+  // Locais oferecidos pela equipe — alimenta o filtro de local
+  const locaisDisponiveis = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const v of vets) for (const l of v.locais) m.set(l.localizacaoId, l.localizacaoNome);
+    return [...m.entries()]
+      .map(([id, nome]) => ({ id, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }, [vets]);
+
+  // Faixa de horário do filtro de período do dia
+  const faixaHorarioFiltro = useMemo(() => {
+    const TURNOS: Record<string, [number, number]> = {
+      MANHA: [0, 12 * 60],
+      TARDE: [12 * 60, 18 * 60],
+      NOITE: [18 * 60, 24 * 60],
+    };
+    const [de, ate] = filtroTurno ? TURNOS[filtroTurno] : [0, 24 * 60];
+    return { de, ate };
+  }, [filtroTurno]);
+
+  // Expediente efetivo de UM LOCAL: interseção do horário/dias do local com o da
+  // empresa (a empresa é sempre o limitador).
+  const expedienteDoLocal = (local: LocalAtendimento) => {
+    const cIni = expediente.horaInicio, cFim = expediente.horaFim, cDias = expediente.dias;
+    const horaInicio = (local.horaIni && cIni) ? (local.horaIni > cIni ? local.horaIni : cIni) : (local.horaIni ?? cIni);
+    const horaFim    = (local.horaFim && cFim) ? (local.horaFim < cFim ? local.horaFim : cFim) : (local.horaFim ?? cFim);
+    let dias: number[] | null;
+    if (cDias && local.dias) dias = local.dias.filter(d => cDias.includes(d));
+    else                     dias = local.dias ?? cDias;
+    return { dias, horaInicio, horaFim };
+  };
+
+  /**
+   * Uma linha por PROFISSIONAL × LOCAL × ESPECIALIDADE para a data selecionada.
+   * Só entra a linha cujo local atende no dia escolhido E que tenha grade
+   * (expediente que produza horários) — clicar numa quinta não pode listar quem
+   * não trabalha na quinta.
+   */
+  const linhasAtendimento = useMemo(() => {
+    const wd = new Date(`${selectedDate}T00:00:00`).getDay();
+    const agora = selectedDate === hoje() ? new Date() : null;
+    const agoraMin = agora ? agora.getHours() * 60 + agora.getMinutes() : null;
+    const espFiltro = filtroEspId ? Number(filtroEspId) : null;
+    const localFiltro = filtroLocalId ? Number(filtroLocalId) : null;
+
+    const linhas: Array<{
+      key: string;
+      vet: VetMembro;
+      localNome: string;
+      esp: EspecialidadeVet | null;
+      dias: number[] | null;
+      horaInicio: string | null;
+      horaFim: string | null;
+      livres: string[];
+    }> = [];
+
+    const montar = (
+      vet: VetMembro, localId: number | null, localNome: string,
+      exp: { dias: number[] | null; horaInicio: string | null; horaFim: string | null },
+      esp: EspecialidadeVet | null,
+    ) => {
+      if (exp.dias && !exp.dias.includes(wd)) return;          // não é dia de trabalho
+      const passo = passoDe(esp?.tempoMin);
+      const grade = gerarSlots(exp.horaInicio, exp.horaFim, passo);
+      if (grade.length === 0) return;                           // sem agenda nesse dia
+
+      const ocupados = ocupacoesDoVet(vet.userId);
+      const livres = grade.filter(h => {
+        const ini = hhmmParaMin(h), fim = ini + passo;
+        if (ini < faixaHorarioFiltro.de || ini >= faixaHorarioFiltro.ate) return false;
+        if (ocupados.some(o => o.iniMin < fim && ini < o.fimMin)) return false;
+        if (agoraMin !== null && ini <= agoraMin) return false;
+        return true;
+      });
+
+      // Sem horário livre a linha não entra: a agenda lista só quem pode receber
+      // agendamento agora. Profissional lotado some do "Expediente Ativo".
+      if (livres.length === 0) return;
+
+      linhas.push({
+        key: `${vet.userId}-${localId ?? 0}-${esp?.id ?? 0}`,
+        vet, localNome, esp,
+        dias: exp.dias, horaInicio: exp.horaInicio, horaFim: exp.horaFim,
+        livres,
+      });
+    };
+
+    for (const vet of vetsFiltrados) {
+      if (vet.locais.length === 0) {
+        // Profissional sem local cadastrado herda o expediente da empresa — continua
+        // aparecendo (senão sumiria da agenda sem explicação).
+        if (localFiltro) continue;
+        const exp = expedienteDoVet(vet.userId);
+        const esps = espFiltro
+          ? vet.especialidadesCat.filter(e => e.id === espFiltro)
+          : vet.especialidadesCat;
+        if (esps.length === 0) montar(vet, null, '—', exp, null);
+        else for (const esp of esps) montar(vet, null, '—', exp, esp);
+        continue;
+      }
+
+      for (const local of vet.locais) {
+        if (localFiltro && local.localizacaoId !== localFiltro) continue;
+        const exp = expedienteDoLocal(local);
+        const esps = espFiltro
+          ? local.especialidades.filter(e => e.id === espFiltro)
+          : local.especialidades;
+        if (esps.length === 0) {
+          // Local sem especialidade configurada: só entra quando não há filtro de
+          // especialidade (não há o que casar).
+          if (!espFiltro) montar(vet, local.localizacaoId, local.localizacaoNome, exp, null);
+        } else {
+          for (const esp of esps) montar(vet, local.localizacaoId, local.localizacaoNome, exp, esp);
+        }
+      }
+    }
+
+    return linhas.sort((a, b) =>
+      a.vet.fullName.localeCompare(b.vet.fullName, 'pt-BR')
+      || a.localNome.localeCompare(b.localNome, 'pt-BR')
+      || (a.esp?.nome ?? '').localeCompare(b.esp?.nome ?? '', 'pt-BR'));
+  }, [vetsFiltrados, selectedDate, filtroEspId, filtroLocalId, faixaHorarioFiltro,
+      agendamentos, ocupacaoGlobal, expediente, vets, tempoPadraoEmpresa]);
+
+  // Rótulo "Seg, Qua · 08:00–12:00" — dias e horário na MESMA coluna
+  const labelDiasHorario = (l: { dias: number[] | null; horaInicio: string | null; horaFim: string | null }): string => {
+    const dias = l.dias === null ? 'Todos os dias'
+      : l.dias.length === 0 ? 'Nenhum dia'
+      : l.dias.slice().sort((a, b) => a - b).map(d => DIAS_PT[d]).join(', ');
+    const ini = l.horaInicio ? l.horaInicio.slice(0, 5) : '00:00';
+    const fim = l.horaFim    ? l.horaFim.slice(0, 5)    : '24:00';
+    return `${dias} · ${ini}–${fim}`;
+  };
   const animaisCombo = animaisNoLocal.filter(a => !comboQuery || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
   // ── Conflict check ────────────────────────────────────────────────────────────
@@ -833,7 +1155,7 @@ export default function Agendamentos() {
   function findConflictAnimal(animalId: number): AgendamentoGlobal | null {
     return agendamentos.find(ag =>
       ag.animal?.id === animalId &&
-      ag.status !== 'CANCELADO'
+      !STATUS_LIVRES.includes(ag.status)
     ) ?? null;
   }
 
@@ -841,7 +1163,7 @@ export default function Agendamentos() {
     return agendamentos.find(ag =>
       ag.animal?.id === animalId &&
       ag.veterinario?.id === vetId &&
-      ag.status !== 'CANCELADO'
+      !STATUS_LIVRES.includes(ag.status)
     ) ?? null;
   }
 
@@ -856,19 +1178,24 @@ export default function Agendamentos() {
       await api.post('/clinica/agendamentos', {
         animalId, tipo: 'CONSULTA', titulo: `Consulta - ${animalNome}`,
         dataHora: new Date(`${selectedDate}T${hora}`).toISOString(), veterinarioId: vetId,
+        // Define a duração do atendimento no backend (tempo de consulta da especialidade)
+        especialidadeId: espDoVet(vetId)?.id ?? undefined,
       });
       toast.success(`Consulta agendada às ${hora}`);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao criar agendamento')); }
+    } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
-  async function handleSlotClick(vetId: number, vetName: string, hora: string) {
-    setOpenSlotVetId(null);
+  async function handleSlotClick(vetId: number, vetName: string, hora: string, espId?: number | null) {
+    setOpenSlotKey(null);
+    setErroGrade(null);
+    // A linha clicada manda na duração: é ela que sabe a especialidade e o local.
+    if (espId) setEspSelPorVet(prev => { const m = new Map(prev); m.set(vetId, espId); return m; });
     // Só o gestor agenda para outro profissional; os demais só para a própria coluna.
     if (!podeAgendarParaOutro && meuUserId != null && vetId !== meuUserId) {
-      setErroInline('Você só pode agendar para você mesmo. Agendar para outro profissional é exclusivo do gestor.');
+      setErroGrade('Você só pode agendar para você mesmo. Agendar para outro profissional é exclusivo do gestor.');
       return;
     }
     if (selectedAnimalId && selectedAnimal) {
@@ -909,6 +1236,7 @@ export default function Agendamentos() {
   }
 
   function resetVoz() {
+    setErroModal(null);
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} recognitionRef.current = null; }
     setVozAberto(false); setVozContexto(null); setVozEtapa('IDLE');
     setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
@@ -974,8 +1302,8 @@ export default function Agendamentos() {
       ?? (vozContexto ? new Date(`${selectedDate}T${vozContexto.hora}`).toISOString() : null);
     const animalNome = vozResultado.animal?.nome ?? selectedAnimal?.nome ?? 'Animal';
 
-    if (!animalId) { setErroInline('Animal não identificado pela IA'); return; }
-    if (!dataHora) { setErroInline('Data/hora não identificada'); return; }
+    if (!animalId) { setErroModal('Animal não identificado pela IA'); return; }
+    if (!dataHora) { setErroModal('Data/hora não identificada'); return; }
 
     setSalvando(true);
     try {
@@ -984,10 +1312,11 @@ export default function Agendamentos() {
         titulo: `Consulta - ${animalNome}`,
         dataHora,
         veterinarioId: vetId,
+        especialidadeId: vetId ? (espDoVet(vetId)?.id ?? undefined) : undefined,
       });
       toast.success('Agendamento confirmado!');
       resetVoz(); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
+    } catch (err) { setErroModal(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
     finally { setSalvando(false); }
   }
 
@@ -1001,17 +1330,19 @@ export default function Agendamentos() {
         titulo: `Consulta - ${animal?.nome ?? 'Paciente'}`,
         dataHora: new Date(`${selectedDate}T${booking.hora}`).toISOString(),
         veterinarioId: booking.vetId,
+        especialidadeId: espDoVet(booking.vetId)?.id ?? undefined,
       });
       toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao criar agendamento')); }
+    } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
   }
 
   async function handleConfirmarBooking(e: React.FormEvent) {
     e.preventDefault();
+    setErroGrade(null);
     if (!booking) return;
-    if (!bookingForm.animalId) { setErroInline('Selecione um animal'); return; }
+    if (!bookingForm.animalId) { setErroGrade('Selecione um animal'); return; }
     const conflito = findConflictAnimal(Number(bookingForm.animalId));
     if (conflito) {
       const nomeAnimal = animais.find(a => String(a.id) === bookingForm.animalId)?.nome ?? 'este animal';
@@ -1039,18 +1370,19 @@ export default function Agendamentos() {
           ? { ...a, status: novoStatus as StatusAgendamento, observacao: novoStatus === 'CANCELADO' && motivo ? motivo : a.observacao }
           : a
       ));
-    } catch { setErroInline('Erro ao atualizar'); }
+    } catch { setErroLista('Erro ao atualizar'); }
   }
 
   function handleIniciarAtendimento(ag: AgendamentoGlobal) {
-    if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
+    if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   }
 
   async function handleTrocarVetAg() {
-    if (!trocandoVetAg || !trocandoVetIdAg) { setErroInline('Selecione um profissional'); return; }
+    setErroModal(null);
+    if (!trocandoVetAg || !trocandoVetIdAg) { setErroModal('Selecione um profissional'); return; }
     if (trocandoVetIdAg === String(trocandoVetAg.veterinario?.id)) {
-      setErroInline('O profissional já é o responsável por este agendamento');
+      setErroModal('O profissional já é o responsável por este agendamento');
       return;
     }
     setSavingTrocaAg(true);
@@ -1061,13 +1393,29 @@ export default function Agendamentos() {
       setTrocandoVetAg(null);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao trocar profissional')); }
+    } catch (err) { setErroModal(msgErroAgenda(err, 'Erro ao trocar profissional')); }
     finally { setSavingTrocaAg(false); }
   }
 
+  // Assumir para si o atendimento de outro veterinário da equipe. O profissional que
+  // estava com ele é avisado por e-mail e WhatsApp (notificação do backend).
+  const [assumindoId, setAssumindoId] = useState<number | null>(null);
+  async function handleAssumir(ag: AgendamentoGlobal) {
+    setErroLista(null);
+    setAssumindoId(ag.id);
+    try {
+      await api.patch(`/clinica/agendamentos/${ag.id}/assumir`);
+      toast.success(`Atendimento de ${ag.animal?.nome ?? 'paciente'} assumido`);
+      fetchAgendamentos(selectedDate);
+      setMesCarregado('');
+    } catch (err) { setErroLista(msgErroAgenda(err, 'Erro ao assumir o atendimento')); }
+    finally { setAssumindoId(null); }
+  }
+
   async function handleTransferirDia() {
-    if (!transDeVetId || !transParaVetId) { setErroInline('Selecione os profissionais'); return; }
-    if (transDeVetId === transParaVetId) { setErroInline('Origem e destino devem ser diferentes'); return; }
+    setErroModal(null);
+    if (!transDeVetId || !transParaVetId) { setErroModal('Selecione os profissionais'); return; }
+    if (transDeVetId === transParaVetId) { setErroModal('Origem e destino devem ser diferentes'); return; }
     setSavingTransf(true);
     try {
       const res = await api.patch('/clinica/agendamentos/transferir-dia', {
@@ -1078,7 +1426,7 @@ export default function Agendamentos() {
       if (transferidos > 0) toast.success(`${transferidos} agendamento(s) transferido(s)`);
       if (bloqueados.length > 0) {
         // Profissional de destino já ocupado nesses horários — não foram movidos
-        setErroInline(
+        setErroModal(
           `${bloqueados.length} agendamento(s) NÃO transferido(s) — profissional de destino já ocupado: ` +
           bloqueados.map(b => `${b.animalNome ?? 'paciente'} às ${formatarHora(b.hora)}`).join(', '),
         );
@@ -1087,7 +1435,7 @@ export default function Agendamentos() {
       setTransferindoDia(false);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao transferir agenda do dia')); }
+    } catch (err) { setErroModal(msgErroAgenda(err, 'Erro ao transferir agenda do dia')); }
     finally { setSavingTransf(false); }
   }
 
@@ -1115,28 +1463,117 @@ export default function Agendamentos() {
     return null;
   }
 
+  // Abre o modal de reagendamento já na agenda: dia do agendamento (ou hoje, se ele
+  // já passou — não se reagenda para trás) e nenhum horário pré-selecionado.
+  function abrirReagendamento(ag: AgendamentoGlobal) {
+    setErroModal(null);
+    const diaAtual = formatarDateInput(ag.dataHora).slice(0, 10);
+    setReagendando(ag);
+    setReagData(diaAtual < hoje() ? hoje() : diaAtual);
+    setReagHora('');
+    setReagOcupados([]);
+  }
+
+  // Ocupação do profissional no dia ESCOLHIDO (não no dia da tela): agenda do contexto
+  // + ocupação global (outras empresas). O próprio agendamento sendo movido é
+  // descontado — o horário dele será liberado.
+  useEffect(() => {
+    if (!reagendando || !reagData) return;
+    const vetId = reagendando.veterinario?.id;
+    if (!vetId) { setReagOcupados([]); return; }
+    let cancelado = false;
+    (async () => {
+      setReagLoading(true);
+      try {
+        const [resDia, resOcup] = await Promise.all([
+          api.get('/clinica/agendamentos', { params: { data: reagData } }),
+          api.get('/clinica/agendamentos/ocupacao', { params: { data: reagData, vetIds: String(vetId) } }),
+        ]);
+        if (cancelado) return;
+        const intervalos: Array<{ iniMin: number; fimMin: number }> = [];
+        for (const ag of (resDia.data?.dados ?? []) as AgendamentoGlobal[]) {
+          if (ag.id === reagendando.id) continue;
+          if (ag.veterinario?.id !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
+          const ini = hhmmParaMin(formatarHora(ag.dataHora));
+          intervalos.push({ iniMin: ini, fimMin: ini + (ag.duracaoMin ?? PASSO_PADRAO_MIN) });
+        }
+        for (const o of (resOcup.data?.dados ?? []) as
+             Array<{ id?: number; dataHora: string; duracaoMin: number | null }>) {
+          if (o.id === reagendando.id) continue;
+          const ini = hhmmParaMin(formatarHora(o.dataHora));
+          intervalos.push({ iniMin: ini, fimMin: ini + (o.duracaoMin ?? PASSO_PADRAO_MIN) });
+        }
+        setReagOcupados(intervalos);
+      } catch { if (!cancelado) setReagOcupados([]); }
+      finally { if (!cancelado) setReagLoading(false); }
+    })();
+    return () => { cancelado = true; };
+  }, [reagendando, reagData]);
+
+  // Grade do dia escolhido para o profissional do agendamento, já sem os horários
+  // ocupados e sem os que ficaram para trás quando o dia é hoje.
+  const slotsReagendamento = useMemo(() => {
+    if (!reagendando || !reagData) return [];
+    const vetId = reagendando.veterinario?.id;
+    if (!vetId) return [];
+    const passo   = passoDoVet(vetId);
+    const agora   = new Date();
+    const agoraMin = reagData === hoje() ? agora.getHours() * 60 + agora.getMinutes() : null;
+    return horariosDoDia(vetId, reagData).filter(h => {
+      const ini = hhmmParaMin(h), fim = ini + passo;
+      if (agoraMin !== null && ini <= agoraMin) return false;      // horário já passou
+      return !reagOcupados.some(o => o.iniMin < fim && ini < o.fimMin);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reagendando, reagData, reagOcupados, vets, expediente, tempoPadraoEmpresa, espSelPorVet, filtroEspId]);
+
+  const novaDataHora = reagData && reagHora ? `${reagData}T${reagHora}` : '';
+
   async function handleReagendar(e: React.FormEvent) {
     e.preventDefault();
-    if (!reagendando || !novaDataHora) { setErroInline('Informe a nova data/hora'); return; }
-    if (novaDataHora === formatarDateInput(reagendando.dataHora)) { setErroInline('A nova data deve ser diferente da atual'); return; }
+    setErroModal(null);
+    if (!reagendando || !novaDataHora) { setErroModal('Escolha o dia e o horário'); return; }
+    if (novaDataHora === formatarDateInput(reagendando.dataHora)) { setErroModal('A nova data deve ser diferente da atual'); return; }
+    if (new Date(novaDataHora).getTime() < Date.now()) {
+      setErroModal('Não é possível reagendar para um horário que já passou.'); return;
+    }
     const avisoExpediente = foraDoExpediente(novaDataHora, expedienteReagendando);
-    if (avisoExpediente) { setErroInline(avisoExpediente); return; }
+    if (avisoExpediente) { setErroModal(avisoExpediente); return; }
     setSalvandoReag(true);
+    // O cancelamento vem ANTES da criação de propósito: liberar o horário antigo é o
+    // que permite reagendar para uma faixa que encosta nele. Se a criação falhar
+    // (horário ocupado, fora do expediente, data passada…), o status original é
+    // restaurado — senão o paciente ficaria sem agendamento nenhum.
+    let cancelado = false;
     try {
       const novaData = new Date(novaDataHora);
       const novaDataStr = novaData.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const novaHoraStr = novaData.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      // TRANSFERIDO (e não CANCELADO): o atendimento não foi desmarcado, mudou de
+      // data. O horário antigo é liberado e a observação registra para quando foi.
       await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
-        status: 'CANCELADO',
-        motivo: `Reagendado para ${novaDataStr}`,
+        status: 'TRANSFERIDO',
+        motivo: `Reagendado para ${novaDataStr} às ${novaHoraStr}`,
       });
+      cancelado = true;
       await api.post('/clinica/agendamentos', {
         animalId: reagendando.animal?.id, tipo: reagendando.tipo, titulo: reagendando.titulo,
         dataHora: novaData.toISOString(), observacao: reagendando.observacao ?? undefined,
         veterinarioId: reagendando.veterinario?.id,
+        // Reagendar mantém a especialidade (e portanto a duração) do original
+        especialidadeId: reagendando.especialidade?.id ?? undefined,
       });
       toast.success('Reagendado');
       setReagendando(null); fetchAgendamentos(selectedDate); setMesCarregado('');
-    } catch (err) { setErroInline(msgErroAgenda(err, 'Erro ao reagendar')); }
+    } catch (err) {
+      if (cancelado) {
+        await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
+          status: reagendando.status || 'AGENDADO',
+          motivo: 'Reagendamento não concluído — horário original mantido',
+        }).catch(() => { /* nada a fazer: o erro original é o que interessa */ });
+      }
+      setErroModal(msgErroAgenda(err, 'Erro ao reagendar'));
+    }
     finally { setSalvandoReag(false); }
   }
 
@@ -1291,7 +1728,7 @@ export default function Agendamentos() {
               <Filter size={13} className="text-gray-500" />
               <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Filtros e Atribuição de Profissional</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {/* Profissional */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-gray-500">Profissional</label>
@@ -1304,14 +1741,49 @@ export default function Agendamentos() {
                   <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
                 </div>
               </div>
-              {/* Tipo */}
+              {/* Especialidade — filtra os profissionais e define o tempo da grade */}
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-bold text-gray-500">Tipo de Atendimento</label>
+                <label className="text-[10px] font-bold text-gray-500">Especialidade</label>
                 <div className="relative">
-                  <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
+                  <select value={filtroEspId} onChange={e => setFiltroEspId(e.target.value)}
+                    disabled={especialidadesDisponiveis.length === 0}
+                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none disabled:opacity-50 disabled:cursor-not-allowed">
+                    <option value="">
+                      {especialidadesDisponiveis.length === 0 ? 'Nenhuma configurada' : 'Todas'}
+                    </option>
+                    {especialidadesDisponiveis.map(e => (
+                      <option key={e.id} value={e.id}>{e.nome}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+              {/* Local de trabalho */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-gray-500">Local de trabalho</label>
+                <div className="relative">
+                  <select value={filtroLocalId} onChange={e => setFiltroLocalId(e.target.value)}
+                    disabled={locaisDisponiveis.length === 0}
+                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none disabled:opacity-50 disabled:cursor-not-allowed">
+                    <option value="">
+                      {locaisDisponiveis.length === 0 ? 'Nenhum cadastrado' : 'Todos'}
+                    </option>
+                    {locaisDisponiveis.map(l => <option key={l.id} value={l.id}>{l.nome}</option>)}
+                  </select>
+                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+              {/* Período do dia */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-gray-500">Período do dia</label>
+                <div className="relative">
+                  <select value={filtroTurno}
+                    onChange={e => setFiltroTurno(e.target.value as '' | 'MANHA' | 'TARDE' | 'NOITE')}
                     className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
-                    <option value="">Todas as categorias</option>
-                    {TIPOS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    <option value="">Dia inteiro</option>
+                    <option value="MANHA">Manhã (até 12:00)</option>
+                    <option value="TARDE">Tarde (12:00 – 18:00)</option>
+                    <option value="NOITE">Noite (a partir das 18:00)</option>
                   </select>
                   <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
                 </div>
@@ -1328,84 +1800,84 @@ export default function Agendamentos() {
                   Expediente Ativo · {labelDia(selectedDate)}
                 </p>
               </div>
-              <span className="text-[10px] font-bold text-gray-400">{vetsFiltrados.length} profissional(is)</span>
+              <span className="text-[10px] font-bold text-gray-400">
+                {linhasAtendimento.length} {linhasAtendimento.length === 1 ? 'atendimento' : 'atendimentos'}
+              </span>
             </div>
 
-            {vetsFiltrados.length === 0 ? (
+            {/* Erro da grade: o slot clicado está logo abaixo desta linha */}
+            <InlineError message={booking ? null : erroGrade} className="mx-4 mt-3" />
+
+            {linhasAtendimento.length === 0 ? (
               <div className="py-10 text-center">
                 <Users size={28} className="mx-auto mb-2 text-gray-300" />
-                <p className="text-sm text-gray-400">Nenhum profissional na equipe</p>
+                <p className="text-sm text-gray-400">Nenhum horário livre neste dia</p>
+                <p className="text-xs text-gray-300 mt-1">
+                  Só aparece quem atende em {labelDia(selectedDate)} e ainda tem horário disponível.
+                </p>
               </div>
             ) : (
               <>
-              {/* Desktop table */}
+              {/* Desktop table — uma linha por profissional × local × especialidade */}
               <div className="hidden md:block overflow-x-auto max-h-[280px] overflow-y-auto">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                      <th className="py-2.5 px-4">Especialidade</th>
                       <th className="py-2.5 px-4">Profissional</th>
-                      <th className="py-2.5 px-4">Período</th>
-                      <th className="py-2.5 px-4">Dias</th>
+                      <th className="py-2.5 px-4">Local de trabalho</th>
+                      <th className="py-2.5 px-4">Especialidade</th>
+                      <th className="py-2.5 px-4">Dias e horário</th>
                       <th className="py-2.5 px-4">Horários Disponíveis</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {vetsFiltrados.map(vet => {
-                      const livres = slotsLivres(vet.userId);
-                      const isOpen = openSlotVetId === vet.userId;
+                    {linhasAtendimento.map(linha => {
+                      const { vet, livres } = linha;
+                      const isOpen = openSlotKey === linha.key;
                       return (
-                        <tr key={vet.userId} className="hover:bg-gray-50/50 transition-colors">
-                          {/* Especialidade */}
-                          <td className="py-3 px-4">
-                            <div className="flex flex-wrap gap-1">
-                              {vet.especialidades.map(esp => (
-                                <span key={esp} className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full whitespace-nowrap">
-                                  {esp}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
+                        <tr key={linha.key} className="hover:bg-gray-50/50 transition-colors">
                           {/* Profissional */}
                           <td className="py-3 px-4">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500 uppercase flex-shrink-0">
-                                {vet.fullName.slice(0, 2)}
-                              </div>
-                              <div>
-                                <p className="text-xs font-bold text-gray-900">{vet.fullName}</p>
-                                <p className="text-[10px] text-gray-400">{vet.cargo}</p>
-                              </div>
-                            </div>
+                            <p className="text-xs font-bold text-gray-900 whitespace-nowrap">{vet.fullName}</p>
                           </td>
-                          {/* Período */}
+                          {/* Local de trabalho */}
                           <td className="py-3 px-4">
-                            <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
-                              <Clock size={11} className="text-gray-400" /> {labelPeriodoVet(vet.userId)}
+                            <span className="flex items-center gap-1 text-xs text-gray-600">
+                              <MapPin size={11} className="text-gray-400 flex-shrink-0" />
+                              {linha.localNome}
                             </span>
                           </td>
-                          {/* Dias */}
-                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">{labelDiasVet(vet.userId)}</td>
+                          {/* Especialidade */}
+                          <td className="py-3 px-4">
+                            {linha.esp ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full whitespace-nowrap">
+                                {linha.esp.nome} · {passoDe(linha.esp.tempoMin)}min
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400">Sem especialidade</span>
+                            )}
+                          </td>
+                          {/* Dias e horário — coluna única */}
+                          <td className="py-3 px-4">
+                            <span className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
+                              <Clock size={11} className="text-gray-400" /> {labelDiasHorario(linha)}
+                            </span>
+                          </td>
                           {/* Horários */}
                           <td className="py-3 px-4">
                             {podeGerenciar ? (
                               <div
                                 className="inline-block"
-                                onMouseEnter={e => livres.length > 0 && openSlotMenu(vet.userId, e.currentTarget)}
+                                onMouseEnter={e => openSlotMenu(linha.key, e.currentTarget)}
                                 onMouseLeave={scheduleCloseSlot}
                               >
                                 <button
-                                  disabled={livres.length === 0}
-                                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border ${
-                                    livres.length > 0
-                                      ? 'bg-green-50 hover:bg-green-100 text-green-700 border-green-200'
-                                      : 'bg-red-50 text-red-500 border-red-200 cursor-not-allowed'
-                                  }`}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
                                 >
                                   {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
-                                  {livres.length > 0 && (isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
+                                  {isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                                 </button>
-                                {isOpen && livres.length > 0 && slotPos && (
+                                {isOpen && slotPos && (
                                   <div
                                     style={{ position: 'fixed', top: slotPos.top, left: slotPos.left, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
                                     onMouseEnter={cancelCloseSlot}
@@ -1415,7 +1887,7 @@ export default function Agendamentos() {
                                     <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Clique para agendar</p>
                                     <div className="grid grid-cols-3 gap-1">
                                       {livres.map(hora => (
-                                        <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora)}
+                                        <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora, linha.esp?.id ?? null)}
                                           className="px-2 py-1.5 text-[11px] font-bold bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors border border-green-200">
                                           {hora}
                                         </button>
@@ -1435,47 +1907,34 @@ export default function Agendamentos() {
                 </table>
               </div>
 
-              {/* Mobile cards */}
+              {/* Mobile cards — mesma linha, empilhada */}
               <div className="md:hidden divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
-                {vetsFiltrados.map(vet => {
-                  const livres = slotsLivres(vet.userId);
-                  const isOpen = openSlotVetId === vet.userId;
+                {linhasAtendimento.map(linha => {
+                  const { vet, livres } = linha;
+                  const isOpen = openSlotKey === linha.key;
                   return (
-                    <div key={vet.userId} className="px-4 py-3">
+                    <div key={linha.key} className="px-4 py-3">
                       <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500 uppercase flex-shrink-0">
-                            {vet.fullName.slice(0, 2)}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-gray-900 truncate">{vet.fullName}</p>
-                            <p className="text-[10px] text-gray-400 truncate">{vet.cargo} - {vet.especialidades.join(', ')}</p>
-                          </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-gray-900 truncate">{vet.fullName}</p>
                         </div>
-                        {/* Qtd de horários livres — toque abre a janela com os horários */}
                         {podeGerenciar ? (
                           <div
                             className="inline-block flex-shrink-0"
-                            onMouseEnter={e => livres.length > 0 && openSlotMenu(vet.userId, e.currentTarget)}
+                            onMouseEnter={e => openSlotMenu(linha.key, e.currentTarget)}
                             onMouseLeave={scheduleCloseSlot}
                           >
                             <button
-                              disabled={livres.length === 0}
                               onClick={e => {
-                                if (livres.length === 0) return;
-                                if (isOpen) { setOpenSlotVetId(null); setSlotPos(null); }
-                                else openSlotMenu(vet.userId, e.currentTarget);
+                                if (isOpen) { setOpenSlotKey(null); setSlotPos(null); }
+                                else openSlotMenu(linha.key, e.currentTarget);
                               }}
-                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border ${
-                                livres.length > 0
-                                  ? 'bg-green-50 hover:bg-green-100 text-green-700 border-green-200'
-                                  : 'bg-red-50 text-red-500 border-red-200 cursor-not-allowed'
-                              }`}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
                             >
                               {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
-                              {livres.length > 0 && (isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
+                              {isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                             </button>
-                            {isOpen && livres.length > 0 && slotPos && (
+                            {isOpen && slotPos && (
                               <div
                                 style={{ position: 'fixed', top: slotPos.top, left: 16, right: 16, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
                                 onMouseEnter={cancelCloseSlot}
@@ -1485,7 +1944,7 @@ export default function Agendamentos() {
                                 <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Toque para agendar</p>
                                 <div className="grid grid-cols-4 gap-1">
                                   {livres.map(hora => (
-                                    <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora)}
+                                    <button key={hora} onClick={() => handleSlotClick(vet.userId, vet.fullName, hora, linha.esp?.id ?? null)}
                                       className="px-2 py-1.5 text-[11px] font-bold bg-green-50 hover:bg-green-100 text-green-700 rounded-xl transition-colors border border-green-200">
                                       {hora}
                                     </button>
@@ -1498,8 +1957,12 @@ export default function Agendamentos() {
                           <span className="text-xs text-gray-500 flex-shrink-0">{livres.length} livres</span>
                         )}
                       </div>
+                      <p className="text-[11px] text-gray-500 flex items-center gap-1 truncate">
+                        <MapPin size={11} className="text-gray-400 flex-shrink-0" /> {linha.localNome}
+                        {linha.esp && <span className="text-emerald-700 font-semibold">· {linha.esp.nome} · {passoDe(linha.esp.tempoMin)}min</span>}
+                      </p>
                       <p className="text-[11px] text-gray-400 flex items-center gap-1">
-                        <Clock size={11} className="text-gray-400" /> {labelPeriodoVet(vet.userId)} · {labelDiasVet(vet.userId)}
+                        <Clock size={11} className="text-gray-400" /> {labelDiasHorario(linha)}
                       </p>
                     </div>
                   );
@@ -1522,9 +1985,14 @@ export default function Agendamentos() {
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
           <div className="flex items-center gap-2">
-            {podeAgendarParaOutro && vets.length > 1 && (
+            {(podeAgendarParaOutro || souVeterinario) && vets.length > 1 && (
               <button
-                onClick={() => { setTransferindoDia(true); setTransDeVetId(filtroVetId); setTransParaVetId(''); }}
+                onClick={() => {
+                  setTransferindoDia(true);
+                  // O gestor escolhe a origem; o profissional só transfere a própria agenda
+                  setTransDeVetId(podeAgendarParaOutro ? filtroVetId : String(meuUserId ?? ''));
+                  setTransParaVetId('');
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold transition-colors border border-blue-200 whitespace-nowrap"
               >
                 <CalendarDays size={12} /> Transferir dia inteiro
@@ -1537,6 +2005,8 @@ export default function Agendamentos() {
             </div>
           </div>
         </div>
+
+        <InlineError message={erroLista} className="mx-4 mt-3" />
 
         {loading ? (
           <div className="py-12 flex justify-center"><Loader2 size={28} className="text-emerald-600 animate-spin" /></div>
@@ -1556,7 +2026,7 @@ export default function Agendamentos() {
                 // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                 const isConcluido   = ag.status === 'CONCLUIDO';
-                const isCancelado   = ag.status === 'CANCELADO';
+                const isCancelado   = STATUS_LIVRES.includes(ag.status);
                 const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                 const podeContinuar = isEmAndamento && podeGerenciar;
                 return (
@@ -1570,7 +2040,7 @@ export default function Agendamentos() {
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
                         {isCancelado ? (
                           <span className="relative group cursor-default">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">CANCELADO</span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COR[ag.status]}`}>{STATUS_LABEL[ag.status]}</span>
                             {ag.observacao && (
                               <span className="absolute bottom-full left-0 mb-1 px-2 py-1 bg-gray-800 text-white text-[10px] rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 max-w-[200px] truncate">
                                 {ag.observacao}
@@ -1593,7 +2063,9 @@ export default function Agendamentos() {
                         <p className="text-xs text-gray-400">Agendado por: {ag.criadoPor.fullName}</p>
                       )}
                       {isCancelado && ag.observacao && (
-                        <p className="text-xs text-red-500 mt-0.5 italic">Motivo: {ag.observacao}</p>
+                        <p className={`text-xs mt-0.5 italic ${ag.status === 'TRANSFERIDO' ? 'text-violet-600' : 'text-red-500'}`}>
+                          {ag.status === 'TRANSFERIDO' ? ag.observacao : `Motivo: ${ag.observacao}`}
+                        </p>
                       )}
                     </div>
                     {podeGerenciar && !isCancelado && (
@@ -1604,13 +2076,21 @@ export default function Agendamentos() {
                           </button>
                         )}
                         {isAgendado && (
-                          <button onClick={() => { setReagendando(ag); setNovaDataHora(formatarDateInput(ag.dataHora)); }} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
+                          <button onClick={() => abrirReagendamento(ag)} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
                             <RefreshCw size={11} /> Reagendar
                           </button>
                         )}
-                        {isAgendado && vets.length > 0 && podeAgendarParaOutro && (
+                        {isAgendado && vets.length > 0 && podeTransferir(ag) && (
                           <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold">
-                            <UserCheck size={11} /> Trocar prof.
+                            <UserCheck size={11} /> Transferir
+                          </button>
+                        )}
+                        {isAgendado && podeAssumir(ag) && (
+                          <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
+                            title={`Assumir o atendimento de ${ag.veterinario?.fullName ?? 'outro profissional'}`}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl text-xs font-semibold">
+                            {assumindoId === ag.id ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={11} />}
+                            Assumir
                           </button>
                         )}
                         {isAgendado && (
@@ -1657,7 +2137,7 @@ export default function Agendamentos() {
                     // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                     const isConcluido   = ag.status === 'CONCLUIDO';
-                    const isCancelado   = ag.status === 'CANCELADO';
+                    const isCancelado   = STATUS_LIVRES.includes(ag.status);
                     const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                     const podeContinuar = isEmAndamento && podeGerenciar;
                     return (
@@ -1690,8 +2170,13 @@ export default function Agendamentos() {
                         <td className="py-3.5 px-4">
                           {isCancelado ? (
                             <div className="relative group inline-block cursor-default">
-                              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-700">CANCELADO</span>
-                              {ag.observacao && (
+                              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${STATUS_COR[ag.status]}`}>{STATUS_LABEL[ag.status]}</span>
+                              {/* Transferido: a nova data/hora fica VISÍVEL (é a informação
+                                  útil da linha); cancelado mantém o motivo no tooltip. */}
+                              {ag.status === 'TRANSFERIDO' && ag.observacao && (
+                                <p className="text-[10px] text-violet-600 italic mt-1 whitespace-nowrap">{ag.observacao}</p>
+                              )}
+                              {ag.status !== 'TRANSFERIDO' && ag.observacao && (
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 bg-gray-800 text-white text-[10px] rounded-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 max-w-[220px] leading-snug">
                                   <span className="block font-semibold text-gray-300 mb-0.5">Motivo</span>
                                   {ag.observacao}
@@ -1712,13 +2197,20 @@ export default function Agendamentos() {
                                 </button>
                               )}
                               {isAgendado && (
-                                <button onClick={() => { setReagendando(ag); setNovaDataHora(formatarDateInput(ag.dataHora)); }} title="Reagendar"
+                                <button onClick={() => abrirReagendamento(ag)} title="Reagendar"
                                   className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
                                   <RefreshCw size={13} />
                                 </button>
                               )}
-                              {isAgendado && vets.length > 0 && podeAgendarParaOutro && (
-                                <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} title="Trocar profissional"
+                              {isAgendado && podeAssumir(ag) && (
+                                <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
+                                  title={`Assumir o atendimento de ${ag.veterinario?.fullName ?? 'outro profissional'}`}
+                                  className="p-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl transition-colors">
+                                  {assumindoId === ag.id ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
+                                </button>
+                              )}
+                              {isAgendado && vets.length > 0 && podeTransferir(ag) && (
+                                <button onClick={() => { setTrocandoVetAg(ag); setTrocandoVetIdAg(ag.veterinario ? String(ag.veterinario.id) : ''); }} title="Transferir para outro profissional"
                                   className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-colors">
                                   <UserCheck size={13} />
                                 </button>
@@ -1761,7 +2253,7 @@ export default function Agendamentos() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-6 pt-5 pb-6 relative">
-              <button onClick={() => setBooking(null)}
+              <button onClick={() => { setBooking(null); setErroGrade(null); }}
                 className="absolute top-4 right-4 p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition-colors">
                 <X size={16} />
               </button>
@@ -1782,6 +2274,7 @@ export default function Agendamentos() {
             </div>
 
             <form onSubmit={handleConfirmarBooking} className="px-6 py-5 flex flex-col gap-5">
+              <InlineError message={erroGrade} />
               {/* Animal */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
@@ -1863,7 +2356,7 @@ export default function Agendamentos() {
               </div>
 
               <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
-                <button type="button" onClick={() => setBooking(null)}
+                <button type="button" onClick={() => { setBooking(null); setErroGrade(null); }}
                   className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">
                   Cancelar
                 </button>
@@ -1881,13 +2374,13 @@ export default function Agendamentos() {
       {/* ── Modal: Reagendar ─────────────────────────────────────────────────── */}
       {reagendando && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md max-h-[92vh] overflow-y-auto">
             <div className="bg-emerald-700 px-6 py-5 flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest">Reagendar</p>
                 <h3 className="text-lg font-bold text-white flex items-center gap-2"><RefreshCw size={16} /> Nova Data e Horário</h3>
               </div>
-              <button onClick={() => setReagendando(null)} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
+              <button onClick={() => { setReagendando(null); setErroModal(null); }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
             </div>
             <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
               <p className="text-xs font-bold text-gray-400 uppercase mb-1">Agendamento atual</p>
@@ -1895,10 +2388,56 @@ export default function Agendamentos() {
               <p className="text-xs text-gray-500">{reagendando.animal?.nome} · {formatarDataHora(reagendando.dataHora)}</p>
             </div>
             <form onSubmit={handleReagendar} className="p-6 flex flex-col gap-4">
+              <InlineError message={erroModal} />
+              {/* Mesma agenda da tela principal: escolhe-se o DIA no calendário e o
+                  horário na grade de livres do profissional. Dias que já passaram
+                  ficam desabilitados. */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-bold text-gray-700">Nova Data e Hora <span className="text-red-500">*</span></label>
-                <input type="datetime-local" value={novaDataHora} onChange={e => setNovaDataHora(e.target.value)}
-                  className="text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+                <label className="text-xs font-bold text-gray-700">Novo dia <span className="text-red-500">*</span></label>
+                <CalendarioInterativo
+                  selectedDate={reagData || hoje()}
+                  onChange={d => { setReagData(d); setReagHora(''); }}
+                  statusPorDia={new Map()}
+                  minDate={hoje()}
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-gray-700">
+                  Horário disponível <span className="text-red-500">*</span>
+                  {reagendando.veterinario?.fullName && (
+                    <span className="ml-1 font-medium text-gray-400">
+                      · {reagendando.veterinario.fullName}
+                    </span>
+                  )}
+                </label>
+                {reagLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-gray-400 py-3">
+                    <Loader2 size={12} className="animate-spin" /> Buscando horários…
+                  </div>
+                ) : slotsReagendamento.length === 0 ? (
+                  <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                    Nenhum horário livre neste dia
+                    {reagendando.veterinario?.fullName ? ` para ${reagendando.veterinario.fullName}` : ''}.
+                    Escolha outro dia no calendário.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-4 gap-1.5 max-h-44 overflow-y-auto pr-1">
+                    {slotsReagendamento.map(h => (
+                      <button
+                        key={h} type="button"
+                        onClick={() => setReagHora(h)}
+                        className={`py-2 rounded-xl text-xs font-bold border transition-colors ${
+                          reagHora === h
+                            ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                            : 'bg-white border-gray-200 text-gray-700 hover:border-emerald-300 hover:bg-emerald-50'
+                        }`}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {expedienteReagendando && (expedienteReagendando.diasTrab || expedienteReagendando.horaIni) && (
                   <p className="text-[11px] text-gray-400">
                     Expediente de {expedienteReagendando.fullName}:{' '}
@@ -1910,15 +2449,21 @@ export default function Agendamentos() {
                       : ''}
                   </p>
                 )}
-                {novaDataHora && foraDoExpediente(novaDataHora, expedienteReagendando) && (
-                  <p className="text-[11px] text-red-500 font-medium">{foraDoExpediente(novaDataHora, expedienteReagendando)}</p>
-                )}
               </div>
+
+              {novaDataHora && (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">Novo horário</p>
+                  <p className="text-sm font-bold text-gray-900">
+                    {reagData.split('-').reverse().join('/')} às {reagHora}
+                  </p>
+                </div>
+              )}
               <div className="bg-emerald-50 rounded-xl p-3 text-xs text-emerald-700">O horário anterior será liberado e um novo agendamento será criado.</div>
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
-                <button type="button" onClick={() => setReagendando(null)}
+                <button type="button" onClick={() => { setReagendando(null); setErroModal(null); }}
                   className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Fechar</button>
-                <button type="submit" disabled={salvandoReag || !!(novaDataHora && foraDoExpediente(novaDataHora, expedienteReagendando))}
+                <button type="submit" disabled={salvandoReag || !novaDataHora || !!foraDoExpediente(novaDataHora, expedienteReagendando)}
                   className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
                   {salvandoReag ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   Confirmar
@@ -1950,6 +2495,7 @@ export default function Agendamentos() {
             )}
 
             <div className="p-6">
+              <InlineError message={erroModal} className="mb-4" />
               {vozEtapa === 'IDLE' && (
                 <div className="flex flex-col items-center gap-5">
                   <p className="text-sm text-gray-600 text-center">
@@ -2185,11 +2731,12 @@ export default function Agendamentos() {
                 <UserCheck size={16} className="text-blue-600" />
                 <h3 className="font-bold text-gray-900">Trocar profissional</h3>
               </div>
-              <button onClick={() => setTrocandoVetAg(null)} className="p-1 text-gray-400 hover:text-gray-600">
+              <button onClick={() => { setTrocandoVetAg(null); setErroModal(null); }} className="p-1 text-gray-400 hover:text-gray-600">
                 <X size={18} />
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
+              <InlineError message={erroModal} />
               <div>
                 <label className="block text-xs text-gray-500 mb-1">ANIMAL</label>
                 <p className="text-sm font-semibold text-gray-800">{trocandoVetAg.animal?.nome ?? '—'}</p>
@@ -2215,7 +2762,7 @@ export default function Agendamentos() {
               </div>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
-              <button onClick={() => setTrocandoVetAg(null)}
+              <button onClick={() => { setTrocandoVetAg(null); setErroModal(null); }}
                 className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
                 Cancelar
               </button>
@@ -2238,21 +2785,27 @@ export default function Agendamentos() {
                 <CalendarDays size={16} className="text-blue-600" />
                 <h3 className="font-bold text-gray-900">Transferir agenda do dia</h3>
               </div>
-              <button onClick={() => setTransferindoDia(false)} className="p-1 text-gray-400 hover:text-gray-600">
+              <button onClick={() => { setTransferindoDia(false); setErroModal(null); }} className="p-1 text-gray-400 hover:text-gray-600">
                 <X size={18} />
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
+              <InlineError message={erroModal} />
               <p className="text-xs text-gray-500">
                 Transfere todos os agendamentos <span className="font-semibold text-amber-700">AGENDADO</span> do dia <span className="font-semibold">{labelDia(selectedDate)}</span> de um profissional para outro.
               </p>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">DE (profissional atual) *</label>
                 <div className="relative">
+                  {/* O profissional só transfere a PRÓPRIA agenda — origem travada nele */}
                   <select value={transDeVetId} onChange={e => setTransDeVetId(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
+                    disabled={!podeAgendarParaOutro}
+                    className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none ${
+                      podeAgendarParaOutro ? '' : 'bg-gray-50 text-gray-500 cursor-not-allowed'
+                    }`}>
                     <option value="">Selecione...</option>
-                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                    {(podeAgendarParaOutro ? vets : vets.filter(v => v.userId === meuUserId))
+                      .map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
                   </select>
                   <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
                 </div>
@@ -2272,7 +2825,7 @@ export default function Agendamentos() {
               </div>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
-              <button onClick={() => setTransferindoDia(false)}
+              <button onClick={() => { setTransferindoDia(false); setErroModal(null); }}
                 className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
                 Cancelar
               </button>

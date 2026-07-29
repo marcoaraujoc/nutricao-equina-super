@@ -5,14 +5,15 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, ClipboardList, Loader2, Search,
   Eye, Printer, ChevronLeft, ChevronRight, Calendar,
-  User, X, Link, Ban,
+  User, X, Link, Ban, Syringe, Pill,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { imprimirPrescricao } from '../utils/PrescricaoPrint';
+import { imprimirPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao } from '../utils/PrescricaoPrint';
+import { formatDate } from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
@@ -59,6 +60,24 @@ export interface GrupoExecucao {
 }
 
 export type ExecMap = Record<string, number[]>;
+
+// Vacina FINALIZADA aguardando aplicação no plantão (vem de /clinica/vacinas/para-execucao)
+export interface VacinaExecucao {
+  id:              number;
+  nome:            string;
+  fabricante:      string | null;
+  lote:            string | null;
+  dose:            string | null;
+  via:             string | null;
+  quantidade:      number | null;
+  numero:          number | null;
+  tipoAtendimento: string | null;
+  dataAplicacao:   string;
+  dataReforco:     string | null;
+  observacao:      string | null;
+  animal:          GrupoExecucao['animal'];
+  veterinario:     { id: number; fullName: string } | null;
+}
 
 interface AlertaEstoque {
   medicamento:   string;
@@ -161,7 +180,7 @@ export function toggleSlot(grupoId: number, map: ExecMap, itemId: number, slotId
 // ─── AnimalAvatar ─────────────────────────────────────────────────────────────
 
 export function AnimalAvatar({ animal, size = 'md' }: {
-  animal: GrupoExecucao['animal'];
+  animal: { nome: string; photoUrl: string | null };
   size?: 'sm' | 'md' | 'lg';
 }) {
   const cls = size === 'lg' ? 'w-14 h-14 text-xl rounded-xl'
@@ -173,6 +192,67 @@ export function AnimalAvatar({ animal, size = 'md' }: {
   ) : (
     <div className={`${cls} bg-emerald-100 flex items-center justify-center flex-shrink-0`}>
       <span className="text-emerald-700 font-bold">{animal.nome[0]?.toUpperCase()}</span>
+    </div>
+  );
+}
+
+// ─── VacinaExecViewModal — detalhes da vacina a aplicar (somente leitura) ──────
+
+function VacRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="text-xs text-gray-400 w-28 flex-shrink-0 pt-0.5">{label}</span>
+      <span className="text-sm text-gray-800 font-medium">{value}</span>
+    </div>
+  );
+}
+
+function VacinaExecViewModal({ v, onClose, onImprimir }: {
+  v:          VacinaExecucao;
+  onClose:    () => void;
+  onImprimir: () => void;
+}) {
+  const vcNum = v.numero != null
+    ? `${v.tipoAtendimento ?? 'VC'}-${String(v.numero).padStart(4, '0')}`
+    : null;
+  const especieInfo = [v.animal.especie?.nome, v.animal.raca?.nome].filter(Boolean).join(' • ');
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Syringe size={16} className="text-teal-600" />
+            <h3 className="font-bold text-gray-900">Detalhes da Vacina</h3>
+            {vcNum && (
+              <span className="text-xs font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-lg">{vcNum}</span>
+            )}
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <VacRow label="Paciente" value={`${v.animal.nome}${especieInfo ? ` — ${especieInfo}` : ''}`} />
+          <VacRow label="Vacina" value={v.nome} />
+          {v.dose && <VacRow label="Tipo Dose" value={v.dose} />}
+          {v.quantidade != null && v.quantidade > 1 && <VacRow label="Qtd Doses" value={String(v.quantidade)} />}
+          {v.via && <VacRow label="Via" value={v.via} />}
+          {v.fabricante && <VacRow label="Fabricante" value={v.fabricante} />}
+          {v.lote && <VacRow label="Lote" value={v.lote} />}
+          <VacRow label="Aplicação" value={formatDate(v.dataAplicacao)} />
+          {v.dataReforco && <VacRow label="Reforço" value={formatDate(v.dataReforco)} />}
+          {v.veterinario && <VacRow label="Prescrito por" value={v.veterinario.fullName} />}
+          {v.observacao && <VacRow label="Obs." value={v.observacao} />}
+        </div>
+        <div className="flex gap-2 px-5 pb-5 pt-2 border-t border-gray-100">
+          <button onClick={onClose}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            Fechar
+          </button>
+          <button onClick={onImprimir}
+            className="flex items-center justify-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            <Printer size={14} /> Imprimir
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -848,9 +928,18 @@ export default function ExecucaoPrescricao() {
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [grupos,   setGrupos]   = useState<GrupoExecucao[]>([]);
+  const [vacinas,  setVacinas]  = useState<VacinaExecucao[]>([]);
+  const [execVacinaId, setExecVacinaId] = useState<number | null>(null);
+  const [viewingVac, setViewingVac] = useState<VacinaExecucao | null>(null);
+  // Erro da execução da vacina exibido COLADO no card da vacina (abaixo do botão),
+  // não no topo da página — cada erro fica junto da ação que o gerou.
+  const [erroVacina, setErroVacina] = useState<{ id: number; msg: string } | null>(null);
   const [loading,  setLoading]  = useState(false);
   const [busca,    setBusca]    = useState('');
   const [modal,    setModal]    = useState<GrupoExecucao | null>(null);
+  // Intenção da abertura do modal: "Ver" (olho) força SOMENTE LEITURA mesmo em
+  // prescrição de hoje ainda executável — só o botão "Executar" abre em modo de execução.
+  const [modalVer, setModalVer] = useState(false);
   const [dataSel,  setDataSel]  = useState(localToday());
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -879,8 +968,14 @@ export default function ExecucaoPrescricao() {
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get('/clinica/prescricoes/grupos/execucao', { params: { data: dataSel } });
-      setGrupos(res.data.dados ?? []);
+      // Prescrições da data + vacinas FINALIZADAS aguardando aplicação (dose única,
+      // não são filtradas por data — aparecem até serem executadas).
+      const [presRes, vacRes] = await Promise.all([
+        api.get('/clinica/prescricoes/grupos/execucao', { params: { data: dataSel } }),
+        api.get('/clinica/vacinas/para-execucao'),
+      ]);
+      setGrupos(presRes.data.dados ?? []);
+      setVacinas(vacRes.data?.dados ?? []);
     } catch {
       setErroInline('Erro ao carregar prescrições');
     } finally {
@@ -889,6 +984,86 @@ export default function ExecucaoPrescricao() {
   }, [dataSel]);
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
+
+  // Impressão da vacina — reutiliza o gerador da prescrição (a vacina vira um "grupo"
+  // de um único item), igual ao imprimirVacina da tela de Vacina.
+  const imprimirVacinaExec = async (v: VacinaExecucao) => {
+    let logoUrl: string | null = null;
+    try {
+      const res = await api.get(`/animais/${v.animal.id}/logo-empresa`);
+      logoUrl = res.data?.dados?.logoUrl ?? null;
+    } catch { /* silencioso — fallback: marca S2Vet no template */ }
+
+    const vcNum = v.numero != null
+      ? `${v.tipoAtendimento ?? 'VC'}-${String(v.numero).padStart(4, '0')}`
+      : `VC-${String(v.id).padStart(4, '0')}`;
+
+    const item: PrintItemPrescricao = {
+      id:              v.id,
+      tipo:            'MEDICAMENTO',
+      medicamento:     v.nome,
+      dosagem:         v.dose,
+      unidade:         v.quantidade != null && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+      via:             v.via ?? '—',
+      frequencia:      v.dataReforco ? `Reforço em ${formatDate(v.dataReforco)}` : 'Dose única',
+      horaInicio:      null,
+      horariosGerados: null,
+      duracaoDias:     1,
+      observacao:      [v.fabricante ? `Fabricante: ${v.fabricante}` : null, v.lote ? `Lote: ${v.lote}` : null, v.observacao].filter(Boolean).join(' · ') || null,
+      dataInicio:      v.dataAplicacao,
+    };
+
+    const grupo: PrintGrupoPrescricao = {
+      numero:          v.numero ?? 0,
+      numeroFormatado: vcNum,
+      status:          'FINALIZADO',
+      finalizadoEm:    null,
+      finalizadoPor:   null,
+      executadoPor:    null,
+      veterinario:     v.veterinario ? { fullName: v.veterinario.fullName } : { fullName: '—' },
+      animal: {
+        nome:     v.animal.nome,
+        photoUrl: v.animal.photoUrl,
+        peso:     v.animal.peso,
+        baia:     v.animal.baia ?? null,
+        especie:  v.animal.especie,
+        raca:     v.animal.raca,
+        logoUrl,
+      },
+      itens: [item],
+    };
+    imprimirPrescricao(grupo);
+  };
+
+  const executarVacina = async (v: VacinaExecucao) => {
+    setErroVacina(null);
+    if (!podeExecutarAcao) {
+      setErroVacina({ id: v.id, msg: 'Sem permissão para executar vacina. Verifique com o responsável.' });
+      return;
+    }
+    setExecVacinaId(v.id);
+    try {
+      await api.patch(`/clinica/vacinas/${v.id}/executar`);
+      toast.success(`${v.nome} — aplicada e lançada na fatura`);
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroVacina({ id: v.id, msg: msg ?? 'Erro ao executar vacina' });
+    } finally {
+      setExecVacinaId(null);
+    }
+  };
+
+  const vacinasFiltradas = vacinas.filter(busca.trim()
+    ? (v => {
+        const q = busca.toLowerCase();
+        return (
+          v.animal.nome.toLowerCase().includes(q) ||
+          v.nome.toLowerCase().includes(q) ||
+          (v.veterinario?.fullName ?? '').toLowerCase().includes(q)
+        );
+      })
+    : () => true);
 
   const aplicarBusca = (lista: GrupoExecucao[]) =>
     lista.filter(busca.trim() ? (g => {
@@ -1004,6 +1179,17 @@ export default function ExecucaoPrescricao() {
               />
             </div>
 
+            {!loading && filtrados.length > 0 && (
+              <div className="flex items-center justify-between px-1 pb-1">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Pill size={13} className="text-emerald-600" /> Medicamentos a aplicar
+                </p>
+                <span className="text-xs text-gray-400">
+                  {filtrados.length} prescrição{filtrados.length !== 1 ? 'ões' : ''}
+                </span>
+              </div>
+            )}
+
             {loading ? (
               <div className="flex justify-center py-24">
                 <Loader2 size={24} className="animate-spin text-emerald-600" />
@@ -1025,14 +1211,74 @@ export default function ExecucaoPrescricao() {
                   <LinhaGrupo
                     key={g.id}
                     g={g}
-                    onExecutar={() => podeExecutarAcao ? setModal(g) : semPermissao('executar prescrição')}
-                    onVer={() => setModal(g)}
+                    onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModal(g); }}
+                    onVer={() => { setModalVer(true); setModal(g); }}
                     onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
                     podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
                     podeImprimir={podeImprimir}
                     soVisualizacao={!isHoje || g.status === 'CANCELADO'}
                   />
                 ))}
+              </div>
+            )}
+
+            {/* ── Vacinas a aplicar (FINALIZADAS) — só no dia de hoje ─────── */}
+            {!loading && isHoje && vacinasFiltradas.length > 0 && (
+              <div className="pt-2">
+                <div className="flex items-center justify-between px-1 pb-2">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                    <Syringe size={13} className="text-teal-600" /> Vacinas a aplicar
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {vacinasFiltradas.length} vacina{vacinasFiltradas.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {vacinasFiltradas.map(v => (
+                    <div key={v.id}
+                      className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 shadow-sm hover:border-teal-200 transition-colors">
+                      <div className="flex items-center gap-3">
+                      <AnimalAvatar animal={v.animal} size="md" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-gray-900 text-sm leading-tight truncate">{v.animal.nome}</p>
+                        <p className="text-xs text-gray-600 truncate">
+                          <span className="font-medium">{v.nome}</span>
+                          {v.dose ? ` · ${v.dose}` : ''}{v.via ? ` · ${v.via}` : ''}
+                          {v.quantidade && v.quantidade > 1 ? ` · ${v.quantidade} doses` : ''}
+                        </p>
+                        {v.veterinario && (
+                          <p className="text-[11px] text-gray-400 truncate">Prescrito por {v.veterinario.fullName}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {podeExecutarAcao && (
+                          <button
+                            onClick={() => executarVacina(v)}
+                            disabled={execVacinaId === v.id}
+                            className="flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 text-white text-xs font-semibold rounded-lg transition-colors">
+                            {execVacinaId === v.id ? <Loader2 size={12} className="animate-spin" /> : <Syringe size={12} />}
+                            Executar
+                          </button>
+                        )}
+                        <button onClick={() => setViewingVac(v)}
+                          className="p-1.5 text-gray-400 hover:text-teal-600 rounded-lg hover:bg-gray-50 transition-colors">
+                          <Eye size={14} />
+                        </button>
+                        {podeImprimir && (
+                          <button onClick={() => imprimirVacinaExec(v)}
+                            title="Imprimir vacina"
+                            className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
+                            <Printer size={14} />
+                          </button>
+                        )}
+                      </div>
+                      </div>
+                      {erroVacina?.id === v.id && (
+                        <InlineError message={erroVacina.msg} className="mt-2" />
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1053,7 +1299,7 @@ export default function ExecucaoPrescricao() {
                       key={g.id}
                       g={g}
                       onExecutar={() => {}}
-                      onVer={() => setModal(g)}
+                      onVer={() => { setModalVer(true); setModal(g); }}
                       onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
                       podeExecutarAcao={false}
                       podeImprimir={podeImprimir}
@@ -1074,7 +1320,15 @@ export default function ExecucaoPrescricao() {
         <ModalExecucao
           grupo={modal}
           onClose={() => { setModal(null); carregar(); }}
-          soVisualizacao={!isHoje || modal.status === 'CANCELADO' || foiExecutadoHoje(modal)}
+          soVisualizacao={modalVer || !isHoje || modal.status === 'CANCELADO' || foiExecutadoHoje(modal)}
+        />
+      )}
+
+      {viewingVac && (
+        <VacinaExecViewModal
+          v={viewingVac}
+          onClose={() => setViewingVac(null)}
+          onImprimir={() => imprimirVacinaExec(viewingVac)}
         />
       )}
     </PageContainer>

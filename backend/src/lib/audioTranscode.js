@@ -3,7 +3,7 @@
 // Conversão de áudio para MP3 via ffmpeg estático (@ffmpeg-installer).
 // Motivo: notas de voz (WhatsApp = Ogg/Opus) e gravações do app (WebM/Opus)
 // NÃO tocam no Safari/iOS. MP3 reproduz em todos os navegadores e continua
-// aceito pelo Whisper/Groq. Usado no upload de mídias de evolução.
+// aceito pelo Gemini na transcrição. Usado no upload de mídias de evolução.
 
 const { spawn } = require('child_process');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;

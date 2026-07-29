@@ -9,6 +9,7 @@ const { registrarAuditoria }                      = require('../lib/auditoria');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
+const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -17,13 +18,78 @@ const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'
 // ATRASADA é setada automaticamente pelo cron marcarAgendamentosAtrasados (agendamentoCronService)
 // 30min após o horário sem conclusão — status informativo, incluído aqui só para permitir
 // exibição/filtro; a rotina noturna de cancelamento (server.ts) também a varre.
-const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'ATRASADA'];
+// TRANSFERIDO: o atendimento saiu desta data/profissional porque foi REAGENDADO —
+// o horário é liberado e a observação guarda para quando ele foi. Diferente de
+// CANCELADO, que é a desistência do atendimento.
+const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'ATRASADA', 'TRANSFERIDO'];
+// Status que NÃO ocupam mais a grade (o slot volta a ficar livre)
+const STATUS_LIVRES = ['CANCELADO', 'TRANSFERIDO'];
 // Quem pode agendar/alterar é decidido pela matriz RBAC (checkPermission nas rotas
 // de agenda.js — atendimento.agendamentos.*). Nenhuma checagem de role aqui.
 // Autoria: "próprio" = veterinário responsável OU quem criou o agendamento.
 const INCLUDE = {
-  veterinario: { select: { id: true, fullName: true } },
+  veterinario:   { select: { id: true, fullName: true } },
+  especialidade: { select: { id: true, nome: true } },
 };
+
+// Agendamento anterior à migration 20260804000000 não tem duracaoMin — a agenda
+// era de 1h fixa, então é assim que ele continua ocupando a grade.
+const DURACAO_PADRAO_MIN = 60;
+const duracaoDe = (ag) => Number(ag?.duracaoMin) > 0 ? Number(ag.duracaoMin) : DURACAO_PADRAO_MIN;
+
+/**
+ * Tempo de consulta (min) que o profissional pratica numa especialidade.
+ * Vem do card "Locais de trabalho": cada local guarda { especialidadeId: minutos }.
+ * O mesmo profissional pode ter tempos diferentes por local — quando há mais de um,
+ * usa o MENOR (é o que cabe em qualquer um deles).
+ * Não configurado → cai no padrão da empresa (Configurações) e, sem ele, em 60 min.
+ * Nunca retorna null: agendar não pode travar por falta de configuração do profissional.
+ */
+async function tempoConsultaDoProfissional(vetId, especialidadeId, req) {
+  if (vetId && especialidadeId) {
+    const locais = await prisma.membroLocalTrabalho.findMany({
+      where:  { membro: { userId: Number(vetId) } },
+      select: { temposConsulta: true },
+    });
+    let menor = null;
+    for (const l of locais) {
+      const min = Number(l.temposConsulta?.[String(especialidadeId)]);
+      if (Number.isInteger(min) && min > 0 && (menor === null || min < menor)) menor = min;
+    }
+    if (menor !== null) return menor;
+  }
+  return req ? tempoConsultaPadraoDaEmpresa(req) : DURACAO_PADRAO_MIN;
+}
+
+/**
+ * Conflito do profissional considerando a DURAÇÃO dos dois lados.
+ * Dois atendimentos colidem quando [inicio, fim) se cruzam — não basta comparar o
+ * horário de início: uma consulta de 60min às 08:00 ocupa o slot das 08:30.
+ * A janela de busca cobre o maior atendimento possível (8h) para não perder um
+ * agendamento longo que começou antes e ainda está em curso.
+ */
+async function conflitoDeAgenda(vetId, inicio, duracaoMin, ignorarId = null) {
+  const fim   = new Date(inicio.getTime() + duracaoMin * 60_000);
+  const desde = new Date(inicio.getTime() - 480 * 60_000);
+
+  const candidatos = await prisma.agendamentoClinico.findMany({
+    where: {
+      ativo: true,
+      status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] },
+      veterinarioId: Number(vetId),
+      dataHora: { gte: desde, lt: fim },
+      ...(ignorarId ? { id: { not: Number(ignorarId) } } : {}),
+    },
+    select: { id: true, dataHora: true, duracaoMin: true, animal: { select: { nome: true } } },
+  });
+
+  for (const c of candidatos) {
+    const cIni = new Date(c.dataHora).getTime();
+    const cFim = cIni + duracaoDe(c) * 60_000;
+    if (cIni < fim.getTime() && inicio.getTime() < cFim) return c;
+  }
+  return null;
+}
 
 // SÓ o GESTOR (bypass FULL / cargo GESTOR) e o ADMIN operam a agenda de OUTRO
 // profissional (criar, trocar profissional, cancelar…). Os demais perfis — mesmo com
@@ -44,6 +110,60 @@ function ehMinhaAgenda(req, item) {
 function podeOperarAgendamento(req, item) {
   // Gestor/Admin: qualquer agendamento. Demais: só o próprio (não basta ter EQUIPE).
   return souGestorAgenda(req) || ehMinhaAgenda(req, item);
+}
+
+/**
+ * Notifica por E-MAIL e WHATSAPP o profissional afetado por uma troca de responsável.
+ * Fire-and-forget: falha de notificação nunca derruba a operação.
+ *
+ * modo 'RECEBIDO'  → `paraVetId` GANHOU os atendimentos (transferência feita por `deVetId`).
+ * modo 'ASSUMIDO'  → `paraVetId` PERDEU o atendimento, que `deVetId` assumiu para si.
+ * `itens` = [{ dataHora, animalNome, tipo }].
+ */
+async function notificarTransferencia({ req, paraVetId, deVetId, itens, modo = 'RECEBIDO' }) {
+  if (!paraVetId || !Array.isArray(itens) || itens.length === 0) return;
+  setImmediate(async () => {
+    try {
+      const [destino, origem] = await Promise.all([
+        prisma.user.findUnique({ where: { id: Number(paraVetId) }, select: { email: true, fullName: true, phone: true } }),
+        deVetId ? prisma.user.findUnique({ where: { id: Number(deVetId) }, select: { fullName: true } }) : null,
+      ]);
+      if (!destino) return;
+
+      await emailService.enviarTransferenciaAgenda({
+        paraEmail: destino.email, paraNome: destino.fullName,
+        deNome:    origem?.fullName ?? null,
+        itens, modo,
+      }).catch(() => {});
+
+      if (!destino.phone) return;
+      const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+      const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+      const linhas  = itens.slice(0, 10)
+        .map(i => `• ${fmtHora(i.dataHora)} — ${i.animalNome ?? 'Paciente'}`);
+      if (itens.length > 10) linhas.push(`• +${itens.length - 10} atendimento(s)`);
+
+      const cabecalho = modo === 'ASSUMIDO'
+        ? [`🐴 *S2Vet — Atendimento assumido por outro profissional*`,
+           origem?.fullName ? `🙋 ${origem.fullName} assumiu este atendimento` : '']
+        : [`🐴 *S2Vet — ${itens.length > 1 ? 'Agenda transferida' : 'Atendimento transferido'}*`,
+           origem?.fullName ? `🔄 De: ${origem.fullName}` : ''];
+
+      const msg = [
+        ...cabecalho,
+        `📅 ${fmtData(itens[0].dataHora)}`,
+        ``,
+        ...linhas,
+      ].filter(Boolean).join('\n');
+
+      // Instância da clínica (Evolution). Sem instância conectada, cai no provider legado.
+      const envio = await whatsappService.sendMessage(
+        { empresaId: req.empresaId, equipeId: req.equipeId },
+        destino.phone, msg,
+      ).catch(() => ({ sucesso: false }));
+      if (!envio?.sucesso) await whatsappService.sendWhatsApp(destino.phone, msg).catch(() => {});
+    } catch { /* silencioso — notificação não bloqueia a transferência */ }
+  });
 }
 
 // Dia da semana (0=Dom…6=Sáb) e HH:MM de um instante, sempre no fuso de Brasília —
@@ -95,8 +215,9 @@ async function dentroDoExpediente(vetId, quando, req) {
 }
 
 const INCLUDE_GLOBAL = {
-  veterinario: { select: { id: true, fullName: true } },
-  criadoPor:   { select: { id: true, fullName: true } },
+  veterinario:   { select: { id: true, fullName: true } },
+  criadoPor:     { select: { id: true, fullName: true } },
+  especialidade: { select: { id: true, nome: true } },
   animal: {
     select: {
       id:      true,
@@ -208,9 +329,12 @@ const AgendamentoController = {
           ativo:         true,
           veterinarioId: { in: ids },
           dataHora:      { gte: inicio, lte: fim },
-          status:        { not: 'CANCELADO' },
+          status:        { notIn: STATUS_LIVRES },
         },
-        select: { veterinarioId: true, dataHora: true },
+        // `id` acompanha para a tela de reagendamento poder DESCONTAR o próprio
+        // agendamento que está sendo movido (o horário dele será liberado). Continua
+        // sem dado nenhum do paciente/empresa.
+        select: { id: true, veterinarioId: true, dataHora: true, duracaoMin: true },
       });
 
       res.json({ dados: itens });
@@ -235,7 +359,7 @@ const AgendamentoController = {
         const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
         where.OR = [
           { status: 'AGENDADO', dataHora: { gte: hoje } },
-          { status: 'CANCELADO' },
+          { status: { in: STATUS_LIVRES } },
         ];
       } else if (req.query.status && STATUS_VALIDOS.includes(req.query.status)) {
         where.status = req.query.status;
@@ -258,7 +382,7 @@ const AgendamentoController = {
   // body: { animalId, tipo, titulo, dataHora, observacao?, veterinarioId? }
   criar: async (req, res) => {
     try {
-      const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, veterinarioId } = req.body;
+      const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, veterinarioId, especialidadeId } = req.body;
 
       if (!animalId || !titulo?.trim() || !dataHora) {
         return res.status(400).json({ error: 'animalId, titulo e dataHora são obrigatórios' });
@@ -269,6 +393,15 @@ const AgendamentoController = {
       const quando = new Date(dataHora);
       if (isNaN(quando.getTime())) {
         return res.status(400).json({ error: 'dataHora inválida' });
+      }
+      // Agenda é para o futuro: não se marca (nem se reagenda) para horário que já
+      // passou. Tolerância de 1 min para o caso do usuário confirmar o slot corrente
+      // no exato virar do minuto.
+      if (quando.getTime() < Date.now() - 60_000) {
+        return res.status(400).json({
+          error: 'Não é possível agendar para uma data/horário que já passou.',
+          code:  'DATA_PASSADA',
+        });
       }
 
       // Só o gestor agenda para OUTRO profissional; os demais só para si mesmos.
@@ -283,24 +416,31 @@ const AgendamentoController = {
       // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
       // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
       const mesmoHorario = await prisma.agendamentoClinico.findFirst({
-        where: { animalId: Number(animalId), dataHora: quando, ativo: true, status: { not: 'CANCELADO' } },
+        where: { animalId: Number(animalId), dataHora: quando, ativo: true, status: { notIn: STATUS_LIVRES } },
         select: { id: true },
       });
       if (mesmoHorario) {
         return res.status(409).json({ error: 'Este animal já tem um agendamento neste horário.', code: 'HORARIO_OCUPADO' });
       }
 
+      // Duração do atendimento: vem do tempo de consulta que o profissional pratica
+      // NAQUELA especialidade (card "Locais de trabalho"). Não configurado → padrão da
+      // empresa (Configurações). Sem especialidade informada (fluxos antigos), idem.
+      const espIdNum = Number(especialidadeId);
+      let duracaoMin = await tempoConsultaPadraoDaEmpresa(req);
+      if (Number.isInteger(espIdNum) && espIdNum > 0) {
+        if (!veterinarioId) {
+          return res.status(400).json({ error: 'Selecione o profissional para agendar por especialidade.' });
+        }
+        duracaoMin = await tempoConsultaDoProfissional(veterinarioId, espIdNum, req);
+      }
+
       // Disponibilidade do profissional: sem conflito de horário e dentro do expediente
       // (próprio do vet ou herdado da empresa/equipe).
       if (veterinarioId) {
         const vetIdNum = Number(veterinarioId);
-        const conflitoVet = await prisma.agendamentoClinico.findFirst({
-          where: {
-            ativo: true, status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] },
-            veterinarioId: vetIdNum, dataHora: quando,
-          },
-          select: { id: true, animal: { select: { nome: true } } },
-        });
+        // Conflito por INTERVALO — considera a duração dos dois atendimentos
+        const conflitoVet = await conflitoDeAgenda(vetIdNum, quando, duracaoMin);
         if (conflitoVet) {
           return res.status(409).json({
             error: `O profissional já tem um agendamento neste horário (${conflitoVet.animal?.nome ?? 'outro paciente'}).`,
@@ -309,6 +449,14 @@ const AgendamentoController = {
         }
         if (!(await dentroDoExpediente(vetIdNum, quando, req))) {
           return res.status(409).json({ error: 'Horário fora do expediente do profissional selecionado.', code: 'FORA_EXPEDIENTE' });
+        }
+        // O atendimento inteiro precisa caber no expediente, não só o seu início
+        const fimPrevisto = new Date(quando.getTime() + (duracaoMin - 1) * 60_000);
+        if (!(await dentroDoExpediente(vetIdNum, fimPrevisto, req))) {
+          return res.status(409).json({
+            error: `O atendimento de ${duracaoMin} min ultrapassa o fim do expediente do profissional.`,
+            code:  'FORA_EXPEDIENTE',
+          });
         }
       }
 
@@ -330,6 +478,8 @@ const AgendamentoController = {
             veterinarioId: veterinarioId
               ? Number(veterinarioId)
               : (req.user.userType === 'VETERINARIO' ? req.user.id : null),
+            especialidadeId: Number.isInteger(espIdNum) && espIdNum > 0 ? espIdNum : null,
+            duracaoMin,
             criadoPorId:   req.user.id,
           },
           include: INCLUDE,
@@ -431,7 +581,7 @@ const AgendamentoController = {
       }
 
       // Cancelamento exige justificativa (auditoria)
-      if (status === 'CANCELADO' && !motivo?.trim()) {
+      if (STATUS_LIVRES.includes(status) && !motivo?.trim()) {
         return res.status(400).json({ error: 'É obrigatório informar o motivo do cancelamento' });
       }
 
@@ -447,7 +597,7 @@ const AgendamentoController = {
       }
 
       const updateData = { status };
-      if (status === 'CANCELADO' && motivo?.trim()) {
+      if (STATUS_LIVRES.includes(status) && motivo?.trim()) {
         updateData.observacao = motivo.trim();
       }
 
@@ -457,7 +607,7 @@ const AgendamentoController = {
         include: INCLUDE,
       });
 
-      if (status === 'CANCELADO') {
+      if (STATUS_LIVRES.includes(status)) {
         await registrarAuditoria(null, req, {
           categoria:  'CANCELAMENTO',
           entidade:   'AGENDAMENTO',
@@ -506,9 +656,13 @@ const AgendamentoController = {
       const novoVetId = veterinarioId !== undefined
         ? (veterinarioId === null ? null : Number(veterinarioId))
         : undefined;
-      // Trocar o profissional do agendamento é exclusivo do gestor.
-      if (novoVetId !== undefined && novoVetId !== item.veterinarioId && !souGestorAgenda(req)) {
-        return res.status(403).json({ error: 'Apenas o gestor pode trocar o profissional do agendamento.' });
+      // Transferir o atendimento: o GESTOR move o de qualquer um; o profissional move
+      // o DELE (é a agenda dele que está sendo passada adiante).
+      const trocaDeVet = novoVetId !== undefined && novoVetId !== item.veterinarioId;
+      if (trocaDeVet && !souGestorAgenda(req) && Number(item.veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({
+          error: 'Você só pode transferir os atendimentos em que é o profissional responsável.',
+        });
       }
       const dataHoraMudou = !!data.dataHora;
       const vetEfetivo = novoVetId !== undefined ? novoVetId : item.veterinarioId;
@@ -544,6 +698,18 @@ const AgendamentoController = {
         data,
         include: INCLUDE_GLOBAL,
       });
+
+      // Quem RECEBEU o atendimento é avisado por e-mail e WhatsApp
+      if (trocaDeVet && novoVetId) {
+        notificarTransferencia({
+          req, paraVetId: novoVetId, deVetId: item.veterinarioId,
+          itens: [{
+            dataHora:   atualizado.dataHora,
+            animalNome: atualizado.animal?.nome ?? null,
+            tipo:       atualizado.tipo,
+          }],
+        });
+      }
 
       res.json({ dados: atualizado });
     } catch (err) {
@@ -599,6 +765,8 @@ const AgendamentoController = {
         dataReferencia: dataRef,
         vetHint:  vetHint  ? Number(vetHint)  : undefined,
         horaHint: horaHint ?? undefined,
+        userId:    req.user?.id ?? null,
+        empresaId: req.empresaId ?? null,
       });
 
       if (!interpretacao) {
@@ -654,7 +822,7 @@ const AgendamentoController = {
           where: {
             veterinarioId: vetIdFinal,
             ativo:         true,
-            status:        { not: 'CANCELADO' },
+            status:        { notIn: STATUS_LIVRES },
             dataHora:      { gte: new Date(`${data}T00:00:00`), lte: new Date(`${data}T23:59:59`) },
           },
           include: { animal: { select: { nome: true } } },
@@ -677,7 +845,7 @@ const AgendamentoController = {
         where: {
           veterinarioId: vetIdFinal,
           ativo:  true,
-          status: { not: 'CANCELADO' },
+          status: { notIn: STATUS_LIVRES },
           dataHora: { gte: new Date(`${data}T00:00:00`), lte: new Date(`${data}T23:59:59`) },
         },
         select: { dataHora: true },
@@ -770,6 +938,69 @@ const AgendamentoController = {
     }
   },
 
+  // PATCH /clinica/agendamentos/:id/assumir
+  // Qualquer VETERINÁRIO da equipe pode assumir o atendimento de outro veterinário —
+  // é um "puxar para si", não depende de o outro transferir. Por isso NÃO passa por
+  // `podeOperarAgendamento` (que exigiria ser o dono do agendamento).
+  assumir: async (req, res) => {
+    try {
+      const item = await prisma.agendamentoClinico.findUnique({
+        where:   { id: Number(req.params.id) },
+        include: { animal: { select: { nome: true } } },
+      });
+      if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
+
+      // Só profissional que atende: veterinário (ou gestor/admin, que é vet por cargo)
+      const ehVet = req.user?.userType === 'VETERINARIO' || souGestorAgenda(req);
+      if (!ehVet) {
+        return res.status(403).json({ error: 'Apenas veterinários podem assumir um atendimento.' });
+      }
+      if (Number(item.veterinarioId) === Number(req.user.id)) {
+        return res.status(400).json({ error: 'Este atendimento já é seu.' });
+      }
+      if (!['AGENDADO', 'ATRASADA'].includes(item.status)) {
+        return res.status(400).json({ error: 'Só é possível assumir um atendimento ainda em aberto.' });
+      }
+
+      // Acesso ao animal e disponibilidade de quem está assumindo
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      const duracao  = duracaoDe(item);
+      const conflito = await conflitoDeAgenda(req.user.id, item.dataHora, duracao, item.id);
+      if (conflito) {
+        return res.status(409).json({
+          error: `Você já tem um agendamento neste horário (${conflito.animal?.nome ?? 'outro paciente'}).`,
+          code:  'PROFISSIONAL_OCUPADO',
+        });
+      }
+      if (!(await dentroDoExpediente(req.user.id, item.dataHora, req))) {
+        return res.status(409).json({ error: 'Horário fora do seu expediente.', code: 'FORA_EXPEDIENTE' });
+      }
+
+      const atualizado = await prisma.agendamentoClinico.update({
+        where:   { id: item.id },
+        data:    { veterinarioId: Number(req.user.id) },
+        include: INCLUDE_GLOBAL,
+      });
+
+      // O profissional que estava com o atendimento é avisado de que ele saiu da agenda
+      // dele — mesma notificação da transferência, na direção contrária.
+      if (item.veterinarioId) {
+        notificarTransferencia({
+          req, paraVetId: item.veterinarioId, deVetId: req.user.id, modo: 'ASSUMIDO',
+          itens: [{ dataHora: item.dataHora, animalNome: item.animal?.nome ?? null, tipo: item.tipo }],
+        });
+      }
+
+      res.json({ dados: atualizado });
+    } catch (err) {
+      console.error('Erro ao assumir agendamento:', err);
+      res.status(500).json({ error: 'Erro ao assumir agendamento' });
+    }
+  },
+
   // PATCH /clinica/agendamentos/transferir-dia — body: { data, deVetId, paraVetId }
   transferirDia: async (req, res) => {
     try {
@@ -781,10 +1012,10 @@ const AgendamentoController = {
         return res.status(400).json({ error: 'Profissional de origem e destino devem ser diferentes' });
       }
 
-      // Transferir/trocar profissional da agenda é exclusivo do gestor (move os
-      // agendamentos para OUTRO profissional, deVetId → paraVetId).
-      if (!souGestorAgenda(req)) {
-        return res.status(403).json({ error: 'Apenas o gestor pode transferir/trocar o profissional da agenda.' });
+      // O GESTOR transfere a agenda de qualquer profissional; o profissional transfere
+      // a DELE (deVetId tem de ser ele mesmo).
+      if (!souGestorAgenda(req) && Number(deVetId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Você só pode transferir a sua própria agenda.' });
       }
 
       const doDia = await prisma.agendamentoClinico.findMany({
@@ -797,7 +1028,7 @@ const AgendamentoController = {
             lte: new Date(data + 'T23:59:59.999'),
           },
         },
-        select: { id: true, dataHora: true, animal: { select: { nome: true } } },
+        select: { id: true, dataHora: true, tipo: true, animal: { select: { nome: true } } },
       });
 
       if (doDia.length === 0) {
@@ -827,6 +1058,14 @@ const AgendamentoController = {
         await prisma.agendamentoClinico.updateMany({
           where: { id: { in: transferiveis.map(a => a.id) } },
           data:  { veterinarioId: Number(paraVetId) },
+        });
+        // Quem RECEBEU a agenda é avisado por e-mail e WhatsApp
+        notificarTransferencia({
+          req, paraVetId, deVetId,
+          itens: transferiveis
+            .slice()
+            .sort((a, b) => a.dataHora - b.dataHora)
+            .map(a => ({ dataHora: a.dataHora, animalNome: a.animal?.nome ?? null, tipo: a.tipo })),
         });
       }
 

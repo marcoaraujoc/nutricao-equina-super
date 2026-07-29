@@ -59,6 +59,7 @@ interface ResumoHistoricoItem {
   badge:             string;
   status?:           string | null;
   responsavel:       string | null;
+  veterinarioId?:    number | null;
   resumo:            string;
   evolucaoId:        number | null;
   dataFim?:          string | null;
@@ -226,12 +227,14 @@ function HistoricoResumidoPanel({
   refreshKey,
   onItemClick,
   onEditClick,
+  podeEditarEvolucao,
 }: {
   animalId:    number;
   animal:      AnimalExtended | null;
   refreshKey:  number;
   onItemClick: (tab: SubModulo, itemId: number) => void;
   onEditClick: (grupo: GrupoResumoHistorico) => void;
+  podeEditarEvolucao: (ev: ResumoHistoricoItem) => boolean;
 }) {
   const [itens,             setItens]             = useState<ResumoHistoricoItem[]>([]);
   const [carregando,        setCarregando]        = useState(false);
@@ -398,7 +401,7 @@ function HistoricoResumidoPanel({
                         {gerandoRelatorio ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
                       </button>
                     )}
-                    {ev.evolucaoId != null && (
+                    {ev.evolucaoId != null && podeEditarEvolucao(ev) && (
                       <button onClick={() => onEditClick(grupo)} title={emAndamento ? 'Continuar atendimento' : 'Editar atendimento'}
                         className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0">
                         <Pencil size={12} />
@@ -558,9 +561,9 @@ function tabFromPath(pathname: string): SubModulo {
 // ─── Atendimento ──────────────────────────────────────────────────────────────
 
 const Atendimento = () => {
-  const { setSelectedAnimal, selectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal, selectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const { user }                              = useAuth();
-  const { podeExecutar, isGestor }            = usePermissoes();
+  const { podeExecutar, isGestor, permissoes } = usePermissoes();
   const { contextoAtivo, loading: empresaLoading } = useEmpresa();
   const navigate                              = useNavigate();
   const location                              = useLocation();
@@ -569,6 +572,18 @@ const Atendimento = () => {
   const podeFinalizarEvolucao = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
   // FORNECEDOR: regra de autoria — só finaliza a evolução que ele próprio criou
   const isFornecedor = user?.userType === 'FORNECEDOR';
+
+  // Botão "Editar" do Histórico do Paciente: MESMA regra do Histórico de Evolução
+  // Clínica (SubModuloEvolucao) — antes o painel mostrava "Editar" sem checagem de
+  // autoria/permissão, divergindo da aba de evolução. Agora reflete as mesmas ações.
+  const podeEditarEvolucaoHist = (ev: ResumoHistoricoItem): boolean => {
+    const nivelEditar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar'] ?? 'NENHUM');
+    const eProprioAutor = ev.veterinarioId != null && ev.veterinarioId === (user?.id ?? 0);
+    const podeEditarEsta = isFornecedor
+      ? (nivelEditar !== 'NENHUM' && eProprioAutor)
+      : (nivelEditar === 'FULL' || ((nivelEditar === 'EQUIPE' || nivelEditar === 'PROPRIO') && eProprioAutor));
+    return (ev.status === 'EM_ANDAMENTO' && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
+  };
 
   const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
 
@@ -719,6 +734,18 @@ const Atendimento = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
+      // GET 403 → data null: o id da URL é de OUTRA empresa (link antigo, sessão
+      // restaurada ou troca de contexto). Em vez de seguir com animal nulo — e deixar
+      // todos os submódulos batendo 403 nesse id —, larga o id da URL e cai no
+      // paciente do contexto ativo (a rota sem id usa o selectedAnimal).
+      if (!res.data) {
+        if (animalIdParam) navigate(location.pathname.replace(/\/\d+$/, ''), { replace: true });
+        // Sem id na URL, o inacessível é o PACIENTE SELECIONADO (ex.: seleção herdada
+        // de outra empresa): refaz a seleção com a lista do contexto ativo, senão o
+        // card do animal fica vazio sem explicação.
+        else await refreshSelectedAnimal();
+        return;
+      }
       const a   = (res.data?.dados ?? res.data) as AnimalExtended;
       setAnimal(a);
       setSelectedAnimal(a);
@@ -731,7 +758,8 @@ const Atendimento = () => {
         })
         .catch(() => {});
     } catch (err) { console.error('Erro ao carregar animal:', err); }
-  }, [effectiveAnimalId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAnimalId, animalIdParam, location.pathname, refreshSelectedAnimal]);
 
   const carregarEvolucaoAtiva = useCallback(async () => {
     if (!effectiveAnimalId) return;
@@ -975,6 +1003,7 @@ const Atendimento = () => {
                     navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
                   }}
                   onEditClick={abrirEdicaoAtendimento}
+                  podeEditarEvolucao={podeEditarEvolucaoHist}
                 />
               </div>
             </div>
@@ -1020,6 +1049,7 @@ const Atendimento = () => {
                         setShowHistoricoM(false);
                         abrirEdicaoAtendimento(grupo);
                       }}
+                      podeEditarEvolucao={podeEditarEvolucaoHist}
                     />
                   </div>
                 </div>

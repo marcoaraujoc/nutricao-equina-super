@@ -7,28 +7,26 @@ const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
+const { processarExame } = require('../services/exameParserService');
+const { storage }        = require('../storage');
 
 const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
 
-// ── Permissão por TIPO de exame (matriz RBAC) ────────────────────────────────
-// Laboratorial/Bioquímico → exames.laboratorial.* ; Imagem → exames.imagem.*
-// Compra não tem módulo próprio (vale apenas atendimento.exames.*).
-// Complementa o checkPermission da rota: o slug do tipo só é conhecido em runtime
-// (vem do body ou do registro), por isso é resolvido aqui via getNivelEfetivo.
-const SLUG_BASE_POR_TIPO = {
+// NOTA: o PEDIDO de exame (criar/editar/finalizar/excluir) é protegido APENAS por
+// `atendimento.exames.*`. Já o RESULTADO/laudo (carregar) usa os slugs de resultado
+// `exames.laboratorial.*` / `exames.imagem.*` — ver `SLUG_RESULTADO` e `salvarResultado`.
+// Laboratorial/Bioquímico → exames.laboratorial ; Imagem → exames.imagem ;
+// Compra não tem resultado (sem restrição extra).
+const SLUG_RESULTADO = {
   Laboratorial: 'exames.laboratorial',
   'Bioquímico': 'exames.laboratorial',
   Imagem:       'exames.imagem',
 };
 
-async function nivelDoTipo(req, tipo, acao) {
-  const base = SLUG_BASE_POR_TIPO[tipo];
-  if (!base) return null; // tipo sem restrição adicional
-  return getNivelEfetivo(req, `${base}.${acao}`);
-}
-
 const INCLUDE = {
-  veterinario: { select: { id: true, fullName: true } },
+  veterinario:    { select: { id: true, fullName: true } },
+  resultadoItens: { orderBy: { ordem: 'asc' } },
+  imagens:        { where: { ativo: true }, orderBy: { id: 'asc' }, select: { id: true, nome: true, arquivoUrl: true } },
 };
 
 const ExameClinicoController = {
@@ -43,21 +41,17 @@ const ExameClinicoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      const take = Math.min(Number(req.query.limit ?? 10), 50);
-      const skip = (Number(req.query.page ?? 1) - 1) * take;
+      // Histórico completo (ativos E inativados) — o front filtra por status
+      // (SALVA/FINALIZADA/INATIVA) e pagina no cliente, mesmo padrão da tela de Vacina.
+      // Segregação multi-clínica: cada empresa vê só os próprios exames do animal.
+      const where = { animalId, AND: [escopoFilhoEvolucaoWhere(req)] };
+      const itens = await prisma.exameClinico.findMany({
+        where,
+        include: INCLUDE,
+        orderBy: { dataSolicitacao: 'desc' },
+      });
 
-      const [itens, total] = await Promise.all([
-        prisma.exameClinico.findMany({
-          // Segregação multi-clínica: cada empresa vê só os próprios exames do animal
-          where:   { animalId, ativo: true, AND: [escopoFilhoEvolucaoWhere(req)] },
-          include: INCLUDE,
-          orderBy: { dataSolicitacao: 'desc' },
-          take, skip,
-        }),
-        prisma.exameClinico.count({ where: { animalId, ativo: true, AND: [escopoFilhoEvolucaoWhere(req)] } }),
-      ]);
-
-      res.json({ dados: itens, meta: { total, page: Number(req.query.page ?? 1), limit: take } });
+      res.json({ dados: itens, meta: { total: itens.length } });
     } catch (err) {
       console.error('Erro ao listar exames clínicos:', err);
       res.status(500).json({ error: 'Erro ao listar exames' });
@@ -94,12 +88,6 @@ const ExameClinicoController = {
           select: { id: true },
         });
         if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
-      }
-
-      // Permissão por tipo (matriz RBAC): exames.laboratorial.criar / exames.imagem.criar
-      const nivelTipoCriar = await nivelDoTipo(req, tipo, 'criar');
-      if (nivelTipoCriar !== null && (NIVEL_ORDINAL[nivelTipoCriar] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
-        return res.status(403).json({ error: `Sem permissão para criar exames do tipo ${tipo}.` });
       }
 
       // Campos extras armazenados em observacao como JSON
@@ -199,12 +187,6 @@ const ExameClinicoController = {
         return res.status(403).json({ error: 'Seu nível de permissão só permite editar exames criados por você.' });
       }
 
-      // Permissão por tipo (exames.laboratorial.editar / exames.imagem.editar)
-      const nivelTipoEditar = await nivelDoTipo(req, item.tipo, 'editar');
-      if (nivelTipoEditar !== null && !podeOperarRegistro(nivelTipoEditar, item.veterinarioId, req.user.id)) {
-        return res.status(403).json({ error: `Sem permissão para editar exames do tipo ${item.tipo}.` });
-      }
-
       const { descricao, observacao, status, laboratorio, tipoAmostra, indicacaoClinica, dataSolicitacao, qtdAmostra } = req.body;
 
       // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
@@ -256,6 +238,117 @@ const ExameClinicoController = {
       }
       console.error('Erro ao atualizar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao atualizar exame' });
+    }
+  },
+
+  // PATCH /clinica/exames/:id/resultado — CARREGAR RESULTADO (multipart)
+  // Laboratorial/Bioquímico: extrai o laudo (LLM) em forma de TABELA + guarda o arquivo.
+  // Imagem: laudo VERBATIM (sem interpretação) + imagens anexadas. Ao salvar → REALIZADO.
+  // RBAC do RESULTADO (distinto do pedido): exames.laboratorial.* / exames.imagem.* por tipo.
+  salvarResultado: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const exame = await prisma.exameClinico.findUnique({ where: { id: Number(id) } });
+      if (!exame || !exame.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: exame.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+      });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      // Gate do RESULTADO por TIPO (exames.laboratorial.editar / exames.imagem.editar).
+      // Compra não tem resultado estruturado — sem restrição extra.
+      const base = SLUG_RESULTADO[exame.tipo];
+      if (base) {
+        const nivel = await getNivelEfetivo(req, `${base}.editar`);
+        if ((NIVEL_ORDINAL[nivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+          return res.status(403).json({ error: `Sem permissão para carregar resultado de exame ${exame.tipo}.` });
+        }
+      }
+
+      const laudoTexto = (req.body?.resultado ?? '').toString().trim();
+      const arquivos   = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      const agora      = new Date();
+
+      // ── IMAGEM: laudo VERBATIM + imagens (sem interpretação da IA) ───────────
+      if (exame.tipo === 'Imagem') {
+        const imagens = [];
+        for (const file of arquivos) {
+          const arquivoUrl = await storage.upload(file, 'exames-imagens');
+          const anexo = await prisma.exameImagemAnexo.create({
+            data: {
+              animalId:       exame.animalId,
+              exameClinicoId: exame.id,
+              nome:           file.originalname ?? null,
+              arquivoUrl,
+              criadoPorId:    req.user?.id ?? null,
+            },
+          });
+          imagens.push({ id: anexo.id, nome: anexo.nome, arquivoUrl: anexo.arquivoUrl });
+        }
+        await prisma.exameClinico.update({
+          where: { id: exame.id },
+          data:  { resultado: laudoTexto || exame.resultado, status: 'REALIZADO', dataResultado: agora },
+        });
+        return res.json({ dados: { id: exame.id, status: 'REALIZADO', imagens } });
+      }
+
+      // ── LABORATORIAL/BIOQUÍMICO: extrai a TABELA do laudo (LLM) + guarda arquivo ──
+      let arquivoUrl = exame.arquivoUrl;
+      let itens = [];
+      const file = arquivos[0];
+      if (file) {
+        arquivoUrl = await storage.upload(file, 'exames');
+        try {
+          const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null);
+          itens = (extracao?.exames ?? [])
+            .map((e, idx) => {
+              const refMin = e.referencia_min ?? e.valorMinRef;
+              const refMax = e.referencia_max ?? e.valorMaxRef;
+              const referencia = [refMin, refMax]
+                .filter(v => v != null && v !== '')
+                .join(' – ') || null;
+              return {
+                parametro:  (e.nome ?? e.nomeNutriente ?? '').toString().trim(),
+                valor:      (e.resultado ?? e.valorEncontrado),
+                unidade:    e.unidade ? String(e.unidade).trim() : null,
+                referencia,
+                ordem:      idx,
+              };
+            })
+            .filter(i => i.parametro);
+        } catch (errLLM) {
+          // LLM indisponível/falhou → guarda o arquivo mesmo assim (sem tabela)
+          console.error('salvarResultado — extração LLM falhou, mantendo só o arquivo:', errLLM.message);
+        }
+      }
+
+      await prisma.$transaction(async (tx) => {
+        // Recarga do resultado substitui a tabela anterior deste exame
+        await tx.exameClinicoResultadoItem.deleteMany({ where: { exameClinicoId: exame.id } });
+        for (const it of itens) {
+          await tx.exameClinicoResultadoItem.create({
+            data: {
+              exameClinicoId: exame.id,
+              parametro:      it.parametro,
+              valor:          it.valor != null ? String(it.valor) : null,
+              unidade:        it.unidade,
+              referencia:     it.referencia,
+              ordem:          it.ordem,
+            },
+          });
+        }
+        await tx.exameClinico.update({
+          where: { id: exame.id },
+          data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, status: 'REALIZADO', dataResultado: agora },
+        });
+      });
+
+      return res.json({ dados: { id: exame.id, status: 'REALIZADO', itens } });
+    } catch (err) {
+      console.error('Erro ao salvar resultado do exame:', err);
+      res.status(500).json({ error: 'Erro ao salvar resultado' });
     }
   },
 
@@ -329,12 +422,6 @@ const ExameClinicoController = {
         return res.status(403).json({ error: 'Seu nível de permissão só permite excluir exames criados por você.' });
       }
 
-      // Permissão por tipo (exames.laboratorial.deletar / exames.imagem.deletar)
-      const nivelTipoDel = await nivelDoTipo(req, item.tipo, 'deletar');
-      if (nivelTipoDel !== null && !podeOperarRegistro(nivelTipoDel, item.veterinarioId, req.user.id)) {
-        return res.status(403).json({ error: `Sem permissão para excluir exames do tipo ${item.tipo}.` });
-      }
-
       await prisma.$transaction(async (tx) => {
         // Remove o FaturaItem vinculado ao exame (se houver) — independente do status,
         // pois desde 2026-07-16 o exame pode ser faturado (valor 0) já ao FINALIZAR a
@@ -344,7 +431,7 @@ const ExameClinicoController = {
         await tx.exameClinico.update({ where: { id: item.id }, data: { ativo: false } });
 
         await registrarAuditoria(tx, req, {
-          categoria:  'EXCLUSAO',
+          categoria:  'CANCELAMENTO',
           entidade:   'EXAME_CLINICO',
           entidadeId: item.id,
           animalId:   item.animalId,

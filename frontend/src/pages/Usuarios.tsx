@@ -395,7 +395,9 @@ const Usuarios = () => {
 
       </div>
 
-      {/* ── Modal criar / editar ─────────────────────────────────────────────── */}
+      {/* ── Modal criar / editar ───────────────────────────────────────────────
+          Tela ADMIN-only (as rotas /users/:id exigem authorize('ADMIN')) — o ADMIN é,
+          junto com o próprio dono da conta, quem pode trocar uma senha. */}
       {modalAberto && (
         <UsuarioFormModal
           titulo={editando ? 'Editar Usuário' : 'Novo Usuário'}

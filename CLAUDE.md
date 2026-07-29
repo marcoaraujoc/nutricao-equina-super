@@ -1,5 +1,7 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-07-25 (Vacina com a lógica da Prescrição: SALVA→FINALIZADA→EXECUTADA — fatura e estoque só na Execução de Prescrição/plantão)
+# Atualizado em: 2026-07-25 (Vacina no Atendimento com ciclo SALVA→FINALIZADA, igual a Exames/Encaminhamento — migration 20260729000000)
 # Atualizado em: 2026-07-23 (Orçamento: posologia do medicamento (dias+frequência), doses da vacina e item OUTROS lançado direto na fatura; desconto por item na fatura)
 # Atualizado em: 2026-07-16 (Listagem de animais base × convidado: base própria vê todos os vínculos incl. co-tratados de outra empresa; convidada = isolamento estrito por empresa; designação de prestador escopada ao contexto)
 # Atualizado em: 2026-07-14 (Relatórios com período + Tabela responsiva; expediente de atendimento; autosave de evolução; lembretes WhatsApp; alertas/Monitoração de cron com agenda dinâmica; cookie-dica de sessão)
@@ -31,7 +33,7 @@
 | Cadastro / Proprietários | ✅ Implementado |
 | Cadastro / Tratadores | ✅ Implementado |
 | Cadastro / Localizações | ✅ Implementado |
-| IA / LLM Integration | 🟡 Parcial (Groq integrado) |
+| IA / LLM Integration | ✅ Implementado (Gemini único — memória clínica + IA financeira) |
 | Auditoria | 🟡 Básico |
 | Admin | 🔲 Planejado |
 
@@ -68,9 +70,9 @@ Schema PostgreSQL: schs2vet
 
 ### IA
 ```
-Provider atual: Groq
-Modelo: configurável por operação
-AiUsageLog: tabela já modelada (tokensEntrada, tokensSaida, custoUsd, latenciaMs)
+Provider único: Google Gemini (texto, visão e áudio) — src/ai/geminiClient.ts
+Modelo: GEMINI_MODEL (default gemini-3.1-flash-lite)
+AiUsageLog: modulo, modelo, provedor, tokensEntrada/Saida/Total, custoUsd, latenciaMs
 ```
 
 ---
@@ -195,7 +197,7 @@ bypass paths (dono de empresa, membro com cargo GESTOR). Controllers verificam:
 `if (req.membroCargo !== 'GESTOR' && item.veterinarioId !== req.user.id) → 403`
 Aplicado em: `EvolucaoController.atualizar`, `PrescricaoController.atualizar`,
 `ExameClinicoController.atualizar`, `EncaminhamentoController.atualizar`.
-VacinaClinica: pendente de migration para campo `status` antes de implementar.
+VacinaClinica: campo `status` (SALVA|FINALIZADA) adicionado (migration `20260729000000`) — ver seção do ciclo de vida da vacina.
 
 **Regra 2 — Finalização (finalizar):** ✅ Implementado em 2026-06-24
 ```
@@ -280,7 +282,8 @@ EvolucaoMidia     → mídias (imagem/vídeo/áudio) anexadas a evoluções (tip
 Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, status: RASCUNHO|ATIVA,
                     dosagem, unidade, via, frequencia, duracaoDias, horaInicio,
                     horariosGerados: JSONB, diasAplicacaoInicio, diasAplicacaoFim)
-VacinaClinica     → registro de vacinas
+VacinaClinica     → registro de vacinas (status: SALVA|FINALIZADA|EXECUTADA — mesma lógica da
+                    Prescrição: fatura + débito de estoque só na EXECUÇÃO, ver seção do fluxo da vacina)
 EncaminhamentoClinico → encaminhamentos (prestadorId: User FORNECEDOR da equipe, null = destino externo;
                     status PENDENTE|CONCLUIDO|CANCELADO; urgencia NORMAL|ALTA|URGENTE)
 AgendamentoClinico → agendamentos do animal (tb_agendamentos_clinicos) — tipo CONSULTA|VACINA|
@@ -319,7 +322,7 @@ OrcamentoItem       (migration 20260723000000). Item tipo PROCEDIMENTO|COMBO|MED
 Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
 AuditLog          → log de ações dos usuários
-AiUsageLog        → rastreabilidade de uso de IA
+AiUsageLog        → rastreabilidade de uso de IA (inclui `modulo` — quem chamou a LLM)
 VetPerfil         → perfil estendido do veterinário (CRMV, bio)
 VetEspecie        → especialização do vet por espécie
 VetSubespecialidade → subespecialidades do vet
@@ -347,6 +350,36 @@ MatrizPerfil      → template de permissões por perfil — propagado a membros
                     NEGADO = bloqueio explícito; deny-wins sobre outras equipes
 AuditoriaPermissao → log imutável de alterações de permissão (quem alterou, nível anterior/novo, motivo, IP)
 PermissaoProprietario → legado (mantido, não mais gerenciado pela UI) — substituído por MatrizPerfil PROPRIETARIO
+ProfissionalPerfil → cadastro do PROFISSIONAL por EMPRESA (tb_profissional_perfis, migration
+                    20260807000000). unique(userId, empresaId). Campos: fullName, phone,
+                    cep/endereco/complemento/bairro/cidade/estado, crmv, ativo (na empresa).
+                    POR QUÊ: mesma razão do ProprietarioPerfil — `User.email` é único global,
+                    então o profissional que atende em 2 clínicas era UMA linha em users:
+                    editar telefone/endereço/CRMV na empresa A mudava o cadastro da B, e
+                    incluir alguém que já tinha login trazia os dados da outra clínica prontos.
+                    REGRA: o mesmo profissional pode ter cadastro em várias empresas e cada um
+                    é INDEPENDENTE (nada é pré-carregado ao incluí-lo numa empresa nova). O que
+                    permanece compartilhado é só a IDENTIDADE — e-mail, senha, userType e o
+                    `ativo` global; no login ele escolhe a empresa no seletor de contexto que
+                    já existe.
+                    LEITURA/ESCRITA: SEMPRE via `lib/profissionalPerfil.js` (`aplicarPerfil` /
+                    `aplicarPerfilEmLista` / `aplicarPerfilEmRelacao`; escrita `salvarPerfil(client,
+                    userId, empresaId, dados)` / `garantirPerfil`). Havendo perfil na empresa do
+                    contexto ele é AUTORIDADE de todos os seus campos (null = vazio NAQUELA
+                    empresa, não cai de volta no User); sem perfil (legado/ADMIN global), lê-se
+                    o User. `ativo` efetivo = User.ativo && perfil.ativo.
+                    CRMV mora aqui, e não em `VetPerfil.crmv` (que é @unique GLOBAL e não
+                    comporta o mesmo profissional cadastrado por duas clínicas); VetPerfil
+                    segue existindo para espécies/subespecialidades e para o cron de CRMV.
+                    Já aplicado em: EquipeController (incluirMembroDireto/atualizarMembro/
+                    listarMembros/listarMembrosPorEquipe) e UserController (getMe/updateMe).
+                    ⚠️ PENDENTE: o nome exibido em registros clínicos antigos (evolução,
+                    prescrição, histórico, relatórios) ainda vem de `User.fullName` — aplicar
+                    `aplicarPerfilEmRelacao` conforme cada tela for tocada.
+UsuarioEspecialidade → ganhou `empresaId` (migration 20260807000000; null = vínculo legado) e o
+                    unique virou (userId, especialidadeId, empresaId): a especialidade também é
+                    POR EMPRESA — o mesmo profissional pode ser ortopedista numa clínica e
+                    clínico geral na outra. TODA leitura/escrita filtra por empresa.
 ProprietarioPerfil → cadastro do PROPRIETÁRIO por EMPRESA (tb_proprietario_perfis, migration
                     20260724000000). unique(userId, empresaId). Campos: fullName, phone, phone2,
                     cpf, cnpj, cep/endereco/complemento/bairro/cidade/estado, mensalista,
@@ -760,23 +793,128 @@ res.status(404).json({ error: 'Recurso não encontrado' })
 
 ## 7. ARQUITETURA DE IA
 
-### Provider atual: Groq
-- Rastreabilidade completa via `AiUsageLog`
-- Campos monitorados: modelo, provedor, tokens, custo, latência, sucesso
+### Provider ÚNICO: Google Gemini (2026-07-28)
+Groq, OpenAI e Anthropic foram REMOVIDOS (providers deletados; `groq-sdk` sem uso).
+Todo acesso a LLM — texto, visão e transcrição de áudio — passa por
+`src/ai/geminiClient.ts` (`gerarConteudo` / `gerarTexto` / `transcreverAudio`).
+NUNCA chamar a API do Gemini com `fetch` fora desse arquivo: o log de tokens depende dele.
+
+```
+Modelo:  MODELO_PADRAO = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite'
+Chave:   GEMINI_API_KEY (única — AI_PROVIDER e GROQ_API_KEY saíram do .env)
+```
+⚠️ `gemini-1.5-flash` foi RETIRADO da API do Google (404 em chaves novas). Projetos
+legados que ainda tenham acesso podem usá-lo via `GEMINI_MODEL=gemini-1.5-flash`.
+Ao trocar o modelo, registre o preço em `services/aiLogger.service.js#PRECOS` — sem
+isso o custo cai no fallback `default` (chamadas e tokens seguem exatos).
 
 ### Princípios AI-ready
 ```
-- NUNCA acoplar código ao Groq diretamente sem abstração
-- SEMPRE usar AIProvider interface que permite trocar modelo/provedor
-- Preparar fallback de modelos
-- Versionar prompts (não hardcodar prompts no código)
+- NUNCA acoplar código ao provider sem abstração (AIProvider em src/ai/types.ts)
+- Fallback entre providers: buildChain() em src/ai/index.ts (hoje só Gemini)
+- Versionar prompts (catálogo src/ai/prompts — nunca hardcodar prompt no código)
 - Logar toda inferência em AiUsageLog
-- Controlar custo por operação
+- TODA chamada declara `modulo` (MODULOS_IA) — é o "quem chamou" do relatório
 ```
 
-### Operações de IA existentes
-- Geração/sugestão de dietas nutricionais
-- `interpretarEvolucao(texto)` em `clinicaLLMService.js` → extrai ações clínicas estruturadas + sugere título a partir de texto livre do prontuário (rota: `POST /api/clinica/evolucoes/interpretar`, degradação graciosa em caso de falha)
+### `modulo` — obrigatório em toda chamada
+`callAI({ operacao, modulo, prompt, ... })` e `logAiUsage({ ..., modulo })` exigem o
+módulo de origem. Valores em `MODULOS_IA` (`src/ai/index.ts`): ATENDIMENTO,
+MEMORIA_CLINICA, FINANCEIRO, EXAMES, NUTRICAO, AGENDA, TRANSCRICAO.
+`AiUsageLog.modulo` (migration `20260731000000`) — registros anteriores = `'LEGADO'`.
+
+### Padrão de escrita de prompt (revisão 2026-07-28)
+Todos os prompts do catálogo foram reescritos em voz IMPERATIVA e assertiva.
+Regras obrigatórias para prompt novo ou editado:
+```
+- Comando direto ("Extraia", "Ignore", "Omita") — nunca "Você é um assistente que..."
+- Não justificar a regra dentro do prompt
+- Saída = só o artefato pedido. Proibido preâmbulo, comentário, markdown, explicação
+- Terminar com o bloco SAÍDA + a constante SO_JSON (proibições padronizadas)
+```
+
+### Operações de IA existentes (catálogo `src/ai/prompts/index.js`)
+| Chave | Versão | Módulo | Onde |
+|---|---|---|---|
+| `memoria_clinica` | v1 | MEMORIA_CLINICA | `resumoAtendimentoService` — AnimalDetail |
+| `analise_financeira` | v1 | FINANCEIRO | `financeiroLLMService` — Relatórios > Financeiro |
+| `parse_laudo` | v5 | EXAMES | `exameParserService` |
+| `interpretacao_clinica` | v3 | ATENDIMENTO | `clinicaLLMService.interpretarEvolucao` |
+| `resumo_historico` | v2 | ATENDIMENTO | `clinicaLLMService.resumirHistorico` |
+| `extrair_resultado_sessao_equino` | v7 | ATENDIMENTO | `laudoEquinoExtracao.service` (body-map) |
+| `interpretacao_agendamento` | v2 | AGENDA | `agendamentoLLMService` |
+| `analise_nota_clinica` | v1 | ATENDIMENTO | `AudioController` (rota ainda não montada) |
+| `parse_composicao_visao` | v2 | NUTRICAO | `composicaoParserService` (multimodal) |
+| `parse_composicao_texto` | v2 | NUTRICAO | `composicaoParserService` |
+
+### Metering de IA por cliente (2026-07-28)
+Modelo de mercado adotado: **conta única no Google + medição interna por tenant**
+(migration `20260801000000`). O `usage_metadata` do Gemini já vinha sendo capturado
+por `geminiClient.ts`; o que faltava era ATRIBUIR o consumo ao cliente que paga —
+num SaaS multi-tenant o cliente é a EMPRESA, não o usuário.
+
+```
+AiUsageLog.empresaId  — sem FK (o log sobrevive à exclusão da empresa, igual AuditLog)
+IaPlanoEmpresa        — plano por empresa: limiteTokensMes, limiteChamadasMes,
+                        bloquearAoExceder, ativo. SEM LINHA = sem limite (só medição).
+                        Limite null = ilimitado naquela dimensão.
+```
+
+**TODA chamada de IA deve passar `empresaId: req.empresaId`.** Sem isso o consumo cai
+em "Sem empresa" e não é faturável. Os serviços recebem `empresaId` como último
+parâmetro (`interpretarEvolucao`, `resumirHistorico`, `processarExame`,
+`processarArquivo`, `interpretarAgendamento`, `extrairResumoAtendimento`,
+`extrairResultadoSessao`) ou via `req` (memória clínica, financeiro, transcrição).
+
+**Gate de quota** (`services/iaQuotaService.js`): `garantirQuota(empresaId)` roda DENTRO
+de `callAI`, ANTES de gastar token. Estourou o plano com `bloquearAoExceder` → lança
+`QuotaIaExcedidaError` (`code: 'IA_QUOTA_EXCEDIDA'`), traduzido para **HTTP 429** pelo
+error handler global de `server.ts`. Controllers com try/catch próprio precisam
+repassar: `if (err.code === 'IA_QUOTA_EXCEDIDA') return next(err);`.
+Só conta chamada com `sucesso: true` — falha de provider não é consumo do cliente.
+Sem `empresaId` (ADMIN global, job sem tenant) NÃO bloqueia.
+POR QUÊ o gate existe: na conta única o rate limit e a fatura são COMPARTILHADOS —
+sem teto por tenant, um cliente sozinho derruba a IA de todos (já aconteceu: 429
+`limit: 0` do free tier).
+
+Painel ADMIN: `GET /api/ai-usage/por-empresa` + `GET/PUT /api/ai-usage/planos/:empresaId`
+→ `components/ConsumoPorClienteIA.tsx` em `/ai-usage` (consumo, % do limite e edição
+do plano). O % só é exibido no período **Este mês** — é a janela que o gate usa.
+
+### Memória Clínica do Paciente (`memoria_clinica`)
+Duas camadas persistidas em `tb_resumo_atendimento_ia` (1 registro por animal+empresa):
+```
+highlights[] — padrões factuais entre atendimentos, cada um ancorado nos tópicos que
+               o comprovam (mín. 2). Ex.: "Perda progressiva de peso: 70 kg (20/06)
+               → 60 kg (22/06) → 50 kg (27/07)."
+               tipo: TENDENCIA|RECORRENCIA|PENDENCIA|ALTERACAO
+               direcao: aumento|reducao|estavel|nao_aplicavel
+topicos[]    — um por evento, com `ref` = id do Histórico (evolucao-31, vacina-7…),
+               o que torna cada tópico clicável até o registro de origem
+```
+INCREMENTAL: o LLM só é chamado quando há evento NOVO (colunas `total_eventos` e
+`ultimo_evento_em`). Abrir a tela de novo NÃO varre as evoluções. Bump de versão do
+prompt (`versao_prompt`) força reconstrução completa.
+ANTI-ALUCINAÇÃO: os ids dos tópicos são atribuídos pelo SERVIÇO (t1..tN), nunca pelo
+modelo — ele apenas os ecoa. `normalizarTopicos`/`normalizarHighlights` descartam
+qualquer id/ref que não case com um evento realmente coletado.
+A IA é PROIBIDA de sugerir conduta, diagnosticar, prognosticar ou emitir laudo — ela
+apenas descreve e correlaciona o que está registrado.
+Front: `components/MemoriaClinicaPanel.tsx` (highlights no topo → clicar realça e rola
+até os tópicos que o sustentam; tópico → abre o registro de origem).
+Rotas: `GET /clinica/resumo-atendimento/animal/:animalId` (não chama IA) e
+`POST /clinica/resumo-atendimento/animal/:animalId/atualizar`.
+
+### IA Financeira (`analise_financeira`)
+Análise gerencial do período para a empresa do contexto ativo. NÃO persiste nada: lê
+os indicadores já apurados por `RelatoriosController.computarFinanceiro` (fonte única
+de cálculo — desconto por item, escopo por empresa e janela do período já vêm
+resolvidos de lá) e devolve `{ highlights[], analise[] }`.
+Proibida de recomendar ação, projetar cenário ou qualificar o resultado — descreve,
+quantifica e compara.
+Rota: `GET /api/relatorios/financeiro/analise-ia` (`relatorios.gerencial.ler`).
+Front: `components/relatorios/AnaliseFinanceiraIA.tsx` — chamada SOB DEMANDA (botão
+"Analisar período"), nunca ao abrir a página, para controlar custo.
 
 ---
 
@@ -808,7 +946,7 @@ interface StorageProvider {
 | Layout scroll | overflow-y-auto no main | Páginas públicas livres, internas controladas |
 | Mobile pattern | cards mobile / tabela desktop | UX otimizada por breakpoint |
 | Upload | Canvas compress antes do envio | Reduz tráfego e storage |
-| IA Provider | Groq (atual) | Velocidade e custo — mas abstraído |
+| IA Provider | Google Gemini (único) | Um só fornecedor p/ texto, visão e áudio — abstraído por AIProvider |
 | Schema PG | schs2vet | Isolamento multi-tenant futuro |
 | Soft delete | campo `ativo` | Preservação histórica |
 
@@ -891,6 +1029,215 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-07-28 (parte 6) — Agenda: reagendar, transferir e assumir
+- [x] **Reagendar virou agenda de verdade** — o `datetime-local` do modal saiu; agora é o
+      mesmo `CalendarioInterativo` da tela + grade de horários livres do profissional
+      naquele dia. `CalendarioInterativo` ganhou `minDate` (dias passados riscados e
+      desabilitados) e a grade descarta horário que já passou quando o dia é hoje.
+      A ocupação é buscada para o DIA ESCOLHIDO (não o da tela) e o próprio agendamento
+      que está sendo movido é descontado — por isso `ocupacaoDoDia` passou a devolver `id`.
+- [x] **Nada de agendar no passado** — `AgendamentoController.criar` responde 400
+      `DATA_PASSADA` (tolerância de 1 min). Vale para agendamento novo E reagendamento.
+- [x] **Status `TRANSFERIDO`** — reagendar não "cancela" mais: o registro antigo fica
+      TRANSFERIDO com a observação `Reagendado para dd/mm/aaaa às HH:MM`. `STATUS_LIVRES`
+      (`CANCELADO` + `TRANSFERIDO`) é quem define "não ocupa mais a grade" — existe no
+      controller e espelhado no front; TODA query de ocupação usa `notIn: STATUS_LIVRES`.
+      Se `handleReagendar` falhar depois de liberar o horário, o status original é
+      restaurado (senão o paciente ficava sem agendamento nenhum).
+- [x] **Transferir deixou de ser exclusivo do gestor** — o profissional transfere a
+      agenda DELE (`transferirDia` com `deVetId` = ele) e os atendimentos DELE
+      (`atualizar` com troca de `veterinarioId`); o gestor segue movendo os de qualquer um.
+- [x] **Assumir atendimento** — `PATCH /clinica/agendamentos/:id/assumir`: qualquer
+      VETERINÁRIO puxa para si o atendimento de outro vet da equipe (não passa por
+      `podeOperarAgendamento` de propósito — é um "puxar", não editar o alheio). Valida
+      acesso ao animal, conflito de horário e expediente de quem assume.
+- [x] **Notificação de e-mail + WhatsApp** — `notificarTransferencia()` avisa quem
+      RECEBEU a transferência (modo `RECEBIDO`) e, no assumir, quem PERDEU o atendimento
+      (modo `ASSUMIDO`, texto próprio). Template `emailService.enviarTransferenciaAgenda`
+      + WhatsApp pela instância da clínica (`whatsappService.sendMessage`), com fallback
+      no provider legado. Fire-and-forget: falha de notificação nunca derruba a operação.
+- [x] **Lista de pacientes carregava ANTES do contexto (1º login)** — `SelectedAnimalContext`
+      disparava `/animais` junto com a resolução do contexto ativo. No primeiro login
+      (localStorage vazio) a chamada saía SEM `x-empresa-id`, o backend caía no vínculo
+      mais recente — a OUTRA empresa — e o paciente selecionado nascia de lá; quando o
+      contexto resolvia para a empresa do gestor, esse paciente respondia 403 e o card do
+      animal sumia no Atendimento. Agora o `loadAnimais` espera `useEmpresa().loading`
+      terminar (MESMO gate que o `usePermissoes` já tinha, e pelo mesmo motivo) e
+      recarrega quando o contexto muda. `Atendimento` ainda refaz a seleção
+      (`refreshSelectedAnimal`) se o paciente selecionado vier 403 — auto-cura em vez de
+      card vazio. REGRA: nenhum fetch escopado por empresa antes de `empresaLoading=false`.
+- [x] **URL com id de animal de outra empresa** — o id do paciente vive TAMBÉM na rota
+      (`/clinica/evolucao/:animalId`, `/dieta/:animalId`, `/exames/:animalId`…), e o
+      `animalIdParam` VENCE o `selectedAnimal`. Resultado: a tela mostrava o paciente do
+      contexto ativo mas TODAS as chamadas iam para o id antigo (403 em cascata).
+      `ROTA_COM_ANIMAL` (EmpresaContext) cobre todas essas rotas na troca de contexto, e
+      `Atendimento.carregarAnimal` larga o id da URL quando ele responde 403 — cai na
+      rota sem id, que usa o paciente do contexto ativo. Cobre também o caso que a troca
+      de contexto não pega: sessão restaurada com a URL antiga.
+- [x] **"Erro ao carregar evoluções" era a armadilha #23** — `res.data.dados` sem guard
+      num GET que pode voltar 403 (`data` null) estourava TypeError e caía no catch,
+      exibindo erro de carga para um caso de permissão. Corrigido em `SubModuloEvolucao`.
+- [x] **Paciente selecionado é POR EMPRESA** — `trocarContexto` mantinha
+      `lastSelectedAnimalId` (e a rota `/animal/:id`) ao trocar de empresa: a empresa
+      nova abria as telas com um paciente a que não tem acesso e TUDO respondia 403
+      (animais, evoluções, histórico, logo). O backend estava certo — era isolamento
+      multi-tenant funcionando. Agora `trocarContexto` limpa a seleção e sai da rota
+      presa a um animal; `SelectedAnimalContext` descarta a chave quando o animal não
+      está na lista do contexto; e `AnimalDetail` mostra "Paciente de outra empresa"
+      (GET 403 → `res.data` null) em vez de tela vazia com o console cheio de 403.
+- [x] **Erro na superfície da ação (Agenda)** — o `InlineError` único no topo (colado no
+      botão Voltar) foi quebrado em quatro escopos: `erroInline` (carga da página),
+      `erroGrade` (clique no slot / modal de novo agendamento), `erroLista` (ações da
+      lista do dia: assumir, iniciar, status) e `erroModal` (reagendar, trocar
+      profissional, transferir dia, voz/IA). Cada um é limpo ao iniciar a ação e ao
+      fechar o modal. Padrão para telas novas: erro de ação pertence à superfície que
+      a disparou — no topo o usuário não vê o retorno do que acabou de clicar.
+- [x] **`LocalTrabalhoFields`** — o formulário de local de trabalho virou componente
+      único exportado por `UsuarioFormModal`, usado pelo Incluir/Editar Membro E pelo
+      Cadastro Pessoal. Antes eram duas cópias com larguras e classes diferentes; agora
+      layout, fontes e textos são os mesmos por construção.
+
+### Sessão 2026-07-28 (parte 5) — Profissional isolado por empresa
+- [x] **`ProfissionalPerfil`** (migration `20260807000000`, com backfill) — o cadastro do
+      profissional passou a ser POR EMPRESA, igual ao do proprietário: mesmo login,
+      cadastros independentes. Incluir numa empresa nova não carrega NADA da outra; editar
+      numa não altera a outra. `lib/profissionalPerfil.js` é a fonte única. Ver seção 5.
+- [x] **Especialidade por empresa** — `UsuarioEspecialidade.empresaId` + unique novo; o
+      backfill deu as especialidades existentes à empresa do vínculo mais ANTIGO (a que
+      cadastrou o profissional) e nas demais ele começa sem — que é a regra de cadastro novo.
+- [x] `atualizarMembro` deixou de gravar nome/telefone/endereço no `User` (era o vazamento
+      entre clínicas); no User ficaram só e-mail, senha e o `ativo` global.
+- [x] **Senha só do ADMIN e do próprio dono** — campo "Nova senha" saiu do Editar Membro
+      (Equipe) e o backend passou a responder 403 para troca de senha por terceiros
+      (`atualizarMembro`, `ProprietarioController.atualizar`); `adicionarMembro` ignora
+      `senha` do body. Ver seção 14.
+- [ ] `ativo` por empresa existe na tabela mas ainda NÃO é usado no login/seletor: desativar
+      o membro numa clínica continua desativando o login global (`toggleMembro` mexe em
+      `User.ativo`). Para isolar de verdade, `toggleMembro` deve gravar `perfil.ativo` e
+      `meusContextos` deve esconder a empresa em que o perfil está inativo.
+- [ ] Nome do profissional em telas clínicas (evolução/prescrição/histórico/relatórios)
+      ainda sai de `User.fullName` — aplicar `aplicarPerfilEmRelacao` ao tocar cada uma.
+
+### Sessão 2026-07-28 (parte 4) — Herança do padrão da empresa + erro na tela do cadastro
+- [x] **Tempo de consulta padrão da empresa** (migration `20260806000000`) —
+      `EmpresaConfiguracao.tempoConsultaPadraoMin` + campo em `/configuracoes`.
+      Dias, horário e tempo em branco no card "Locais de trabalho" passam a HERDAR o
+      da empresa (herança dinâmica). Ver seção 15.
+- [x] **Erro do cadastro dentro do modal** — `UsuarioFormModal` ganhou a prop
+      `erroServidor`, exibida no rodapé do próprio modal. `Equipe.tsx` e
+      `ControleAcesso.TabEquipe` pararam de mandar o erro de incluir/editar membro para
+      o `InlineError` do topo da página (que fica atrás do modal, colado no botão Voltar).
+      Padrão para telas novas: erro de ação de modal é do MODAL, não da página.
+- [x] **Busca limpa após salvar** — incluir/editar membro faz `setBusca('')` (com a busca
+      antiga em aberto, quem acabou de ser cadastrado não aparecia na lista) e os campos
+      de busca ganharam `name`/`autoComplete` neutros para o navegador não reoferecer o
+      nome digitado no cadastro.
+- [x] **Cadastro Pessoal: `temposConsulta` sumia no round-trip** — `UserController.getMe`
+      montava `locaisTrabalho` SEM `temposConsulta`, então a tela reabria sem o tempo e o
+      salvava vazio, APAGANDO o que o gestor configurou na inclusão do membro. O campo
+      voltou no `getMe` e o seletor "Tempo de consulta" (mesmo do Incluir Membro, com a
+      opção "Padrão da empresa") passou a existir também no Cadastro Pessoal, além do
+      tempo aparecer nos chips dos locais já salvos.
+      LIÇÃO: campo novo em formulário compartilhado precisa entrar no GET e no PUT na
+      mesma leva — um lado só transforma "não editável" em "apagado ao salvar".
+- [x] **Especialidade deixou de ser obrigatória** — regra por PERFIL:
+      `VETERINARIO` sem especialidade assume **Clínica Médica**;
+      `FORNECEDOR` segue a mesma regra do vet mas aceita especialidade NULA;
+      **todos os demais perfis** (estagiário, enfermeiro, secretaria, financeiro e o
+      próprio GESTOR — que tem userType VETERINARIO mas não preenche dados
+      profissionais) não têm especialidade NEM tempo de consulta, e o backend descarta
+      o que vier no body. Ver seção 15.
+- [x] Migration aplicada (`migrate deploy`) e client regerado nesta máquina. Em outra
+      máquina, rodar os dois — sem o `generate` o client não conhece
+      `tempoConsultaPadraoMin` e salvar Configurações falha.
+
+### Sessão 2026-07-28 (parte 3) — Tempo de consulta por especialidade na grade
+- [x] **Tempo de consulta por especialidade** (migration `20260804000000`) —
+      `MembroLocalTrabalho.temposConsulta` (JSONB `{ especialidadeId: minutos }`),
+      `AgendamentoClinico.especialidadeId` + `duracaoMin`. Campo no card
+      "Locais de trabalho" (`UsuarioFormModal`), obrigatório por especialidade.
+      A grade da Agenda passou a ser gerada pelo tempo da especialidade
+      selecionada, e a ocupação virou INTERVALO. Ver seção 15.
+- [x] **Backfill dos tempos** (migration `20260805000000`) — a migration anterior deixou
+      `tempos_consulta` vazia, então TODO local cadastrado antes dela ficou com
+      especialidade e sem tempo: a Agenda não montava a grade por especialidade nem
+      exibia os chips, e só voltaria a funcionar se alguém reabrisse cada membro à mão.
+      Preenche 60 min (o passo que a Agenda já usava — zero mudança de comportamento).
+      LIÇÃO: coluna nova que a UI passa a exigir precisa de backfill na mesma leva.
+- [x] **Filtro por especialidade na Agenda** — restringe os profissionais listados E
+      fixa a especialidade de todos (o filtro vence a escolha por linha), então as
+      grades saem no tempo daquela especialidade. Desabilitado quando nenhuma está
+      configurada. O catálogo `/especialidades` é buscado junto de `/equipes/membros`
+      para o nome nunca cair em "Especialidade #id".
+- [x] **Expediente Ativo por linha** — tabela reformulada (profissional × local ×
+      especialidade), função por extenso, dias+horário numa coluna só, coluna de
+      local, e filtros de local/turno/faixa de horário. Ver seção 15.
+- [ ] ⚠️ `frontend/tsconfig.json` tem `"files": []` + project references: rodar
+      `npx tsc --noEmit` na raiz do frontend **não checa nada** (sai 0 sempre).
+      O typecheck real é `npx tsc -b --noEmit` (ou `npm run build`, que faz `tsc &&
+      vite build`). Há erros TS6133 (código morto) PRÉ-EXISTENTES em ~27 arquivos,
+      então `npm run build` já falha hoje — por isso o dev roda `vite build` direto.
+- [ ] `HORARIOS` (24 slots de 1h) ainda é usado no heatmap do mês
+      (`PARCIAL` quando `count < HORARIOS.length`) — a densidade do calendário
+      não considera o passo real da grade. Revisar quando o mês virar por passo.
+
+### Sessão 2026-07-28 (parte 2) — Metering de IA por cliente + 2FA por e-mail
+- [x] **Metering por cliente** (migration `20260801000000`) — `AiUsageLog.empresaId`,
+      model `IaPlanoEmpresa`, `services/iaQuotaService.js`, gate dentro de `callAI`,
+      429 `IA_QUOTA_EXCEDIDA` no error handler global, endpoints
+      `/ai-usage/por-empresa` e `/ai-usage/planos/:empresaId`, painel
+      `components/ConsumoPorClienteIA.tsx`. `empresaId` propagado a TODOS os call
+      sites de IA. Ver seção 7.
+- [x] **2FA por e-mail** (migration `20260802000000`) — `users.mfa_ativo`,
+      `tb_mfa_desafios`, `services/mfaService.js`, `emailService.enviarCodigoMfa`,
+      rotas `/auth/2fa/verificar` e `/auth/2fa/reenviar` com rate limit próprio,
+      `emitirSessao()` como ponto único de sessão, `components/Verificacao2FA.tsx`,
+      cron de limpeza dos desafios. Ver seção 14.
+- [x] **Seletor de 2FA para o ADMIN** (migration `20260803000000`) — `ConfiguracaoSeguranca`
+      (linha única), `GET/PUT /api/seguranca/config`, `components/CardSegurancaAdmin.tsx`
+      na tela **Configuração** (`/configuracao-alertas`, ADMIN). `exigeMfa()` virou
+      **async**. Entregue DESATIVADO. Alteração auditada (categoria `CONFIGURACAO`).
+      Armadilha descoberta aqui: `usePermissoes().isGestor` é FALSE para ADMIN — ver seção 14.
+- [ ] Vender o plano em UNIDADES DE NEGÓCIO (nº de resumos/laudos/transcrições) e não
+      em tokens — o token é a unidade de medida interna, não a de venda para a clínica.
+
+### Sessão 2026-07-28 — IA: provider único, Memória Clínica, IA Financeira, consumo por módulo
+- [x] **Gemini como provider ÚNICO** (migration `20260731000000`) — `AnthropicProvider`,
+      `OpenAIProvider` e `GroqProvider` DELETADOS; chain reduzida a Gemini. Novo
+      `src/ai/geminiClient.ts` centraliza texto, visão e áudio. Transcrição saiu do
+      Whisper/Groq para o Gemini (`EvolucaoController.transcrever` e `AudioController`) —
+      WebM/Ogg passam por `transcodeParaMp3` antes, pois o Gemini não aceita Opus.
+      `composicaoParserService` deixou de fixar `gemini-2.5-flash`. `chamarGroqComLog`
+      removido do `aiLogger.service`. `.env`: só `GEMINI_API_KEY` + `GEMINI_MODEL`.
+      ⚠️ `gemini-1.5-flash` (pedido original) foi retirado da API do Google — ver seção 7.
+- [x] **Memória Clínica do Paciente** — `memoria_clinica@v1` substitui `resumo_atendimentos`.
+      Highlights clicáveis ancorados nos tópicos + resumo por tópicos ancorados na evolução
+      de origem; incremental e persistido (colunas novas `dados` JSONB e `versao_prompt`).
+      A IA não sugere conduta nem diagnostica. Ver seção 7 para o contrato completo.
+- [x] **IA Financeira gerencial** — `analise_financeira@v1`,
+      `services/financeiroLLMService.js`, `controllers/AnaliseFinanceiraController.js`,
+      rota `GET /api/relatorios/financeiro/analise-ia`, painel
+      `components/relatorios/AnaliseFinanceiraIA.tsx` (sob demanda).
+      `RelatoriosController.financeiro` foi refatorado: a apuração virou
+      `computarFinanceiro(req)` (exportada) e o handler só a serializa — fonte única
+      de cálculo entre o relatório e a IA.
+- [x] **Revisão de TODOS os prompts** — voz imperativa, sem explicações na saída.
+      Versões: parse_laudo v5, interpretacao_clinica v3, resumo_historico v2,
+      parse_composicao_visao/texto v2, extrair_resultado_sessao_equino v7.
+      Prompts inline de `agendamentoLLMService` e `AudioController` migrados para o
+      catálogo (`interpretacao_agendamento@v2`, `analise_nota_clinica@v1`).
+- [x] **Relatório de consumo de IA por módulo** — `AiUsageLog.modulo`;
+      `AiUsageController.resumo` ganhou `porModulo` (chamadas, tokens entrada/saída,
+      média por chamada, custo) e `logRecente` aceita filtro `modulo`/`periodo` e
+      devolve `tokensEntrada`/`tokensSaida` por chamada. `AiUsageDashboard.tsx`:
+      card "Consumo por módulo" (cards no mobile / tabela no desktop), coluna Módulo
+      e colunas Entrada/Saída/Total no log ADMIN; `min-h-screen` trocado por
+      `PageContainer` (violava a regra de layout da seção 6).
+- [ ] Confirmar o preço real do modelo em `aiLogger.service.js#PRECOS` — a coluna de
+      custo do dashboard usa estimativa do tier flash-lite (chamadas e tokens são exatos).
+- [ ] Montar `/api/clinica/audio` em `server.ts` — `AudioController` está funcional e
+      migrado, mas a rota nunca foi registrada (o front já chama em `audioOrchestrator`).
+
 ### Sessão 2026-07-23 — Orçamento (posologia, doses, OUTROS) + desconto na fatura
 - [x] **Medicamento no orçamento com dias + frequência** — `OrcamentoItem.dias` / `.frequencia`
       (migration `20260725000000`). A aba Medicamentos do builder tem um painel de posologia
@@ -939,7 +1286,7 @@ New-Item -ItemType Junction `
 - [x] Mover `prismaClient.ts` → `src/lib/prisma.ts` (singleton, injetável)
 - [x] Implementar `StorageProvider` abstrato (LocalStorageProvider + factory)
 - [x] Repository Pattern no backend (BaseRepository + Animal/User/Equipe)
-- [x] Criar camada de AI services desacoplada (`src/ai/` — AIProvider interface + GroqProvider)
+- [x] Criar camada de AI services desacoplada (`src/ai/` — AIProvider interface + GeminiProvider)
 - [x] Prompt versioning (`src/ai/prompts/index.js` — catálogo com `operacao@vN`)
 - [x] Rate limiting nas rotas (express-rate-limit: 200/min geral, 20/15min auth)
 - [x] Logs estruturados (Winston — substituiu console.log, override global)
@@ -1062,7 +1409,19 @@ New-Item -ItemType Junction `
   - Seed: VET finalizar PROPRIO → NENHUM; FORNECEDOR recebeu PROPRIO em todos os módulos; novos slugs `atendimento.encaminhamentos.finalizar` e `atendimento.exames.finalizar` adicionados ao ModuloSistema + todos os perfis.
   - Rotas: `PATCH aprovar` (evolucoes) usa `finalizar PROPRIO`; prescricoes `/grupos/:id/finalizar|cancelar` e legados usam `finalizar PROPRIO`. Novos: `PATCH /:id/finalizar` em `clinica-exames.js` (→ status CONCLUIDO) e `encaminhamentos.js` (→ CONCLUIDO + inativa designação).
   - Controllers: `PrescricaoGrupoController` — removido check hardcoded `membroEquipe.cargo=GESTOR`; adicionado FORNECEDOR ownership check. `PrescricaoController.finalizarTodas` — FORNECEDOR filtra por `veterinarioId`. `ExameClinicoController.criar` — `veterinarioId` sempre `req.user.id` (antes: null para não-VET). `EvolucaoController.aprovar` e `EncaminhamentoController` — FORNECEDOR ownership check.
-  - VacinaClinica: sem finalizar (modelo sem status/draft). TODO: migration futura para campo `status`.
+  - VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA (migration `20260729000000` adicionou
+    `status`; EXECUTADA é só valor novo, sem migration). **Mesma lógica da Prescrição — a fatura e o
+    débito de estoque acontecem SÓ na EXECUÇÃO, não no registro:**
+    - `registrar` → cria SALVA. NÃO debita lote nem lança fatura (só fixa o lote sugerido/valor de referência).
+    - `PATCH /clinica/vacinas/:id/finalizar` (`atendimento.vacinas.finalizar PROPRIO`) → SALVA→FINALIZADA;
+      a vacina passa a aparecer na tela de **Execução de Prescrição** (plantão).
+    - `PATCH /clinica/vacinas/:id/executar` (`enfermagem.prescricao.executar PROPRIO`) → FINALIZADA→EXECUTADA:
+      debita o lote (usa o vinculado ou FEFO) + lança `FaturaItem` (tipo VACINA, `vacinaClinicaId`). Guarda
+      contra legado: se já existe FaturaItem do registro (vacinas criadas na lógica ANTIGA que faturava no
+      `registrar`), NÃO refatura nem redebita — só muda o status.
+    - `GET /clinica/vacinas/para-execucao` (`enfermagem.prescricao.ler`) → vacinas FINALIZADAS aguardando
+      aplicação, escopo por empresa (`escopoFilhoEvolucaoWhere`). Consumido por `ExecucaoPrescricao.tsx`
+      (seção "Vacinas a aplicar", executa via o endpoint acima).
 - [x] **Regra de autoria em editar** — `EvolucaoController.atualizar`, `PrescricaoController.atualizar`, `ExameClinicoController.atualizar`, `EncaminhamentoController.atualizar`: GESTOR edita qualquer item (via `req.membroCargo === 'GESTOR'`); demais só editam itens que criaram (`veterinarioId === req.user.id` → 403 caso contrário). VacinaClinica.atualizar: pendente de migration para campo `status`.
 - [x] **Rastreabilidade FaturaItem ↔ origem clínica** (migration `20260701000001_fatura_item_origem`) —
       `FaturaItem` ganhou 4 FKs nullable: `exameClinicoId`, `prescricaoId`, `vacinaClinicaId`,
@@ -1194,9 +1553,115 @@ New-Item -ItemType Junction `
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
-- [ ] AI: adicionar OpenAIProvider / GeminiProvider para text completions
 - [ ] Testes unitários nos services de permissão e equipe
 - [ ] Frontend: migrar raw `fetch('/api...')` restantes para `authFetch` ou `api` (axios)
+
+---
+
+## 15. AGENDA — TEMPO DE CONSULTA POR ESPECIALIDADE
+
+Cadastro (card "Locais de trabalho" do membro):
+```
+MembroLocalTrabalho.temposConsulta  JSONB  { "<especialidadeId>": minutos }
+```
+O tempo é POR LOCAL e POR ESPECIALIDADE — a mesma especialidade pode levar 30min na
+clínica e 60min a campo. Aceita múltiplos de 5, de 5 a 480 min — a grade é regerada a
+partir do início do expediente a cada dia, então 45/90min não desalinham nada.
+
+**OPCIONAL desde 2026-07-28 (parte 4)** — dias, horário e tempo de consulta em branco
+HERDAM o que estiver configurado na empresa (`EmpresaConfiguracao`):
+`diasAtendimento` / `horaInicioAtendimento` / `horaFimAtendimento` e o novo
+`tempoConsultaPadraoMin` (migration `20260806000000`; null = 60 min, o
+`TEMPO_CONSULTA_PADRAO_SISTEMA`). A herança é DINÂMICA — o valor da empresa NUNCA é
+copiado para dentro do local; mudou em Configurações, mudou a agenda de todo mundo que
+não configurou. `parseLocaisTrabalho` grava a ausência como ausência (a especialidade
+some do JSON) e só valida o valor quando ele é informado.
+**Quem tem especialidade e tempo de consulta (2026-07-28, parte 4)**
+```
+VETERINARIO → tem. Sem nenhuma informada, assume CLÍNICA MÉDICA.
+FORNECEDOR  → tem, mas aceita NULA (fica sem especialidade mesmo).
+demais      → NÃO têm especialidade nem tempo de consulta: informam APENAS local e
+              horário de trabalho. Cobre ESTAGIARIO, ENFERMEIRO, SECRETARIA, FINANCEIRO
+              e o GESTOR (userType VETERINARIO, mas cargo de gestão: não preenche dados
+              profissionais).
+```
+Fonte única no front: `PERFIS_COM_ESPECIALIDADE` (`UsuarioFormModal`), usada pelo modal e
+pelo Cadastro Pessoal — não repetir o `perfil === 'VETERINARIO' || …` em tela nova.
+Perfil sem especialidade envia `especialidadeIds: []` e locais com `especialidadeIds`/
+`temposConsulta` zerados, então trocar o perfil no meio do preenchimento não deixa resíduo.
+⚠️ `UsuarioEspecialidade` é GLOBAL (por usuário, não por equipe): quem é VETERINARIO/
+FORNECEDOR por `userType` NÃO tem o cadastro apagado por ocupar cargo sem atuação clínica
+numa equipe — senão a edição numa empresa apagaria as especialidades dele na outra
+(guarda em `atualizarMembro` e `updateMe`).
+O padrão do vet sai de `EquipeController.especialidadesPadraoVeterinario(req, equipeId?,
+especiesFallback?)`: o catálogo é POR ESPÉCIE e cada uma tem seu rótulo, então o match é
+por PREFIXO `clínica médica` (Equino/Canino → "Clínica Médica", Felino → "Clínica Médica
+de Felinos", Bovino → "Clínica Médica (Buiatria)"; Réptil não tem → fica sem padrão) e
+devolve UMA especialidade por espécie atendida (`resolverEspeciesAtendidas`, extraída de
+`obterEspeciesAtendidas`). Empresa sem espécies configuradas → sem padrão (o fallback das
+espécies do próprio vet só é usado no Cadastro Pessoal, onde ele acabou de informá-las).
+Aplicado em `incluirMembroDireto`, `atualizarMembro` e `UserController.updateMe` — os três
+também têm a garantia final "vet sem NENHUM vínculo `UsuarioEspecialidade` recebe o padrão",
+e passam `semEspecialidade` a `parseLocaisTrabalho` para os perfis sem atuação clínica.
+NUNCA voltar a exigir especialidade no frontend: o backend é a autoridade da regra.
+
+Resolução do tempo: tempo do local → `EquipeController.tempoConsultaPadraoDaEmpresa(req)`
+→ 60. `AgendamentoController.tempoConsultaDoProfissional(vetId, espId, req)` nunca mais
+devolve null e o 400 `SEM_TEMPO_CONSULTA` deixou de existir. No front, `passoDe(tempoMin)`
+(Agendamentos.tsx) faz o mesmo — e a lista de especialidades do local passou a sair de
+`especialidadeIds` (não mais das chaves de `temposConsulta`), senão a especialidade sem
+tempo próprio sumiria da grade.
+
+Agendamento:
+```
+AgendamentoClinico.especialidadeId  → para qual especialidade é o atendimento
+AgendamentoClinico.duracaoMin       → SNAPSHOT dos minutos no momento da marcação
+```
+`duracaoMin` é gravado, **não derivado na leitura**: se o profissional mudar o tempo
+da especialidade depois, os agendamentos já marcados mantêm a duração com que
+nasceram — senão a agenda do passado se reescreveria sozinha. `null` = agendamento
+anterior à migration → tratado como 60min (a grade que a agenda sempre teve).
+
+Regras no backend (`AgendamentoController`):
+- `tempoConsultaDoProfissional(vetId, espId)` — varre os locais do profissional e usa
+  o MENOR tempo daquela especialidade (é o que cabe em qualquer local). Sem
+  configuração → 400 `SEM_TEMPO_CONSULTA`.
+- `conflitoDeAgenda(vetId, inicio, duracaoMin)` — colisão por INTERVALO `[ini, fim)`.
+  NUNCA voltar a comparar só o `dataHora` de início: uma consulta de 60min às 08:00
+  ocupa o slot das 08:30. A janela de busca recua 8h (maior atendimento possível)
+  para não perder um agendamento longo ainda em curso.
+- O atendimento INTEIRO precisa caber no expediente (`dentroDoExpediente` é chamado
+  para o início e para o fim previsto).
+
+**Tela "Expediente Ativo" — uma linha por PROFISSIONAL × LOCAL × ESPECIALIDADE**
+(`linhasAtendimento`). Colunas: Profissional · Local de trabalho · Especialidade ·
+Dias e horário (coluna única) · Horários Disponíveis. Sem coluna de Função e sem
+avatar de iniciais — o nome do profissional aparece por extenso.
+A linha SÓ entra quando (1) o local atende no dia selecionado (`exp.dias.includes(wd)`),
+(2) a grade não é vazia e (3) sobrou ao menos UM horário livre — clicar numa quinta
+não pode listar quem não trabalha na quinta, e profissional lotado não aparece
+(não existe estado "Lotado" na tela: a linha simplesmente sai). Ex. real: Marina Sereno tem 3 locais (Sáb/Dermatologia, Seg-Qua/Fisioterapia,
+Ter-Qui/Cardiologia) → 3 linhas no total, 1 por dia consultado.
+Profissional SEM local cadastrado gera uma linha com local "—" usando o expediente
+herdado da empresa (senão sumiria da agenda sem explicação).
+`expedienteDoLocal(local)` intersecta o horário/dias DO LOCAL com o da empresa —
+`expedienteDoVet` (agregado do profissional) só é usado nesse caso de fallback.
+Filtros (4 numa linha só): Profissional · Especialidade · Local de trabalho ·
+Período do dia (Manhã até 12:00 / Tarde 12:00-18:00 / Noite a partir das 18:00 —
+`faixaHorarioFiltro`). Os filtros de "Horário de/até" e "Tipo de Atendimento" foram
+REMOVIDOS a pedido; com o Tipo saiu também o recorte por tipo na lista de
+agendamentos abaixo.
+
+Frontend (`Agendamentos.tsx`):
+- `espDoVet(vetId)` / `passoDoVet(vetId)` — especialidade ativa do profissional na
+  grade (chips clicáveis na coluna Especialidade) e o passo em minutos. O filtro
+  global de especialidade tem precedência sobre a escolha por linha.
+- `gerarSlots(ini, fim, passo)` — slots de `passo` em `passo`; só entra o horário em
+  que o atendimento inteiro cabe (`m + passo <= fim`), igual ao backend.
+- `ocupacoesDoVet(vetId)` devolve INTERVALOS (contexto ativo + ocupação global de
+  todas as empresas); `slotsLivres` descarta o slot que cruza qualquer um deles.
+- Profissional sem tempo configurado (`especialidadesCat` vazio) cai em
+  `PASSO_PADRAO_MIN = 60` — a grade antiga, sem regressão para quem não configurar.
 
 ---
 
@@ -1469,6 +1934,11 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `SeletorAnimal.tsx` | Dropdown de seleção de animal (alimenta SelectedAnimalContext) |
 | `PageContainer.tsx` | Wrapper com padding e maxWidth padronizados |
 | `DietaAcoesBar.tsx` | Barra de ações da dieta. Props: `podeImprimir?`, `podeCompartilhar?`, `podeExportar?` (default true). Botões ocultam em modo compacto ou exibem toast quando sem permissão. |
+| `CardSegurancaAdmin.tsx` | Seletor GLOBAL de 2FA (só ADMIN), na tela Configuração (`/configuracao-alertas`). Salva sozinho — não é config de empresa. Ver seção 14. |
+| `Verificacao2FA.tsx` | Segundo passo do login: código de 6 dígitos enviado ao e-mail. Auto-submete ao completar, reenvio com espera. A sessão nasce só quando ele recebe 200. Ver seção 14. |
+| `ConsumoPorClienteIA.tsx` | Metering de IA por empresa em /ai-usage (ADMIN): consumo, % do limite e edição do plano. Ver seção 7. |
+| `MemoriaClinicaPanel.tsx` | Memória Clínica do Paciente (IA) em AnimalDetail. Highlights clicáveis no topo (realçam e rolam até os tópicos que os comprovam) + resumo por tópicos; tópico abre o registro de origem via `onAbrirRef`. Ver seção 7. |
+| `relatorios/AnaliseFinanceiraIA.tsx` | IA Financeira em Relatórios > Financeiro. Highlights + análise textual do período; chamada SOB DEMANDA (botão), nunca no load. |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 
 ### Frontend — Hooks e Contextos
@@ -1666,20 +2136,38 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     `req.membroCargo === 'GESTOR'` nem `userType === 'FORNECEDOR'` para decidir autoria de AÇÃO —
     isso foi removido em 2026-07-10. Editar registro FINALIZADO (evolução) exige nível FULL no
     editar (regra derivada do nível, não de cargo). Exclusão de evolução FINALIZADA por não-ADMIN
-    segue bloqueada (regra de ADMIN, permitida). VacinaClinica: sem finalizar (modelo sem status).
+    segue bloqueada (regra de ADMIN, permitida). VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA
+    (fatura/estoque só na execução, no plantão via `enfermagem.prescricao.executar` — ver seção do fluxo da vacina).
     Escopo de DADOS de prestador (quais animais o FORNECEDOR vê via DesignacaoPrestador) e a
     resolução de contexto (MapaAtendimento isGestor) continuam usando membroCargo/userType — isso
     é modelo de acesso/tenant, NÃO regra de autorização de ação.
 
-29. **Controle por TIPO de exame (2026-07-10)** — `exames.laboratorial.*` (Laboratorial+Bioquímico)
-    e `exames.imagem.*` (Imagem) deixaram de ser órfãos: `ExameClinicoController` resolve o nível do
-    tipo em runtime via `getNivelEfetivo(req, slug)` (permissao.middleware.js — paridade com
-    checkPermission, sem query de cargo) e combina com o slug geral `atendimento.exames.*` (o mais
-    restritivo vence) em criar/editar/excluir. Compra não tem módulo próprio. Frontend
-    (SubModuloExames.tsx): abas Laboratorial/Imagem só aparecem com `exames.<tipo>.criar`; aba padrão
-    respeita a permissão. Seed alinhou os slugs de tipo ao `atendimento.exames.*` de cada perfil.
-    `getNivelEfetivo` é o utilitário a usar SEMPRE que a permissão depender de dado do body/registro
-    (slug só conhecido em runtime) — não recalcular cargo à mão.
+29. **PEDIDO de exame × RESULTADO de exame são módulos distintos (2026-07-25)** — apesar dos nomes
+    parecidos, são fluxos diferentes:
+    - **PEDIDO** (solicitar/editar/finalizar/excluir o exame no atendimento — `ExameClinicoController`):
+      protegido APENAS por `atendimento.exames.*` (checkPermission na rota + autoria via
+      `req.permissaoNivel`), MESMO padrão de evolução/prescrição/vacina/encaminhamento.
+    - **RESULTADO/laudo** (carregar/salvar/alterar/ver o resultado): é quem deve usar
+      `exames.laboratorial.*` / `exames.imagem.*` (ações ver/carregar/salvar/alterar).
+    **REVERTIDO o gate por tipo de 2026-07-10**: o `ExameClinicoController` (pedido) NÃO consulta mais
+    `exames.laboratorial.*`/`exames.imagem.*` em criar/editar/excluir — isso causava 403 ao criar um
+    pedido mesmo com `atendimento.exames.criar` concedido (o gestor concedia o slug de atendimento mas
+    não o do módulo "Exames"/resultado). `SLUG_BASE_POR_TIPO`/`nivelDoTipo` removidos do controller;
+    frontend `SubModuloExames.tsx` — abas Laboratorial/Imagem gateadas só por `atendimento.exames.criar`
+    (`podeCriarLab`/`podeCriarImg = podeCriar`). NUNCA reamarrar os slugs de resultado ao pedido.
+    **FLUXO DE RESULTADO IMPLEMENTADO (2026-07-25, migration `20260730000000`):** `PATCH /clinica/exames/:id/resultado`
+    (multipart, `ExameClinicoController.salvarResultado`) carrega o resultado e transita o exame para
+    status `REALIZADO` (front exibe "Realizada"). Gate pelos slugs de RESULTADO por tipo, resolvido no
+    controller via `getNivelEfetivo` (Lab/Bioquímico→`exames.laboratorial.editar`; Imagem→`exames.imagem.editar`)
+    — distinto do pedido (`atendimento.exames.*`). A rota entra por `atendimento.exames.ler` só para popular
+    o contexto (bypass do gestor); o gate real é no controller. **Laboratorial/Bioquímico:** reusa
+    `processarExame` (LLM, mesmo do exame nutricional) → grava a tabela em `ExameClinicoResultadoItem`
+    (parametro/valor/unidade/referencia) + `storage.upload` do arquivo (`arquivoUrl`). **Imagem:** laudo
+    VERBATIM (sem LLM) em `ExameClinico.resultado` + imagens em `ExameImagemAnexo` (ganhou `exameClinicoId`).
+    Correlação exame×evolução via `ExameClinico.evolucaoId` já existente. Front (`SubModuloExames.tsx`):
+    seletor "Carregar resultado" com os exames SOLICITADO do animal + opção "carregar exame não pedido"
+    (cria o pedido com a evolução do atendimento e então carrega), modal `CarregarResultadoModal`, exibição
+    (tabela + laudo + miniaturas) no ViewModal, status "Realizada" (badge/filtro).
 
 30. Sincronização FaturaItem ↔ origem — helpers `removerFaturaItensDaOrigem`/`atualizarFaturaItensDaOrigem`
     (`faturaUtils.js`) recebem `(tx, campo, origemId, ...)` onde `campo` é o nome literal da FK no
@@ -1790,7 +2278,7 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 | SQL Injection | Protegido pelo Prisma ORM | Queries parametrizadas — sem `$queryRaw` com interpolação de usuário |
 | Headers HTTP | Helmet ativo (`app.use(helmet())`) | CSP, X-Frame-Options, HSTS, etc. |
 | Rate limiting | 200 req/min geral · 20 req/15min em /auth | Defesa contra brute force e scraping |
-| API keys | Groq e Gemini apenas no backend `.env` | Nunca expor no bundle JS do frontend |
+| API keys | `GEMINI_API_KEY` apenas no backend `.env` | Nunca expor no bundle JS do frontend |
 | Google Client ID | `VITE_GOOGLE_CLIENT_ID` no frontend — intencional | Client ID é público por design do OAuth |
 | Console output | Suprimido em produção via main.tsx (`console.*` → noop quando `!import.meta.env.DEV`) | Não expor stack traces e erros internos ao usuário final |
 | 403 silenciosos | GET 403 resolve como `{ data: null }` (não rejeita, não loga) | Evitar ruído de erro para operações bloqueadas por permissão normal |
@@ -1843,6 +2331,84 @@ exclusões/cancelamentos (lib/auditoria.js — ipDoRequest(req), normaliza ::fff
 do req (nunca do body). Tela AuditoriaGeral.tsx exibe coluna IP.
 ```
 
+### 2FA por e-mail no login (2026-07-28)
+```
+Migration 20260802000000. users.mfa_ativo (default true) + tb_mfa_desafios.
+Fluxo: POST /auth/login (senha OK) → NÃO emite cookie → cria desafio, envia código
+       → 200 { mfaRequerido: true, desafioId, emailMascarado, validadeMinutos }
+       → POST /auth/2fa/verificar { desafioId, codigo } → aí sim emite a sessão
+       → POST /auth/2fa/reenviar { desafioId } (novo código, renova a janela)
+```
+`emitirSessao(res, user)` em `auth/UserController.js` é o **ponto único** de nascimento
+de sessão por senha (login sem 2FA e verificação do 2º fator). Não duplicar.
+
+Regras (`services/mfaService.js`):
+- Código de 6 dígitos por `crypto.randomInt` (CSPRNG). **Nunca** `Math.random` para OTP.
+- Persistido só como **SHA-256**; comparação com `timingSafeEqual`.
+- 10 min de validade · 5 tentativas · 3 reenvios · `desafioId` opaco (32 bytes) que
+  não revela o usuário. Criar desafio novo INVALIDA os anteriores do usuário.
+- Erros são genéricos ("Código inválido.") — não dá para distinguir código errado de
+  desafio inexistente, nem enumerar usuário.
+- `ativo` é revalidado na verificação: conta desativada entre a senha e o código não entra.
+- Rate limit por IP nas rotas: 10/5min em `/2fa/verificar`, 3/10min em `/2fa/reenviar`.
+- Falha ao enviar o e-mail → **503 e nenhuma sessão** (não existe fallback que pule o fator).
+- Cron `limpeza_desafios_2fa` (04:15) remove desafios vencidos/consumidos com +24h.
+
+**Google OAuth NÃO passa por 2FA de e-mail** — o Google já autenticou e aplica o 2FA
+da própria conta; somar um OTP em cima disso é atrito sem ganho.
+
+**Chave mestra do ADMIN** (migration `20260803000000`) — `ConfiguracaoSeguranca`
+(`tb_configuracao_seguranca`, linha única id=1, CHECK trava o id). Ordem de resolução
+em `mfaService.exigeMfa()` (que é **async** — sempre `await`):
+```
+1. MFA_EMAIL_ENABLED=false no .env  → OFF (kill-switch de emergência, vence tudo)
+2. ConfiguracaoSeguranca.mfaEmailAtivo → seletor do ADMIN em /configuracoes
+3. User.mfaAtivo                    → exceção por usuário
+```
+Cache de 30s no valor global (o login não paga um SELECT por tentativa);
+`invalidarCacheGlobal()` zera na hora ao salvar. Banco fora do ar → mantém o último
+valor conhecido; sem valor conhecido, fica DESLIGADO (não trancar a base fora).
+**Estado entregue: DESATIVADO** (default `false` na migration).
+
+Rotas `GET/PUT /api/seguranca/config` (`authorize('ADMIN')`). Front:
+`components/CardSegurancaAdmin.tsx` em **`ConfiguracaoAlerta.tsx`** (rota
+`/configuracao-alertas`, Sidebar > Geral > "Configuração", ADMIN) — salva SOZINHO,
+fora do form de alertas, porque é config global da plataforma e não da clínica.
+⚠️ NÃO colocar em `Configuracoes.tsx`: **o ADMIN não alcança aquela tela**.
+`usePermissoes` faz `precisaCarregar = user && !isAdminUser` — para ADMIN o hook nem
+chama o backend e deixa `isGestor = false`, então o link do Sidebar (`{isGestor &&}`)
+some e o guard da página barra o ADMIN. Por isso o Sidebar usa `(isGestor || isAdmin)`
+onde o ADMIN também precisa entrar. Para gates de ADMIN use o `role`/`userType` do
+`useAuth`, nunca o `isGestor` do `usePermissoes`.
+Na tela hospedeira, `isAdmin` inclui GESTOR — o card usa `isAdminPlataforma`
+(role/userType estritos) para o gestor não ver o seletor global. Quando o kill-switch de ambiente está ativo,
+o toggle aparece desabilitado com aviso de que não tem efeito.
+Ligar/desligar gera AuditLog categoria `CONFIGURACAO` (categoria nova em
+`lib/auditoria.js`, com badge e filtro próprios em `AuditoriaGeral.tsx`).
+
+**Kill-switch**: `MFA_EMAIL_ENABLED=false` desliga globalmente sem migration (usar se o
+SMTP cair). Por usuário: `UPDATE schs2vet.users SET mfa_ativo = false WHERE id = <id>;`
+⚠️ A tabela do usuário é `users` (NÃO `tb_users`) — atenção ao escrever migration.
+
+Front: `components/Verificacao2FA.tsx` (auto-submete aos 6 dígitos, reenvio com espera
+de 45s, `autoComplete="one-time-code"` para o preenchimento automático do SO).
+
+### Senha é da PESSOA — só ADMIN e o próprio dono alteram (2026-07-28)
+```
+ADMIN da plataforma → altera a senha de qualquer conta (rotas /users/:id, authorize('ADMIN'))
+Próprio usuário     → PATCH /users/me/senha (e o campo "Nova senha" ao editar a si mesmo)
+GESTOR / qualquer outro perfil → NÃO altera a senha de ninguém (403)
+```
+O gestor administra a EQUIPE, não a credencial de quem está nela: quem esqueceu usa
+"esqueci minha senha" e conta nova nasce com a padrão `Inicial_001` + troca obrigatória
+no primeiro acesso. Enforcement: `EquipeController.atualizarMembro` (PUT
+/equipes/membros/:id) e `ProprietarioController.atualizar` (PUT
+/cadastro/proprietarios/:id) respondem **403** se vier `senha` de quem não é ADMIN nem o
+dono da conta; `EquipeController.adicionarMembro` ignora `senha` do body.
+Frontend: `UsuarioFormModal.permitirSenha` só pode ser `true` para ADMIN ou para o próprio
+dono — `Equipe.tsx` passa `membroEditando.user.id === user?.id` (antes era `isGestor`, que
+deixava o gestor trocar a senha do membro) e `Usuarios.tsx` é tela ADMIN-only.
+
 ### Pendências de segurança (futuro)
 - [x] Migrar tokens para HttpOnly Cookies (feito 2026-07-10)
 - [ ] Vincular acesso à mídia (uploads) à sessão via cookie (capability URL ainda é o único gate)
@@ -1850,6 +2416,7 @@ do req (nunca do body). Tela AuditoriaGeral.tsx exibe coluna IP.
 - [ ] Renovar JWT_SECRET antes de produção
 - [ ] Configurar ALLOWED_ORIGINS com domínio real em produção
 - [ ] Definir COOKIE_SECURE=true e TRUST_PROXY_HOPS conforme a topologia de proxy em produção
+- [ ] 2FA: "lembrar este dispositivo" por 30 dias (hoje o código é pedido em todo login)
 
 ### Varredura de segurança — 2026-06-11 (CORRIGIDA)
 

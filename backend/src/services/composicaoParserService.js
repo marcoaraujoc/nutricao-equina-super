@@ -5,50 +5,30 @@ const fs       = require('fs');
 const pdfParse = require('pdf-parse');
 const { logAiUsage } = require('./aiLogger.service');
 const { PROMPTS, buildPrompt } = require('../ai/prompts');
-// Nota: composicaoParserService usa Gemini Vision — provider-específico por natureza
-// (multimodal com imagem). callAI() cobre apenas text completions.
-
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const { MODULOS_IA } = require('../ai');
+const { gerarConteudo, MODELO_PADRAO, PROVEDOR } = require('../ai/geminiClient');
+// Rótulo em imagem é multimodal: entra pelo gerarConteudo (inlineData), não pelo
+// callAI() — que cobre apenas texto. O log de uso é feito aqui, manualmente.
 
 // =====================================================================
 // CHAMADAS GEMINI (com logging manual via logAiUsage)
 // =====================================================================
 
-async function chamarGeminiVisao(imageBase64, mimeType, userId = null, animalId = null) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
-
+async function chamarGemini({ parts, promptTexto, operacaoVers, userId, animalId, empresaId }) {
   const inicio = Date.now();
-  let sucesso      = true;
-  let erroMensagem = null;
+  let sucesso       = true;
+  let erroMensagem  = null;
   let respostaTexto = '';
+  let tokensEntradaApi = null;
+  let tokensSaidaApi   = null;
+  let modelo = MODELO_PADRAO;
 
   try {
-    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { inlineData: { mimeType, data: imageBase64 } },
-              { text: PROMPTS['parse_composicao_visao'].text },
-            ],
-          },
-        ],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-      }),
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Gemini Vision Error HTTP ${response.status}: ${err}`);
-    }
-
-    const data    = await response.json();
-    respostaTexto = data.candidates[0].content.parts[0].text.trim();
-
+    const r = await gerarConteudo(parts, { temperature: 0.1, maxTokens: 8192 });
+    respostaTexto    = (r.text ?? '').trim();
+    tokensEntradaApi = r.tokensEntrada;
+    tokensSaidaApi   = r.tokensSaida;
+    modelo           = r.modelo;
     return respostaTexto;
 
   } catch (err) {
@@ -58,68 +38,48 @@ async function chamarGeminiVisao(imageBase64, mimeType, userId = null, animalId 
 
   } finally {
     await logAiUsage({
-      operacao:      `parse_composicao_visao@${PROMPTS['parse_composicao_visao'].version}`,
-      modelo:        'gemini-2.5-flash',
-      provedor:      'google',
-      promptTexto:   PROMPTS['parse_composicao_visao'].text,
+      operacao:   operacaoVers,
+      modulo:     MODULOS_IA.NUTRICAO,
+      modelo,
+      provedor:   PROVEDOR,
+      promptTexto,
       respostaTexto,
-      latenciaMs:    Date.now() - inicio,
+      tokensEntradaApi: tokensEntradaApi ?? undefined,
+      tokensSaidaApi:   tokensSaidaApi   ?? undefined,
+      latenciaMs: Date.now() - inicio,
       userId,
       animalId,
+      empresaId,
       sucesso,
       erroMensagem,
     });
   }
 }
 
-async function chamarGeminiTexto(prompt, userId = null, animalId = null) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente');
+function chamarGeminiVisao(imageBase64, mimeType, userId = null, animalId = null, empresaId = null) {
+  const entrada = PROMPTS['parse_composicao_visao'];
+  return chamarGemini({
+    parts: [
+      { inlineData: { mimeType, data: imageBase64 } },
+      { text: entrada.text },
+    ],
+    promptTexto:  entrada.text,
+    operacaoVers: `parse_composicao_visao@${entrada.version}`,
+    userId,
+    animalId,
+    empresaId,
+  });
+}
 
-  const inicio = Date.now();
-  let sucesso      = true;
-  let erroMensagem = null;
-  let respostaTexto = '';
-
-  try {
-    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-      }),
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Gemini Text Error HTTP ${response.status}: ${err}`);
-    }
-
-    const data    = await response.json();
-    respostaTexto = data.candidates[0].content.parts[0].text.trim();
-
-    return respostaTexto;
-
-  } catch (err) {
-    sucesso      = false;
-    erroMensagem = err.message;
-    throw err;
-
-  } finally {
-    await logAiUsage({
-      operacao:      `parse_composicao_texto@${PROMPTS['parse_composicao_texto'].version}`,
-      modelo:        'gemini-2.5-flash',
-      provedor:      'google',
-      promptTexto:   prompt,
-      respostaTexto,
-      latenciaMs:    Date.now() - inicio,
-      userId,
-      animalId,
-      sucesso,
-      erroMensagem,
-    });
-  }
+function chamarGeminiTexto(prompt, operacaoVers, userId = null, animalId = null, empresaId = null) {
+  return chamarGemini({
+    parts: [{ text: prompt }],
+    promptTexto: prompt,
+    operacaoVers,
+    userId,
+    animalId,
+    empresaId,
+  });
 }
 
 // =====================================================================
@@ -201,7 +161,7 @@ module.exports = {
    * @param {number} [userId]   — id do usuário (para log)
    * @param {number} [animalId] — id do animal (para log)
    */
-  async processarArquivo(filePath, mimetype = '', userId = null, animalId = null) {
+  async processarArquivo(filePath, mimetype = '', userId = null, animalId = null, empresaId = null) {
     const isPdf =
       mimetype === 'application/pdf' || filePath.toLowerCase().endsWith('.pdf');
 
@@ -211,8 +171,8 @@ module.exports = {
       if (!text?.trim()) {
         throw new Error('PDF sem texto extraível. Envie uma imagem do rótulo.');
       }
-      const { prompt } = buildPrompt('parse_composicao_texto', text);
-      const respostaGemini = await chamarGeminiTexto(prompt, userId, animalId);
+      const { operacaoVers, prompt } = buildPrompt('parse_composicao_texto', text);
+      const respostaGemini = await chamarGeminiTexto(prompt, operacaoVers, userId, animalId, empresaId);
       return parsearRespostaGemini(respostaGemini);
     }
 
@@ -224,6 +184,7 @@ module.exports = {
       mimetype || 'image/jpeg',
       userId,
       animalId,
+      empresaId,
     );
     return parsearRespostaGemini(respostaGemini);
   },

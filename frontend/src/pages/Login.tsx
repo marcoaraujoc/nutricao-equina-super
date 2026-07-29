@@ -5,6 +5,8 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
 import { AlertCircle, Eye, EyeOff } from 'lucide-react';
 import InlineError from '../components/InlineError';
+import Verificacao2FA from '../components/Verificacao2FA';
+import type { DesafioMfa } from '../components/Verificacao2FA';
 
 export default function Login() {
   const { login }  = useAuth();
@@ -21,6 +23,8 @@ export default function Login() {
   const [error,        setError]        = useState('');
   const [googleError,  setGoogleError]  = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // Desafio de 2FA pendente: com ele preenchido, a tela troca para o código.
+  const [desafio2fa,   setDesafio2fa]   = useState<DesafioMfa | null>(null);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [forgotEmail,     setForgotEmail]     = useState('');
@@ -50,10 +54,22 @@ export default function Login() {
       });
       const data = await res.json();
       if (res.ok) {
+        // Senha correta, mas ainda falta o segundo fator: nenhum cookie foi
+        // emitido — a sessão só nasce após POST /auth/2fa/verificar.
+        if (data.mfaRequerido) {
+          setDesafio2fa({
+            desafioId:       data.desafioId,
+            emailMascarado:  data.emailMascarado,
+            validadeMinutos: data.validadeMinutos ?? 10,
+          });
+          return;
+        }
         // Backend já setou os cookies HttpOnly — carrega a identidade via /me
         await login();
         localStorage.removeItem('s2vet_ob');
         redirecionarAposLogin();
+      } else if (res.status === 503) {
+        setError(data.error ?? 'Não foi possível enviar o código de verificação.');
       } else {
         setError('Usuário ou senha inválidos');
       }
@@ -122,6 +138,18 @@ export default function Login() {
       <div className="bg-white text-gray-900 w-full max-w-md rounded-3xl shadow-2xl
                       px-6 py-6 sm:px-10 sm:py-8">
 
+        {desafio2fa ? (
+          <Verificacao2FA
+            desafio={desafio2fa}
+            onVerificado={async () => {
+              await login();
+              localStorage.removeItem('s2vet_ob');
+              redirecionarAposLogin();
+            }}
+            onCancelar={() => { setDesafio2fa(null); setPassword(''); }}
+          />
+        ) : (
+        <>
         <h1 className="text-2xl sm:text-3xl font-bold text-center mb-4 sm:mb-6">
           Faça login na sua conta
         </h1>
@@ -238,6 +266,8 @@ export default function Login() {
             Cadastrar-se
           </Link>
         </p>
+        </>
+        )}
       </div>
 
       {/* MODAL — Esqueci minha senha */}

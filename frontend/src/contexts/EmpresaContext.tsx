@@ -14,6 +14,15 @@ import api from '../services/api';
 export const EMPRESA_ATIVA_KEY = 's2vet_empresa_id';
 export const EQUIPE_ATIVA_KEY  = 's2vet_equipe_id';
 
+/**
+ * Rotas que carregam um ID DE ANIMAL na URL (ver App.tsx). O id é sempre de UMA
+ * empresa — ao trocar de contexto, continuar nelas faz a empresa nova pedir um
+ * paciente a que não tem acesso e a tela inteira responde 403.
+ * O `\d` no fim é o que separa a rota de detalhe da rota de lista (/exames/12 × /exames).
+ */
+export const ROTA_COM_ANIMAL =
+  /#\/(?:animal|animais|dieta|exames|relatorio-nutricional|exame-compra|resenha)\/\d|#\/clinica\/(?:evolucao|prescricao|vacina|exames|encaminhamento)\/\d/;
+
 export interface ContextoOpcao {
   empresaId: number;
   /** null = opção no nível da empresa (CNPJ); número = equipe ativa (CPF) */
@@ -107,6 +116,17 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(EMPRESA_ATIVA_KEY, String(opcao.empresaId));
     if (opcao.equipeId) localStorage.setItem(EQUIPE_ATIVA_KEY, String(opcao.equipeId));
     else localStorage.removeItem(EQUIPE_ATIVA_KEY);
+
+    // O paciente selecionado é DAQUELA empresa — mantê-lo faz a próxima empresa abrir
+    // as telas com um animal a que ela não tem acesso, e tudo responde 403.
+    localStorage.removeItem('lastSelectedAnimalId');
+
+    // Rota presa a um animal (ex.: /clinica/evolucao/43) também não sobrevive à troca:
+    // o id é de outra empresa. Volta para a lista de pacientes do novo contexto.
+    if (ROTA_COM_ANIMAL.test(window.location.hash)) {
+      window.location.hash = '#/animais';
+    }
+
     // Reload garante que todas as páginas refaçam os fetches no novo contexto
     window.location.reload();
   };

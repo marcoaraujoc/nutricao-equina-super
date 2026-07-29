@@ -33,7 +33,7 @@ const ResumoAtendimentoController = {
 
   // POST /clinica/resumo-atendimento/animal/:animalId/atualizar
   // Apenda os eventos novos ao resumo via IA e persiste. Sem eventos novos, não chama a IA.
-  atualizar: async (req, res) => {
+  atualizar: async (req, res, next) => {
     try {
       const animalId = Number(req.params.animalId);
       if (!(await autorizar(req, res, animalId))) return;
@@ -41,6 +41,8 @@ const ResumoAtendimentoController = {
       const dados  = await atualizarResumo(req, animalId, animal?.nome ?? null);
       res.json({ dados });
     } catch (err) {
+      // Limite de plano de IA → 429 pelo handler global (não é erro do servidor)
+      if (err.code === 'IA_QUOTA_EXCEDIDA') return next(err);
       console.error('ResumoAtendimentoController.atualizar:', err);
       res.status(500).json({ error: 'Erro ao atualizar resumo de atendimentos' });
     }

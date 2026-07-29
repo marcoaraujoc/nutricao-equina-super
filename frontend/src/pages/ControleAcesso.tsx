@@ -238,6 +238,13 @@ const ACAO_COLS: Array<{ acao: string; label: string; icon?: React.ReactNode }> 
 ];
 
 const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: string }>> = {
+  // Enfermagem = execução de prescrições (enfermagem.prescricao.executar). A ação
+  // principal é EXECUTAR — não existe criar/editar/finalizar aqui.
+  enfermagem: [
+    { acao: 'ler',      label: 'VER'      },
+    { acao: 'executar', label: 'EXECUTAR' },
+    { acao: 'imprimir', label: 'IMPRIMIR' },
+  ],
   // Agenda = atendimento.agendamentos.* (o que o app realmente enforça).
   // "Alterar" cobre confirmar/reagendar/trocar profissional/mudar status.
   agenda: [
@@ -2686,6 +2693,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [enviando,   setEnviando]   = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro da inclusão — exibido DENTRO do modal, onde o cadastro está sendo feito
+  const [erroModal,  setErroModal]  = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2711,6 +2720,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
 
   const handleIncluirModal = async (values: UsuarioFormValues) => {
     setEnviando(true);
+    setErroModal(null);
     try {
       if (values.perfil === 'FORNECEDOR') {
         const res = await api.post('/equipes/incluir-membro', {
@@ -2725,6 +2735,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
         });
         toast.success('Fornecedor incluído. Selecione os animais com acesso.');
         setShowModal(false);
+        // Busca em aberto esconderia justamente quem acabou de ser incluído
+        setBusca('');
         carregar();
         const dados = (res.data as { dados?: { userId?: number; fullName?: string } })?.dados;
         if (dados?.userId) {
@@ -2738,11 +2750,12 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
         });
         toast.success('Convite enviado por e-mail');
         setShowModal(false);
+        setBusca('');
         carregar();
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro';
-      setErroInline(msg);
+      setErroModal(msg);
     } finally { setEnviando(false); }
   };
 
@@ -2834,7 +2847,10 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       <div className="px-5 py-3 border-b border-gray-50 flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          {/* name/autoComplete neutros: sem isso o navegador trata como campo de nome
+              e reoferece/preenche o nome digitado no cadastro que acabou de ser salvo */}
           <input value={busca} onChange={e => setBusca(e.target.value)}
+            name="busca-membros" autoComplete="off" data-lpignore="true" data-form-type="other"
             placeholder="Buscar por nome ou e-mail..."
             className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
         </div>
@@ -3010,7 +3026,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           textoBotao="Incluir"
           comFornecedor
           salvando={enviando}
-          onClose={() => setShowModal(false)}
+          erroServidor={erroModal}
+          onClose={() => { setShowModal(false); setErroModal(null); }}
           onSubmit={handleIncluirModal}
         />
       )}

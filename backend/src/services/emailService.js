@@ -17,6 +17,51 @@ const podeEnviar = () => !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 
 const emailService = {
 
+  // ── Código de verificação em duas etapas (2FA) ────────────────────────────
+  // Falha de envio é PROPAGADA de propósito: sem o código não pode nascer sessão.
+  async enviarCodigoMfa({ email, nome, codigo, validadeMin, ip }) {
+    if (!podeEnviar()) {
+      throw new Error('Envio de e-mail não configurado — não é possível concluir a verificação em duas etapas.');
+    }
+
+    const primeiroNome = String(nome ?? '').trim().split(' ')[0] || 'você';
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      email,
+      subject: `${codigo} é o seu código de acesso S2Vet`,
+      text:    `Seu código de acesso S2Vet é ${codigo}. Ele expira em ${validadeMin} minutos. Se não foi você que tentou entrar, troque sua senha.`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#047857;padding:20px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:20px;font-weight:700;">🐴 S2Vet — Verificação em duas etapas</h1>
+          </div>
+          <div style="background:#f9fafb;padding:28px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="color:#374151;line-height:1.6;margin:0 0 20px;">
+              Olá, ${primeiroNome}. Use o código abaixo para concluir o acesso:
+            </p>
+
+            <div style="background:white;border:2px solid #047857;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px;">
+              <span style="font-size:34px;font-weight:700;letter-spacing:10px;color:#047857;font-family:monospace;">${codigo}</span>
+            </div>
+
+            <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0 0 16px;">
+              O código expira em <strong>${validadeMin} minutos</strong> e só pode ser usado uma vez.
+            </p>
+
+            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;">
+              <p style="color:#991b1b;font-size:13px;line-height:1.6;margin:0;">
+                <strong>Não foi você?</strong> Ignore este e-mail e troque sua senha imediatamente.
+                Ninguém do S2Vet vai pedir este código por telefone, WhatsApp ou e-mail.
+                ${ip ? `<br><span style="color:#b91c1c;font-size:12px;">Tentativa registrada a partir do IP ${ip}.</span>` : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+      `,
+    });
+  },
+
   // ── Alerta de execução de tarefa agendada (cron) para o ADMIN ─────────────
   async enviarAlertaCron({ para, nome, ok, resumo, erro, quando }) {
     if (!podeEnviar()) {
@@ -1116,6 +1161,77 @@ const emailService = {
       `,
     });
     console.log(`[emailService] Notificação de agendamento → ${vetEmail}`);
+  },
+
+  // ── Transferência de agenda/consulta para outro profissional ──────────────
+  // `itens` = [{ dataHora, animalNome, tipo }] — 1 item (consulta avulsa) ou vários
+  // (agenda do dia inteiro). Quem recebe a transferência é notificado aqui e por WhatsApp.
+  // `modo`: 'RECEBIDO' (o destinatário ganhou os atendimentos) | 'ASSUMIDO' (o
+  // destinatário PERDEU o atendimento, que `deNome` assumiu para si).
+  async enviarTransferenciaAgenda({ paraEmail, paraNome, deNome, itens = [], observacao, modo = 'RECEBIDO' }) {
+    if (!podeEnviar() || !paraEmail || itens.length === 0) return;
+    const appUrl = process.env.APP_URL || 'http://localhost:5173';
+    const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+    const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const rotulo  = (t) => ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[t] ?? t ?? 'Atendimento');
+
+    const varios   = itens.length > 1;
+    const assumido = modo === 'ASSUMIDO';
+    const assunto  = assumido
+      ? `[S2Vet] Atendimento assumido por outro profissional — ${itens[0].animalNome ?? 'Paciente'} · ${fmtHora(itens[0].dataHora)}`
+      : varios
+        ? `[S2Vet] ${itens.length} atendimentos transferidos para você — ${fmtData(itens[0].dataHora)}`
+        : `[S2Vet] Atendimento transferido para você — ${itens[0].animalNome ?? 'Paciente'} · ${fmtHora(itens[0].dataHora)}`;
+
+    const linhas = itens.map(i => `
+      <tr>
+        <td style="padding:8px 0;color:#111827;font-weight:700;">${fmtHora(i.dataHora)}</td>
+        <td style="padding:8px 0;color:#374151;">${i.animalNome ?? 'Paciente'}</td>
+        <td style="padding:8px 0;color:#6b7280;font-size:13px;">${rotulo(i.tipo)}</td>
+      </tr>`).join('');
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      paraEmail,
+      subject: assunto,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">
+              ${assumido ? '🙋 Atendimento assumido por outro profissional' : `🔄 ${varios ? 'Agenda transferida' : 'Atendimento transferido'} para você`}
+            </h2>
+            <p style="color:#374151;">
+              Olá, <strong>${paraNome ?? 'profissional'}</strong>!
+              ${assumido
+                ? `${deNome ? `<strong>${deNome}</strong> assumiu` : 'Outro profissional assumiu'} o atendimento abaixo, que saiu da sua agenda.`
+                : `${deNome ? `<strong>${deNome}</strong> transferiu` : 'Foi transferido'} ${varios ? `<strong>${itens.length} atendimentos</strong>` : 'um atendimento'} para a sua agenda.`}
+            </p>
+
+            <div style="background:white;border:2px solid #a7f3d0;border-radius:12px;padding:20px;margin:24px 0;">
+              <p style="margin:0 0 12px;color:#6b7280;font-size:13px;">📅 ${fmtData(itens[0].dataHora)}</p>
+              <table style="width:100%;border-collapse:collapse;">${linhas}</table>
+            </div>
+
+            ${observacao ? `<p style="color:#374151;font-size:13px;">📝 ${observacao}</p>` : ''}
+
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                Ver minha agenda
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Transferência registrada no S2Vet.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Transferência de agenda → ${paraEmail} (${itens.length} item(ns))`);
   },
 
   // ── Lembrete 1 dia antes ao proprietário ──────────────────────────────────

@@ -1,68 +1,88 @@
 // src/ai/index.ts
 // Ponto único de entrada para inferência de texto.
-// Chain de fallback: Claude → Gemini → OpenAI → Groq
-// Pula automaticamente qualquer provider sem API key configurada.
+//
+// Provider ÚNICO: Google Gemini (gemini-1.5-flash) — ver geminiClient.ts.
+// A interface AIProvider continua existindo para não acoplar o domínio ao
+// fornecedor; para voltar a ter fallback, basta implementar outro provider e
+// empilhá-lo em buildChain().
 
 import type { AIProvider, AICompletionOptions } from './types';
-import { GeminiProvider }    from './providers/GeminiProvider';
-import { OpenAIProvider }    from './providers/OpenAIProvider';
-import { AnthropicProvider } from './providers/AnthropicProvider';
-import { GroqProvider }      from './providers/GroqProvider';
-import { logAiUsage }        from '../services/aiLogger.service';
+import { GeminiProvider } from './providers/GeminiProvider';
+import { logAiUsage }     from '../services/aiLogger.service';
 
-// ── Chain de providers ─────────────────────────────────────────────────────────
-// Constrói a lista de providers configurados na ordem de preferência.
-// Adicionar novo provider: criar XyzProvider.ts e adicionar condição aqui.
+// Gate de consumo por cliente (conta única + metering). require() porque o serviço
+// é JS e precisa ser carregado de forma preguiçosa — evita ciclo com lib/prisma.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { garantirQuota } = require('../services/iaQuotaService');
+
+// ── Módulos que consomem IA ───────────────────────────────────────────────────
+// Toda chamada precisa declarar o módulo de origem — é o que alimenta o
+// relatório de consumo (/ai-usage) com "quem chamou".
+
+export const MODULOS_IA = {
+  ATENDIMENTO:     'ATENDIMENTO',
+  MEMORIA_CLINICA: 'MEMORIA_CLINICA',
+  FINANCEIRO:      'FINANCEIRO',
+  EXAMES:          'EXAMES',
+  NUTRICAO:        'NUTRICAO',
+  AGENDA:          'AGENDA',
+  TRANSCRICAO:     'TRANSCRICAO',
+} as const;
+
+export type ModuloIA = typeof MODULOS_IA[keyof typeof MODULOS_IA];
+
+// ── Chain de providers ────────────────────────────────────────────────────────
 
 function buildChain(): AIProvider[] {
   const chain: AIProvider[] = [];
-  if (process.env.ANTHROPIC_API_KEY) chain.push(new AnthropicProvider());
-  if (process.env.GEMINI_API_KEY)    chain.push(new GeminiProvider());
-  if (process.env.OPENAI_API_KEY)    chain.push(new OpenAIProvider());
-  if (process.env.GROQ_API_KEY)      chain.push(new GroqProvider());
+  if (process.env.GEMINI_API_KEY) chain.push(new GeminiProvider());
   return chain;
 }
 
 // ── callAI() ──────────────────────────────────────────────────────────────────
 
 export interface CallAIOptions extends AICompletionOptions {
-  operacao:  string;
-  prompt:    string;
-  userId?:   number | null;
-  animalId?: number | null;
+  operacao:   string;
+  modulo:     ModuloIA | string;
+  prompt:     string;
+  userId?:    number | null;
+  animalId?:  number | null;
+  /** Cliente (tenant) a quem o consumo é atribuído. Sempre req.empresaId. */
+  empresaId?: number | null;
 }
 
 /**
- * Executa inferência de texto com fallback automático entre providers.
- * Ordem: Claude → Gemini → OpenAI → Groq (apenas os que tiverem API key configurada).
- * Loga o uso em AiUsageLog.
+ * Executa inferência de texto no Gemini e loga o uso em AiUsageLog.
  */
 export async function callAI({
   operacao,
+  modulo,
   prompt,
-  userId   = null,
-  animalId = null,
+  userId    = null,
+  animalId  = null,
+  empresaId = null,
   ...opts
 }: CallAIOptions): Promise<string> {
   const chain = buildChain();
 
   if (chain.length === 0) {
-    throw new Error(
-      'Nenhum provider de IA configurado. ' +
-      'Defina pelo menos uma chave: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY ou GROQ_API_KEY'
-    );
+    throw new Error('IA indisponível: defina GEMINI_API_KEY no ambiente.');
   }
 
-  const inicio     = Date.now();
+  // Gate ANTES de gastar token. Lança QuotaIaExcedidaError (code IA_QUOTA_EXCEDIDA)
+  // quando a empresa estourou o plano — o controller traduz para HTTP 429.
+  await garantirQuota(empresaId);
+
+  const inicio               = Date.now();
   const tentativas: string[] = [];
 
   for (const provider of chain) {
     try {
       const result = await provider.complete(prompt, opts);
 
-      // Loga o uso do provider bem-sucedido
       await logAiUsage({
         operacao,
+        modulo,
         modelo:           result.modelo,
         provedor:         result.provedor,
         promptTexto:      prompt,
@@ -70,17 +90,11 @@ export async function callAI({
         tokensEntradaApi: result.tokensEntradaApi ?? undefined,
         tokensSaidaApi:   result.tokensSaidaApi   ?? undefined,
         latenciaMs:       Date.now() - inicio,
-        userId:           userId   ?? undefined,
-        animalId:         animalId ?? undefined,
+        userId:           userId    ?? undefined,
+        animalId:         animalId  ?? undefined,
+        empresaId:        empresaId ?? undefined,
         sucesso:          true,
       });
-
-      if (tentativas.length > 0) {
-        console.info(
-          `[AI] Fallback ativado: ${provider.name} respondeu ` +
-          `(falhas anteriores: ${tentativas.join(', ')})`
-        );
-      }
 
       return result.text;
 
@@ -91,18 +105,19 @@ export async function callAI({
     }
   }
 
-  // Todos falharam — loga o erro e lança
-  const erroFinal = `Todos os providers de IA falharam: [${tentativas.join(', ')}]`;
+  const erroFinal = `Falha na chamada de IA: [${tentativas.join(', ')}]`;
 
   await logAiUsage({
     operacao,
+    modulo,
     modelo:        'none',
     provedor:      tentativas.join(','),
     promptTexto:   prompt,
     respostaTexto: '',
     latenciaMs:    Date.now() - inicio,
-    userId:        userId   ?? undefined,
-    animalId:      animalId ?? undefined,
+    userId:        userId    ?? undefined,
+    animalId:      animalId  ?? undefined,
+    empresaId:     empresaId ?? undefined,
     sucesso:       false,
     erroMensagem:  erroFinal,
   }).catch(() => {});
@@ -110,9 +125,9 @@ export async function callAI({
   throw new Error(erroFinal);
 }
 
-// Mantido para compatibilidade — retorna o primeiro provider configurado
+// Mantido para compatibilidade — retorna o provider configurado
 export function getProvider(): AIProvider {
   const chain = buildChain();
-  if (chain.length === 0) throw new Error('Nenhum provider de IA configurado');
+  if (chain.length === 0) throw new Error('IA indisponível: defina GEMINI_API_KEY no ambiente.');
   return chain[0];
 }

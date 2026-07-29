@@ -7,6 +7,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Bell, Loader2, Mail, Clock } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import CardSegurancaAdmin from '../components/CardSegurancaAdmin';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -31,6 +32,10 @@ export default function ConfiguracaoAlerta() {
   const { user } = useAuth();
   const { isGestor } = usePermissoes();
   const isAdmin = isGestor || user?.userType === 'ADMIN'; // ADMIN ou GESTOR podem gerenciar
+  // A configuração de SEGURANÇA é global da plataforma: só o ADMIN, nunca o GESTOR.
+  // (O backend já exige authorize('ADMIN'); aqui é para nem exibir o seletor.)
+  const isAdminPlataforma =
+    user?.userType?.toUpperCase() === 'ADMIN' || user?.role?.toUpperCase() === 'ADMIN';
   const navigate = useNavigate();
 
   const [loading,  setLoading]  = useState(true);
@@ -136,9 +141,19 @@ export default function ConfiguracaoAlerta() {
 
       <div className="flex items-center gap-2 mb-1">
         <Bell size={22} className="text-emerald-600" />
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Configuração de Alertas</h1>
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Configuração</h1>
       </div>
-      <p className="text-gray-500 mb-6 text-sm">Alertas das tarefas agendadas (cron) enviados por e-mail. Aplicado automaticamente na próxima execução.</p>
+      <p className="text-gray-500 mb-6 text-sm">Ajustes globais da plataforma — valem para todas as empresas.</p>
+
+      {/* Segurança da plataforma — só ADMIN. Salva sozinho, fora do form de alertas. */}
+      {isAdminPlataforma && (
+        <div className="bg-white shadow rounded-3xl p-5 sm:p-8 mb-6">
+          <CardSegurancaAdmin />
+        </div>
+      )}
+
+      <h2 className="text-sm font-bold text-gray-800 mb-1">Alertas das tarefas agendadas</h2>
+      <p className="text-gray-500 mb-3 text-xs">Enviados por e-mail (cron). Aplicado automaticamente na próxima execução.</p>
 
       <form onSubmit={handleSalvar} className="bg-white shadow rounded-3xl p-5 sm:p-8 space-y-6">
 

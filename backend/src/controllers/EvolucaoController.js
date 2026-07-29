@@ -10,6 +10,9 @@ const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtil
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 const { PROMPTS }               = require('../ai/prompts');
+const { MODULOS_IA }            = require('../ai');
+const { transcreverAudio }      = require('../ai/geminiClient');
+const { logAiUsage }            = require('../services/aiLogger.service');
 const { extrairResumoAtendimento } = require('../services/laudoEquinoExtracao.service');
 const { interpretarEvolucao }      = require('../services/clinicaLLMService');
 const { pintarLaudoEquino }         = require('../models/anatomia-equina/pintarLaudoEquino');
@@ -238,7 +241,7 @@ const EvolucaoController = {
       // na resposta para o modal do frontend, sem persistir aqui.
       let tituloIA = null;
       let acoesIA  = [];
-      const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId)).catch(() => null);
+      const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
       if (resultadoIA) {
         tituloIA = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
         acoesIA  = resultadoIA.acoes ?? [];
@@ -395,7 +398,7 @@ const EvolucaoController = {
       let tituloParaSalvar = existente.titulo;
       let acoesIA = [];
       if ((!existente.titulo?.trim() || textoMudou) && textoEfetivo?.trim()) {
-        const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId).catch(() => null);
+        const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId, req.empresaId ?? null).catch(() => null);
         if (resultadoIA) {
           tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || existente.titulo;
           acoesIA = resultadoIA.acoes ?? [];
@@ -428,6 +431,36 @@ const EvolucaoController = {
             where: { id: existente.agendamentoId, status: 'EM_ANDAMENTO' },
             data:  { status: 'FINALIZADO' },
           });
+        }
+
+        // Cascata da finalização (2026-07-25): finalizar a evolução também FINALIZA as
+        // prescrições e vacinas SALVAS do atendimento → elas passam a "Em Execução" e vão
+        // para o plantão (Execução de Prescrição). Só transição de status: fatura e débito
+        // de estoque continuam acontecendo na EXECUÇÃO, não aqui. Idempotente (só toca SALVO/SALVA).
+        if (vaiFinalizar) {
+          const gruposSalvos = await tx.prescricaoGrupo.findMany({
+            where:  { evolucaoId: Number(id), status: 'SALVO' },
+            select: { id: true },
+          });
+          const grupoIds = gruposSalvos.map(g => g.id);
+          if (grupoIds.length > 0) {
+            await tx.prescricao.updateMany({
+              where: { grupoId: { in: grupoIds }, ativo: true },
+              data:  { status: 'ATIVA' },
+            });
+            await tx.prescricaoGrupo.updateMany({
+              where: { id: { in: grupoIds } },
+              data:  { status: 'FINALIZADO', finalizadoPorId: userId, finalizadoEm: new Date() },
+            });
+          }
+
+          // Vacinas SALVAS do atendimento → FINALIZADA (status vive fora do client gerado).
+          await tx.$executeRawUnsafe(
+            `UPDATE schs2vet.tb_vacinas_clinicas
+             SET status = 'FINALIZADA'
+             WHERE evolucao_id = $1 AND status = 'SALVA' AND ativo = true`,
+            Number(id)
+          );
         }
 
         return upd;
@@ -819,7 +852,7 @@ const EvolucaoController = {
     }
   },
 
-  // ── Interpretar texto com LLM (Groq) ──────────────────────────────────────
+  // ── Interpretar texto com LLM ─────────────────────────────────────────────
   // Rota inline em evolucao.js — usa clinicaLLMService
   // Este método é mantido como fallback mas não está em uso direto no router
 
@@ -831,7 +864,7 @@ const EvolucaoController = {
     res.status(501).json({ sucesso: false, mensagem: 'Use a rota POST /interpretar do router' });
   },
 
-  // ── Transcrever áudio com Groq Whisper ────────────────────────────────────
+  // ── Transcrever áudio com Gemini ──────────────────────────────────────────
   // POST /clinica/evolucoes/transcrever
   // multipart/form-data: audio (arquivo)
 
@@ -842,56 +875,62 @@ const EvolucaoController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Arquivo de áudio obrigatório' });
     }
 
-    const inicio = Date.now();
-
-    // O Groq Whisper valida a EXTENSÃO do nome do arquivo, mas o multer salva o
-    // temporário sem extensão (dest:). Renomeia com a extensão original
-    // (whitelist do Groq) antes de enviar — fallback .webm (gravações do app).
-    const GROQ_EXTS = new Set(['.flac', '.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.ogg', '.opus', '.wav', '.webm']);
-    const extOrig   = path.extname(req.file.originalname || '').toLowerCase();
-    const audioPath = `${req.file.path}${GROQ_EXTS.has(extOrig) ? extOrig : '.webm'}`;
-    try { fs.renameSync(req.file.path, audioPath); } catch {
-      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao preparar o áudio' });
-    }
+    const extOrig = path.extname(req.file.originalname || '').toLowerCase();
+    // O Gemini não aceita WebM/Opus (formato das gravações do app e das notas de
+    // voz do WhatsApp) — transcodifica para MP3 antes de enviar.
+    const precisaConverter = EXTS_INCOMPATIVEIS_SAFARI.has(extOrig) || !extOrig;
+    const audioPath        = `${req.file.path}${precisaConverter ? '.mp3' : extOrig}`;
+    const mimeType         = precisaConverter ? 'audio/mp3' : (req.file.mimetype || 'audio/mp3');
 
     try {
-      const Groq = require('groq-sdk');
-      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+      if (precisaConverter) await transcodeParaMp3(req.file.path, audioPath);
+      else                  fs.renameSync(req.file.path, audioPath);
+    } catch (err) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      console.error('Erro ao preparar o áudio:', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao preparar o áudio' });
+    }
+    if (precisaConverter) { try { fs.unlinkSync(req.file.path); } catch {} }
 
-      const transcription = await groq.audio.transcriptions.create({
-        file:     fs.createReadStream(audioPath),
-        model:    'whisper-large-v3',
-        language: 'pt',
-      });
-
-      const latencia = Date.now() - inicio;
-      const texto    = transcription.text?.trim() ?? '';
+    const inicio = Date.now();
+    try {
+      const buffer = fs.readFileSync(audioPath);
+      const r      = await transcreverAudio(buffer, mimeType);
+      const texto  = (r.text ?? '').trim();
 
       try { fs.unlinkSync(audioPath); } catch {}
 
-      try {
-        await prisma.aiUsageLog.create({
-          data: {
-            operacao:      'TRANSCRICAO_AUDIO',
-            modelo:        'whisper-large-v3',
-            provedor:      'groq',
-            tokensEntrada: 0,
-            tokensSaida:   0,
-            tokensTotal:   0,
-            custoUsd:      0.0,
-            latenciaMs:    latencia,
-            userId:        userId,
-            sucesso:       true,
-          },
-        });
-      } catch (logErr) {
-        console.error('Erro ao registrar AI log:', logErr);
-      }
+      await logAiUsage({
+        operacao:         'transcricao_audio@v1',
+        modulo:           MODULOS_IA.TRANSCRICAO,
+        modelo:           r.modelo,
+        provedor:         r.provedor,
+        promptTexto:      '',
+        respostaTexto:    texto,
+        tokensEntradaApi: r.tokensEntrada ?? undefined,
+        tokensSaidaApi:   r.tokensSaida   ?? undefined,
+        latenciaMs:       Date.now() - inicio,
+        userId,
+        empresaId:        req.empresaId ?? null,
+        sucesso:          true,
+      });
 
       res.json({ sucesso: true, dados: { texto } });
     } catch (error) {
       try { fs.unlinkSync(audioPath); } catch {}
       console.error('Erro ao transcrever áudio:', error);
+      await logAiUsage({
+        operacao:      'transcricao_audio@v1',
+        modulo:        MODULOS_IA.TRANSCRICAO,
+        modelo:        'gemini',
+        promptTexto:   '',
+        respostaTexto: '',
+        latenciaMs:    Date.now() - inicio,
+        userId,
+        empresaId:     req.empresaId ?? null,
+        sucesso:       false,
+        erroMensagem:  error.message,
+      }).catch(() => {});
       res.status(500).json({ sucesso: false, mensagem: 'Erro na transcrição do áudio' });
     }
   },
@@ -1004,8 +1043,8 @@ const EvolucaoController = {
       });
 
       const [resumoAtual, resumoAnterior] = await Promise.all([
-        garantirResumoIa(atual, userId),
-        anterior ? garantirResumoIa(anterior, userId) : Promise.resolve(null),
+        garantirResumoIa(atual, userId, req.empresaId ?? null),
+        anterior ? garantirResumoIa(anterior, userId, req.empresaId ?? null) : Promise.resolve(null),
       ]);
 
       // Painter por tipo de atendimento: Ferrageamento → casco.png;
@@ -1085,7 +1124,7 @@ const EvolucaoController = {
  * versão atual do prompt; caso contrário, extrai via IA e persiste o cache.
  * Nunca lança — extrairResumoAtendimento já degrada graciosamente.
  */
-async function garantirResumoIa(evolucao, userId) {
+async function garantirResumoIa(evolucao, userId, empresaId = null) {
   // Relatório editado pelo veterinário tem precedência ABSOLUTA sobre a IA:
   // nunca re-extrai (nem em bump de versão do prompt). Só um novo texto de
   // evolução (que limpa o cache em `atualizar`) dispara nova extração.
@@ -1100,6 +1139,7 @@ async function garantirResumoIa(evolucao, userId) {
     texto:    evolucao.texto,
     userId,
     animalId: evolucao.animalId,
+    empresaId,
   });
 
   // NÃO cachear falha de extração (registros vazios + completo:false = fallback

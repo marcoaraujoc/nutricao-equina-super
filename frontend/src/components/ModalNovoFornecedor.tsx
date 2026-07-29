@@ -205,9 +205,8 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
 
   const handleSalvar = async (force = false) => {
     if (!form.nome.trim())             { setErroInline('Nome é obrigatório'); return; }
-    if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
-      setErroInline('Selecione ao menos uma especialidade'); return;
-    }
+    // Especialidade do fornecedor é OPCIONAL (regra 2026-07-28) — sem nenhuma, o
+    // tipoServico legado fica sendo o próprio tipo de fornecedor.
     if (!form.email.trim())            { setErroInline('E-mail é obrigatório'); return; }
     if (!isValidEmail(form.email))     { setErroInline('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())         { setErroInline('Telefone é obrigatório'); return; }
@@ -224,9 +223,11 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
         telefone:    form.telefone,
         email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-        // Veterinário → especialidades do catálogo; demais tipos → tipoServico é o próprio tipo
+        // Veterinário → especialidades do catálogo; demais tipos (e veterinário sem
+        // especialidade selecionada) → tipoServico é o próprio tipo de fornecedor
         especialidadeIds: form.tipoFornecedor === 'Veterinário' ? form.especialidadeIds : [],
-        ...(form.tipoFornecedor !== 'Veterinário' ? { tipoServico: form.tipoFornecedor } : {}),
+        ...(form.tipoFornecedor !== 'Veterinário' || form.especialidadeIds.length === 0
+          ? { tipoServico: form.tipoFornecedor } : {}),
         cep:         form.cep         || null,
         endereco:    form.endereco    || null,
         complemento: form.complemento || null,
@@ -334,7 +335,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
               </div>
               {form.tipoFornecedor === 'Veterinário' && (
                 <div>
-                  <label className={lbl}>Especialidade *</label>
+                  <label className={lbl}>Especialidade <span className="font-normal text-gray-400">(opcional)</span></label>
                   <EspecialidadeSelector
                     variant="dropdown"
                     value={form.especialidadeIds}

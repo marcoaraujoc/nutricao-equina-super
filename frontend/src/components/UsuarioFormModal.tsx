@@ -55,6 +55,9 @@ export interface LocalTrabalhoForm {
   horaInicioTrabalho: string;    // HH:MM
   horaFimTrabalho:    string;    // HH:MM
   especialidadeIds:   number[];  // especialidades exercidas NESTE local (catálogo)
+  /** Tempo de consulta por especialidade NESTE local: { especialidadeId: minutos }.
+   *  Obrigatório para toda especialidade selecionada — é o passo da grade da Agenda. */
+  temposConsulta:     Record<number, number>;
 }
 
 interface LocalizacaoOpcao { id: number; nome: string }
@@ -73,6 +76,11 @@ interface FornecedorDisponivel {
 }
 
 export const SENHA_PADRAO_INICIAL = 'Inicial_001';
+
+// Perfis que TÊM especialidade e tempo de consulta. Os demais (ESTAGIARIO, ENFERMEIRO,
+// SECRETARIA, FINANCEIRO, GESTOR) informam apenas local e horário de trabalho.
+// Espelha a regra do backend (EquipeController/UserController), que é a autoridade.
+export const PERFIS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR'];
 
 export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
@@ -136,8 +144,16 @@ export function resumoLocal(l: LocalTrabalhoForm): string {
 }
 
 export const RASCUNHO_LOCAL_VAZIO: LocalTrabalhoForm = {
-  localizacaoId: 0, localizacaoNome: '', diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '', especialidadeIds: [],
+  localizacaoId: 0, localizacaoNome: '', diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '',
+  especialidadeIds: [], temposConsulta: {},
 };
+
+// Opções de tempo de consulta. Múltiplos de 5 — espelha a validação do EquipeController.
+export const TEMPOS_CONSULTA = [5, 10, 15, 20, 30, 45, 60, 90, 120] as const;
+
+// Fallback de tempo de consulta quando a empresa também não configurou nada
+// (espelha TEMPO_CONSULTA_PADRAO_SISTEMA do backend).
+export const TEMPO_CONSULTA_PADRAO_SISTEMA = 60;
 
 // Especialidades do profissional = UNIÃO das especialidades de todos os locais.
 export function uniaoEspecialidadesLocais(locais: LocalTrabalhoForm[]): number[] {
@@ -213,7 +229,9 @@ interface UsuarioFormModalProps {
   infoNota?: string;
   /** Edição: oculta a nota de senha padrão e exibe o checkbox "Usuário ativo" */
   modoEdicao?: boolean;
-  /** Edição: exibe campo "Nova senha" (admin: todos; gestor: membros da própria equipe) */
+  /** Edição: exibe campo "Nova senha". Só passe `true` para quem PODE trocar aquela
+   *  senha — o ADMIN da plataforma ou o próprio dono da conta. Gestor NÃO troca a senha
+   *  de um membro da equipe (o backend rejeita com 403). */
   permitirSenha?: boolean;
   /** Desabilita o campo de e-mail (e-mail é o login — edição restrita) */
   emailBloqueado?: boolean;
@@ -229,6 +247,9 @@ interface UsuarioFormModalProps {
   equipeId?: number | null;
   /** Erro de senha vindo do backend (ex.: reuso das últimas 6 senhas) — exibido inline sob o campo. */
   erroSenhaServidor?: string;
+  /** Erro do backend ao salvar — exibido DENTRO do modal (onde o cadastro está sendo
+   *  feito), nunca no topo da página por trás dele. */
+  erroServidor?: string | null;
   initial?: Partial<UsuarioFormValues>;
   salvando: boolean;
   textoBotao?: string;
@@ -299,12 +320,161 @@ export function LocalizacaoCombobox({
   );
 }
 
+// ─── Campos do local de trabalho ──────────────────────────────────────────────
+// Extraído para ser EXATAMENTE o mesmo formulário no "Incluir/Editar Membro" e no
+// "Cadastro Pessoal" — mesma distribuição de campos, mesmas classes, mesmos textos.
+// Os botões (Adicionar/Cancelar) ficam com quem usa: cada tela tem sua validação.
+export interface LocalTrabalhoFieldsProps {
+  rascunho:      LocalTrabalhoForm;
+  onChange:      (fn: (r: LocalTrabalhoForm) => LocalTrabalhoForm) => void;
+  /** Limpa o erro exibido pela tela hospedeira a cada alteração */
+  onDirty?:      () => void;
+  /** VET/FORNECEDOR: exibe especialidades e tempo de consulta */
+  comEspecialidades: boolean;
+  /** Espécies que filtram o catálogo de especialidades */
+  especieIds:    number[];
+  espNomeById:   Record<number, string>;
+  tempoPadraoEmpresa: number;
+  diasEmpresaLabel:    string;
+  horarioEmpresaLabel: string;
+  /** Complemento do rótulo de especialidade (regra do perfil) */
+  textoEspecialidade:  string;
+  emptyTextEspecialidade?: string;
+}
+
+export function LocalTrabalhoFields({
+  rascunho, onChange, onDirty, comEspecialidades, especieIds, espNomeById,
+  tempoPadraoEmpresa, diasEmpresaLabel, horarioEmpresaLabel, textoEspecialidade,
+  emptyTextEspecialidade = 'A empresa ainda não configurou as espécies atendidas (Configurações).',
+}: LocalTrabalhoFieldsProps) {
+  const set = (fn: (r: LocalTrabalhoForm) => LocalTrabalhoForm) => { onDirty?.(); onChange(fn); };
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[160px]">
+          <label className={labelCls}>Local</label>
+          <LocalizacaoCombobox
+            value={rascunho.localizacaoId || null}
+            nome={rascunho.localizacaoNome}
+            onSelect={(id, nome) => set(r => ({ ...r, localizacaoId: id, localizacaoNome: nome }))}
+          />
+        </div>
+        <div className="w-24">
+          <label className={labelCls}>Entra às</label>
+          <HoraInput value={rascunho.horaInicioTrabalho}
+            onChange={v => set(r => ({ ...r, horaInicioTrabalho: v }))}
+            className={inputCls} />
+        </div>
+        <div className="w-24">
+          <label className={labelCls}>Sai às</label>
+          <HoraInput value={rascunho.horaFimTrabalho}
+            onChange={v => set(r => ({ ...r, horaFimTrabalho: v }))}
+            className={inputCls} />
+        </div>
+      </div>
+      <p className="text-[11px] text-gray-400 -mt-1">
+        Horário em branco = expediente da empresa ({horarioEmpresaLabel}).
+      </p>
+
+      {/* Dias da semana — abaixo do horário: primeiro define-se a faixa,
+          depois em quais dias ela vale. Nada marcado = dias da empresa. */}
+      <div>
+        <label className={labelCls}>
+          Dias da semana
+          <span className="text-gray-400"> — sem marcar nenhum, vale o da empresa ({diasEmpresaLabel})</span>
+        </label>
+        <div className="flex flex-wrap gap-1">
+          {DIAS_SEMANA_TRAB.map(d => {
+            const on = rascunho.diasTrabalho.includes(d.v);
+            return (
+              <button key={d.v} type="button"
+                onClick={() => set(r => ({
+                  ...r,
+                  diasTrabalho: on ? r.diasTrabalho.filter(x => x !== d.v)
+                                   : [...r.diasTrabalho, d.v].sort((a, b) => a - b),
+                }))}
+                className={`px-2 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                  on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}>
+                {d.l}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Especialidades exercidas NESTE local (multi-seleção) */}
+      {comEspecialidades && (
+        <div>
+          <label className={labelCls}>
+            Especialidades neste local
+            <span className="text-gray-400"> — {textoEspecialidade}</span>
+          </label>
+          <EspecialidadeSelector
+            variant="dropdown"
+            value={rascunho.especialidadeIds}
+            onChange={ids => set(r => {
+              // Descarta o tempo de especialidade removida — não deixa lixo no JSON
+              const tempos: Record<number, number> = {};
+              for (const id of ids) if (r.temposConsulta?.[id]) tempos[id] = r.temposConsulta[id];
+              return { ...r, especialidadeIds: ids, temposConsulta: tempos };
+            })}
+            especieIds={especieIds}
+            emptyText={emptyTextEspecialidade}
+          />
+        </div>
+      )}
+
+      {/* Tempo de consulta POR especialidade — define o passo da grade da Agenda.
+          Em branco = usa o padrão configurado pela empresa. */}
+      {comEspecialidades && rascunho.especialidadeIds.length > 0 && (
+        <div>
+          <label className={labelCls}>Tempo de consulta</label>
+          <div className="space-y-1.5">
+            {rascunho.especialidadeIds.map(id => (
+              <div key={id} className="flex items-center gap-2">
+                <span className="flex-1 min-w-0 truncate text-sm text-gray-700">
+                  {espNomeById[id] ?? `Especialidade #${id}`}
+                </span>
+                <select
+                  value={rascunho.temposConsulta?.[id] ?? ''}
+                  onChange={e => {
+                    const min = Number(e.target.value);
+                    set(r => {
+                      const tempos = { ...r.temposConsulta };
+                      // Vazio = volta a herdar o padrão da empresa (não grava 0)
+                      if (min > 0) tempos[id] = min; else delete tempos[id];
+                      return { ...r, temposConsulta: tempos };
+                    });
+                  }}
+                  className={`w-44 ${inputCls}`}
+                >
+                  <option value="">Padrão da empresa ({tempoPadraoEmpresa} min)</option>
+                  {TEMPOS_CONSULTA.map(m => (
+                    <option key={m} value={m}>{m} min</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5">
+            Define de quanto em quanto tempo a agenda oferece horários deste
+            profissional em cada especialidade. Em branco, vale o padrão da
+            empresa ({tempoPadraoEmpresa} min).
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
   comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
-  equipeId = null, erroSenhaServidor, initial, salvando, textoBotao, onClose, onSubmit,
+  equipeId = null, erroSenhaServidor, erroServidor, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
   const [form, setForm] = useState<UsuarioFormValues>({
@@ -327,8 +497,15 @@ export default function UsuarioFormModal({
 
   const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
-  // Especialidades (catálogo por espécie) — VET e FORNECEDOR, na inclusão E na edição.
-  const mostrarEspecialidades = form.perfil === 'VETERINARIO' || form.perfil === 'FORNECEDOR';
+  // Especialidades (catálogo por espécie) — SÓ VET e FORNECEDOR, na inclusão E na edição.
+  // Estagiário, enfermeiro, secretaria, financeiro e gestor informam APENAS local e
+  // horário de trabalho: nem especialidade nem tempo de consulta aparecem para eles.
+  const mostrarEspecialidades = PERFIS_COM_ESPECIALIDADE.includes(form.perfil);
+  // Especialidade é opcional: veterinário sem nenhuma assume Clínica Médica; fornecedor
+  // pode ficar sem especialidade nenhuma.
+  const textoPadraoEspecialidade = form.perfil === 'VETERINARIO'
+    ? 'Opcional — sem especialidade selecionada, o veterinário assume Clínica Médica.'
+    : 'Opcional — o fornecedor pode ficar sem especialidade.';
   // Rascunho do local em preenchimento (padrão da prescrição: formulário fixo →
   // "Adicionar" empurra para a lista compacta e limpa o formulário).
   const [rascunhoLocal, setRascunhoLocal] = useState<LocalTrabalhoForm>(RASCUNHO_LOCAL_VAZIO);
@@ -349,8 +526,10 @@ export default function UsuarioFormModal({
       .catch(() => setEspeciesEmpresa([]));
   }, [equipeId]);
 
-  // Expediente da EMPRESA — todo membro fica restrito a esses dias/horário
+  // Expediente da EMPRESA — todo membro fica restrito a esses dias/horário, e o que o
+  // profissional não informar (dias, horário ou tempo de consulta) herda daqui.
   const [expedienteEmpresa, setExpedienteEmpresa] = useState<{ dias: number[] | null; ini: string | null; fim: string | null }>({ dias: null, ini: null, fim: null });
+  const [tempoPadraoEmpresa, setTempoPadraoEmpresa] = useState<number>(TEMPO_CONSULTA_PADRAO_SISTEMA);
   useEffect(() => {
     if (!comExpediente) return;
     const url = equipeId ? `/equipes/horario-atendimento?equipeId=${equipeId}` : '/equipes/horario-atendimento';
@@ -363,9 +542,18 @@ export default function UsuarioFormModal({
           ini:  d.horaInicioAtendimento || null,
           fim:  d.horaFimAtendimento    || null,
         });
+        if (Number(d.tempoConsultaPadrao) > 0) setTempoPadraoEmpresa(Number(d.tempoConsultaPadrao));
       })
       .catch(() => {});
   }, [comExpediente, equipeId]);
+
+  // Rótulos do que a empresa preenche quando o campo fica em branco
+  const diasEmpresaLabel = expedienteEmpresa.dias && expedienteEmpresa.dias.length > 0
+    ? [...expedienteEmpresa.dias].sort((a, b) => a - b).map(d => DIAS_SEMANA_TRAB.find(x => x.v === d)?.l ?? d).join(', ')
+    : 'todos os dias';
+  const horarioEmpresaLabel = expedienteEmpresa.ini || expedienteEmpresa.fim
+    ? `${expedienteEmpresa.ini ?? '00:00'}–${expedienteEmpresa.fim ?? '24:00'}`
+    : 'dia inteiro';
 
   // Mapa id→nome de especialidade — para exibir os nomes nas linhas de local já adicionadas
   const [espNomeById, setEspNomeById] = useState<Record<number, string>>({});
@@ -484,7 +672,7 @@ export default function UsuarioFormModal({
       if (erroSenha) { setErroSenhaLocal(erroSenha); return; }
     }
     const perfilFinal = cargosFinais[0];
-    const enviaEspec = perfilFinal === 'VETERINARIO' || perfilFinal === 'FORNECEDOR';
+    const enviaEspec = PERFIS_COM_ESPECIALIDADE.includes(perfilFinal);
     // Absorve um local preenchido mas ainda não adicionado (mesma cortesia da
     // prescrição, que aproveita o item do formulário ao salvar).
     let locaisTrabalho = form.locaisTrabalho ?? [];
@@ -519,18 +707,20 @@ export default function UsuarioFormModal({
     const uniaoEspec = comExpediente
       ? uniaoEspecialidadesLocais(locaisTrabalho)
       : (form.especialidadeIds ?? []);
-    if (enviaEspec && !modoEdicao && uniaoEspec.length === 0) {
-      setErroInline(comExpediente
-        ? 'Selecione ao menos uma especialidade em algum local de trabalho'
-        : 'Selecione ao menos uma especialidade');
-      return;
-    }
+    // Especialidade NÃO é obrigatória: o veterinário sem nenhuma assume Clínica Médica
+    // (aplicado pelo backend, que é a autoridade) e o fornecedor pode ficar sem.
     // Transição/legado: com expediente e NENHUMA especialidade por local, não envia
     // especialidadeIds (evita apagar as especialidades já cadastradas do profissional).
     const especEnviar = comExpediente && uniaoEspec.length === 0 ? undefined : uniaoEspec;
+    // Perfil sem especialidade (estagiário, enfermeiro, secretaria, financeiro, gestor)
+    // só leva local e horário: qualquer especialidade/tempo que tenha sobrado de uma
+    // troca de perfil no meio do preenchimento sai aqui, e o [] limpa o que houver gravado.
+    const locaisEnviar = enviaEspec
+      ? locaisTrabalho
+      : locaisTrabalho.map(l => ({ ...l, especialidadeIds: [], temposConsulta: {} }));
     onSubmit({
       ...form,
-      locaisTrabalho,
+      locaisTrabalho: locaisEnviar,
       fullName:     form.fullName.trim(),
       email:        form.email.trim().toLowerCase(),
       phone:        form.phone.trim(),
@@ -538,7 +728,9 @@ export default function UsuarioFormModal({
       perfil:       perfilFinal,
       fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
-      especialidadeIds: enviaEspec ? especEnviar : undefined,
+      // [] (e não undefined) para o perfil sem especialidade: limpa vínculo herdado
+      // de quando o membro era veterinário.
+      especialidadeIds: enviaEspec ? especEnviar : [],
     });
   };
 
@@ -681,7 +873,7 @@ export default function UsuarioFormModal({
                       Com expediente (Equipe), a especialidade é definida POR LOCAL. */}
                   {mostrarEspecialidades && !comExpediente && (
                     <div className="sm:col-span-2">
-                      <label className={labelCls}>Especialidade *</label>
+                      <label className={labelCls}>Especialidade</label>
                       <EspecialidadeSelector
                         variant="dropdown"
                         value={form.especialidadeIds ?? []}
@@ -689,6 +881,7 @@ export default function UsuarioFormModal({
                         especieIds={especiesEmpresa}
                         emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
                       />
+                      <p className="text-[11px] text-gray-400 mt-1">{textoPadraoEspecialidade}</p>
                     </div>
                   )}
 
@@ -742,7 +935,7 @@ export default function UsuarioFormModal({
                           <div className="flex flex-wrap gap-1 mt-1">
                             {lt.especialidadeIds.map(id => (
                               <span key={id} className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-medium">
-                                {espNomeById[id] ?? `#${id}`}
+                                {espNomeById[id] ?? `#${id}`} · {lt.temposConsulta?.[id] ?? tempoPadraoEmpresa} min
                               </span>
                             ))}
                           </div>
@@ -789,66 +982,21 @@ export default function UsuarioFormModal({
                 </button>
               )}
 
-              {/* Formulário do novo local: local · dias · horas · especialidades */}
+              {/* Formulário do novo local: local · horário · dias · especialidades · tempo */}
               {mostrarFormLocal && (
               <div className="p-3 bg-gray-50/60 border border-gray-200 rounded-2xl space-y-3">
-                <div className="flex flex-wrap items-end gap-2">
-                <div className="flex-1 min-w-[160px]">
-                  <label className={labelCls}>Local</label>
-                  <LocalizacaoCombobox
-                    value={rascunhoLocal.localizacaoId || null}
-                    nome={rascunhoLocal.localizacaoNome}
-                    onSelect={(id, nome) => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, localizacaoId: id, localizacaoNome: nome })); }}
-                  />
-                </div>
-                <div className="min-w-[180px]">
-                  <label className={labelCls}>Dias da semana</label>
-                  <div className="flex flex-wrap gap-1">
-                    {DIAS_SEMANA_TRAB.map(d => {
-                      const on = rascunhoLocal.diasTrabalho.includes(d.v);
-                      return (
-                        <button key={d.v} type="button"
-                          onClick={() => { setErroLocal(null); setRascunhoLocal(r => ({
-                            ...r,
-                            diasTrabalho: on ? r.diasTrabalho.filter(x => x !== d.v)
-                                             : [...r.diasTrabalho, d.v].sort((a, b) => a - b),
-                          })); }}
-                          className={`px-2 py-1 rounded-lg text-xs font-bold border transition-colors ${
-                            on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                          }`}>
-                          {d.l}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="w-24">
-                  <label className={labelCls}>Entra às</label>
-                  <HoraInput value={rascunhoLocal.horaInicioTrabalho}
-                    onChange={v => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, horaInicioTrabalho: v })); }}
-                    className={inputCls} />
-                </div>
-                <div className="w-24">
-                  <label className={labelCls}>Sai às</label>
-                  <HoraInput value={rascunhoLocal.horaFimTrabalho}
-                    onChange={v => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, horaFimTrabalho: v })); }}
-                    className={inputCls} />
-                </div>
-                </div>
-
-                {/* Especialidades exercidas NESTE local (multi-seleção) */}
-                {mostrarEspecialidades && (
-                  <div>
-                    <label className={labelCls}>Especialidades neste local</label>
-                    <EspecialidadeSelector
-                      variant="dropdown"
-                      value={rascunhoLocal.especialidadeIds}
-                      onChange={ids => { setErroLocal(null); setRascunhoLocal(r => ({ ...r, especialidadeIds: ids })); }}
-                      especieIds={especiesEmpresa}
-                      emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                    />
-                  </div>
-                )}
+                <LocalTrabalhoFields
+                  rascunho={rascunhoLocal}
+                  onChange={fn => setRascunhoLocal(fn)}
+                  onDirty={() => setErroLocal(null)}
+                  comEspecialidades={mostrarEspecialidades}
+                  especieIds={especiesEmpresa}
+                  espNomeById={espNomeById}
+                  tempoPadraoEmpresa={tempoPadraoEmpresa}
+                  diasEmpresaLabel={diasEmpresaLabel}
+                  horarioEmpresaLabel={horarioEmpresaLabel}
+                  textoEspecialidade={textoPadraoEspecialidade.replace('Opcional — ', '')}
+                />
 
                 <div className="flex justify-end gap-2">
                 <button type="button"
@@ -873,6 +1021,8 @@ export default function UsuarioFormModal({
                     // Todo membro fica restrito ao dia/horário da empresa
                     const foraEmpresa = validarExpedienteEmpresa(rascunhoLocal);
                     if (foraEmpresa) { setErroLocal(foraEmpresa); return; }
+                    // Dias, horário e tempo de consulta são OPCIONAIS: o que ficar em
+                    // branco herda o que estiver configurado na empresa.
                     setForm(prev => ({
                       ...prev,
                       locaisTrabalho: editIndexLocal === null
@@ -956,8 +1106,9 @@ export default function UsuarioFormModal({
           )}
         </div>
 
-        {/* Footer */}
-        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
+        {/* Footer — erro de validação do form E erro do backend aparecem AQUI, dentro
+            do modal em que o cadastro está sendo feito. */}
+        <InlineError message={erroInline ?? erroServidor ?? null} className="mx-5 mt-3 flex-shrink-0" />
 
         <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} disabled={salvando}

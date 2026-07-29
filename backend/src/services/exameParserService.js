@@ -3,7 +3,7 @@
 
 const fs       = require('fs');
 const pdfParse = require('pdf-parse');
-const { callAI }      = require('../ai');
+const { callAI, MODULOS_IA } = require('../ai');
 const { buildPrompt } = require('../ai/prompts');
 
 // =====================================================================
@@ -25,7 +25,7 @@ module.exports = {
    * @param {number} [userId]   — id do usuário que disparou a ação (para log)
    * @param {number} [animalId] — id do animal relacionado (para log)
    */
-  async processarExame(filePath, userId = null, animalId = null) {
+  async processarExame(filePath, userId = null, animalId = null, empresaId = null) {
     const fileBuffer = fs.readFileSync(filePath);
     const texto      = await extrairTextoPDF(fileBuffer);
 
@@ -37,11 +37,13 @@ module.exports = {
 
     const respostaTexto = await callAI({
       operacao:    operacaoVers,
+      modulo:      MODULOS_IA.EXAMES,
       prompt,
       maxTokens:   2000,
       temperature: 0.1,
       userId,
       animalId,
+      empresaId,
     });
 
     // Parse da resposta

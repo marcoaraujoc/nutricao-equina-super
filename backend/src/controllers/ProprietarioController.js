@@ -321,7 +321,19 @@ const ProprietarioController = {
 
       // Identidade (compartilhada entre as empresas): só e-mail, senha e ativo global.
       const dataUser = { email: emailNovo };
-      if (senha?.trim()) dataUser.passwordHash = await bcrypt.hash(senha.trim(), 10);
+      // Senha é da PESSOA: só o ADMIN e o próprio dono da conta alteram. A clínica
+      // cadastra e edita o cliente, não a credencial dele (quem esqueceu usa
+      // "esqueci minha senha"; conta nova nasce com a padrão + troca no 1º acesso).
+      if (senha?.trim()) {
+        const ehProprio = Number(req.user.id) === Number(id);
+        if (!isAdmin && !ehProprio) {
+          return res.status(403).json({
+            sucesso:  false,
+            mensagem: 'Apenas o administrador ou o próprio usuário podem alterar a senha.',
+          });
+        }
+        dataUser.passwordHash = await bcrypt.hash(senha.trim(), 10);
+      }
       if (isAdmin && ativo !== undefined) dataUser.ativo = Boolean(ativo);
 
       const proprietario = await prisma.$transaction(async (tx) => {

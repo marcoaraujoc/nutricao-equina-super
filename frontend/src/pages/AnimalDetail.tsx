@@ -3,7 +3,7 @@
 // vacinas, exames, prescrições, encaminhamentos) e painel de Agendamentos.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -11,12 +11,14 @@ import {
   Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, X, Check, Trash2,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
-  Scan, Activity, Sparkles,
+  Scan, Activity, Building2,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
+import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
 const ESPECIE_EMOJI: Record<string, string> = {
@@ -787,7 +789,10 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
   onConcluir:    (id: number) => void;
   onExcluir:     (id: number) => void;
 }) {
-  const isCancelado    = ag.status === 'CANCELADO';
+  // TRANSFERIDO = reagendado: sai da grade como o cancelado, mas NÃO é desistência —
+  // tem badge próprio e mostra para quando o atendimento foi movido (observacao).
+  const isTransferido  = ag.status === 'TRANSFERIDO';
+  const isCancelado    = ag.status === 'CANCELADO' || isTransferido;
   const isConcluido    = ag.status === 'CONCLUIDO';
   const isEmAndamento  = ag.status === 'EM_ANDAMENTO';
   const isFinalizado   = ag.status === 'FINALIZADO';
@@ -805,8 +810,10 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
               {ag.tipo}
             </span>
             {isCancelado && (
-              <span className="inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-red-100 text-red-600">
-                Cancelado
+              <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${
+                isTransferido ? 'bg-violet-100 text-violet-700' : 'bg-red-100 text-red-600'
+              }`}>
+                {isTransferido ? 'Transferido' : 'Cancelado'}
               </span>
             )}
             {isEmAndamento && (
@@ -824,6 +831,12 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
           <div className="flex items-center gap-1 mt-1.5 text-[11px] text-gray-400">
             <Clock size={10} /> {horaDe(ag.dataHora)}
           </div>
+          {/* Transferido: para quando foi. Cancelado: por quê. Os dois vêm da observação. */}
+          {isCancelado && ag.observacao && (
+            <p className={`text-[11px] mt-1 italic ${isTransferido ? 'text-violet-600' : 'text-red-500'}`}>
+              {isTransferido ? ag.observacao : `Motivo: ${ag.observacao}`}
+            </p>
+          )}
           {ag.veterinario && (
             <div className="flex items-center gap-1 mt-0.5 text-[11px] text-gray-500 font-medium">
               <UserIcon size={10} /> Vet: {ag.veterinario.fullName}
@@ -958,7 +971,10 @@ const AnimalDetail = () => {
     (user?.role ?? '').toUpperCase() === 'ADMIN' ||
     ['VETERINARIO', 'ESTAGIARIO'].includes((user?.userType ?? '').toUpperCase());
 
+  const navigate = useNavigate();
   const [animal,       setAnimal]       = useState<AnimalData | null>(null);
+  // Paciente existe, mas é de OUTRA empresa/equipe que não a do contexto ativo
+  const [foraDoContexto, setForaDoContexto] = useState(false);
   const [historico,    setHistorico]    = useState<EventoHistorico[]>([]);
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
   const [loading,      setLoading]      = useState(true);
@@ -982,8 +998,8 @@ const AnimalDetail = () => {
     } catch { /* silencioso */ }
   }, [id]);
 
-  // ── Resumo de atendimentos por IA (persistido; append só com evento novo) ──
-  const [resumoIA,          setResumoIA]          = useState<{ resumo: string; atualizadoEm: string | null; desatualizado: boolean } | null>(null);
+  // ── Memória Clínica do Paciente (IA, persistida; append só com evento novo) ──
+  const [memoriaIA,         setMemoriaIA]         = useState<MemoriaClinica | null>(null);
   const [atualizandoResumo, setAtualizandoResumo] = useState(false);
 
   useEffect(() => {
@@ -995,13 +1011,13 @@ const AnimalDetail = () => {
         const res = await api.get(`/clinica/resumo-atendimento/animal/${id}`);
         if (cancelado || !res.data) return;
         const dados = res.data?.dados ?? null;
-        setResumoIA(dados);
+        setMemoriaIA(dados);
         // 2) Havendo evento novo (procedimento, fatura manual etc.), apenda via IA
         if (dados?.desatualizado) {
           setAtualizandoResumo(true);
           try {
             const upd = await api.post(`/clinica/resumo-atendimento/animal/${id}/atualizar`);
-            if (!cancelado && upd.data?.dados) setResumoIA(upd.data.dados);
+            if (!cancelado && upd.data?.dados) setMemoriaIA(upd.data.dados);
           } catch { /* mantém o resumo salvo */ }
           finally { if (!cancelado) setAtualizandoResumo(false); }
         }
@@ -1013,9 +1029,14 @@ const AnimalDetail = () => {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
+    setForaDoContexto(false);
     Promise.all([
       api.get(`/animais/${id}`).then(res => {
+        // GET 403 → o interceptor resolve com data null (services/api.ts). Aqui isso
+        // significa: o paciente não é da empresa/equipe ATIVA. Sem este aviso a tela
+        // ficava vazia e o console enchia de 403 sem explicar nada ao usuário.
         if (res.data) setAnimal(res.data.dados ?? res.data);
+        else          setForaDoContexto(true);
       }).catch(() => {}),
       api.get(`/clinica/historico/animal/${id}`).then(res => {
         if (res.data) setHistorico(res.data.dados ?? []);
@@ -1076,6 +1097,26 @@ const AnimalDetail = () => {
 
   const grupos = useMemo(() => agruparEventos(historico), [historico]);
 
+  // Memória Clínica → registro de origem. O "ref" do tópico casa com o id do
+  // histórico; prescrição carrega sufixo de tipo (prescricao-5-MEDICAMENTO),
+  // então o prefixo "origem-id" também é aceito como chave.
+  const eventoPorRef = useMemo(() => {
+    const mapa = new Map<string, EventoHistorico>();
+    for (const ev of historico) {
+      if (!mapa.has(ev.id)) mapa.set(ev.id, ev);
+      const base = ev.id.split('-').slice(0, 2).join('-');
+      if (!mapa.has(base)) mapa.set(base, ev);
+    }
+    return mapa;
+  }, [historico]);
+
+  const refsAbriveis = useMemo(() => new Set(eventoPorRef.keys()), [eventoPorRef]);
+
+  const abrirPorRef = (ref: string) => {
+    const ev = eventoPorRef.get(ref);
+    if (ev) handleAbrirDetalhe(ev);
+  };
+
   const gruposFiltrados = useMemo(() => {
     if (!busca.trim()) return grupos;
     const q = busca.toLowerCase();
@@ -1129,7 +1170,23 @@ const AnimalDetail = () => {
 
   if (!animal) return (
     <PageContainer maxWidth="7xl">
-      <div className="text-center py-20 text-red-500">Animal não encontrado</div>
+      <BotaoVoltar />
+      {foraDoContexto ? (
+        <div className="text-center py-20 max-w-md mx-auto">
+          <Building2 size={40} className="mx-auto mb-4 text-gray-300" />
+          <h2 className="text-lg font-semibold text-gray-700 mb-2">Paciente de outra empresa</h2>
+          <p className="text-sm text-gray-500">
+            Este paciente não pertence à empresa/equipe ativa no momento. Troque a empresa
+            no seletor do menu lateral para acessá-lo.
+          </p>
+          <button onClick={() => navigate('/animais')}
+            className="mt-6 px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xl text-sm font-semibold transition-colors">
+            Ver pacientes desta empresa
+          </button>
+        </div>
+      ) : (
+        <div className="text-center py-20 text-red-500">Animal não encontrado</div>
+      )}
     </PageContainer>
   );
 
@@ -1187,38 +1244,13 @@ const AnimalDetail = () => {
           </div>
         </div>
 
-        {/* Resumo dos Atendimentos (IA) */}
-        <div className="w-full lg:w-80 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between px-4 py-4 border-b border-gray-50 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-violet-50 rounded-xl flex items-center justify-center">
-                <Sparkles size={15} className="text-violet-600" />
-              </div>
-              <h2 className="font-bold text-gray-900 text-sm">Resumo dos Atendimentos</h2>
-            </div>
-            {atualizandoResumo && <Loader2 size={14} className="animate-spin text-violet-500 flex-shrink-0" />}
-          </div>
-          <div className="p-4 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
-            {resumoIA?.resumo ? (
-              <>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{resumoIA.resumo}</p>
-                <p className="text-[10px] text-gray-400 mt-3 pt-2 border-t border-gray-50 flex items-center gap-1">
-                  <Sparkles size={10} className="text-violet-400" />
-                  Gerado por IA
-                  {resumoIA.atualizadoEm && ` · atualizado em ${new Date(resumoIA.atualizadoEm).toLocaleDateString('pt-BR')}`}
-                  {atualizandoResumo && ' · atualizando…'}
-                </p>
-              </>
-            ) : atualizandoResumo ? (
-              <div className="text-center py-10">
-                <Loader2 size={18} className="animate-spin text-violet-400 mx-auto mb-2" />
-                <p className="text-sm text-gray-400">Gerando resumo com IA…</p>
-              </div>
-            ) : (
-              <p className="text-center text-sm text-gray-300 py-10">Sem atendimentos para resumir</p>
-            )}
-          </div>
-        </div>
+        {/* Memória Clínica do Paciente (IA) */}
+        <MemoriaClinicaPanel
+          memoria={memoriaIA}
+          atualizando={atualizandoResumo}
+          onAbrirRef={abrirPorRef}
+          refsAbriveis={refsAbriveis}
+        />
 
         {/* Agendamentos */}
         <div className="w-full lg:w-80 flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">

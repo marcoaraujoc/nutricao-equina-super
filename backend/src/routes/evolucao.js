@@ -16,7 +16,7 @@ const validate                        = require('../middlewares/validate');
 const { criarEvolucaoRules,
         evolucaoIdParam }             = require('../validators/evolucao.validators');
 
-// ─── Multer: áudio (transcrição Whisper) ─────────────────────────────────────
+// ─── Multer: áudio (transcrição via Gemini) ──────────────────────────────────
 const uploadAudio = multer({ dest: 'uploads/audio_tmp/' });
 
 // ─── Multer: mídia de evolução (imagens, vídeos, áudios) ─────────────────────
@@ -57,7 +57,7 @@ router.post('/interpretar', authenticate, async (req, res) => {
     return res.status(400).json({ sucesso: false, mensagem: 'texto é obrigatório' });
   }
   try {
-    const resultado = await interpretarEvolucao(texto);
+    const resultado = await interpretarEvolucao(texto, req.user?.id ?? null, null, req.empresaId ?? null);
     res.json({ sucesso: true, dados: resultado });
   } catch (error) {
     console.error('Erro ao interpretar evolução (não crítico):', error);
@@ -65,7 +65,7 @@ router.post('/interpretar', authenticate, async (req, res) => {
   }
 });
 
-// Transcrever áudio com Whisper (utilitário — não altera dados diretamente)
+// Transcrever áudio com Gemini (utilitário — não altera dados diretamente)
 router.post('/transcrever', authenticate, checkPermission('atendimento.evolucoes.criar', 'PROPRIO'), uploadAudio.single('audio'), EvolucaoController.transcrever);
 
 // Listas
