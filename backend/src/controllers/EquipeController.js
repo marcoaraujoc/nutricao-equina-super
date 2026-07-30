@@ -22,9 +22,28 @@ const {
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
 // usada se o usuário for dono OU gestor dela; caso contrário cai no fallback.
+/**
+ * Empresa em que o usuário age como GESTOR (dono ou cargo GESTOR).
+ *
+ * ⚠️ REGRA DE ISOLAMENTO (corrigido 2026-07-29): havendo CONTEXTO ATIVO
+ * (`empresaIdPreferida` = req.empresaId, já validado pelo auth.js), a resolução é
+ * EXCLUSIVA daquela empresa — não existe fallback. Quem não é dono/gestor DELA
+ * recebe `null`, e o caller trata como "não é gestor aqui".
+ *
+ * O fallback antigo ("qualquer empresa que ele possua/gerencie") vazava o papel de
+ * gestor entre clínicas: um profissional que é GESTOR na empresa A e VETERINÁRIO na
+ * B, trabalhando no contexto de B, era resolvido para A — e então `listarMembros`
+ * devolvia o roster de A com isGestor=true, `/equipes/configuracoes` devolvia a
+ * configuração de A (bloqueando os módulos de B com "Complete a Configuração da
+ * Empresa") e as ações de gestão gravavam em A. Ver CLAUDE.md armadilha #25:
+ * "bypass de dono vale APENAS para a empresa ativa".
+ *
+ * Sem contexto ativo (1º login, cliente não-navegador) o fallback continua: é o
+ * bootstrap do vet autônomo, que só tem a própria empresa.
+ */
 async function getEmpresaDoGestor(userId, empresaIdPreferida = null) {
   if (empresaIdPreferida) {
-    const preferida = await prisma.empresa.findFirst({
+    return prisma.empresa.findFirst({
       where: {
         id: Number(empresaIdPreferida),
         OR: [
@@ -33,7 +52,6 @@ async function getEmpresaDoGestor(userId, empresaIdPreferida = null) {
         ],
       },
     });
-    if (preferida) return preferida;
   }
 
   // 1. Usuário é dono (ownerId)
@@ -57,6 +75,10 @@ async function getEmpresaDoGestor(userId, empresaIdPreferida = null) {
 async function garantirEquipePadrao(vetUserId, empresaIdPreferida = null, equipeIdPreferida = null) {
   let empresa = await getEmpresaDoGestor(vetUserId, empresaIdPreferida);
   if (!empresa) {
+    // Contexto ativo em que ele NÃO é dono/gestor: a operação é de gestão e não vale
+    // aqui. Não se cria empresa nova (viraria empresa fantasma a cada tentativa) nem
+    // se cai na empresa dele (gravaria o membro na clínica errada). Caller responde 403.
+    if (empresaIdPreferida) return { empresa: null, equipe: null };
     const vetUser = await prisma.user.findUnique({ where: { id: vetUserId }, select: { fullName: true } });
     empresa = await prisma.empresa.create({
       data: { nome: `Clínica de ${vetUser?.fullName ?? 'Veterinário'}`, ownerId: vetUserId },
@@ -73,8 +95,11 @@ async function garantirEquipePadrao(vetUserId, empresaIdPreferida = null, equipe
   // inclusão e listagem divergirem quando não há equipe ativa no contexto.
   if (!equipe) equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id }, orderBy: { createdAt: 'asc' } });
   if (!equipe) {
+    // Bootstrap (empresa legada sem equipe): aqui não existe nome informado por
+    // ninguém, então usa o da PRÓPRIA EMPRESA — nunca em branco e nunca o genérico
+    // "Equipe Principal", que é o que o gestor acabava vendo no seletor de contexto.
     equipe = await prisma.equipe.create({
-      data: { nome: 'Equipe Principal', empresaId: empresa.id },
+      data: { nome: empresa.nome, empresaId: empresa.id },
     });
   }
 
@@ -188,6 +213,19 @@ async function resolverEspeciesAtendidas(req, equipeIdParam = null) {
 // catálogo de onde tirar o padrão).
 // FORNECEDOR NÃO usa este padrão: para ele especialidade nula é válida.
 const PREFIXO_ESPECIALIDADE_PADRAO = 'clínica médica';
+
+// Animal como a tela "Gerenciar Acesso" do prestador precisa: além da identificação,
+// o LOCAL — `localizacao` (cadastro atual) e o campo textual `local` (legado), que é
+// o fallback de exibição/filtro para animais cadastrados antes da localização.
+const ANIMAL_DESIGNACAO_SELECT = {
+  id:            true,
+  nome:          true,
+  photoUrl:      true,
+  local:         true,
+  localizacaoId: true,
+  especie:       { select: { nome: true } },
+  localizacao:   { select: { id: true, nome: true } },
+};
 
 // `especiesFallback` cobre o cadastro do vet autônomo: a empresa pode não ter espécies
 // configuradas, mas ele acabou de informar as que atende no próprio formulário.
@@ -629,8 +667,13 @@ const EquipeController = {
 
   criarEmpresa: async (req, res) => {
     try {
-      const { nome, cnpj, telefone, endereco } = req.body;
+      const { nome, cnpj, telefone, endereco, equipeNome } = req.body;
       if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+      // Equipe nasce junto com a empresa (invariante do gestor) e o nome dela é
+      // OBRIGATÓRIO — nunca em branco, nunca um genérico escolhido pelo sistema.
+      if (!equipeNome?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Nome da equipe é obrigatório', code: 'EQUIPE_NOME_OBRIGATORIO' });
+      }
 
       const nomeTrim = nome.trim();
       const cnpjNorm = cnpj?.trim() ? cnpj.replace(/\D/g, '') : null;
@@ -644,8 +687,28 @@ const EquipeController = {
         return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma empresa com este nome e CPF/CNPJ para o seu usuário.' });
       }
 
-      const empresa = await prisma.empresa.create({
-        data: { nome: nomeTrim, cnpj: cnpjNorm, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
+      // INVARIANTE: empresa nunca existe sem gestor. Nasce com o dono E com o vínculo
+      // GESTOR numa equipe, na MESMA transaction — antes, quem criasse a empresa por
+      // aqui era gestor só por `ownerId` e a equipe/vínculo vinham depois (ou não),
+      // deixando a empresa sem nenhum membro GESTOR.
+      //
+      // O NOME da equipe é SEMPRE o que o gestor informou (validado acima) — nunca em
+      // branco e nunca um genérico "Equipe Principal". Em empresa pessoal (CPF) é o
+      // nome da equipe que aparece no seletor de contexto, então o genérico fazia o
+      // gestor ver "Equipe Principal" no lugar da clínica dele.
+      const nomeEquipeInicial = equipeNome.trim();
+      const empresa = await prisma.$transaction(async (tx) => {
+        const emp = await tx.empresa.create({
+          data: { nome: nomeTrim, cnpj: cnpjNorm, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
+        });
+        await tx.equipe.create({
+          data: {
+            nome:      nomeEquipeInicial,
+            empresaId: emp.id,
+            membros:   { create: { userId: req.user.id, cargo: 'GESTOR' } },
+          },
+        });
+        return emp;
       });
       // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort,
       // nunca bloqueia o cadastro; o Conectar da tela de Configurações cobre falhas.
@@ -1088,6 +1151,42 @@ const EquipeController = {
         return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma equipe com este nome nesta empresa.' });
       }
 
+      // A empresa nasce com UMA equipe (invariante do gestor — ver `criarEmpresa`).
+      // Quando essa equipe ainda é a AUTOMÁTICA — nome igual ao da empresa, ou o
+      // legado "Equipe Principal" — e está intocada (só o gestor, sem paciente e sem
+      // convite), a equipe que o gestor criar RENOMEIA ela em vez de virar uma
+      // segunda: é o nome que ele quer ver no seletor de contexto, e evita a empresa
+      // ficar com "PatriciaVet" + a equipe automática.
+      // O nome é o que distingue automática de escolhida: sem isso, TODA equipe nova
+      // renomeava a única existente enquanto ela estivesse vazia, e o gestor perdia a
+      // equipe anterior ao criar a segunda.
+      const equipesDaEmpresa = await prisma.equipe.findMany({
+        where:  { empresaId: empresaId_n },
+        select: {
+          id: true, nome: true,
+          _count: { select: { membros: true, animais: true, convites: true } },
+        },
+      });
+      const soUma = equipesDaEmpresa.length === 1 ? equipesDaEmpresa[0] : null;
+      const nomeAutomatico = soUma && (
+        soUma.nome.trim().toLowerCase() === empresa.nome.trim().toLowerCase()
+        || soUma.nome.trim().toLowerCase() === 'equipe principal'
+      );
+      const inicialIntocada = nomeAutomatico
+        && soUma._count.membros  <= 1
+        && soUma._count.animais  === 0
+        && soUma._count.convites === 0
+        ? soUma
+        : null;
+
+      if (inicialIntocada) {
+        const renomeada = await prisma.equipe.update({
+          where: { id: inicialIntocada.id },
+          data:  { nome: nome.trim() },
+        });
+        return res.status(200).json({ sucesso: true, dados: renomeada, renomeada: true });
+      }
+
       const equipe = await prisma.equipe.create({
         data: { nome: nome.trim(), empresaId: empresaId_n },
       });
@@ -1277,7 +1376,10 @@ const EquipeController = {
         if (!vinculo && req.empresaId) {
           vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId, equipe: { empresaId: Number(req.empresaId) } }, orderBy: { createdAt: 'desc' }, select: { equipeId: true } });
         }
-        if (!vinculo) {
+        // Só sem contexto ativo é que se procura vínculo em qualquer empresa. Com
+        // contexto e sem vínculo nele, devolver o "mais antigo" entregaria o ROSTER
+        // de outra clínica na tela desta — vazamento entre empresas.
+        if (!vinculo && !req.empresaId && !req.equipeId) {
           vinculo = await prisma.membroEquipe.findFirst({ where: { userId: vetUserId }, orderBy: { createdAt: 'asc' }, select: { equipeId: true } });
         }
         if (!vinculo) return res.json({ sucesso: true, dados: [], equipeId: null, isGestor: false });
@@ -1412,6 +1514,9 @@ const EquipeController = {
 
   // ─── Designações de Prestador ─────────────────────────────────────────────
 
+  // O `local` do animal vai no payload (localização cadastrada + o campo textual
+  // legado como fallback): é por ele que a tela "Gerenciar Acesso" filtra a lista de
+  // disponíveis e resolve o "inserir todos deste local".
   getDesignacoesPrestador: async (req, res) => {
     try {
       const equipeIdN    = Number(req.params.equipeId);
@@ -1430,9 +1535,7 @@ const EquipeController = {
       const [designacoes, animaisDisponiveis] = await Promise.all([
         prisma.designacaoPrestador.findMany({
           where: { equipeId: equipeIdN, prestadorId: prestadorIdN },
-          include: {
-            animal: { select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } } },
-          },
+          include: { animal: { select: ANIMAL_DESIGNACAO_SELECT } },
           orderBy: [{ ativo: 'desc' }, { animal: { nome: 'asc' } }],
         }),
         prisma.animal.findMany({
@@ -1446,7 +1549,7 @@ const EquipeController = {
               designacoes: { some: { prestadorId: prestadorIdN, equipeId: equipeIdN, ativo: true } },
             },
           },
-          select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } },
+          select:  ANIMAL_DESIGNACAO_SELECT,
           orderBy: { nome: 'asc' },
         }),
       ]);
@@ -1490,14 +1593,76 @@ const EquipeController = {
           motivo:     motivo?.trim() || null,
           dataInicio: new Date(),
         },
-        include: {
-          animal: { select: { id: true, nome: true, photoUrl: true, especie: { select: { nome: true } } } },
-        },
+        include: { animal: { select: ANIMAL_DESIGNACAO_SELECT } },
       });
 
       res.status(201).json({ sucesso: true, dados: designacao });
     } catch (err) {
       console.error('Erro ao adicionar designação:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // POST /:equipeId/prestadores/:userId/designacoes/lote — body: { animalIds[], motivo? }
+  // Concede acesso a VÁRIOS animais de uma vez ("inserir todos", filtrado por local
+  // ou não). Um POST por animal deixaria o botão fazendo N requisições e podendo
+  // parar no meio; aqui a lista inteira entra numa transaction — ou tudo, ou nada.
+  addDesignacoesPrestadorLote: async (req, res) => {
+    try {
+      const equipeIdN    = Number(req.params.equipeId);
+      const prestadorIdN = Number(req.params.userId);
+      const { animalIds, motivo } = req.body;
+
+      const ids = [...new Set((animalIds ?? []).map(Number))].filter(Number.isInteger);
+      if (ids.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos um animal', code: 'SEM_ANIMAIS' });
+      }
+
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+        const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+        if (!empresa || !equipe || equipe.empresaId !== empresa.id)
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+      }
+
+      // Só designa animal que o prestador poderia receber pela tela: ativo e dentro
+      // da equipe/empresa. Id forjado no body não vira acesso a animal de fora.
+      const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+      const permitidos = await prisma.animal.findMany({
+        where: {
+          id:    { in: ids },
+          ativo: true,
+          OR: [
+            { equipeId: equipeIdN },
+            ...(equipe?.empresaId ? [{ empresaId: equipe.empresaId }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      if (permitidos.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Nenhum animal elegível na seleção', code: 'SEM_ANIMAIS_ELEGIVEIS' });
+      }
+
+      const motivoLimpo = motivo?.trim() || null;
+      const agora       = new Date();
+
+      await prisma.$transaction(
+        permitidos.map(({ id: animalId }) => prisma.designacaoPrestador.upsert({
+          where:  { animalId_prestadorId_equipeId: { animalId, prestadorId: prestadorIdN, equipeId: equipeIdN } },
+          create: {
+            animalId, prestadorId: prestadorIdN, equipeId: equipeIdN,
+            motivo: motivoLimpo, criadoPorId: req.user.id, ativo: true, dataInicio: agora,
+          },
+          update: { ativo: true, dataFim: null, motivo: motivoLimpo, dataInicio: agora },
+        })),
+      );
+
+      res.status(201).json({
+        sucesso: true,
+        dados: { concedidos: permitidos.length, ignorados: ids.length - permitidos.length },
+      });
+    } catch (err) {
+      console.error('Erro ao adicionar designações em lote:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -1527,6 +1692,33 @@ const EquipeController = {
     }
   },
 
+  // DELETE /:equipeId/prestadores/:userId/designacoes — revoga TODO o acesso vigente
+  // do prestador nesta equipe ("Remover todos"). Soft delete, igual ao unitário: as
+  // linhas ficam com ativo=false + dataFim, preservando o histórico.
+  removeTodasDesignacoesPrestador: async (req, res) => {
+    try {
+      const equipeIdN    = Number(req.params.equipeId);
+      const prestadorIdN = Number(req.params.userId);
+
+      if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
+        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+        const equipe  = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+        if (!empresa || !equipe || equipe.empresaId !== empresa.id)
+          return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado.' });
+      }
+
+      const { count } = await prisma.designacaoPrestador.updateMany({
+        where: { prestadorId: prestadorIdN, equipeId: equipeIdN, ativo: true },
+        data:  { ativo: false, dataFim: new Date() },
+      });
+
+      res.json({ sucesso: true, dados: { removidos: count } });
+    } catch (err) {
+      console.error('Erro ao remover todas as designações:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
   adicionarMembro: async (req, res) => {
     try {
       const vetUserId                  = req.user.id;
@@ -1544,6 +1736,7 @@ const EquipeController = {
       }
 
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
+      if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Você não é gestor da empresa ativa.' });
 
       const emailNorm = normalizeEmail(email);
       let usuario = await findUserByEmail(prisma, emailNorm);
@@ -1871,6 +2064,7 @@ const EquipeController = {
       }
 
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
+      if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Você não é gestor da empresa ativa.' });
 
       // Bloqueia re-convite: membro já existente
       const usuarioCheck = await findUserByEmail(prisma, email);
@@ -2050,6 +2244,7 @@ const EquipeController = {
       // valida que ela pertence à empresa do gestor; caso contrário cai no contexto ativo.
       // Sem isso, a inclusão podia gravar numa equipe diferente da exibida na lista.
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, equipeIdBody ?? req.equipeId);
+      if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Você não é gestor da empresa ativa.' });
 
       // Bloqueia se já é membro
       const usuarioCheck = await findUserByEmail(prisma, email);
@@ -2355,7 +2550,8 @@ const EquipeController = {
         if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada.' });
         equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
         if (!equipe) {
-          equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
+          // Nome da equipe nunca é genérico: sem nome informado, o da própria empresa.
+          equipe = await prisma.equipe.create({ data: { nome: nomeEquipe?.trim() || empresa.nome, empresaId: empresa.id } });
         }
       } else if (isCnpj) {
         // CNPJ: reutiliza empresa por CNPJ + nome (mesmo CNPJ com nome diferente cria outra empresa)
@@ -2369,7 +2565,8 @@ const EquipeController = {
         }
         equipe = await prisma.equipe.findFirst({ where: { empresaId: empresa.id } });
         if (!equipe) {
-          equipe = await prisma.equipe.create({ data: { nome: 'Equipe Principal', empresaId: empresa.id } });
+          // Nome da equipe nunca é genérico: sem nome informado, o da própria empresa.
+          equipe = await prisma.equipe.create({ data: { nome: nomeEquipe?.trim() || empresa.nome, empresaId: empresa.id } });
         }
       } else {
         // CPF: empresa pessoal do convidado — reutiliza só se o nome também coincidir
@@ -2382,7 +2579,7 @@ const EquipeController = {
             data: { nome: empresaNome.trim(), cnpj: null, ownerId: convidadoId },
           });
         }
-        const nomeEquipeFinal = nomeEquipe?.trim() || 'Equipe Principal';
+        const nomeEquipeFinal = nomeEquipe?.trim() || empresa.nome;
         equipe = await prisma.equipe.findFirst({
           where: { empresaId: empresa.id, nome: { equals: nomeEquipeFinal, mode: 'insensitive' } },
         });

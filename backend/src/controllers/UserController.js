@@ -77,8 +77,12 @@ const resolverMembroDoContexto = async (userId, req) => {
       orderBy: { createdAt: 'desc' },
       select:  { id: true, cargo: true },
     });
-    if (m) return m;
+    // Contexto ativo SEM vínculo: não cai em outro vínculo. Cair no mais antigo
+    // trazia o cargo (e o expediente/locais) de OUTRA clínica para esta tela.
+    return m ?? null;
   }
+  // Só sem contexto nenhum (1º login, cliente não-navegador) é que se usa o vínculo
+  // mais antigo como palpite.
   return prisma.membroEquipe.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' }, select: { id: true, cargo: true } });
 };
 
@@ -147,15 +151,7 @@ const UserController = {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Cargo na equipe (ex: GESTOR) — definido na inclusão do membro
-      const membroEquipe = await prisma.membroEquipe.findFirst({
-        where:   { userId: user.id },
-        select:  { cargo: true },
-        orderBy: { createdAt: 'asc' },
-      });
-
-      // Expediente de atendimento do profissional. Lê o do vínculo do contexto; se vazio,
-      // herda o que o profissional definiu em qualquer vínculo (mais recente).
+      // Expediente de atendimento do profissional. Lê o do vínculo do CONTEXTO ATIVO.
       let expediente = { diasTrabalho: null, horaInicioTrabalho: null, horaFimTrabalho: null };
       const membroExp = await resolverMembroDoContexto(user.id, req);
       try {
@@ -166,12 +162,18 @@ const UserController = {
           );
           if (rows[0]) expediente = rows[0];
         }
-        if (!expediente.diasTrabalho && !expediente.horaInicioTrabalho && !expediente.horaFimTrabalho) {
+        // Vínculo do contexto sem expediente: herda de OUTRO vínculo do profissional
+        // NA MESMA EMPRESA (ele pode ter mais de uma equipe nela). NUNCA de outra
+        // empresa — o cadastro profissional é por empresa (ver ProfissionalPerfil).
+        if (!expediente.diasTrabalho && !expediente.horaInicioTrabalho && !expediente.horaFimTrabalho && req.empresaId) {
           const rows = await prisma.$queryRawUnsafe(
-            `SELECT "diasTrabalho","horaInicioTrabalho","horaFimTrabalho" FROM schs2vet.tb_membros_equipe
-              WHERE "userId"=$1 AND ("diasTrabalho" IS NOT NULL OR "horaInicioTrabalho" IS NOT NULL OR "horaFimTrabalho" IS NOT NULL)
-              ORDER BY id DESC LIMIT 1`,
-            user.id,
+            `SELECT m."diasTrabalho", m."horaInicioTrabalho", m."horaFimTrabalho"
+               FROM schs2vet.tb_membros_equipe m
+               JOIN schs2vet.tb_equipes e ON e.id = m."equipeId"
+              WHERE m."userId" = $1 AND e."empresaId" = $2
+                AND (m."diasTrabalho" IS NOT NULL OR m."horaInicioTrabalho" IS NOT NULL OR m."horaFimTrabalho" IS NOT NULL)
+              ORDER BY m.id DESC LIMIT 1`,
+            user.id, Number(req.empresaId),
           );
           if (rows[0]) expediente = rows[0];
         }
@@ -200,18 +202,32 @@ const UserController = {
       }
 
       const { vetPerfil, especialidades, ...userBruto } = user;
+      // TIPO POR EMPRESA: o que ela é na clínica ATIVA (cargo ali, ou cliente ali) —
+      // resolvido pelo `authenticate` (lib/tipoContexto.js). O `userType` do login
+      // fica em `userTypeGlobal`, só como identidade/legado. É isto que faz a MESMA
+      // pessoa ser gestora numa empresa, veterinária na outra, estagiária na terceira
+      // e PROPRIETÁRIA na quarta, cada uma com seu cadastro.
+      const tipoNoContexto = req.user?.userType ?? userBruto.userType;
+      const ehClienteAqui  = tipoNoContexto === 'PROPRIETARIO';
+
       // Cadastro da EMPRESA ATIVA — cada clínica mantém o seu, para proprietário
       // (ProprietarioPerfil) e para profissional (ProfissionalPerfil).
-      const userData = userBruto.userType === 'PROPRIETARIO'
+      const userData = ehClienteAqui
         ? await aplicarPerfilProprietario(userBruto, req.empresaId)
         : await aplicarPerfilProfissional(userBruto, req.empresaId);
-      const perfilProf = userBruto.userType === 'PROPRIETARIO'
+      const perfilProf = ehClienteAqui
         ? null
         : await obterPerfilProfissional(user.id, req.empresaId);
       return res.status(200).json({
         ...userData,
+        userType:       tipoNoContexto,
+        userTypeGlobal: userBruto.userType,
         isConvidado,
-        cargoEquipe: membroEquipe?.cargo ?? null,
+        // Cargo do vínculo do CONTEXTO ATIVO. Antes vinha do vínculo mais ANTIGO do
+        // usuário (`findFirst` sem filtro de empresa): quem é GESTOR na própria
+        // clínica aparecia como "Gestor(a)" — com os dados profissionais travados —
+        // ao entrar em outra empresa onde é estagiário/veterinário.
+        cargoEquipe: membroExp?.cargo ?? null,
         temEquipe:   !!membroExp,
         diasTrabalho:       expediente.diasTrabalho,
         horaInicioTrabalho: expediente.horaInicioTrabalho,
@@ -263,39 +279,33 @@ const UserController = {
         locaisTrabalho,
       } = req.body;
 
-      // Determina se é usuário convidado (userType foi definido pelo convite)
-      let isConvidado = false;
-      try {
-        const rows = await prisma.$queryRawUnsafe(
-          `SELECT "isConvidado" FROM schs2vet.users WHERE email = $1`,
-          email,
-        );
-        isConvidado = rows[0]?.isConvidado ?? false;
-      } catch { /* coluna ainda não existe no DB legado */ }
+      // (o antigo flag `isConvidado` deixou de decidir a troca de tipo — quem decide
+      // é o vínculo no contexto ativo, logo abaixo)
 
-      // Convidados não podem alterar o userType atribuído pela equipe — EXCETO
-      // quando assinaram a aplicação (donos de empresa própria): ex. fornecedora
-      // convidada que virou gestora e se declara Médica Veterinária.
-      // Cadastros diretos só permitem PROPRIETARIO ou VETERINARIO.
+      // O tipo de usuário DENTRO de uma empresa é o CARGO que o gestor atribuiu
+      // (MembroEquipe.cargo, que é por equipe/empresa). Logo, quem tem vínculo no
+      // contexto ativo NÃO altera o `userType` global daqui — o campo é somente
+      // leitura na tela e o body é ignorado. Antes bastava ser dono/gestor de
+      // QUALQUER empresa para liberar a troca: a profissional que tem a própria
+      // clínica podia, de dentro da empresa onde é estagiária, reescrever o tipo
+      // que vale para todas as empresas.
+      // Continuam podendo: quem não tem vínculo no contexto (cadastro direto) e o
+      // DONO da empresa ativa (caso documentado: fornecedora convidada que assinou a
+      // aplicação, virou gestora da própria clínica e se declara Médica Veterinária).
       let effectiveUserType = undefined;
       if (userType) {
-        let podeAlterarTipo = !isConvidado;
-        if (isConvidado) {
-          const [donoDeEmpresa, gestorDeEquipe] = await Promise.all([
-            prisma.empresa.findFirst({
-              where:  { ownerId: Number(req.user.id) },
-              select: { id: true },
-            }),
-            prisma.membroEquipe.findFirst({
-              where:  { userId: Number(req.user.id), cargo: 'GESTOR' },
-              select: { id: true },
-            }),
-          ]);
-          podeAlterarTipo = !!donoDeEmpresa || !!gestorDeEquipe;
+        const membroDoContexto = await resolverMembroDoContexto(Number(req.user.id), req);
+        let podeAlterarTipo = !membroDoContexto;
+        if (membroDoContexto && req.empresaId) {
+          const donoDaAtiva = await prisma.empresa.findFirst({
+            where:  { id: Number(req.empresaId), ownerId: Number(req.user.id) },
+            select: { id: true },
+          });
+          podeAlterarTipo = !!donoDaAtiva;
         }
 
         if (!podeAlterarTipo) {
-          effectiveUserType = undefined; // mantém o que foi definido pelo convite
+          effectiveUserType = undefined; // mantém o tipo definido pela equipe
         } else {
           const TIPOS_PERMITIDOS = ['PROPRIETARIO', 'VETERINARIO'];
           if (!TIPOS_PERMITIDOS.includes(userType)) {

@@ -181,6 +181,8 @@ export default function EquipeManager() {
   const [empNome,       setEmpNome]       = useState('');
   const [empCnpj,       setEmpCnpj]       = useState('');
   const [empTel,        setEmpTel]        = useState('');
+  // Nome da equipe que nasce com a empresa (em branco = nome da empresa)
+  const [empEqNome,     setEmpEqNome]     = useState('');
   const [savingEmp,     setSavingEmp]     = useState(false);
 
   // Form equipe
@@ -202,12 +204,16 @@ export default function EquipeManager() {
   useEffect(() => { carregar(); }, []);
 
   const handleCriarEmpresa = async () => {
-    if (!empNome.trim()) { setErroInline('Nome da empresa é obrigatório'); return; }
+    if (!empNome.trim())   { setErroInline('Nome da empresa é obrigatório'); return; }
+    if (!empEqNome.trim()) { setErroInline('Nome da equipe é obrigatório'); return; }
     setSavingEmp(true);
     try {
-      await api.post('/equipes/empresas', { nome: empNome.trim(), cnpj: empCnpj || undefined, telefone: empTel || undefined });
+      await api.post('/equipes/empresas', {
+        nome: empNome.trim(), cnpj: empCnpj || undefined, telefone: empTel || undefined,
+        equipeNome: empEqNome.trim(),
+      });
       toast.success('Empresa criada!');
-      setEmpNome(''); setEmpCnpj(''); setEmpTel(''); setShowEmpForm(false);
+      setEmpNome(''); setEmpCnpj(''); setEmpTel(''); setEmpEqNome(''); setShowEmpForm(false);
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar empresa';
@@ -281,6 +287,11 @@ export default function EquipeManager() {
                 placeholder="Telefone (opcional)"
                 className="text-sm border border-gray-200 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500" />
             </div>
+            {/* A empresa nasce com uma equipe (o gestor precisa de vínculo GESTOR nela)
+                e o nome dela é OBRIGATÓRIO — o sistema não inventa nome de equipe. */}
+            <input value={empEqNome} onChange={e => setEmpEqNome(e.target.value)}
+              placeholder="Nome da equipe *"
+              className="w-full text-sm border border-gray-200 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500" />
             <div className="flex gap-2">
               <button onClick={handleCriarEmpresa} disabled={savingEmp}
                 className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors">

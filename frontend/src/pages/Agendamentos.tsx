@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isSubespecialidadeValida } from '../utils/subespecialidades';
+import { agendamentoAntecipado } from '../utils/dateUtils';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Check,
   X, Clock, User as UserIcon, RefreshCw, Search,
@@ -732,7 +733,10 @@ export default function Agendamentos() {
       setVets(membros
         // Veterinários, gestores E fornecedores (prestadores) — o fornecedor também
         // agenda e ocupa horários (debita da cota do dia).
-        .filter(m => m.user.userType === 'VETERINARIO' || m.cargo === 'GESTOR' || m.cargo === 'FORNECEDOR')
+        // Quem atende é decidido pelo CARGO NESTA empresa, não pelo `userType` do
+        // login: a veterinária que é cliente em outra clínica ficava fora da agenda,
+        // e a estagiária daqui entrava nela por ser veterinária em outra.
+        .filter(m => m.cargo === 'VETERINARIO' || m.cargo === 'GESTOR' || m.cargo === 'FORNECEDOR')
         .map(m => {
           let especialidades: string[];
           if (m.cargo === 'FORNECEDOR') {
@@ -1195,7 +1199,7 @@ export default function Agendamentos() {
     if (espId) setEspSelPorVet(prev => { const m = new Map(prev); m.set(vetId, espId); return m; });
     // Só o gestor agenda para outro profissional; os demais só para a própria coluna.
     if (!podeAgendarParaOutro && meuUserId != null && vetId !== meuUserId) {
-      setErroGrade('Você só pode agendar para você mesmo. Agendar para outro profissional é exclusivo do gestor.');
+      setErroGrade('Não é permitido o agendamento para outro profissional');
       return;
     }
     if (selectedAnimalId && selectedAnimal) {
@@ -1375,6 +1379,12 @@ export default function Agendamentos() {
 
   function handleIniciarAtendimento(ag: AgendamentoGlobal) {
     if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
+    // Não se antecipa um agendamento: atender antes da hora marcada exige
+    // REAGENDAR (o backend recusa com AGENDAMENTO_ANTECIPADO).
+    if (ag.status !== 'EM_ANDAMENTO' && agendamentoAntecipado(ag.dataHora)) {
+      setErroLista(`Este atendimento está marcado para ${formatarHora(ag.dataHora)}. Para iniciar antes, reagende-o para o novo horário.`);
+      return;
+    }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   }
 
@@ -2029,6 +2039,8 @@ export default function Agendamentos() {
                 const isCancelado   = STATUS_LIVRES.includes(ag.status);
                 const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                 const podeContinuar = isEmAndamento && podeGerenciar;
+                // Antes da hora marcada não se inicia o atendimento — reagende.
+                const antecipado    = agendamentoAntecipado(ag.dataHora);
                 return (
                   <div
                     key={ag.id}
@@ -2071,7 +2083,9 @@ export default function Agendamentos() {
                     {podeGerenciar && !isCancelado && (
                       <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
                         {isAgendado && (
-                          <button onClick={() => handleIniciarAtendimento(ag)} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
+                          <button onClick={() => handleIniciarAtendimento(ag)} disabled={antecipado}
+                            title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — reagende para iniciar antes` : 'Iniciar atendimento'}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 text-emerald-700 rounded-xl text-xs font-semibold">
                             <Stethoscope size={11} /> Iniciar
                           </button>
                         )}
@@ -2140,6 +2154,8 @@ export default function Agendamentos() {
                     const isCancelado   = STATUS_LIVRES.includes(ag.status);
                     const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                     const podeContinuar = isEmAndamento && podeGerenciar;
+                    // Antes da hora marcada não se inicia o atendimento — reagende.
+                    const antecipado    = agendamentoAntecipado(ag.dataHora);
                     return (
                       <tr
                         key={ag.id}
@@ -2191,8 +2207,9 @@ export default function Agendamentos() {
                           <td className="py-3.5 px-4">
                             <div className="flex items-center justify-center gap-1.5">
                               {isAgendado && (
-                                <button onClick={() => handleIniciarAtendimento(ag)} title="Iniciar atendimento"
-                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
+                                <button onClick={() => handleIniciarAtendimento(ag)} disabled={antecipado}
+                                  title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — reagende para iniciar antes` : 'Iniciar atendimento'}
+                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 text-emerald-700 rounded-xl transition-colors">
                                   <Stethoscope size={13} />
                                 </button>
                               )}

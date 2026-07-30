@@ -1053,7 +1053,7 @@ export default function UsuarioFormModal({
               <div>
                 <label className={labelCls}>CEP</label>
                 <div className="relative">
-                  <input type="text" value={form.cep}
+                  <input type="text" value={form.cep} name="cep-empresa" autoComplete="off"
                     onChange={e => {
                       const masked = mascaraCEP(e.target.value);
                       set('cep', masked);
@@ -1066,31 +1066,31 @@ export default function UsuarioFormModal({
               </div>
               <div className="sm:col-span-2">
                 <label className={labelCls}>Endereço</label>
-                <input type="text" value={form.endereco}
+                <input type="text" value={form.endereco} name="endereco-empresa" autoComplete="off"
                   onChange={e => set('endereco', e.target.value)}
                   placeholder="Rua, av., rodovia..." className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Complemento</label>
-                <input type="text" value={form.complemento}
+                <input type="text" value={form.complemento} name="complemento-empresa" autoComplete="off"
                   onChange={e => set('complemento', e.target.value)}
                   placeholder="Apto, sala..." className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Bairro</label>
-                <input type="text" value={form.bairro}
+                <input type="text" value={form.bairro} name="bairro-empresa" autoComplete="off"
                   onChange={e => set('bairro', e.target.value)}
                   placeholder="Bairro" className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Cidade</label>
-                <input type="text" value={form.cidade}
+                <input type="text" value={form.cidade} name="cidade-empresa" autoComplete="off"
                   onChange={e => set('cidade', e.target.value)}
                   placeholder="Cidade" className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Estado</label>
-                <input type="text" value={form.estado}
+                <input type="text" value={form.estado} name="estado-empresa" autoComplete="off"
                   onChange={e => set('estado', e.target.value.toUpperCase().slice(0, 2))}
                   placeholder="SP" maxLength={2} className={inputCls} />
               </div>

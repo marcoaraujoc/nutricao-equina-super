@@ -51,6 +51,27 @@ const LABEL_TIPO_USUARIO: Record<string, string> = {
   ADMIN:        'Administrador(a)',
 };
 
+// O tipo de usuário DENTRO de uma empresa é o CARGO que o gestor atribuiu
+// (MembroEquipe.cargo) — é por empresa, então o mesmo e-mail é estagiário numa e
+// veterinário na outra. Este mapa rotula o cargo do contexto ativo; o `userType`
+// global do login não manda nesta tela.
+const LABEL_CARGO_EQUIPE: Record<string, string> = {
+  GESTOR:       'Gestor(a)',
+  VETERINARIO:  'Médico(a) Veterinário(a)',
+  ESTAGIARIO:   'Estagiário(a)',
+  ENFERMEIRO:   'Enfermeiro(a)',
+  SECRETARIA:   'Secretaria',
+  FINANCEIRO:   'Financeiro',
+  FORNECEDOR:   'Fornecedor(a)',
+  PRESTADOR:    'Prestador(a) de serviço',
+  PROPRIETARIO: 'Proprietário(a)',
+};
+
+// Cargos que exercem atuação clínica — só eles têm especialidade e tempo de consulta
+// (mesma regra do backend: ver CLAUDE.md §15). Estagiário, enfermeiro, secretaria,
+// financeiro e gestor informam apenas local e horário de trabalho.
+const CARGOS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR'];
+
 // ── Label com asterisco de obrigatório ────────────────────────────────────────
 function Label({ text, required, optional }: { text: string; required?: boolean; optional?: boolean }) {
   return (
@@ -97,8 +118,12 @@ export default function CadastroPessoal() {
   // Membro de alguma equipe → habilita o expediente de atendimento
   const [temEquipe,       setTemEquipe]       = useState(false);
 
-  // Gestor: sem dados profissionais (CRMV/espécies/subespecialidade) e tipo travado
+  // Gestor: sem dados profissionais (CRMV/espécies/subespecialidade)
   const isGestorEquipe = cargoEquipe === 'GESTOR';
+  // Membro de equipe NESTE contexto → o tipo de usuário é o cargo que o gestor
+  // atribuiu, exibido em somente leitura. Sem vínculo (cadastro direto) é que ele
+  // escolhe entre Proprietário e Médico Veterinário.
+  const tipoDefinidoPelaEquipe = !!cargoEquipe;
 
   const carregarEspecies = () => {
     setEspeciesErro(false);
@@ -193,8 +218,24 @@ export default function CadastroPessoal() {
   // Só VETERINARIO e FORNECEDOR têm especialidade (e tempo de consulta). Estagiário,
   // enfermeiro, secretaria, financeiro e gestor informam APENAS local e horário de
   // trabalho. (Depois do useState do form — ver comentário acima sobre TDZ.)
-  const perfilComEspecialidade =
-    PERFIS_COM_ESPECIALIDADE.includes(form.tipoUsuario) && !isGestorEquipe;
+  //
+  // Dentro de uma empresa quem decide é o CARGO, não o `userType` do login: a mesma
+  // pessoa é ESTAGIÁRIA aqui (sem CRMV/especialidade) e VETERINÁRIA na outra clínica.
+  // Sem vínculo (cadastro direto) cai no tipo que ela mesma escolheu.
+  const perfilComEspecialidade = cargoEquipe
+    ? CARGOS_COM_ESPECIALIDADE.includes(cargoEquipe)
+    : PERFIS_COM_ESPECIALIDADE.includes(form.tipoUsuario);
+
+  // Tipo de usuário exibido: o cargo do contexto quando há vínculo.
+  const labelTipoUsuario = cargoEquipe
+    ? (LABEL_CARGO_EQUIPE[cargoEquipe] ?? cargoEquipe)
+    : (LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario);
+
+  // Atua como veterinário NESTA empresa (CRMV, espécies, especialidade). Vale o CARGO
+  // do contexto: quem é VETERINARIO no login mas ESTAGIÁRIA aqui não preenche CRMV.
+  const atuaComoVet = cargoEquipe
+    ? cargoEquipe === 'VETERINARIO'
+    : form.tipoUsuario === 'VETERINARIO';
 
   // Rótulos do que a EMPRESA preenche quando o campo do local fica em branco
   const diasEmpresaLabel = expedienteEmpresa.dias && expedienteEmpresa.dias.length > 0
@@ -362,7 +403,7 @@ export default function CadastroPessoal() {
       case 'estado':
         return form.estado.trim() ? '' : 'Estado é obrigatório';
       case 'crmv':
-        if (form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe) {
+        if (atuaComoVet) {
           if (!form.crmv.trim()) return 'CRMV é obrigatório para Médicos Veterinários';
           if (!CRMV_REGEX.test(form.crmv.trim())) return 'Formato de CRMV inválido. Use o formato: 12345/SP';
           if (crmvStatus === 'invalido') return 'CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.';
@@ -370,7 +411,7 @@ export default function CadastroPessoal() {
         }
         return '';
       case 'especiesAtendidas':
-        if (form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe && !isConvidadoFlag
+        if (atuaComoVet && !isConvidadoFlag
             && form.especiesAtendidas.length === 0 && especies.length > 0) {
           return 'Selecione ao menos uma espécie atendida';
         }
@@ -484,7 +525,7 @@ export default function CadastroPessoal() {
       cidade:      form.cidade.trim(),
       estado:      form.estado.trim().toUpperCase(),
       userType:    form.tipoUsuario,
-      ...(form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe && {
+      ...(atuaComoVet && {
         crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
@@ -492,7 +533,7 @@ export default function CadastroPessoal() {
       // Especialidades do profissional (VET e FORNECEDOR): COM equipe = união das
       // especialidades dos locais; SEM equipe = seletor standalone. Estagiário e demais
       // perfis não enviam especialidade nenhuma — só local e horário.
-      ...(perfilComEspecialidade && !isGestorEquipe && {
+      ...(perfilComEspecialidade && {
         // Com equipe: união dos locais. Vazia (legado sem especialidade por local) →
         // undefined para não apagar as especialidades já cadastradas.
         especialidadeIds: temEquipe
@@ -704,13 +745,12 @@ export default function CadastroPessoal() {
           {/* Tipo de Usuário */}
           <div>
             <Label text="Tipo de Usuário" required />
-            {(fromConvite || isGestorEquipe) ? (
+            {/* Com vínculo na empresa ativa, o tipo é o CARGO que o gestor atribuiu —
+                somente leitura e por empresa (estagiária aqui, veterinária na outra).
+                O select só existe para cadastro direto, sem equipe. */}
+            {(fromConvite || tipoDefinidoPelaEquipe) ? (
               <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
-                <span className="text-gray-800 font-medium">
-                  {isGestorEquipe
-                    ? 'Gestor(a)'
-                    : LABEL_TIPO_USUARIO[form.tipoUsuario] ?? form.tipoUsuario}
-                </span>
+                <span className="text-gray-800 font-medium">{labelTipoUsuario}</span>
                 <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
                   <Info size={11} /> Definido pela equipe
                 </span>
@@ -725,7 +765,7 @@ export default function CadastroPessoal() {
           </div>
 
           {/* ── Dados profissionais — só para veterinários (gestor não preenche) ── */}
-          {form.tipoUsuario === 'VETERINARIO' && !isGestorEquipe && (
+          {atuaComoVet && (
             <div className="pt-2 border-t border-gray-100 space-y-5">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 

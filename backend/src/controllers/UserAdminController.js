@@ -248,6 +248,26 @@ const UserAdminController = {
       const existe = await prisma.user.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
 
+      // INVARIANTE: empresa não fica sem gestor. `Empresa.owner` é onDelete: SetNull e
+      // `MembroEquipe` é cascade — apagar o dono zerava o ownerId E removia o vínculo
+      // GESTOR, deixando a empresa ÓRFÃ (foi o que criou a "Patricia Costa dos Santos":
+      // sem dono, sem gestor, mas ainda com paciente, proprietário e tratador dentro).
+      // Antes de excluir o usuário, a empresa tem de ser transferida ou excluída.
+      const empresasDele = await prisma.empresa.findMany({
+        where:  { ownerId: Number(id) },
+        select: { id: true, nome: true },
+      });
+      if (empresasDele.length > 0) {
+        return res.status(409).json({
+          sucesso:  false,
+          code:     'USUARIO_DONO_DE_EMPRESA',
+          mensagem: `Este usuário é o gestor responsável por ${empresasDele.length === 1 ? 'a empresa' : 'as empresas'} `
+                    + empresasDele.map(e => `"${e.nome}"`).join(', ')
+                    + '. Transfira a gestão para outro usuário ou exclua a empresa antes de excluir a conta.',
+          dados:    { empresas: empresasDele },
+        });
+      }
+
       await prisma.user.delete({ where: { id: Number(id) } });
       res.json({ sucesso: true, mensagem: 'Usuário excluído com sucesso' });
     } catch (err) {

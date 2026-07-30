@@ -59,14 +59,27 @@ atendimento existente pelo histórico ("Editar/Continuar").
 ## 7. Casos de uso
 
 ### UC-06-01 — Iniciar/registrar evolução
-- **Pré:** `atendimento.evolucoes.criar`; **não** existir evolução EM_ANDAMENTO do
-  animal (RN-06-001).
+- **Pré:** `atendimento.evolucoes.criar`.
 - **Principal:** aba Evolução → especialidade (15 opções) → texto (digitação, Web
   Speech online ou Whisper offline com fila de áudios e opção "transcrever ou apenas
   anexar") → Salvar (EM_ANDAMENTO).
 - **Alternativos:** iniciar a partir do agendamento (`?agendamentoId=`) → numeração
-  herdada AG-XXXX e agendamento vai a EM_ANDAMENTO.
-- **Erros:** já existe em andamento → orientação para finalizar/cancelar a atual.
+  herdada AG-XXXX e agendamento vai a EM_ANDAMENTO. Existindo evolução em andamento
+  de OUTRO profissional para o animal → modal de decisão: **assumir a evolução** (o
+  responsável anterior é comunicado por e-mail/WhatsApp) ou **abrir uma nova em
+  paralelo** (o outro profissional é comunicado) — RN-06-001/RN-06-007.
+- **Erros:** o próprio usuário já tem evolução em andamento do animal → bloqueado,
+  finalize/cancele antes (RN-06-001); agendamento ainda não chegou → recusa
+  `AGENDAMENTO_ANTECIPADO` com orientação para reagendar (RN-06-008).
+
+### UC-06-01b — Assumir evolução de outro profissional
+- **Pré:** `atendimento.evolucoes.editar` (qualquer nível — não exige autoria);
+  evolução EM_ANDAMENTO de OUTRO profissional (qualquer paciente); acesso ao animal.
+- **Principal:** botão "Assumir" no histórico (ou no modal de decisão) → `PATCH
+  /clinica/evolucoes/:id/assumir` → `veterinarioId` passa a ser o assumidor →
+  e-mail + WhatsApp ao anterior → evolução abre em edição para quem assumiu.
+- **Erros:** evolução não EM_ANDAMENTO (`EVOLUCAO_NAO_ABERTA`); já é sua
+  (`EVOLUCAO_JA_MINHA`).
 
 ### UC-06-02 — Anexar/remover mídias
 - Upload imagem/vídeo/áudio até 100MB (whitelist extensão+mimetype); remoção física do
@@ -123,9 +136,32 @@ histórico via FAB.
 
 ## 10. Regras de negócio
 
-**RN-06-001 — Uma evolução em andamento por animal.** Criar nova exige
-finalizar/cancelar a atual. Motivo: unicidade do atendimento corrente. Exemplo: tentar
-abrir nova → aviso com atalho para a atual.
+**RN-06-001 — Uma evolução em andamento POR PROFISSIONAL por animal.** A evolução
+EM_ANDAMENTO aberta pelo PRÓPRIO profissional bloqueia (400 `EVOLUCAO_EM_ANDAMENTO`,
+nem `confirmarConcorrente` derruba): ele finaliza ou cancela a sua antes de abrir outra
+para o mesmo paciente — ninguém atende a si mesmo em paralelo. Já a evolução de OUTRO
+profissional NÃO bloqueia: devolve 409 `EVOLUCAO_EM_ANDAMENTO` com os dados da aberta e
+o usuário escolhe **assumir** (RN-06-007) ou **abrir uma nova em paralelo** (reenvio com
+`confirmarConcorrente`). Motivo: dois profissionais podem atender o mesmo paciente ao
+mesmo tempo, e travar o segundo apagava atendimento real. Com atendimentos paralelos, o
+"atendimento ativo" do shell (a que prescrição, vacina e exames se vinculam) é o do
+PRÓPRIO usuário.
+
+**RN-06-007 — Assumir é só a evolução de OUTRO profissional, e comunica o anterior.**
+`PATCH /clinica/evolucoes/:id/assumir` transfere a responsabilidade (novo
+`veterinarioId`) de uma evolução EM_ANDAMENTO — é um "puxar para si", gate só por
+`atendimento.evolucoes.editar` + acesso ao animal + escopo clínico, sem exigir autoria
+(mesma lógica de `AgendamentoController.assumir`). A condição é apenas ser de outro
+profissional, independentemente do paciente; a própria evolução não se assume (400
+`EVOLUCAO_JA_MINHA` — o caminho dela é editar/finalizar/cancelar). Quem conduzia recebe
+e-mail e WhatsApp; abrir evolução em paralelo à de outro o comunica do mesmo modo.
+
+**RN-06-008 — Agendamento não se antecipa.** Iniciar evolução a partir de agendamento
+cuja `dataHora` ainda não chegou é recusado com 400 `AGENDAMENTO_ANTECIPADO` (tolerância
+de relógio de 1 min). Para atender antes, REAGENDE o agendamento para o novo horário —
+senão a agenda mente sobre quando o paciente foi atendido e o horário original fica
+ocupado à toa. O botão "Iniciar" da agenda e o seletor de agendamento vinculado ficam
+desabilitados até a hora marcada.
 
 **RN-06-002 — Finalização é ato clínico restrito.** (= RN-G-004.) Ao finalizar, o
 sistema grava `dataFim` e dispara a interpretação IA em best-effort.
@@ -174,7 +210,10 @@ Groq (interpretar/título/resumo do laudo), Whisper local + transcodificação
 
 | Código | Mensagem | Quando |
 |---|---|---|
-| MSG-06-001 | "Já existe um atendimento em andamento para este animal." | RN-06-001. |
+| MSG-06-001 | "Já existe uma evolução em andamento para este animal. Finalize ou cancele-a antes de criar uma nova." | RN-06-001 — evolução do PRÓPRIO profissional (400). |
+| MSG-06-001a | "<Profissional> tem uma evolução em andamento para este paciente. Assuma a evolução ou confirme a criação de uma nova." | RN-06-001 — evolução de OUTRO (409). |
+| MSG-06-001b | "Evolução assumida — o profissional anterior foi comunicado" | RN-06-007. |
+| MSG-06-001c | "Este agendamento está marcado para <data/hora>. Para atender antes, reagende-o para o novo horário." | RN-06-008. |
 | MSG-06-002 | "Evolução finalizada com sucesso." | Finalizar ok. |
 | MSG-06-003 | "Justificativa é obrigatória" | Cancelar/excluir sem motivo. |
 | MSG-06-004 | "Apenas administradores podem excluir evoluções finalizadas" | Guard de exclusão. |

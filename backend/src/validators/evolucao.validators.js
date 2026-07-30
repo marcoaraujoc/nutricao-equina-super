@@ -17,6 +17,11 @@ const criarEvolucaoRules = [
   body('status')
     .optional()
     .isIn(['EM_ANDAMENTO', 'FINALIZADA', 'CANCELADA']).withMessage('Status inválido'),
+  // Ciência do profissional de que já existe evolução em andamento para o paciente
+  // e de que quer MESMO abrir outra em paralelo (ver EvolucaoController.criar).
+  body('confirmarConcorrente')
+    .optional()
+    .isBoolean().withMessage('confirmarConcorrente inválido'),
 ];
 
 const evolucaoIdParam = [

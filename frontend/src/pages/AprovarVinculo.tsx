@@ -1,6 +1,6 @@
 // src/pages/AprovarVinculo.tsx
 import { useEffect, useState, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react';
 import api from '../services/api';
 
@@ -14,6 +14,7 @@ interface Resultado {
 export default function AprovarVinculo() {
   const [searchParams] = useSearchParams();
   const navigate       = useNavigate();
+  const location       = useLocation();
   const [estado,    setEstado]    = useState<Estado>('carregando');
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [msgErro,   setMsgErro]   = useState('');
@@ -63,10 +64,11 @@ export default function AprovarVinculo() {
           localStorage.removeItem('lastSelectedAnimalId');
           localStorage.removeItem('s2vet_ob');
 
-          // Monta returnUrl para voltar à aprovação após login correto
-          const returnUrl = encodeURIComponent(
-            window.location.pathname + window.location.search
-          );
+          // Monta returnUrl para voltar à aprovação após login correto. Vem do
+          // ROUTER (useLocation): sob HashRouter o window.location.pathname é `/`
+          // e o search é vazio — a rota e o token moram no fragmento, então ler
+          // window.location devolvia `%2F` e perdia o token. Ver CLAUDE.md §14.
+          const returnUrl = encodeURIComponent(location.pathname + location.search);
 
           navigate(`/login?returnUrl=${returnUrl}&msg=vet_required`, { replace: true });
           return;
@@ -75,7 +77,7 @@ export default function AprovarVinculo() {
         setEstado('erro');
         setMsgErro(msg || 'Ocorreu um erro inesperado.');
       });
-  }, [token, acao, navigate]);
+  }, [token, acao, navigate, location.pathname, location.search]);
 
   const ir = () => navigate('/');
 

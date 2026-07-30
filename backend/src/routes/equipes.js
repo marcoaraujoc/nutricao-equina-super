@@ -106,8 +106,12 @@ router.get('/empresa/:empresaId/especies', authenticate, EquipeController.getEsp
 router.get   ('/:equipeId/especies',                   authenticate, EquipeController.getEspeciesEquipe);
 router.get   ('/:equipeId/fornecedores',               authenticate, EquipeController.getFornecedoresPorEquipe);
 router.get   ('/:equipeId/prestadores/:userId/designacoes',           authenticate, EquipeController.getDesignacoesPrestador);
+// Lote ANTES da rota simples não é necessário (paths distintos), mas fica junto dela.
+router.post  ('/:equipeId/prestadores/:userId/designacoes/lote',      authenticate, EquipeController.addDesignacoesPrestadorLote);
 router.post  ('/:equipeId/prestadores/:userId/designacoes',           authenticate, EquipeController.addDesignacaoPrestador);
 router.delete('/:equipeId/prestadores/:userId/designacoes/:animalId', authenticate, EquipeController.removeDesignacaoPrestador);
+// Sem :animalId = revoga todo o acesso vigente do prestador ("Remover todos").
+router.delete('/:equipeId/prestadores/:userId/designacoes',           authenticate, EquipeController.removeTodasDesignacoesPrestador);
 router.patch ('/:equipeId/nome',                        authenticate, EquipeController.renomearEquipe);
 router.delete('/:equipeId/gestor/:userId',               authenticate, EquipeController.removerGestorAdmin);
 router.post  ('/:equipeId/convidar',                   authenticate, EquipeController.convidarParaEquipe);

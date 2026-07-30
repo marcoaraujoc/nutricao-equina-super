@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import { agendamentoAntecipado } from '../utils/dateUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -162,6 +163,12 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   const handleIniciarAtendimento = (ag: Agendamento) => {
     if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
+    // Não se antecipa um agendamento: atender antes da hora exige REAGENDAR
+    // (o backend recusa com AGENDAMENTO_ANTECIPADO).
+    if (ag.status !== 'EM_ANDAMENTO' && agendamentoAntecipado(ag.dataHora)) {
+      setErroInline(`Este atendimento está marcado para ${formatHora(ag.dataHora)}. Para iniciar antes, reagende-o para o novo horário.`);
+      return;
+    }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   };
 
@@ -380,8 +387,12 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
                       {isAgendado && (
-                        <button onClick={() => handleIniciarAtendimento(ag)} title="Iniciar atendimento"
-                          className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-lg transition-colors">
+                        <button onClick={() => handleIniciarAtendimento(ag)}
+                          disabled={agendamentoAntecipado(ag.dataHora)}
+                          title={agendamentoAntecipado(ag.dataHora)
+                            ? `Marcado para ${formatHora(ag.dataHora)} — reagende para iniciar antes`
+                            : 'Iniciar atendimento'}
+                          className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 disabled:text-gray-300 disabled:hover:bg-transparent rounded-lg transition-colors">
                           <Stethoscope size={13} />
                         </button>
                       )}
@@ -477,7 +488,11 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                 {isAgendado && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     <button onClick={() => handleIniciarAtendimento(ag)}
-                      className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors">
+                      disabled={agendamentoAntecipado(ag.dataHora)}
+                      title={agendamentoAntecipado(ag.dataHora)
+                        ? `Marcado para ${formatHora(ag.dataHora)} — reagende para iniciar antes`
+                        : undefined}
+                      className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 transition-colors">
                       <Stethoscope size={11} /> Iniciar
                     </button>
                     {podeEditar && <>

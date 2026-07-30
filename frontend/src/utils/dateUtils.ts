@@ -22,6 +22,24 @@ export const formatDateShort = (d: string | Date | null | undefined): string => 
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}`;
 };
 
+/**
+ * Tolerância de relógio para "o horário marcado já chegou?" — espelha
+ * TOLERANCIA_INICIO_MS do EvolucaoController. NÃO é folga de antecipação:
+ * atender antes da hora exige REAGENDAR o agendamento.
+ */
+export const TOLERANCIA_INICIO_MS = 60_000;
+
+/**
+ * true quando o agendamento ainda não chegou — iniciar a evolução dele seria
+ * ANTECIPAR o atendimento, o que o backend recusa (AGENDAMENTO_ANTECIPADO).
+ */
+export const agendamentoAntecipado = (dataHora: string | Date | null | undefined): boolean => {
+  if (!dataHora) return false;
+  const t = (dataHora instanceof Date ? dataHora : new Date(dataHora)).getTime();
+  if (isNaN(t)) return false;
+  return t - Date.now() > TOLERANCIA_INICIO_MS;
+};
+
 // DD/MM/YYYY HH:MM — para timestamps com hora, exibidos no fuso Brasil
 export const formatDateTime = (d: string | Date | null | undefined): string => {
   if (!d) return '—';

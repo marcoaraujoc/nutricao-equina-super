@@ -1,5 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-07-29 (Evolução: assumir SÓ a de outro profissional c/ e-mail+WhatsApp, própria aberta continua bloqueando, paralelo por decisão (409) e proibição de antecipar agendamento)
 # Atualizado em: 2026-07-25 (Vacina com a lógica da Prescrição: SALVA→FINALIZADA→EXECUTADA — fatura e estoque só na Execução de Prescrição/plantão)
 # Atualizado em: 2026-07-25 (Vacina no Atendimento com ciclo SALVA→FINALIZADA, igual a Exames/Encaminhamento — migration 20260729000000)
 # Atualizado em: 2026-07-23 (Orçamento: posologia do medicamento (dias+frequência), doses da vacina e item OUTROS lançado direto na fatura; desconto por item na fatura)
@@ -1029,6 +1030,49 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-07-29 — Evolução: assumir, atendimento em paralelo e fim da antecipação
+- [x] **Assumir evolução (mesma lógica da agenda)** — `PATCH /clinica/evolucoes/:id/assumir`
+      (`EvolucaoController.assumir`): qualquer profissional com `atendimento.evolucoes.editar`
+      (QUALQUER nível) + acesso ao animal + escopo clínico puxa para si uma evolução
+      EM_ANDAMENTO de outro. NÃO passa por `podeOperarRegistro` — é um "puxar para si", não
+      a edição do registro alheio (idêntico ao `AgendamentoController.assumir`). Grava
+      `veterinarioId`/`modificadoPorId`/`dataModificacao` + AuditLog `EVOLUCAO_ASSUMIDA`.
+      **Só evolução de OUTRO profissional, independentemente do paciente** — a própria não
+      se assume (400 `EVOLUCAO_JA_MINHA`; o caminho dela é editar/finalizar/cancelar).
+- [x] **Comunicação entre profissionais** — `notificarEvolucao()` (espelho de
+      `notificarTransferencia` da agenda): e-mail (`emailService.enviarTransferenciaEvolucao`)
+      + WhatsApp pela instância da clínica com fallback no provider legado. Dois modos:
+      `ASSUMIDA` (perdeu a evolução) e `PARALELA` (outro abriu evolução para o mesmo
+      paciente; a dele continua com ele). Fire-and-forget — falha de notificação nunca
+      derruba a operação clínica.
+- [x] **Evolução em andamento: bloqueia se for MINHA, decide se for de OUTRO** — regra por
+      AUTOR, não por animal:
+      - **própria** aberta → `criar` responde **400** `EVOLUCAO_EM_ANDAMENTO` como sempre
+        respondeu (finalize/cancele antes) e `confirmarConcorrente` NÃO derruba o bloqueio;
+        no front o botão "Nova Evolução" volta a ficar `disabled` com ícone `Lock`.
+      - **de outro profissional** → **409** `EVOLUCAO_EM_ANDAMENTO` com `evolucaoAberta
+        { id, atendimentoNumero, dataInicio, especialidade, titulo, veterinarioId,
+        veterinarioNome }`; o usuário decide no `EvolucaoAbertaModal` (SubModuloEvolucao):
+        **assumir** ou **criar uma nova** — que reenvia o POST com
+        `confirmarConcorrente: true`.
+      `criar` lê TODAS as abertas do animal (`findMany`) porque pode haver mais de uma:
+      acha a minha → 400; senão usa a mais recente de outro → 409. O 409 também é tratado
+      no salvar/finalizar (corrida ou lista filtrada), preservando o texto digitado.
+      `formularioVisivel` passou a governar formulário × botão (antes, com evolução aberta,
+      a tela ficava SEM os dois).
+- [x] **Atendimento ativo do shell = o MEU** — com duas evoluções abertas, `carregarEvolucoes`
+      prefere a do próprio usuário no `onEvolucaoChange`. É a ela que prescrição, vacina e
+      exames do shell se vinculam — sem isso o item clínico cairia na evolução do outro.
+- [x] **Agendamento não se antecipa** — `criar` recusa 400 `AGENDAMENTO_ANTECIPADO` quando
+      `agendamento.dataHora` ainda não chegou (`TOLERANCIA_INICIO_MS` = 1 min, só folga de
+      relógio). Atender antes exige REAGENDAR. Espelho no front: `agendamentoAntecipado()`
+      (`utils/dateUtils.ts`) desabilita "Iniciar" em `Agendamentos.tsx` e
+      `SubModuloMinhaAgenda.tsx` e a opção do seletor "Agendamento vinculado".
+      `EM_ANDAMENTO` (continuar atendimento já iniciado) nunca é bloqueado.
+- [ ] Prescrição/vacina/exame criados numa evolução assumida seguem com o `veterinarioId`
+      de quem os lançou (correto), mas a tela não sinaliza que o condutor da evolução mudou —
+      avaliar um marcador de "assumida por" no histórico.
+
 ### Sessão 2026-07-28 (parte 6) — Agenda: reagendar, transferir e assumir
 - [x] **Reagendar virou agenda de verdade** — o `datetime-local` do modal saiu; agora é o
       mesmo `CalendarioInterativo` da tela + grade de horários livres do profissional
@@ -1549,7 +1593,18 @@ New-Item -ItemType Junction `
       `liberarReservas`.
 - [ ] Slugs orphans `exames.laboratorial.*` e `exames.imagem.*` — existem no seed e aparecem no ControleAcesso mas não protegem nenhum endpoint real (backends usam `atendimento.exames.*`). Gestores que configurarem esses slugs não controlam nada efetivamente. Decisão pendente: remover do seed ou implementar granularidade real por tipo de exame.
 - [x] Sidebar/páginas de agenda: migrar gate de role check (`isVetOuSuperior`) para `podeExecutar('atendimento.agendamentos.ler')` — Agenda usa permissão real; Minha Agenda mantém `isVetOuSuperior && podeVerAgendamentos` (sub-view específica de vet). Dashboard oculto para VET (non-Gestor) e ESTAGIÁRIO no Sidebar — eles têm "Pacientes" como home; GESTOR (bypass) continua vendo.
-- [ ] UI de gestão de designações no ControleAcesso (aba Equipe → membro PRESTADOR → animais designados)
+- [x] UI de gestão de designações no ControleAcesso (aba Profissionais → membro PRESTADOR →
+      "Gerenciar Acesso"), no MESMO padrão do "inserir exames" (`SubModuloExames`): filtro por LOCAL
+      (localização cadastrada, com fallback no campo textual legado `local`; só lista locais que têm
+      animal a designar, com a contagem) + dropdown de SELEÇÃO MÚLTIPLA com busca própria (sem
+      acento/caixa) e checkbox por animal, exibindo **apenas o nome do animal**; marcados viram chips
+      numerados com X e "Limpar tudo". Dentro do dropdown, **Marcar todos (N)** cobre o "conceder o
+      local inteiro" — por isso existe UM só botão de ação, **Inserir**, no visual do "Incluir Membro"
+      da tela (emerald, canto direito). Na lista "Com acesso ativo", botão **Remover todos** (vermelho,
+      ao lado da contagem) revoga tudo de uma vez via `DELETE …/designacoes` sem `:animalId`, com
+      `ConfirmModal` antes. O histórico de acessos removidos NÃO é exibido (segue no banco).
+      Backend: `POST …/designacoes/lote` numa transaction — marcar 1 ou 20 é a mesma chamada (um POST
+      por animal parava no meio e deixava acesso concedido pela metade).
 - [ ] Backfill empresaId nos animais existentes via VetAnimalSolicitacao
 - [ ] `empresaId` em EvolucaoClinica, Fatura (após enforcement)
 - [ ] Row-Level Security no PostgreSQL (fase enterprise)
@@ -1784,10 +1839,13 @@ POST   /transcrever                     → Whisper: transcreve áudio (multipar
 GET    /responsaveis/:animalId          → lista vets que atenderam o animal
 GET    /animal/:animalId                → lista evoluções (page/limit/status/dataInicio/dataFim/responsavelId/busca)
 GET    /:id                             → obter por ID
-POST   /                                → criar evolução
+POST   /                                → criar evolução (409 EVOLUCAO_EM_ANDAMENTO se já há uma aberta;
+                                          reenviar com `confirmarConcorrente: true` cria em paralelo)
 PUT    /:id                             → atualizar
 DELETE /:id                             → soft delete
 PATCH  /:id/aprovar                     → aprovar evolução
+PATCH  /:id/assumir                     → assumir evolução EM_ANDAMENTO de outro profissional
+                                          (e-mail + WhatsApp ao anterior) — atendimento.evolucoes.editar
 PATCH  /:id/titulo                      → salvar título
 POST   /:id/midias                      → upload de mídia (multipart: midia, máx 100MB, image|video|audio)
 DELETE /:id/midias/:midiaId             → remover mídia
@@ -1855,6 +1913,16 @@ DELETE /clinica/agendamentos/:id              → soft delete
 /api/composicoes-alimentares → ComposicaoAlimentarController
 /api/clinica/faturas → FaturaController
 GET  /api/equipes/:equipeId/fornecedores → EquipeController.getFornecedoresPorEquipe (busca FORNECEDOR da empresa, exclui já-membros)
+GET    /api/equipes/:equipeId/prestadores/:userId/designacoes      → designações + animaisDisponiveis
+                                          (animal traz `localizacao`/`local` — filtro por local da tela)
+POST   /api/equipes/:equipeId/prestadores/:userId/designacoes      → concede acesso a 1 animal
+POST   /api/equipes/:equipeId/prestadores/:userId/designacoes/lote → { animalIds[], motivo? } concede em
+                                          LOTE numa transaction (botão "Inserir todos"); ids fora da
+                                          equipe/empresa são descartados antes do upsert
+DELETE /api/equipes/:equipeId/prestadores/:userId/designacoes/:animalId → inativa a designação
+DELETE /api/equipes/:equipeId/prestadores/:userId/designacoes      → SEM :animalId, revoga TODO o
+                                          acesso vigente do prestador (botão "Remover todos");
+                                          soft delete (ativo=false + dataFim), devolve { removidos }
 GET  /api/equipes/configuracoes → EquipeController.obterConfiguracao (logo + diaFechamentoFatura do escopo ativo)
 PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipart: logo?, diaFechamentoFatura, removerLogo?) — GESTOR/dono only
 
@@ -2138,6 +2206,11 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     editar (regra derivada do nível, não de cargo). Exclusão de evolução FINALIZADA por não-ADMIN
     segue bloqueada (regra de ADMIN, permitida). VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA
     (fatura/estoque só na execução, no plantão via `enfermagem.prescricao.executar` — ver seção do fluxo da vacina).
+    EXCEÇÃO deliberada — "assumir": `AgendamentoController.assumir` e
+    `EvolucaoController.assumir` NÃO chamam `podeOperarRegistro`. Assumir é um PUXAR PARA SI
+    (quem assume passa a ser o responsável), não a edição do registro alheio: o gate é o
+    slug de `editar` da rota + acesso ao animal + escopo clínico. Quem perdeu o registro é
+    comunicado por e-mail e WhatsApp. Não "consertar" isso adicionando check de autoria.
     Escopo de DADOS de prestador (quais animais o FORNECEDOR vê via DesignacaoPrestador) e a
     resolução de contexto (MapaAtendimento isGestor) continuam usando membroCargo/userType — isso
     é modelo de acesso/tenant, NÃO regra de autorização de ação.
@@ -2228,6 +2301,100 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     front continua sendo `isGestor || nível de finalizar (EQUIPE/FULL = qualquer registro; PROPRIO =
     só os próprios)` — o bypass do escopo só garante que o registro APAREÇA para o gestor decidir.
 
+36-b. **Resolver "sou gestor?" e "qual é o meu cargo?" NUNCA pode ter fallback para outra
+    empresa (corrigido 2026-07-29).** Dois helpers faziam isso e vazavam papel entre clínicas:
+    - `EquipeController.getEmpresaDoGestor(userId, empresaIdPreferida)` — quando a empresa
+      PREFERIDA (o contexto ativo) não tinha o usuário como dono/GESTOR, caía em "qualquer
+      empresa que ele possua/gerencie". Um profissional GESTOR na empresa A e VETERINÁRIO na
+      B, trabalhando em B, era resolvido para A: `listarMembros` devolvia o roster de A com
+      `isGestor: true`, `GET /equipes/configuracoes` devolvia a config de A (e o Sidebar
+      bloqueava os módulos de B com "Complete a Configuração da Empresa") e toda ação de
+      gestão gravava em A. Agora, com `empresaIdPreferida` informado, a resolução é EXCLUSIVA
+      daquela empresa (null = "não é gestor aqui"). Fallback só sem contexto (bootstrap do vet
+      autônomo). `garantirEquipePadrao` devolve `{ empresa: null, equipe: null }` nesse caso —
+      NUNCA cria empresa nova nem usa a do usuário — e os 3 callers respondem 403.
+    - `UserController.getMe` — `cargoEquipe` vinha de `membroEquipe.findFirst({ userId })`
+      ordenado por `createdAt asc`, isto é, o vínculo MAIS ANTIGO. Quem é GESTOR na própria
+      clínica aparecia como "Gestor(a)" no Cadastro Pessoal (com os dados profissionais
+      travados) ao entrar em outra empresa onde é estagiário. Agora usa
+      `resolverMembroDoContexto`, que também deixou de cair em outro vínculo quando existe
+      contexto ativo (o mesmo valia para expediente e locais de trabalho — a herança de
+      expediente agora é escopada à EMPRESA ativa).
+    REGRA: todo "quem sou eu aqui" (cargo, isGestor, expediente, locais, configuração) se
+    resolve pelo par (req.empresaId, req.equipeId) e, na ausência de vínculo nele, responde
+    vazio/404 — nunca o vínculo de outra empresa. Cadastro incompleto numa empresa nova é
+    ESPERADO (o `ProfissionalPerfil` é por empresa): o gestor inclui com nome+telefone e o
+    profissional completa endereço/CEP ao entrar naquele contexto.
+
+36-d. **Empresa NUNCA existe sem gestor (2026-07-30).** Dois furos fechados:
+    - `EquipeController.criarEmpresa` criava a linha de `Empresa` com `ownerId` e mais nada —
+      a equipe e o vínculo GESTOR vinham depois (ou não). Agora nasce empresa + "Equipe
+      Principal" + `MembroEquipe{cargo:'GESTOR'}` na MESMA transaction (igual `setup` e
+      `EquipeService.criarEmpresaEEquipe`).
+    - `UserAdminController.excluir` (ADMIN) apagava o usuário sem olhar as empresas dele:
+      `Empresa.owner` é `onDelete: SetNull` e `MembroEquipe` é cascade, então excluir o dono
+      zerava o `ownerId` E removia o vínculo GESTOR — a empresa ficava ÓRFÃ, ainda com
+      paciente/proprietário/tratador dentro, invisível para todos (nenhum gestor a alcança) e
+      sem aparecer em `meusContextos`. Agora responde **409 `USUARIO_DONO_DE_EMPRESA`**
+      listando as empresas: transfira a gestão ou exclua a empresa antes de excluir a conta.
+    Para achar órfãs: empresa cujo `ownerId` é null/inexistente E sem nenhum `MembroEquipe`
+    com cargo GESTOR nas suas equipes.
+    **Nome da equipe é OBRIGATÓRIO e nunca genérico.** `criarEmpresa` exige `equipeNome`
+    (400 `EQUIPE_NOME_OBRIGATORIO` + `criarEmpresaRules`): o sistema não inventa nome de
+    equipe. Onde não há ninguém para informar o nome (bootstrap de empresa legada sem equipe
+    em `garantirEquipePadrao`; `convidarGestorAdmin` sem `nomeEquipe`), usa-se o NOME DA
+    PRÓPRIA EMPRESA — nunca "Equipe Principal" (em empresa pessoal/CPF é o nome da EQUIPE que
+    aparece no seletor de contexto, então o genérico fazia o gestor ver "Equipe Principal" no
+    lugar da clínica dele). E `criarEquipe` RENOMEIA a equipe inicial em vez de criar uma
+    segunda quando ela ainda é a AUTOMÁTICA (nome == nome da empresa, ou "Equipe Principal")
+    e está intocada (só o gestor, 0 animais, 0 convites) — senão a empresa ficava com a
+    clínica + a equipe automática, e o unique(empresaId, nome) dava 409 quando o gestor
+    tentava usar o mesmo nome. O nome é o que distingue automática de escolhida: sem essa
+    checagem, TODA equipe nova renomeava a única existente e o gestor perdia a anterior.
+
+36-e. **`req.user.userType` é o tipo NA EMPRESA ATIVA, não o do login (2026-07-30).**
+    `lib/tipoContexto.js#resolverTipoNoContexto` roda no `authenticate` e sobrescreve
+    `req.user.userType`; o valor do token fica em `req.user.userTypeGlobal`. Ordem:
+    (1) vínculo de equipe no contexto → `CARGO_PARA_TIPO[cargo]`; (2) sem vínculo mas com
+    `ProprietarioPerfil` ativo OU animal ativo na empresa → `PROPRIETARIO`; (3) sem nada →
+    `User.userType` (legado/autônomo). ADMIN é global e nunca é reescrito.
+    `GET /users/me` devolve `userType` (contexto) + `userTypeGlobal`, e escolhe entre
+    `ProprietarioPerfil` e `ProfissionalPerfil` pelo tipo do CONTEXTO.
+    É o que permite o mesmo e-mail ser gestora na empresa 1, veterinária na 2, estagiária na
+    3 e CLIENTE na 4 — com endereço/telefone próprios em cada uma — mantendo UMA linha em
+    `users` (a alternativa, 4 linhas com o mesmo e-mail, exigiria refazer login/2FA/OAuth/
+    reset de senha e as 31 chamadas que assumem 1 usuário por e-mail; decisão de 30/07 foi
+    NÃO fazer isso). Consequência esperada: quem é VETERINARIO no login mas FORNECEDOR na
+    empresa ativa perde ali as ações de vet — é a regra, não bug.
+    ⚠️ Guardas de plataforma (ADMIN) devem usar `role`/`userTypeGlobal`, nunca o `userType`
+    de contexto.
+    ⚠️ **No FRONT, lista/filtro por empresa se decide pelo `cargo` do membro, NUNCA pelo
+    `user.userType`** (que é o do login e vale para todas as empresas). Dois casos reais
+    corrigidos em 30/07: `ControleAcesso.TabEquipe` filtrava `user.userType !== 'PROPRIETARIO'`
+    e SUMIA com a veterinária que é cliente em outra clínica; `Agendamentos` montava a lista de
+    quem atende com `user.userType === 'VETERINARIO'`, colocando na agenda a ESTAGIÁRIA daqui
+    (veterinária em outra empresa) e deixando de fora a VETERINÁRIA daqui. Só o corte de ADMIN
+    continua pelo userType.
+
+36-c. **"Tipo de usuário" é POR EMPRESA e é o CARGO (2026-07-30).** O identificador
+    compartilhado entre empresas é só o E-MAIL (para o seletor de contexto); nome, telefone,
+    endereço e tipo são de cada empresa. O tipo dentro da empresa NÃO é o `User.userType`
+    global — é `MembroEquipe.cargo`, que o gestor define ao incluir o membro (a mesma pessoa
+    é ESTAGIÁRIA numa clínica e VETERINÁRIA na outra). Consequências:
+    - `CadastroPessoal`: havendo vínculo no contexto (`cargoEquipe`), o campo "Tipo de
+      Usuário" é SOMENTE LEITURA e mostra o rótulo do cargo (`LABEL_CARGO_EQUIPE`). O select
+      Proprietário/Médico Veterinário só aparece para cadastro direto, sem equipe. Antes o
+      lock valia só para GESTOR/convite, então nas outras empresas o campo virava editável e
+      mostrava o `userType` global em vez do cargo.
+    - Dados profissionais (CRMV, espécies, especialidade, tempo de consulta) seguem o CARGO:
+      `atuaComoVet`/`CARGOS_COM_ESPECIALIDADE` no front, `semEspecialidade` no back. Uma
+      estagiária com `userType` VETERINARIO não preenche CRMV.
+    - `UserController.updateMe`: quem tem vínculo no contexto ativo NÃO altera o `userType`
+      global (body ignorado). Só o DONO da empresa ativa (caso documentado: convidada que
+      assinou a aplicação e virou gestora da própria clínica) ou quem não tem vínculo nenhum.
+      A regra antiga liberava para dono/gestor de QUALQUER empresa — de dentro da empresa
+      onde era estagiária, ela reescrevia o tipo que vale para todas.
+
 36. **Proprietário é isolado por empresa (2026-07-24)** — o cadastro do cliente NÃO mora mais no
     `User`: mora em `ProprietarioPerfil` (uma linha por empresa). NUNCA leia nome/telefone/documento
     /endereço/condição comercial de um proprietário direto do `User` numa tela de clínica — use
@@ -2304,6 +2471,25 @@ Backend recusa iniciar se JWT_SECRET tiver menos de 32 caracteres.
 `${appUrl}/#/reset-password?token=X`
 `${appUrl}/#/equipe/convite/${token}`
 ```
+
+**A mesma regra vale DENTRO do app (corrigido 2026-07-29).** A rota mora no
+FRAGMENTO — `window.location.pathname` é sempre `/` e `window.location.search` é
+sempre vazio, em qualquer tela. Logo:
+```javascript
+// Redirect fora do router (interceptor, listener…): sempre com /#/
+window.location.href = '/#/login';   // ✅ mesma path → troca de hash, sem reload
+window.location.href = '/login';     // ❌ vai para um PATH de servidor
+// Ler a rota atual (returnUrl, deep link, etc.): sempre pelo ROUTER
+const { pathname, search } = useLocation();  // ✅ rota + query do fragmento
+window.location.pathname + window.location.search;  // ❌ devolve "/" sempre
+```
+Sintoma de ter violado a regra: URL com **path e query reais + `#/rota` no fim**
+(ex.: `localhost:5173/login?returnUrl=…&msg=…#/login`). O dev server do Vite faz
+fallback de qualquer path para o `index.html`, então a tela até renderiza — mas o
+HashRouter só lê o fragmento, o `?query` real fica inerte (`useLocation().search`
+vazio) e o parâmetro é silenciosamente ignorado. Foi o que quebrava o retorno
+pós-login do link de aprovação de vínculo: `returnUrl`/`msg` viravam `null`, o aviso
+não aparecia e o usuário caía na home em vez de voltar ao token.
 
 ### Autenticação por cookie HttpOnly (2026-07-10)
 ```

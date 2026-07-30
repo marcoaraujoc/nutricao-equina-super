@@ -7,6 +7,12 @@ const criarEmpresaRules = [
     .trim()
     .notEmpty().withMessage('Nome da empresa é obrigatório')
     .isLength({ min: 2, max: 255 }).withMessage('Nome deve ter entre 2 e 255 caracteres'),
+  // A empresa nasce com uma equipe (o gestor precisa de vínculo GESTOR nela) e o nome
+  // dela é OBRIGATÓRIO — o sistema não inventa nome de equipe.
+  body('equipeNome')
+    .trim()
+    .notEmpty().withMessage('Nome da equipe é obrigatório')
+    .isLength({ min: 2, max: 255 }).withMessage('Nome da equipe deve ter entre 2 e 255 caracteres'),
   body('cnpj')
     .optional({ nullable: true })
     .matches(/^\d{14}$|^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/).withMessage('CNPJ inválido'),

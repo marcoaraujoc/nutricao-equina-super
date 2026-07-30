@@ -84,6 +84,10 @@ router.delete('/:id',   authenticate, checkPermission('atendimento.evolucoes.del
 // Ações de patch
 router.patch('/:id/cancelar', authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.cancelar);
 router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evolucoes.finalizar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.aprovar);
+// Assumir a evolução em andamento de outro profissional. Nível PROPRIO basta: é um
+// "puxar para si" (o assumidor passa a ser o autor), não a edição do registro alheio
+// — a regra é validada no controller, igual ao assumir da agenda.
+router.patch('/:id/assumir',  authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), injectTenant, evolucaoIdParam, validate, EvolucaoController.assumir);
 router.patch('/:id/titulo',   authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
 
 // Mídias

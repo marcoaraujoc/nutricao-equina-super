@@ -1,6 +1,7 @@
 const jwt   = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
 const { getAccessTokenFromCookie } = require('../lib/authCookies');
+const { resolverTipoNoContexto }   = require('../lib/tipoContexto');
 
 const SECRET = process.env.JWT_SECRET;
 
@@ -104,6 +105,25 @@ const authenticate = async (req, res, next) => {
     } catch {
       req.empresaId = null;
     }
+
+    // TIPO POR EMPRESA: o que a pessoa é na clínica ATIVA vem do cargo dela ali (ou
+    // de ser cliente ali), não do `userType` global do login. Sem isto, quem é
+    // veterinária numa empresa entrava como veterinária na empresa em que é
+    // estagiária — ou em que é apenas CLIENTE. Ver lib/tipoContexto.js.
+    // `req.user.userTypeGlobal` preserva o valor do token para quem precisar da
+    // identidade (troca de senha, 2FA, telas de plataforma).
+    try {
+      const { tipo, cargo, origem } = await resolverTipoNoContexto({
+        userId:    decoded.id,
+        userType:  decoded.userType,
+        role:      decoded.role,
+        empresaId: req.empresaId,
+        equipeId:  req.equipeId,
+      });
+      req.user = { ...req.user, userTypeGlobal: decoded.userType, userType: tipo };
+      req.cargoContexto  = cargo;
+      req.origemTipo     = origem;
+    } catch { /* mantém o userType do token */ }
 
     next();
   } catch (err) {

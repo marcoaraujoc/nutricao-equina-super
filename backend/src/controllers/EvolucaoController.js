@@ -8,6 +8,8 @@ const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
+const emailService              = require('../services/emailService');
+const whatsappService           = require('../services/whatsappService');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
 const { PROMPTS }               = require('../ai/prompts');
 const { MODULOS_IA }            = require('../ai');
@@ -53,6 +55,71 @@ const { registrarAuditoria: auditoriaCentral } = require('../lib/auditoria');
 // Autoria via RBAC (req.permissaoNivel): PROPRIO = só registros próprios;
 // EQUIPE/FULL = qualquer registro da equipe. Nenhuma checagem de cargo/userType aqui.
 const { podeOperarRegistro, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMUNICAÇÃO ENTRE PROFISSIONAIS (e-mail + WhatsApp)
+// Mesma lógica da agenda (AgendamentoController.notificarTransferencia): quando o
+// responsável por um atendimento muda — ou passa a haver outro atendimento em
+// paralelo — o profissional afetado é avisado. Fire-and-forget: falha de
+// notificação NUNCA derruba a operação clínica.
+//
+// modo 'ASSUMIDA' → `paraVetId` PERDEU a evolução, que `deVetId` assumiu.
+// modo 'PARALELA' → `paraVetId` segue com a evolução dele, e `deVetId` abriu uma
+//                   NOVA evolução para o mesmo paciente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function notificarEvolucao({ req, paraVetId, deVetId, evolucao, animalNome, modo = 'ASSUMIDA' }) {
+  if (!paraVetId || Number(paraVetId) === Number(deVetId)) return;
+  setImmediate(async () => {
+    try {
+      const [destino, origem] = await Promise.all([
+        prisma.user.findUnique({ where: { id: Number(paraVetId) }, select: { email: true, fullName: true, phone: true } }),
+        deVetId ? prisma.user.findUnique({ where: { id: Number(deVetId) }, select: { fullName: true } }) : null,
+      ]);
+      if (!destino) return;
+
+      const atendimentoNumero = formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero);
+
+      await emailService.enviarTransferenciaEvolucao({
+        paraEmail:     destino.email,
+        paraNome:      destino.fullName,
+        deNome:        origem?.fullName ?? null,
+        animalNome:    animalNome ?? null,
+        atendimentoNumero,
+        titulo:        evolucao.titulo ?? null,
+        especialidade: evolucao.especialidade ?? null,
+        dataInicio:    evolucao.dataInicio ?? null,
+        modo,
+      }).catch(() => {});
+
+      if (!destino.phone) return;
+      const assumida = modo === 'ASSUMIDA';
+      const msg = [
+        assumida
+          ? '🐴 *S2Vet — Evolução assumida por outro profissional*'
+          : '🐴 *S2Vet — Nova evolução aberta em paralelo*',
+        origem?.fullName
+          ? (assumida ? `🙋 ${origem.fullName} assumiu a condução` : `👥 ${origem.fullName} abriu uma nova evolução`)
+          : '',
+        `🐎 ${animalNome ?? 'Paciente'}${atendimentoNumero ? ` — ${atendimentoNumero}` : ''}`,
+        evolucao.titulo ? `📝 ${evolucao.titulo}` : '',
+        assumida ? '' : 'Sua evolução continua sob sua responsabilidade.',
+      ].filter(Boolean).join('\n');
+
+      // Instância da clínica (Evolution). Sem instância conectada, cai no provider legado.
+      const envio = await whatsappService.sendMessage(
+        { empresaId: req.empresaId, equipeId: req.equipeId },
+        destino.phone, msg,
+      ).catch(() => ({ sucesso: false }));
+      if (!envio?.sucesso) await whatsappService.sendWhatsApp(destino.phone, msg).catch(() => {});
+    } catch { /* silencioso — notificação não bloqueia o atendimento */ }
+  });
+}
+
+// Tolerância de relógio ao comparar "o horário do agendamento já chegou?" — mesmo
+// 1 min que AgendamentoController usa em DATA_PASSADA. NÃO é folga de antecipação:
+// antecipar um atendimento exige REAGENDAR (regra de negócio, ver `criar`).
+const TOLERANCIA_INICIO_MS = 60_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTROLLER
@@ -197,10 +264,16 @@ const EvolucaoController = {
   // ── Criar evolução ────────────────────────────────────────────────────────
   // POST /clinica/evolucoes
   //
-  // Regra: não permite criar se já existir uma evolução EM_ANDAMENTO para este animal.
+  // Evolução em andamento do PRÓPRIO profissional continua BLOQUEANDO (400
+  // EVOLUCAO_EM_ANDAMENTO): ele finaliza ou cancela a que abriu antes de abrir outra
+  // para o mesmo paciente — nunca atende a si mesmo em paralelo.
+  // Evolução em andamento de OUTRO profissional não bloqueia: responde 409
+  // EVOLUCAO_EM_ANDAMENTO com os dados dela para o frontend oferecer as duas saídas —
+  // ASSUMIR (PATCH /:id/assumir) ou CRIAR UMA NOVA (reenvio com `confirmarConcorrente`),
+  // caso em que o outro profissional é comunicado por e-mail/WhatsApp.
 
   criar: async (req, res) => {
-    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO', agendamentoId } = req.body;
+    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO', agendamentoId, confirmarConcorrente } = req.body;
     const userId = req.user.id;
 
     if (!animalId)      return res.status(400).json({ sucesso: false, mensagem: 'Animal é obrigatório' });
@@ -221,17 +294,49 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       }
 
-      // Bloqueia nova evolução se já existe uma em andamento para este animal
-      const evolucaoAberta = await prisma.evolucaoClinica.findFirst({
-        where: { animalId: Number(animalId), status: 'EM_ANDAMENTO', ativo: true },
-        select: { id: true },
+      // Evoluções em andamento deste animal (pode haver mais de uma quando
+      // profissionais diferentes atendem o mesmo paciente em paralelo).
+      const abertas = await prisma.evolucaoClinica.findMany({
+        where:   { animalId: Number(animalId), status: 'EM_ANDAMENTO', ativo: true },
+        orderBy: { dataInicio: 'desc' },
+        select: {
+          id: true, numero: true, tipoAtendimento: true, dataInicio: true,
+          especialidade: true, titulo: true, veterinarioId: true,
+          veterinario: { select: { id: true, fullName: true } },
+        },
       });
 
-      if (evolucaoAberta) {
+      // A PRÓPRIA evolução aberta BLOQUEIA — e nem `confirmarConcorrente` derruba
+      // isso: ninguém atende a si mesmo em paralelo no mesmo paciente. Finalize ou
+      // cancele a que você abriu antes de abrir outra.
+      const minhaAberta = abertas.find(e => Number(e.veterinarioId) === Number(userId));
+      if (minhaAberta) {
         return res.status(400).json({
           sucesso:  false,
           mensagem: 'Já existe uma evolução em andamento para este animal. Finalize ou cancele-a antes de criar uma nova.',
           code:     'EVOLUCAO_EM_ANDAMENTO',
+        });
+      }
+
+      // Aberta por OUTRO profissional: exige decisão explícita (assumir OU criar
+      // uma nova em paralelo, reenviando com `confirmarConcorrente`).
+      const evolucaoAberta = abertas[0] ?? null;
+      if (evolucaoAberta && !confirmarConcorrente) {
+        return res.status(409).json({
+          sucesso:  false,
+          code:     'EVOLUCAO_EM_ANDAMENTO',
+          mensagem: `${evolucaoAberta.veterinario?.fullName ?? 'Outro profissional'} tem uma evolução em andamento para este paciente. Assuma a evolução ou confirme a criação de uma nova.`,
+          evolucaoAberta: {
+            id:                evolucaoAberta.id,
+            numero:            evolucaoAberta.numero,
+            tipoAtendimento:   evolucaoAberta.tipoAtendimento,
+            atendimentoNumero: formatAtendimentoNum(evolucaoAberta.tipoAtendimento, evolucaoAberta.numero),
+            dataInicio:        evolucaoAberta.dataInicio,
+            especialidade:     evolucaoAberta.especialidade,
+            titulo:            evolucaoAberta.titulo,
+            veterinarioId:     evolucaoAberta.veterinarioId,
+            veterinarioNome:   evolucaoAberta.veterinario?.fullName ?? null,
+          },
         });
       }
 
@@ -257,13 +362,27 @@ const EvolucaoController = {
           // (só vira FINALIZADO quando a evolução for finalizada — ver EvolucaoController.atualizar)
           const agendamento = await tx.agendamentoClinico.findFirst({
             where: { id: Number(agendamentoId), animalId: Number(animalId), ativo: true },
-            select: { id: true, numero: true, status: true },
+            select: { id: true, numero: true, status: true, dataHora: true },
           });
           if (!agendamento) {
             throw Object.assign(new Error('Agendamento não encontrado para este animal'), { statusCode: 404, code: 'AGENDAMENTO_NOT_FOUND' });
           }
           if (agendamento.status !== 'AGENDADO') {
             throw Object.assign(new Error('Agendamento já foi iniciado, concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
+          }
+          // Não se ANTECIPA um agendamento: atender antes da hora marcada exige
+          // REAGENDAR para o novo horário (senão a agenda passa a mentir sobre
+          // quando o paciente foi atendido e o horário original fica ocupado à toa).
+          const marcado = new Date(agendamento.dataHora).getTime();
+          if (marcado - Date.now() > TOLERANCIA_INICIO_MS) {
+            const quando = new Date(agendamento.dataHora).toLocaleString('pt-BR', {
+              day: '2-digit', month: '2-digit', year: 'numeric',
+              hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+            });
+            throw Object.assign(
+              new Error(`Este agendamento está marcado para ${quando}. Para atender antes, reagende-o para o novo horário.`),
+              { statusCode: 400, code: 'AGENDAMENTO_ANTECIPADO' },
+            );
           }
           numero = agendamento.numero;
           tipoAtendimento = 'AG';
@@ -313,6 +432,20 @@ const EvolucaoController = {
         req.user.email,
         `EVOLUCAO_CRIADA | id=${evolucao.id} | animal=${animalId} | num=${evolucao.tipoAtendimento}-${evolucao.numero} | status=${status}`
       );
+
+      // Atendimento em paralelo: o outro profissional (só chega aqui a evolução
+      // aberta por OUTRO — a própria bloqueia acima) é comunicado de que uma nova
+      // evolução foi aberta para o mesmo paciente; a dele segue com ele.
+      if (evolucaoAberta) {
+        notificarEvolucao({
+          req,
+          paraVetId:  evolucaoAberta.veterinarioId,
+          deVetId:    userId,
+          modo:       'PARALELA',
+          animalNome: animal.nome,
+          evolucao:   evolucaoAberta,
+        });
+      }
 
       res.status(201).json({
         sucesso: true,
@@ -644,6 +777,89 @@ const EvolucaoController = {
       res.json({ sucesso: true, dados: cancelada });
     } catch (error) {
       console.error('Erro ao cancelar evolução:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Assumir evolução de outro profissional ────────────────────────────────
+  // PATCH /clinica/evolucoes/:id/assumir
+  //
+  // Mesma lógica do "assumir" da agenda (AgendamentoController.assumir): é um PUXAR
+  // PARA SI, não a edição do registro alheio — por isso NÃO passa por
+  // `podeOperarRegistro` (que exigiria ser o autor). O gate é o RBAC da rota
+  // (atendimento.evolucoes.editar), o acesso ao animal e o escopo clínico.
+  // Quem estava conduzindo a evolução é comunicado por e-mail e WhatsApp.
+  //
+  // SÓ se assume evolução de OUTRO profissional — qualquer paciente, sem exceção.
+  // A própria evolução aberta não se assume (ela já é dele): responde 400
+  // EVOLUCAO_JA_MINHA e o caminho continua sendo editar/finalizar/cancelar.
+
+  assumir: async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+      const existente = await prisma.evolucaoClinica.findFirst({
+        where:   { AND: [{ id: Number(id) }, escopoEvolucaoWhere(req)] },
+        include: { animal: { select: { nome: true } } },
+      });
+
+      if (!existente || !existente.ativo) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      if (existente.status !== 'EM_ANDAMENTO') {
+        return res.status(400).json({
+          sucesso:  false,
+          mensagem: 'Só é possível assumir uma evolução em andamento.',
+          code:     'EVOLUCAO_NAO_ABERTA',
+        });
+      }
+      if (Number(existente.veterinarioId) === Number(userId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Esta evolução já é sua.', code: 'EVOLUCAO_JA_MINHA' });
+      }
+
+      const anteriorId = existente.veterinarioId;
+
+      const assumida = await prisma.evolucaoClinica.update({
+        where: { id: existente.id },
+        data:  {
+          veterinarioId:   userId,
+          modificadoPorId: userId,
+          dataModificacao: new Date(),
+        },
+        include: INCLUDE_PADRAO,
+      });
+
+      await registrarAuditoria(
+        userId,
+        req.user.fullName,
+        req.user.email,
+        `EVOLUCAO_ASSUMIDA | id=${existente.id} | animal=${existente.animalId} | de=${anteriorId ?? '-'} | para=${userId}`
+      );
+
+      notificarEvolucao({
+        req,
+        paraVetId:  anteriorId,
+        deVetId:    userId,
+        modo:       'ASSUMIDA',
+        animalNome: existente.animal?.nome ?? null,
+        evolucao:   existente,
+      });
+
+      res.json({
+        sucesso: true,
+        dados: {
+          ...assumida,
+          atendimentoNumero: formatAtendimentoNum(assumida.tipoAtendimento, assumida.numero),
+        },
+      });
+    } catch (error) {
+      console.error('Erro ao assumir evolução:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },

@@ -4,7 +4,7 @@
 // Se não estiver logado → redireciona para /login com returnUrl.
 
 import { useEffect, useState, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 
@@ -13,6 +13,7 @@ type Estado = 'aguardando_auth' | 'carregando' | 'sucesso_aceito' | 'sucesso_rec
 export default function AprovarVinculoProprietario() {
   const [searchParams]              = useSearchParams();
   const navigate                    = useNavigate();
+  const location                    = useLocation();
   const { user, loading: authLoading } = useAuth();
 
   const [estado,   setEstado]   = useState<Estado>('aguardando_auth');
@@ -32,11 +33,13 @@ export default function AprovarVinculoProprietario() {
       return;
     }
 
-    // Não logado → redireciona para login com returnUrl para voltar após autenticação
+    // Não logado → redireciona para login com returnUrl para voltar após autenticação.
+    // A rota vem do ROUTER (useLocation), não de window.location: sob HashRouter o
+    // window.location.pathname é sempre `/` e o search é vazio — a rota e o token
+    // moram no fragmento. Lendo window.location o returnUrl saía `%2F` (perdendo o
+    // token) e o proprietário caía na home depois de logar. Ver CLAUDE.md §14.
     if (!user) {
-      const returnUrl = encodeURIComponent(
-        window.location.pathname + window.location.search
-      );
+      const returnUrl = encodeURIComponent(location.pathname + location.search);
       navigate(`/login?returnUrl=${returnUrl}&msg=login_required_to_approve`, { replace: true });
       return;
     }
@@ -58,7 +61,7 @@ export default function AprovarVinculoProprietario() {
         setEstado(status === 410 ? 'expirado' : 'erro');
         setMensagem(msg);
       });
-  }, [authLoading, user, searchParams, navigate]);
+  }, [authLoading, user, searchParams, navigate, location.pathname, location.search]);
 
   // ── Tela de espera enquanto verifica autenticação ─────────────────────────
   if (estado === 'aguardando_auth' || authLoading) {

@@ -1234,6 +1234,76 @@ const emailService = {
     console.log(`[emailService] Transferência de agenda → ${paraEmail} (${itens.length} item(ns))`);
   },
 
+  // ── Evolução clínica: assumida por outro profissional / aberta em paralelo ──
+  // Mesma comunicação da transferência de agenda, na superfície do atendimento.
+  // `modo`:
+  //   'ASSUMIDA' → o destinatário PERDEU a evolução: `deNome` assumiu a condução.
+  //   'PARALELA' → a evolução do destinatário CONTINUA com ele, mas `deNome` abriu
+  //                uma NOVA evolução para o mesmo paciente (atendimento simultâneo).
+  async enviarTransferenciaEvolucao({
+    paraEmail, paraNome, deNome, animalNome, atendimentoNumero,
+    titulo, especialidade, dataInicio, modo = 'ASSUMIDA',
+  }) {
+    if (!podeEnviar() || !paraEmail) return;
+    const appUrl   = process.env.APP_URL || 'http://localhost:5173';
+    const assumida = modo === 'ASSUMIDA';
+    const paciente = animalNome ?? 'Paciente';
+    const quando   = dataInicio
+      ? new Date(dataInicio).toLocaleString('pt-BR', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+        })
+      : null;
+
+    const assunto = assumida
+      ? `[S2Vet] Evolução assumida por outro profissional — ${paciente}`
+      : `[S2Vet] Nova evolução aberta em paralelo — ${paciente}`;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      paraEmail,
+      subject: assunto,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">
+              ${assumida ? '🙋 Evolução assumida por outro profissional' : '👥 Nova evolução aberta em paralelo'}
+            </h2>
+            <p style="color:#374151;">
+              Olá, <strong>${paraNome ?? 'profissional'}</strong>!
+              ${assumida
+                ? `${deNome ? `<strong>${deNome}</strong> assumiu` : 'Outro profissional assumiu'} a condução da evolução clínica abaixo. Você não é mais o responsável por ela.`
+                : `${deNome ? `<strong>${deNome}</strong> abriu` : 'Outro profissional abriu'} uma NOVA evolução para este paciente. A evolução abaixo continua sob sua responsabilidade.`}
+            </p>
+
+            <div style="background:white;border:2px solid #a7f3d0;border-radius:12px;padding:20px;margin:24px 0;">
+              <p style="margin:0;color:#111827;font-weight:700;font-size:15px;">${paciente}</p>
+              ${atendimentoNumero ? `<p style="margin:6px 0 0;color:#059669;font-weight:700;font-size:13px;">${atendimentoNumero}</p>` : ''}
+              ${titulo ? `<p style="margin:6px 0 0;color:#374151;font-size:13px;">📝 ${titulo}</p>` : ''}
+              ${especialidade ? `<p style="margin:6px 0 0;color:#6b7280;font-size:13px;">🩺 ${especialidade}</p>` : ''}
+              ${quando ? `<p style="margin:6px 0 0;color:#6b7280;font-size:13px;">📅 Iniciada em ${quando}</p>` : ''}
+            </div>
+
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                Abrir o S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              ${assumida ? 'Transferência de responsabilidade registrada no S2Vet.' : 'Atendimento simultâneo registrado no S2Vet.'}
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Evolução (${modo}) → ${paraEmail}`);
+  },
+
   // ── Lembrete 1 dia antes ao proprietário ──────────────────────────────────
   async enviarLembreteDiaAnteriorProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, vetPhone, dataHora, appUrl: appUrlParam }) {
     if (!podeEnviar()) return;

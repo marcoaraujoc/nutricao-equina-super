@@ -86,7 +86,13 @@ api.interceptors.response.use(
     }
 
     drainQueue(false);
-    window.location.href = '/login';
+    // HashRouter: a rota vive no fragmento. `'/login'` levava para um PATH de
+    // servidor (o dev server responde index.html, o router acha o hash vazio e
+    // acrescenta `#/login`) — resultado: `localhost:5173/login#/login`, com a rota
+    // anterior e seus parâmetros perdidos no caminho. `'/#/login'` é a URL
+    // canônica: mesmo path, então a troca de hash nem recarrega a página; vindo de
+    // um path espúrio, recarrega e normaliza o endereço. Ver CLAUDE.md §14.
+    window.location.href = '/#/login';
     return Promise.reject(error);
   }
 );
