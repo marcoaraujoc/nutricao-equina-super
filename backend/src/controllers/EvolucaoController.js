@@ -116,11 +116,6 @@ function notificarEvolucao({ req, paraVetId, deVetId, evolucao, animalNome, modo
   });
 }
 
-// Tolerância de relógio ao comparar "o horário do agendamento já chegou?" — mesmo
-// 1 min que AgendamentoController usa em DATA_PASSADA. NÃO é folga de antecipação:
-// antecipar um atendimento exige REAGENDAR (regra de negócio, ver `criar`).
-const TOLERANCIA_INICIO_MS = 60_000;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTROLLER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,20 +365,11 @@ const EvolucaoController = {
           if (agendamento.status !== 'AGENDADO') {
             throw Object.assign(new Error('Agendamento já foi iniciado, concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
           }
-          // Não se ANTECIPA um agendamento: atender antes da hora marcada exige
-          // REAGENDAR para o novo horário (senão a agenda passa a mentir sobre
-          // quando o paciente foi atendido e o horário original fica ocupado à toa).
-          const marcado = new Date(agendamento.dataHora).getTime();
-          if (marcado - Date.now() > TOLERANCIA_INICIO_MS) {
-            const quando = new Date(agendamento.dataHora).toLocaleString('pt-BR', {
-              day: '2-digit', month: '2-digit', year: 'numeric',
-              hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
-            });
-            throw Object.assign(
-              new Error(`Este agendamento está marcado para ${quando}. Para atender antes, reagende-o para o novo horário.`),
-              { statusCode: 400, code: 'AGENDAMENTO_ANTECIPADO' },
-            );
-          }
+          // ADIANTAR é permitido: o paciente chegou antes, o profissional vagou —
+          // atende-se e pronto. O que continua proibido é o inverso, mexer na
+          // agenda para TRÁS do relógio (`AgendamentoController.criar`/`atualizar`
+          // recusam com DATA_PASSADA). Não existe mais bloqueio de antecipação
+          // aqui: exigir reagendamento para atender 20 min antes era atrito puro.
           numero = agendamento.numero;
           tipoAtendimento = 'AG';
           agendamentoIdFinal = agendamento.id;

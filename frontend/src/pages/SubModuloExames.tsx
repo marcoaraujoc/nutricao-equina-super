@@ -709,6 +709,9 @@ export default function SubModuloExames({
   const podeCriar     = isGestor || podeExecutar('atendimento.exames.criar');
   const podeDeletar   = isGestor || podeExecutar('atendimento.exames.deletar');
   const podeFinalizar = isGestor || podeExecutar('atendimento.exames.finalizar');
+  // Imprimir a requisição e compartilhá-la (WhatsApp/e-mail) são a mesma coisa:
+  // conteúdo saindo do sistema. Quem só tem VER não faz nenhum dos três.
+  const podeImprimir  = isGestor || podeExecutar('atendimento.exames.imprimir');
   // Só o gestor finaliza/exclui exame de outro; os demais só os que solicitaram.
   const podeFinalizarEx = (ex: ExameClinico) => podeFinalizar && (isGestor || ex.veterinario?.id === user?.id);
   // O PEDIDO de exame (Laboratorial e Imagem) é controlado APENAS por
@@ -1279,9 +1282,13 @@ export default function SubModuloExames({
     } finally { setSavingResultado(false); }
   };
 
-  const imprimirExame = (ex: ExameClinico) => imprimirExameUtil(ex, animal);
+  const imprimirExame = (ex: ExameClinico) => {
+    if (!podeImprimir) { semPermissao('imprimir exame'); return; }
+    imprimirExameUtil(ex, animal);
+  };
 
   const compartilharWhatsApp = (ex: ExameClinico) => {
+    if (!podeImprimir) { semPermissao('compartilhar exame'); return; }
     const extra = parseExtra(ex.observacao);
     const examList = ex.descricao.split(', ');
     const texto = [
@@ -1299,6 +1306,7 @@ export default function SubModuloExames({
   };
 
   const compartilharEmail = (ex: ExameClinico) => {
+    if (!podeImprimir) { semPermissao('compartilhar exame'); return; }
     const extra = parseExtra(ex.observacao);
     const examList = ex.descricao.split(', ');
     const assunto = `Requisição de Exame - ${ex.tipo} - ${formatDate(ex.dataSolicitacao)}`;
@@ -2181,18 +2189,24 @@ export default function SubModuloExames({
                         {finalizandoId === ex.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Finalizar
                       </button>
                     )}
-                    <button onClick={() => imprimirExame(ex)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                      <Printer size={11} /> Imprimir
-                    </button>
-                    <button onClick={() => compartilharWhatsApp(ex)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                      <MessageCircle size={11} /> WhatsApp
-                    </button>
-                    <button onClick={() => compartilharEmail(ex)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                      <Mail size={11} /> E-mail
-                    </button>
+                    {podeImprimir && (
+                      <button onClick={() => imprimirExame(ex)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                        <Printer size={11} /> Imprimir
+                      </button>
+                    )}
+                    {podeImprimir && (
+                      <button onClick={() => compartilharWhatsApp(ex)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                        <MessageCircle size={11} /> WhatsApp
+                      </button>
+                    )}
+                    {podeImprimir && (
+                      <button onClick={() => compartilharEmail(ex)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                        <Mail size={11} /> E-mail
+                      </button>
+                    )}
                     {podeDeletar && ex.ativo && (
                       <button onClick={() => handleExcluirSolicitado(ex.id)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
@@ -2278,18 +2292,24 @@ export default function SubModuloExames({
                               {finalizandoId === ex.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                             </button>
                           )}
-                          <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Printer size={14} />
-                          </button>
-                          <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
-                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
-                            <MessageCircle size={14} />
-                          </button>
-                          <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
-                            className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Mail size={14} />
-                          </button>
+                          {podeImprimir && (
+                            <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
+                              className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                              <Printer size={14} />
+                            </button>
+                          )}
+                          {podeImprimir && (
+                            <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
+                              className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                              <MessageCircle size={14} />
+                            </button>
+                          )}
+                          {podeImprimir && (
+                            <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
+                              className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                              <Mail size={14} />
+                            </button>
+                          )}
                           {podeDeletar && ex.ativo && (
                             <button onClick={() => handleExcluirSolicitado(ex.id)} title="Cancelar exame"
                               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">

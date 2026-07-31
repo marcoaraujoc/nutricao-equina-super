@@ -374,6 +374,64 @@ async function listarParaExecucao(req, res) {
   }
 }
 
+// Reforço periódico → intervalo entre as doses, em MESES. Espelha INTERVALO_REFORCO_MESES
+// do SubModuloVacina. Tipo de dose fora deste mapa não gera agendamento automático.
+const INTERVALO_REFORCO_MESES = {
+  'reforço mensal': 1,
+  'reforco mensal': 1,
+  'reforço anual':  12,
+  'reforco anual':  12,
+};
+
+const intervaloDaDose = (dose) =>
+  INTERVALO_REFORCO_MESES[String(dose ?? '').trim().toLowerCase()] ?? null;
+
+/**
+ * Agenda as doses SEGUINTES de um esquema de reforço periódico.
+ *
+ * A dose aplicada agora é a PRIMEIRA da série, então de `quantidade` doses restam
+ * `quantidade - 1` a agendar: 5 doses de Reforço Mensal → 4 agendamentos, em +1, +2,
+ * +3 e +4 meses a partir da aplicação.
+ *
+ * Idempotente: se já existirem agendamentos de VACINA criados por esta mesma vacina
+ * (mesma observação de rastreio), não duplica — reexecutar não enche a agenda.
+ */
+async function agendarReforcos(tx, { vacina, dose, quantidade, veterinarioId, empresaId, equipeId, aplicadaEm }) {
+  const meses = intervaloDaDose(dose);
+  if (!meses) return 0;
+  const restantes = Math.max(0, (Number(quantidade) || 1) - 1);
+  if (restantes === 0) return 0;
+
+  const marca = `[VC-${vacina.id}]`;   // rastreio: liga o agendamento à vacina de origem
+  const jaExiste = await tx.agendamentoClinico.findFirst({
+    where:  { animalId: vacina.animalId, tipo: 'VACINA', ativo: true, observacao: { contains: marca } },
+    select: { id: true },
+  });
+  if (jaExiste) return 0;
+
+  for (let i = 1; i <= restantes; i++) {
+    const quando = new Date(aplicadaEm);
+    // setMonth normaliza sozinho o estouro de mês (31/01 + 1 mês → 03/03); é o
+    // comportamento aceitável para reforço, que não exige o mesmo dia exato.
+    quando.setMonth(quando.getMonth() + meses * i);
+    await tx.agendamentoClinico.create({
+      data: {
+        animalId:      vacina.animalId,
+        tipo:          'VACINA',
+        titulo:        `${vacina.nome} — ${i + 1}ª dose (${dose})`,
+        dataHora:      quando,
+        status:        'AGENDADO',
+        veterinarioId: veterinarioId ?? null,
+        criadoPorId:   veterinarioId ?? null,
+        empresaId:     empresaId ?? null,
+        equipeId:      equipeId ?? null,
+        observacao:    `${marca} Agendado automaticamente na aplicação da 1ª dose.`,
+      },
+    });
+  }
+  return restantes;
+}
+
 // PATCH /clinica/vacinas/:id/executar — aplica a vacina no plantão: debita o lote
 // (FEFO) e lança na fatura. Só FINALIZADA → EXECUTADA. Guarda contra registros legados
 // que já foram faturados/debitados no antigo `registrar` (não duplica).
@@ -405,6 +463,7 @@ async function executar(req, res) {
 
     const empresaIdEfetivo = req.empresaId ?? null;
     const agora = new Date();
+    let agendados = 0;   // nº de reforços agendados automaticamente (ver agendarReforcos)
 
     let evolucao = null;
     if (vacina.evolucaoId) {
@@ -481,6 +540,18 @@ async function executar(req, res) {
       await tx.$executeRawUnsafe(
         `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'EXECUTADA' WHERE id = $1`, Number(id)
       );
+
+      // Esquema de reforço (mensal/anual) com mais de uma dose: agenda as seguintes.
+      // A aplicação de agora é a 1ª — por isso `quantidade - 1` agendamentos.
+      agendados = await agendarReforcos(tx, {
+        vacina,
+        dose:          vacina.dose,
+        quantidade:    qtd,
+        veterinarioId,
+        empresaId:     empresaIdEfetivo,
+        equipeId:      req.equipeId ?? null,
+        aplicadaEm:    vacina.dataAplicacao ?? agora,
+      });
     });
 
     const atualizada = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) }, include: INCLUDE_VACINA });
@@ -490,7 +561,7 @@ async function executar(req, res) {
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
     );
-    res.json({ dados: { ...atualizada, ...(extras2[0] ?? {}) } });
+    res.json({ dados: { ...atualizada, ...(extras2[0] ?? {}) }, reforcosAgendados: agendados });
   } catch (err) {
     console.error('executar vacina:', err);
     res.status(500).json({ error: 'Erro ao executar vacina' });

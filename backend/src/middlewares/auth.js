@@ -78,6 +78,23 @@ const authenticate = async (req, res, next) => {
       }
 
       if (!req.empresaId) {
+        // Sem contexto escolhido (ex.: logo após o login, que limpa a seleção): a
+        // PRÓPRIA empresa vem primeiro. Antes vinha o vínculo de equipe MAIS RECENTE,
+        // então o dono de clínica caía na empresa de outra pessoa em que foi
+        // convidado — inclusive no gate de cadastro, que é por empresa: ele salvava
+        // o cadastro na clínica dele e, ao logar, a tela pedia de novo (porque caía
+        // na outra empresa, onde de fato não havia confirmação).
+        const propria = await prisma.empresa.findFirst({
+          where:   { OR: [
+            { ownerId: decoded.id },
+            { equipes: { some: { membros: { some: { userId: decoded.id, cargo: 'GESTOR' } } } } },
+          ] },
+          select:  { id: true },
+          orderBy: { id: 'asc' },
+        });
+        if (propria) req.empresaId = propria.id;
+
+        if (!req.empresaId) {
         const membro = await prisma.membroEquipe.findFirst({
           where:   { userId: decoded.id },
           include: { equipe: { select: { empresaId: true } } },
@@ -100,6 +117,7 @@ const authenticate = async (req, res, next) => {
             });
             req.empresaId = animal?.empresaId ?? null;
           }
+        }
         }
       }
     } catch {

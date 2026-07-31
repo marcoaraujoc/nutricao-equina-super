@@ -74,6 +74,8 @@ interface PrescricaoGrupo {
   status: StatusGrupo;
   createdAt: string;
   itens: ItemGrupo[];
+  /** Aplicada pelo PROPRIETÁRIO: não entra no plantão nem na fatura. */
+  executadaPeloProprietario?: boolean;
 }
 
 interface FormItem {
@@ -156,23 +158,23 @@ const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
 // Ordem das abas de filtro por status no histórico
 const STATUS_ORDER: StatusGrupo[] = ['SALVO', 'FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE', 'CANCELADO'];
 
-// Categoria de uma prescrição a partir dos seus itens. Como a criação separa por
-// categoria, normalmente cada grupo é homogêneo; 'Misto' cobre grupos legados/editados.
-type CategoriaPresc = 'Controlado' | 'Normal' | 'Procedimento' | 'Misto';
+// Categoria de uma prescrição a partir dos seus itens — espelha o agrupamento do
+// backend (`categoriaPara` em PrescricaoGrupoController): medicamento comum e
+// procedimento convivem no MESMO documento ('Geral'); só o CONTROLADO se separa,
+// porque o receituário de controle especial é documento distinto por lei.
+// 'Misto' só aparece em grupo legado, criado quando a separação era por tipo.
+type CategoriaPresc = 'Controlado' | 'Geral' | 'Misto';
 
 const CATEGORIA_BADGE: Record<CategoriaPresc, string> = {
-  Controlado:   'bg-red-100 text-red-700',
-  Normal:       'bg-blue-100 text-blue-700',
-  Procedimento: 'bg-emerald-100 text-emerald-700',
-  Misto:        'bg-gray-100 text-gray-600',
+  Controlado: 'bg-red-100 text-red-700',
+  Geral:      'bg-blue-100 text-blue-700',
+  Misto:      'bg-gray-100 text-gray-600',
 };
 
 function categoriaGrupo(g: PrescricaoGrupo): CategoriaPresc {
   const cats = new Set<CategoriaPresc>(
     g.itens.map(i =>
-      i.tipo === 'PROCEDIMENTO' ? 'Procedimento'
-        : i.medicamentoCat?.controlado ? 'Controlado'
-        : 'Normal',
+      i.tipo !== 'PROCEDIMENTO' && i.medicamentoCat?.controlado ? 'Controlado' : 'Geral',
     ),
   );
   return cats.size === 1 ? [...cats][0] : 'Misto';
@@ -408,6 +410,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     return [];
   });
   const [editingLocalIdx,  setEditingLocalIdx]  = useState<number | null>(null);
+  // Prescrição que o PROPRIETÁRIO aplica em casa: fica fora do plantão (Execução de
+  // Prescrição) e, por consequência, nunca gera cobrança nem baixa de estoque —
+  // FaturaItem e movimento só nascem na execução.
+  const [executadaPeloProprietario, setExecutadaPeloProprietario] =
+    useState<boolean>(grupo?.executadaPeloProprietario ?? false);
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
   const [removendoItemId,  setRemovendoItemId]  = useState<number | null>(null);
@@ -805,8 +812,26 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     return true;
   };
 
+  /**
+   * Lista efetiva a salvar = itens da lista + o que está no formulário.
+   *
+   * Quando o formulário está EDITANDO um item (`editingLocalIdx`), ele SUBSTITUI
+   * aquele item — não entra como um novo. Sem isso, quem importava do orçamento,
+   * clicava em "Alterar" para informar dosagem/via e ia direto no Salvar (sem passar
+   * por "Atualizar item") via o item ORIGINAL, ainda sem dosagem, continuar na lista:
+   * o salvamento era barrado com "Informe a dosagem de …" apontando justamente o
+   * medicamento que a pessoa acabara de preencher — e, se passasse, salvaria duplicado.
+   */
+  const itensParaSalvar = (): FormItem[] => {
+    if (formEstaVazio()) return localItens;
+    if (editingLocalIdx !== null) {
+      return localItens.map((it, i) => (i === editingLocalIdx ? form : it));
+    }
+    return [...localItens, form];
+  };
+
   const handleSalvar = async () => {
-    const itens = formEstaVazio() ? localItens : [...localItens, form];
+    const itens = itensParaSalvar();
     if (itens.length === 0) {
       setErroInline('Adicione ao menos um item na prescrição');
       return;
@@ -815,7 +840,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (bloqueadoPorDosagem(itens)) return;
     setSaving(true);
     try {
-      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
+      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens), executadaPeloProprietario });
       const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
       // Salvou → só agora marca os itens de orçamento como importados
       await marcarOrcamentoSalvo(itens);
@@ -823,6 +848,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       clearDraft();
       setLocalItens([]);
       resetForm();
+      setEditingLocalIdx(null);   // a lista foi zerada — índice de edição não aponta mais nada
       setSavedGrupos(grupos);
       onSaved();
     } catch (err: unknown) {
@@ -842,17 +868,18 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       if (pendingFinalizeRef.current) {
         ids = pendingFinalizeRef.current;
       } else if (isCreate && !savedGrupos) {
-        const itens = formEstaVazio() ? localItens : [...localItens, form];
+        const itens = itensParaSalvar();
         if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
         if (bloqueadoPorDosagem(itens)) return;
-        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
+        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens), executadaPeloProprietario });
         const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
         // Grupos criados (persistidos) → marca os itens de orçamento como importados
         await marcarOrcamentoSalvo(itens);
         // Registra os grupos criados — se a finalização falhar (ex: alerta de
         // estoque), a nova tentativa os reutiliza em vez de criar duplicados
         setSavedGrupos(grupos);
+        setEditingLocalIdx(null);   // já persistido: o índice de edição não vale mais
         ids = grupos.map(g => g.id);
       } else if (savedGrupos) {
         ids = savedGrupos.map(g => g.id);
@@ -1339,20 +1366,46 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
                 </div>
 
-                {/* Checkbox medicamento fornecido pelo cliente */}
-                {isMed && (
-                  <div>
-                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={form.medicamentoCliente}
-                        onChange={e => set('medicamentoCliente', e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                      />
-                      <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
-                    </label>
-                    {form.medicamentoCliente && (
-                      <p className="text-xs text-amber-600 mt-1.5 ml-6">Sem baixa no estoque</p>
+                {/* Quem fornece × quem aplica — lado a lado, são decisões irmãs.
+                    "Fornecido pelo Cliente" é do ITEM (não baixa estoque);
+                    "Aplicada pelo proprietário" é da PRESCRIÇÃO inteira (não vai ao
+                    plantão nem à fatura). */}
+                {(isMed || (isCreate && canEdit && !isReadOnly && !savedGrupos)) && (
+                  <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                    {isMed && (
+                      <div>
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={form.medicamentoCliente}
+                            onChange={e => set('medicamentoCliente', e.target.checked)}
+                            className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                          <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
+                        </label>
+                        {form.medicamentoCliente && (
+                          <p className="text-xs text-amber-600 mt-1.5 ml-6">Sem baixa no estoque</p>
+                        )}
+                      </div>
+                    )}
+
+                    {isCreate && canEdit && !isReadOnly && !savedGrupos && (
+                      <div>
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={executadaPeloProprietario}
+                            onChange={e => setExecutadaPeloProprietario(e.target.checked)}
+                            className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                          <span className="text-sm text-red-600 font-medium">Será aplicada pelo Proprietário</span>
+                        </label>
+                        {executadaPeloProprietario && (
+                          <p className="text-xs text-amber-600 mt-1.5 ml-6">
+                            Fora da Execução de Prescrição e da fatura
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1983,6 +2036,16 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // ficam sempre visíveis, do mesmo jeito que Evolução e Exames já fazem.
   const semEvolucaoAtiva = !evolucaoId;
 
+  // Guard de acesso à página — mesmo padrão de Evolução/Vacina/Exames
+  if (!loadingPerms && !isGestor && !podeExecutar('atendimento.prescricoes.ler')) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+        <FileText size={32} className="mb-3" />
+        <p className="text-sm">Sem permissão para visualizar prescrições</p>
+      </div>
+    );
+  }
+
   return (
     <>
       <div ref={viewTopRef} />
@@ -2114,7 +2177,10 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
               const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
-              const editavel   = grupoNaoExecutado(g) && canEdit && (isGestor || eProprioAutor);
+              // Prescrição NÃO EXECUTADA é alterável por quem tem ALTERAR na matriz.
+              // Sem filtro de autoria nem de cargo (armadilha 28-c) e usando o slug de
+              // EDITAR — antes usava o de CRIAR (`canEdit`) e ainda exigia ser o autor.
+              const editavel   = grupoNaoExecutado(g) && podeEditar;
               const podeFinalizarDireto = g.status === 'SALVO';
               const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutor);
               return (
@@ -2134,6 +2200,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${CATEGORIA_BADGE[categoriaGrupo(g)]}`}>
                       {categoriaGrupo(g)}
                     </span>
+                    {g.executadaPeloProprietario && (
+                      <span className="ml-1 inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700"
+                        title="Aplicada pelo proprietário — fora do plantão e da fatura">
+                        Proprietário
+                      </span>
+                    )}
                     <div className="mt-0.5">
                       <span className="text-xs text-gray-600 font-medium">{g.itens.length}</span>
                       <span className="text-[10px] text-gray-400 ml-1">
@@ -2191,7 +2263,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       <div className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
           const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
-          const editavelMobile = grupoNaoExecutado(g) && canEdit && (isGestor || eProprioAutorMobile);
+          const editavelMobile = grupoNaoExecutado(g) && podeEditar;
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -2221,14 +2293,19 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <Pencil size={11} /> Alterar
                 </button>
               )}
-              <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))}
-                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                <MessageCircle size={11} /> WhatsApp
-              </button>
-              <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))}
-                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                <Mail size={11} /> E-mail
-              </button>
+              {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+              {podeImprimir && (
+                <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))}
+                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                  <MessageCircle size={11} /> WhatsApp
+                </button>
+              )}
+              {podeImprimir && (
+                <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))}
+                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                  <Mail size={11} /> E-mail
+                </button>
+              )}
               {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                 <button onClick={() => imprimirPrescricao(g, animal)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
@@ -2279,7 +2356,10 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           animalId={animalId}
           animal={animal}
           grupo={editingGrupo}
-          canEdit={isGestor}
+          // Quem tem ALTERAR na matriz edita de fato. Estava fixo em `isGestor`: para
+          // todo o resto da equipe o botão "Alterar" abria o modal em modo LEITURA —
+          // parecia visualização, e a prescrição não executada era inalterável.
+          canEdit={podeEditar}
           canFinalizarCancelar={canFinalizarCancelar}
           podeImprimir={podeImprimir}
           onClose={fecharModal}

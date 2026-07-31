@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -85,6 +86,8 @@ function Label({ text, required, optional }: { text: string; required?: boolean;
 
 export default function CadastroPessoal() {
   const { user, refreshUser }      = useAuth();
+  // Contexto ativo (seletor de empresa) — o cadastro carregado é o DESTA empresa
+  const { loading: empresaLoading, contextoAtivo } = useEmpresa();
   const { refreshSelectedAnimal }  = useSelectedAnimal();
   const navigate                   = useNavigate();
   const { loading: loadingPerms }  = usePermissoes();
@@ -247,14 +250,17 @@ export default function CadastroPessoal() {
     : 'dia inteiro';
 
   useEffect(() => {
-    if (loadingPerms) return;
+    if (loadingPerms || empresaLoading) return;
     const loadUserData = async () => {
       if (!user?.email) { setLoading(false); return; }
       try {
-        // Sessão por cookie HttpOnly — o cookie é enviado automaticamente
-        const res = await fetch('/api/users/me', { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
+        // OBRIGATÓRIO usar o axios (`api`), não `fetch` cru: é o interceptor dele que
+        // injeta `x-empresa-id`/`x-equipe-id` (contexto ativo do seletor). Com fetch,
+        // a requisição saía SEM contexto e o backend caía no fallback — o vínculo de
+        // equipe MAIS RECENTE — devolvendo o cadastro e o tipo de OUTRA empresa.
+        const res = await api.get('/users/me');
+        if (res.data) {
+          const data = res.data;
           // Locais definidos na inclusão como membro (bound do horário do profissional)
           const locaisCarregados: LocalTrabalhoForm[] = (data.locaisTrabalho ?? []).map((l: {
             localizacaoId: number; localizacaoNome: string | null;
@@ -312,7 +318,10 @@ export default function CadastroPessoal() {
       }
     };
     loadUserData();
-  }, [user?.email, loadingPerms]);
+    // Espera o contexto ativo resolver (mesmo gate do usePermissoes): sem ele a
+    // chamada sai sem `x-empresa-id` e volta o cadastro da empresa errada. E recarrega
+    // quando a empresa do seletor muda.
+  }, [user?.email, loadingPerms, empresaLoading, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
 
   const buscarCep = async (cep: string) => {
     const cepLimpo = cep.replace(/\D/g, '');
@@ -482,24 +491,39 @@ export default function CadastroPessoal() {
   // O horário definido pelo gestor ao incluir o membro é o que manda. O dia/horário
   // que o profissional informar por local deve caber DENTRO dele. Retorna a mensagem
   // de erro se extrapolar (dia fora ou horário fora da faixa); null se estiver ok.
+  //
+  // O MESMO local pode ter VÁRIAS linhas base (turnos com especialidades diferentes),
+  // então basta caber em UMA delas — validar contra a primeira encontrada reprovaria o
+  // turno da tarde por causa da faixa do turno da manhã.
   const validarDentroDaBase = (local: LocalTrabalhoForm): string | null => {
-    const base = locaisBase.find(b => b.localizacaoId === local.localizacaoId);
-    if (!base) return null; // local não definido na inclusão → sem limite da equipe
+    const bases = locaisBase.filter(b => b.localizacaoId === local.localizacaoId);
+    if (bases.length === 0) return null; // local não definido na inclusão → sem limite da equipe
     const nomeDia = (n: number) => DIAS_SEMANA_ATEND.find(x => x.v === n)?.l ?? String(n);
-    if (base.diasTrabalho.length > 0) {
-      const fora = local.diasTrabalho.filter(d => !base.diasTrabalho.includes(d));
-      if (fora.length > 0) {
-        const permitidos = [...base.diasTrabalho].sort((a, b) => a - b).map(nomeDia).join(', ');
-        return `Dias fora do definido pela equipe (permitido: ${permitidos}).`;
+
+    const cabeEm = (base: LocalTrabalhoForm): string | null => {
+      if (base.diasTrabalho.length > 0) {
+        const fora = local.diasTrabalho.filter(d => !base.diasTrabalho.includes(d));
+        if (fora.length > 0) {
+          const permitidos = [...base.diasTrabalho].sort((a, b) => a - b).map(nomeDia).join(', ');
+          return `Dias fora do definido pela equipe (permitido: ${permitidos}).`;
+        }
       }
+      if (base.horaInicioTrabalho && local.horaInicioTrabalho && local.horaInicioTrabalho < base.horaInicioTrabalho) {
+        return `Entrada antes do definido pela equipe (a partir de ${base.horaInicioTrabalho}).`;
+      }
+      if (base.horaFimTrabalho && local.horaFimTrabalho && local.horaFimTrabalho > base.horaFimTrabalho) {
+        return `Saída após o definido pela equipe (até ${base.horaFimTrabalho}).`;
+      }
+      return null;
+    };
+
+    let primeiroErro: string | null = null;
+    for (const base of bases) {
+      const erro = cabeEm(base);
+      if (!erro) return null;                       // coube em algum turno da equipe
+      if (primeiroErro === null) primeiroErro = erro;
     }
-    if (base.horaInicioTrabalho && local.horaInicioTrabalho && local.horaInicioTrabalho < base.horaInicioTrabalho) {
-      return `Entrada antes do definido pela equipe (a partir de ${base.horaInicioTrabalho}).`;
-    }
-    if (base.horaFimTrabalho && local.horaFimTrabalho && local.horaFimTrabalho > base.horaFimTrabalho) {
-      return `Saída após o definido pela equipe (até ${base.horaFimTrabalho}).`;
-    }
-    return null;
+    return primeiroErro;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -560,13 +584,11 @@ export default function CadastroPessoal() {
     };
 
     try {
-      const res     = await fetch('/api/users/me', {
-        method:      'PUT',
-        credentials: 'include',
-        headers:     { 'Content-Type': 'application/json' },
-        body:        JSON.stringify(payload),
-      });
-      const resData = await res.json();
+      // axios (`api`): leva `x-empresa-id`/`x-equipe-id` — o cadastro é gravado na
+      // empresa ATIVA. Com `fetch` cru ia sem contexto e caía na empresa errada.
+      const put     = await api.put('/users/me', payload);
+      const resData = put.data ?? {};
+      const res     = { ok: put.status >= 200 && put.status < 300 };
 
       if (res.ok) {
         // O backend renovou o cookie de acesso com o userType atualizado.
@@ -576,7 +598,12 @@ export default function CadastroPessoal() {
 
         await refreshSelectedAnimal();
 
-        if (form.tipoUsuario === 'VETERINARIO') {
+        // Profissional (qualquer cargo da empresa: gestor, vet, estagiário, enfermeiro,
+        // secretaria, financeiro, fornecedor) vai ao Mapa de Atendimento. Só o CLIENTE
+        // segue o fluxo de animais. Antes, só quem tinha `tipoUsuario` VETERINARIO caía
+        // no mapa — os demais iam parar em "meus animais", que não é tela deles.
+        const ehClienteAqui = !cargoEquipe && form.tipoUsuario === 'PROPRIETARIO';
+        if (!ehClienteAqui) {
           localStorage.setItem('s2vet_ob', 'd');
           navigate('/mapa-atendimento');
         } else {
@@ -594,8 +621,16 @@ export default function CadastroPessoal() {
       } else {
         setErroInline(resData.error || 'Não foi possível salvar o cadastro. Tente novamente.');
       }
-    } catch {
-      setErroInline('Erro de conexão com o servidor. Verifique sua internet e tente novamente.');
+    } catch (err: unknown) {
+      // O axios REJEITA em 4xx/5xx (o `fetch` antigo devolvia res.ok=false), então o
+      // motivo real vinha do servidor e era descartado como "erro de conexão".
+      // Só é falha de rede quando não há resposta nenhuma.
+      const resposta = (err as { response?: { data?: { error?: string; mensagem?: string } } })?.response;
+      setErroInline(
+        resposta
+          ? (resposta.data?.error ?? resposta.data?.mensagem ?? 'Não foi possível salvar o cadastro. Tente novamente.')
+          : 'Erro de conexão com o servidor. Verifique sua internet e tente novamente.',
+      );
     } finally {
       setSaving(false);
     }
@@ -960,11 +995,18 @@ export default function CadastroPessoal() {
 
               {/* Botão que revela o formulário do novo local */}
               {!mostrarFormLocal && (
-                <button type="button"
-                  onClick={() => { setErroLocal(null); setEditIndex(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
-                  className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
-                  <Plus size={13} /> Adicionar local e horário de trabalho
-                </button>
+                <>
+                  <button type="button"
+                    onClick={() => { setErroLocal(null); setEditIndex(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                    <Plus size={13} /> Adicionar local e horário de trabalho
+                  </button>
+                  <p className="text-[11px] text-gray-400 mt-1.5">
+                    O mesmo local pode entrar mais de uma vez, com outros dias, horário e
+                    especialidade — ex.: clínico seg/qua/sex e dermatologista ter/qui na
+                    mesma hípica.
+                  </p>
+                </>
               )}
 
               {/* Formulário do novo local: local + dias + horas em UMA linha;
@@ -1004,9 +1046,9 @@ export default function CadastroPessoal() {
                         }
                         // Ignora o próprio item ao editar (não conflita consigo mesmo)
                         const outros = form.locaisTrabalho.filter((_, i) => i !== editIndex);
-                        // Mesmo local não se repete; horários não podem coincidir
-                        const jaTem = outros.some(l => l.localizacaoId === rascunhoLocal.localizacaoId);
-                        if (jaTem) { setErroLocal('Este local já foi adicionado'); return; }
+                        // O mesmo local pode se repetir com outros dias/horário/especialidade
+                        // (clínico seg/qua/sex e dermatologista ter/qui na mesma Hípica);
+                        // o que não pode é sobrepor o turno de outra linha.
                         const conflito = conflitoEntreLocais([...outros, rascunhoLocal]);
                         if (conflito) { setErroLocal(conflito); return; }
                         // Dia/horário deve caber no expediente da empresa (o que manda)…

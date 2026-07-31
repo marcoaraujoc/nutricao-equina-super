@@ -90,19 +90,19 @@ const especialidadesMinhas = async (req, res) => {
 
     const permitidas = await nomesEspecialidadesPermitidas(req);
 
-    let nomes;
-    if (gestor) {
-      const rows = await prisma.especialidade.findMany({
-        where: { ativo: true }, select: { nome: true }, orderBy: { nome: 'asc' },
-      });
-      nomes = rows.map(r => r.nome);
-    } else {
-      const rows = await prisma.usuarioEspecialidade.findMany({
-        where:   { userId: req.user.id, especialidade: { ativo: true } },
-        select:  { especialidade: { select: { nome: true } } },
-      });
-      nomes = rows.map(r => r.especialidade.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-    }
+    // CATÁLOGO COMPLETO PARA TODOS (decisão de 2026-07-30). Antes, quem não era gestor
+    // via apenas as especialidades do PRÓPRIO vínculo — restrição fixa no código, que a
+    // matriz do Controle de Acesso não oferece configurar (é binária, ver 28-c) e que na
+    // prática impedia de orçar: todo item do orçamento exige especialidade, e 19 dos 39
+    // vínculos não-gestores da base não tinham nenhuma vinculada — lista vazia, nada a
+    // adicionar. Pior: enfermeiro, secretaria e financeiro NÃO TÊM especialidade por
+    // regra (seção 15), então jamais conseguiriam montar um orçamento.
+    // Agora quem decide é a matriz: quem tem a ação de criar orçamento escolhe qualquer
+    // especialidade que a EMPRESA atenda.
+    const rows = await prisma.especialidade.findMany({
+      where: { ativo: true }, select: { nome: true }, orderBy: { nome: 'asc' },
+    });
+    let nomes = rows.map(r => r.nome);
 
     // Restringe às especialidades que a empresa efetivamente atende (Configurações /
     // espécies do dono) — vale tanto para gestor quanto para membro comum.

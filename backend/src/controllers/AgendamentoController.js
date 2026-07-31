@@ -4,12 +4,16 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
+// Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
+const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria }                      = require('../lib/auditoria');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
 const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
+// Autoria por NÍVEL da matriz (Controle de Acesso), não por cargo — ver CLAUDE.md #28
+const { NIVEL_ORDINAL }                           = require('../middlewares/permissao.middleware');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -91,10 +95,12 @@ async function conflitoDeAgenda(vetId, inicio, duracaoMin, ignorarId = null) {
   return null;
 }
 
-// SÓ o GESTOR (bypass FULL / cargo GESTOR) e o ADMIN operam a agenda de OUTRO
-// profissional (criar, trocar profissional, cancelar…). Os demais perfis — mesmo com
-// nível EQUIPE concedido na matriz — só a PRÓPRIA agenda.
-function souGestorAgenda(req) {
+// REGRA BASAL (não é permissão da matriz): NINGUÉM agenda na agenda de OUTRO
+// profissional — só o GESTOR (e o ADMIN). Todo o resto da equipe, com qualquer nível
+// concedido no Controle de Acesso, agenda apenas na PRÓPRIA agenda.
+// É invariante de negócio: a agenda pertence a quem atende. Para o estagiário poder
+// marcar, ele precisa ter coluna própria na grade — não de permissão extra.
+function podeAgendarParaOutro(req) {
   return req.membroCargo === 'GESTOR'
       || req.permissaoNivel === 'FULL'
       || req.user?.userType === 'ADMIN'
@@ -108,8 +114,7 @@ function ehMinhaAgenda(req, item) {
 }
 
 function podeOperarAgendamento(req, item) {
-  // Gestor/Admin: qualquer agendamento. Demais: só o próprio (não basta ter EQUIPE).
-  return souGestorAgenda(req) || ehMinhaAgenda(req, item);
+  return podeAgendarParaOutro(req) || ehMinhaAgenda(req, item);
 }
 
 /**
@@ -223,7 +228,12 @@ const INCLUDE_GLOBAL = {
       id:      true,
       nome:    true,
       especie: { select: { nome: true } },
-      user:    { select: { id: true, fullName: true } },
+      // ONDE o animal está — é o que a agenda mostra ao lado do nome (a espécie
+      // não ajuda quem vai se deslocar até ele). `local` é o campo textual legado,
+      // usado como fallback de quem foi cadastrado antes do catálogo de locais.
+      local:       true,
+      localizacao: { select: { id: true, nome: true } },
+      user:        { select: { id: true, fullName: true } },
     },
   },
 };
@@ -270,23 +280,45 @@ const AgendamentoController = {
       };
 
       // Regra: equipes/agendas são INDEPENDENTES em tudo. Cada agendamento pertence ao
-      // contexto em que foi criado. Um profissional vê apenas os agendamentos DAQUELE
-      // contexto — GESTOR vê todos do contexto; os demais veem só os SEUS (vet responsável
-      // ou criador), mesmo que o animal seja compartilhado com outra equipe.
+      // contexto em que foi criado, e o recorte da listagem é o CONTEXTO — não a autoria.
+      //
+      // VER a agenda é tudo-ou-nada: quem tem `atendimento.agendamentos.ler` (a rota já
+      // exige, em qualquer nível) enxerga os agendamentos de TODOS no contexto, seja
+      // gestor, vet, estagiário ou secretaria. Antes, só o GESTOR via a agenda inteira e
+      // os demais viam apenas os SEUS — restrição que a matriz do Controle de Acesso nem
+      // oferece configurar (a tela é binária, ver armadilha 28-c) e que na prática
+      // impedia a equipe de saber quem está atendendo quem.
+      // O que continua limitando é ISOLAMENTO, não permissão: contexto (empresa/equipe)
+      // e, para o PROPRIETARIO, os próprios animais.
       if (isAdmin) {
         if (req.empresaId) where.id = { in: await idsDoContexto() };
       } else if (userType === 'PROPRIETARIO') {
         where.animal = { userId: Number(userId) };
       } else if (req.empresaId) {
-        const ids = await idsDoContexto();
-        const membroWhere = { userId: Number(userId), cargo: 'GESTOR' };
-        if (req.equipeId) membroWhere.equipeId = Number(req.equipeId);
-        else              membroWhere.equipe   = { empresaId: Number(req.empresaId) };
-        const isGestor = !!(await prisma.membroEquipe.findFirst({ where: membroWhere, select: { id: true } }));
-        where.id = { in: ids };
-        if (!isGestor) where.OR = [{ veterinarioId: Number(userId) }, { criadoPorId: Number(userId) }];
+        where.id = { in: await idsDoContexto() };
+        // ÚNICA exceção, e ela NÃO é permissão: o PRESTADOR (cargo FORNECEDOR) só
+        // alcança animais com designação ativa — deny-by-default do
+        // DesignacaoPrestador, que existe para o profissional externo (ferrador,
+        // fisioterapeuta) não receber a base de pacientes inteira. É escopo de
+        // DADOS/tenant, a mesma distinção que a armadilha 28 do CLAUDE.md faz.
+        // Dentro do que ele alcança, vê os agendamentos de TODOS, como qualquer um.
+        //
+        // O `OR` com os próprios é obrigatório: a designação é INATIVADA quando o
+        // encaminhamento é concluído, então sem ele o prestador perderia de vista
+        // os atendimentos que ele mesmo fez (medido: um caso real ia de 5 para 0).
+        if (req.membroCargo === 'FORNECEDOR') {
+          const { where: escopoAnimal } = await buildAnimalScopeWhere(req);
+          if (escopoAnimal && Object.keys(escopoAnimal).length > 0) {
+            where.OR = [
+              { animal: escopoAnimal },
+              { veterinarioId: Number(userId) },
+              { criadoPorId:   Number(userId) },
+            ];
+          }
+        }
       } else {
-        // Sem contexto de empresa ativo: apenas os próprios (vet responsável ou criador)
+        // Sem contexto de empresa ativo não há equipe a que pertencer: só os próprios
+        // (vet responsável ou criador) — é isolamento, não regra de autoria.
         where.OR = [{ veterinarioId: Number(userId) }, { criadoPorId: Number(userId) }];
       }
 
@@ -405,8 +437,8 @@ const AgendamentoController = {
       }
 
       // Só o gestor agenda para OUTRO profissional; os demais só para si mesmos.
-      if (!souGestorAgenda(req) && veterinarioId && Number(veterinarioId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Apenas o gestor pode agendar para outro profissional. Você só pode agendar para você mesmo.' });
+      if (!podeAgendarParaOutro(req) && veterinarioId && Number(veterinarioId) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.' });
       }
 
       const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
@@ -646,7 +678,25 @@ const AgendamentoController = {
       if (tipo && TIPOS_VALIDOS.includes(tipo)) data.tipo = tipo;
       if (dataHora) {
         const quando = new Date(dataHora);
-        if (!isNaN(quando.getTime())) data.dataHora = quando;
+        if (!isNaN(quando.getTime())) {
+          // Reagendar ADIANTA à vontade — para mais cedo, inclusive para daqui a
+          // pouco — mas nunca para trás do relógio: agendamento é compromisso
+          // futuro, e marcar no passado faria a agenda mentir sobre o que ainda
+          // está por acontecer. Mesmo teto e mesma tolerância do `criar`.
+          //
+          // Só vale quando a data MUDA: um agendamento que já passou (ninguém
+          // concluiu) continua podendo ter título/observação corrigidos, e o
+          // formulário reenvia a data original junto — bloquear ali seria travar
+          // a correção, não o reagendamento.
+          const mudou = quando.getTime() !== new Date(item.dataHora).getTime();
+          if (mudou && quando.getTime() < Date.now() - 60_000) {
+            return res.status(400).json({
+              error: 'Não é possível reagendar para uma data/horário que já passou.',
+              code:  'DATA_PASSADA',
+            });
+          }
+          data.dataHora = quando;
+        }
       }
       if (observacao !== undefined) data.observacao = observacao?.trim() || null;
 
@@ -659,7 +709,7 @@ const AgendamentoController = {
       // Transferir o atendimento: o GESTOR move o de qualquer um; o profissional move
       // o DELE (é a agenda dele que está sendo passada adiante).
       const trocaDeVet = novoVetId !== undefined && novoVetId !== item.veterinarioId;
-      if (trocaDeVet && !souGestorAgenda(req) && Number(item.veterinarioId) !== Number(req.user.id)) {
+      if (trocaDeVet && !podeAgendarParaOutro(req) && Number(item.veterinarioId) !== Number(req.user.id)) {
         return res.status(403).json({
           error: 'Você só pode transferir os atendimentos em que é o profissional responsável.',
         });
@@ -950,11 +1000,8 @@ const AgendamentoController = {
       });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
 
-      // Só profissional que atende: veterinário (ou gestor/admin, que é vet por cargo)
-      const ehVet = req.user?.userType === 'VETERINARIO' || souGestorAgenda(req);
-      if (!ehVet) {
-        return res.status(403).json({ error: 'Apenas veterinários podem assumir um atendimento.' });
-      }
+      // Quem pode assumir é quem tem a ação concedida no Controle de Acesso (o slug
+      // de editar já foi verificado pela rota). Sem filtro por userType/cargo.
       if (Number(item.veterinarioId) === Number(req.user.id)) {
         return res.status(400).json({ error: 'Este atendimento já é seu.' });
       }
@@ -1014,7 +1061,7 @@ const AgendamentoController = {
 
       // O GESTOR transfere a agenda de qualquer profissional; o profissional transfere
       // a DELE (deVetId tem de ser ele mesmo).
-      if (!souGestorAgenda(req) && Number(deVetId) !== Number(req.user.id)) {
+      if (!podeAgendarParaOutro(req) && Number(deVetId) !== Number(req.user.id)) {
         return res.status(403).json({ error: 'Você só pode transferir a sua própria agenda.' });
       }
 

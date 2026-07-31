@@ -3,6 +3,7 @@
 // Usada por EvolucaoController, PrescricaoController e AnimalController.
 
 const prisma = require('./prisma').default;
+const { resolverTipoNoContexto } = require('./tipoContexto');
 
 /**
  * Verifica se o usuário tem acesso a um animal específico.
@@ -24,13 +25,27 @@ const prisma = require('./prisma').default;
  *   false → acesso negado  → caller retorna 403
  *   null  → animal não encontrado → caller retorna 404
  */
-async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equipeId = null }) {
+async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equipeId = null, userType: userTypeCtx = null }) {
   const u = await prisma.user.findUnique({
     where:  { id: Number(userId) },
     select: { userType: true, role: true },
   });
-  const userType = u?.userType ?? 'PROPRIETARIO';
-  const role     = u?.role     ?? 'USER';
+  const role = u?.role ?? 'USER';
+
+  // TIPO POR EMPRESA (armadilha 36-e): o que decide o acesso é o tipo no CONTEXTO
+  // ATIVO, não o `users.userType` global. O caller pode passar `userType` (o
+  // `req.user.userType` que o authenticate já resolveu); sem ele, resolvemos aqui
+  // com os mesmos empresaId/equipeId que a função já recebe.
+  //
+  // Era o bug de 2026-07-30: profissional com `users.userType = PROPRIETARIO` e cargo
+  // VETERINARIO na empresa caía no ramo de proprietário — `animal.userId === userId` —
+  // e levava 403 em TODO paciente que não fosse dela. A listagem mostrava os animais
+  // (lib/animalScope), mas abrir qualquer um dava 403, e junto caíam histórico,
+  // evoluções, prescrições e agendamentos daquele animal.
+  const userType = userTypeCtx
+    ?? (await resolverTipoNoContexto({
+      userId, userType: u?.userType ?? null, role, empresaId, equipeId,
+    })).tipo;
 
   if (role === 'ADMIN' && userType !== 'PROPRIETARIO') return true;
 

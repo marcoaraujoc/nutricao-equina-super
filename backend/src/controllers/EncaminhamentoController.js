@@ -165,9 +165,18 @@ const EncaminhamentoController = {
           select: { prestadorId: true },
         }),
         // Especialidades do catálogo (UsuarioEspecialidade) — membro incluído na equipe
-        // com especialidade aparece mesmo sem/além do tipoServico do cadastro Fornecedor
+        // com especialidade aparece mesmo sem/além do tipoServico do cadastro Fornecedor.
+        // ESCOPADO À EMPRESA: a especialidade é POR EMPRESA (migration 20260807000000) —
+        // sem o filtro, o prestador que é ortopedista em OUTRA clínica aparecia aqui como
+        // ortopedista. Vínculo legado (empresaId null) continua valendo, senão o cadastro
+        // anterior à migration sumiria da tela.
         prisma.usuarioEspecialidade.findMany({
-          where:  { userId: { in: userIds } },
+          where: {
+            userId: { in: userIds },
+            ...(req.empresaId
+              ? { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] }
+              : {}),
+          },
           select: { userId: true, especialidade: { select: { nome: true } } },
         }),
         // Especialidades gravadas no CADASTRO de Fornecedor (FornecedorEspecialidade,

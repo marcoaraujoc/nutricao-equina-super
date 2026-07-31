@@ -8,6 +8,10 @@ const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils')
 const { registrarAuditoria } = require('../lib/auditoria');
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 const perfilProp = require('../lib/proprietarioPerfil');
+// Localidades atendidas do cliente, com a frequência de visitas de CADA uma
+const localidadesProp = require('../lib/proprietarioLocalidades');
+// Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
+const { salvarVinculo } = require('../lib/usuarioEmpresa');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -113,6 +117,9 @@ const ProprietarioController = {
       // Reordena pelo nome da empresa ativa (o merge pode ter trocado o fullName)
       proprietarios.sort((a, b) => String(a.fullName ?? '').localeCompare(String(b.fullName ?? ''), 'pt-BR'));
 
+      // Localidades atendidas + frequência de cada uma (combinado desta empresa)
+      proprietarios = await localidadesProp.anexarEmLista(proprietarios, req.empresaId);
+
       res.json({ sucesso: true, dados: proprietarios });
     } catch (err) {
       console.error('Erro ao listar proprietários:', err);
@@ -136,7 +143,8 @@ const ProprietarioController = {
         if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado' });
       }
 
-      res.json({ sucesso: true, dados: await perfilProp.aplicarPerfil(proprietario, req.empresaId) });
+      const comPerfil = await perfilProp.aplicarPerfil(proprietario, req.empresaId);
+      res.json({ sucesso: true, dados: await localidadesProp.anexar(comPerfil, req.empresaId) });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
     }
@@ -148,6 +156,7 @@ const ProprietarioController = {
       fullName, email, phone, phone2, senha,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
+      localidades,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -156,6 +165,16 @@ const ProprietarioController = {
     if (!validarDiaVencimento(diaVencimentoFatura)) {
       return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura é obrigatório e deve ser entre 1 e 25' });
     }
+
+    // Localidades atendidas, cada uma com a sua frequência de visitas semanais
+    const locParsed = localidadesProp.normalizarLocalidades(localidades);
+    if (locParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locParsed.erro });
+
+    // O campo único vira AGREGADO (a maior frequência) quando há localidades — é o
+    // que as leituras legadas e o ADMIN global continuam enxergando.
+    const freqEfetiva = locParsed.localidades?.length
+      ? localidadesProp.frequenciaAgregada(locParsed.localidades)
+      : (frequenciaVisitas ? Number(frequenciaVisitas) : null);
 
     // Dados que pertencem à EMPRESA (viram o perfil isolado), não ao login
     const dadosDaEmpresa = {
@@ -172,7 +191,7 @@ const ProprietarioController = {
       cnpj:              cnpj?.trim()        || null,
       mensalista:        Boolean(mensalista),
       valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
-      frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null,
+      frequenciaVisitas: freqEfetiva,
       diaVencimentoFatura: Number(diaVencimentoFatura),
     };
 
@@ -200,7 +219,9 @@ const ProprietarioController = {
           return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado nesta empresa' });
         }
 
+        await salvarVinculo(prisma, existente.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
         await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+        await localidadesProp.salvarLocalidades(prisma, existente.id, req.empresaId, locParsed.localidades);
 
         // Proprietário legado sem empresa de origem: adota a atual (não sobrescreve)
         if (!existente.empresaId) {
@@ -212,9 +233,10 @@ const ProprietarioController = {
         }
 
         const base = await prisma.user.findUnique({ where: { id: existente.id }, select: SELECT_PROPRIETARIO });
+        const comPerfil = await perfilProp.aplicarPerfil(base, req.empresaId);
         return res.status(201).json({
           sucesso: true,
-          dados:   await perfilProp.aplicarPerfil(base, req.empresaId),
+          dados:   await localidadesProp.anexar(comPerfil, req.empresaId),
           mensagem: 'Cliente já possuía acesso ao sistema — foi criado o cadastro desta empresa.',
         });
       }
@@ -247,7 +269,9 @@ const ProprietarioController = {
           select: SELECT_PROPRIETARIO,
         });
         if (req.empresaId) {
+          await salvarVinculo(tx, criado.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
           await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+          await localidadesProp.salvarLocalidades(tx, criado.id, req.empresaId, locParsed.localidades);
         }
         return criado;
       });
@@ -259,7 +283,7 @@ const ProprietarioController = {
         senhaInicial:      senhaEfetiva,
       }).catch(err => console.warn('[ProprietarioController] Falha ao enviar e-mail de boas-vindas:', err?.message));
 
-      res.status(201).json({ sucesso: true, dados: proprietario });
+      res.status(201).json({ sucesso: true, dados: await localidadesProp.anexar(proprietario, req.empresaId) });
     } catch (err) {
       if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
       console.error('Erro ao criar proprietário:', err);
@@ -274,6 +298,7 @@ const ProprietarioController = {
       fullName, email, phone, phone2, senha, ativo,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
+      localidades,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -281,6 +306,10 @@ const ProprietarioController = {
     if (diaVencimentoFatura !== undefined && !validarDiaVencimento(diaVencimentoFatura)) {
       return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura deve ser entre 1 e 25' });
     }
+
+    // Localidades atendidas, cada uma com a sua frequência de visitas semanais
+    const locParsed = localidadesProp.normalizarLocalidades(localidades);
+    if (locParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locParsed.erro });
 
     try {
       const isAdmin = req.user?.role === 'ADMIN';
@@ -315,7 +344,13 @@ const ProprietarioController = {
         cnpj:             cnpj?.trim()        || null,
         ...(mensalista        !== undefined ? { mensalista: Boolean(mensalista) } : {}),
         ...(valorAssistencia  !== undefined ? { valorAssistencia:  valorAssistencia  ? Number(valorAssistencia)  : null } : {}),
-        ...(frequenciaVisitas !== undefined ? { frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null } : {}),
+        // Com localidades informadas, o campo único é o AGREGADO delas (a maior
+        // frequência); sem elas, mantém o comportamento antigo do campo avulso.
+        ...(locParsed.localidades !== undefined
+          ? { frequenciaVisitas: localidadesProp.frequenciaAgregada(locParsed.localidades) }
+          : (frequenciaVisitas !== undefined
+              ? { frequenciaVisitas: frequenciaVisitas ? Number(frequenciaVisitas) : null }
+              : {})),
         ...(diaVencimentoFatura !== undefined ? { diaVencimentoFatura: Number(diaVencimentoFatura) } : {}),
       };
 
@@ -351,11 +386,13 @@ const ProprietarioController = {
           data:   dataUser,
           select: SELECT_PROPRIETARIO,
         });
+        await salvarVinculo(tx, Number(id), req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa });
         const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
+        await localidadesProp.salvarLocalidades(tx, Number(id), req.empresaId, locParsed.localidades);
         return perfilProp.mesclar(base, perfil);
       });
 
-      res.json({ sucesso: true, dados: proprietario });
+      res.json({ sucesso: true, dados: await localidadesProp.anexar(proprietario, req.empresaId) });
     } catch (err) {
       if (err.code === 'P2025') return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
       console.error('Erro ao atualizar proprietário:', err);

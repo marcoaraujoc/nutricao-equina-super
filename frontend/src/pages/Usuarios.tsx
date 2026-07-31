@@ -7,7 +7,7 @@ import axios from 'axios';
 import {
   Pencil, Trash2,
   ToggleLeft, ToggleRight,
-  Building2, Users2,
+  Building2, Users2, AlertCircle, X,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
@@ -150,6 +150,11 @@ const Usuarios = () => {
   const [salvando,    setSalvando]    = useState(false);
   const [erroSenha,   setErroSenha]   = useState('');
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
+  // Erro fica na SUPERFÍCIE da ação: `erroLinha` na linha do usuário (ativar/inativar)
+  // e `erroExclusao` dentro do modal, junto do botão que confirma.
+  const [erroLinha,    setErroLinha]    = useState<{ userId: number; mensagem: string } | null>(null);
+  const [erroExclusao, setErroExclusao] = useState<string | null>(null);
+  const [excluindo,    setExcluindo]    = useState(false);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
@@ -242,15 +247,24 @@ const Usuarios = () => {
     }
   };
 
+  // Mensagem do backend (409/400 trazem o motivo real — ex.: usuário é dono de
+  // empresa e precisa transferir a gestão antes) com fallback genérico.
+  const msgErro = (err: unknown, padrao: string): string =>
+    (err as { response?: { data?: { mensagem?: string; error?: string } } })?.response?.data?.mensagem
+    ?? (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+    ?? padrao;
+
   // ── Toggle ativo ──────────────────────────────────────────────────────────
 
   const handleToggle = async (u: Usuario) => {
+    setErroLinha(null);
     try {
       await api.patch(`/users/${u.id}/toggle`);
       toast.success(u.ativo ? 'Usuário inativado' : 'Usuário ativado');
       carregarUsuarios();
-    } catch {
-      setErroInline('Erro ao alterar status');
+    } catch (err: unknown) {
+      // Erro NA LINHA do usuário — o topo da página fica longe do botão clicado.
+      setErroLinha({ userId: u.id, mensagem: msgErro(err, 'Erro ao alterar status') });
     }
   };
 
@@ -258,14 +272,19 @@ const Usuarios = () => {
 
   const confirmarExclusao = async () => {
     if (!paraExcluir) return;
+    setErroExclusao(null);
+    setExcluindo(true);
     try {
       await api.delete(`/users/${paraExcluir.id}`);
       toast.success('Usuário excluído');
       setParaExcluir(null);
       carregarUsuarios();
-    } catch {
-      setErroInline('Erro ao excluir usuário');
-    }
+    } catch (err: unknown) {
+      // Fica DENTRO do modal, junto do "Sim, Excluir" — é onde o usuário está
+      // olhando. Mostra a mensagem do backend (ex.: 409 de dono de empresa, que
+      // lista as empresas a transferir), não um genérico.
+      setErroExclusao(msgErro(err, 'Erro ao excluir usuário'));
+    } finally { setExcluindo(false); }
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -278,21 +297,20 @@ const Usuarios = () => {
 
         <InlineError message={erroInline} className="mb-4" />
 
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-            <Users2 size={20} className="text-emerald-700" />
+        {/* Header — título à esquerda, ação à direita (mesmo padrão de Equipe e
+            Controle de Acesso). No mobile a ação desce e ocupa a largura toda. */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Users2 size={20} className="text-emerald-700" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Usuários</h1>
+              <p className="text-sm text-gray-500">Gestão de usuários do sistema.</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Usuários</h1>
-            <p className="text-sm text-gray-500">Gestão de usuários do sistema.</p>
-          </div>
-        </div>
-
-        {/* Botão */}
-        <div className="mb-3">
           <button onClick={abrirNovo}
-            className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold transition-colors text-sm w-full sm:w-auto">
+            className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold transition-colors text-sm w-full sm:w-auto flex-shrink-0">
             Novo Usuário
           </button>
         </div>
@@ -337,7 +355,7 @@ const Usuarios = () => {
                       Nenhum usuário encontrado.
                     </td>
                   </tr>
-                ) : filtrados.map(u => (
+                ) : filtrados.flatMap(u => ([
                   <tr key={u.id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
@@ -374,14 +392,29 @@ const Usuarios = () => {
                           className="p-1.5 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Editar">
                           <Pencil size={14} />
                         </button>
-                        <button onClick={() => setParaExcluir(u)}
+                        <button onClick={() => { setErroLinha(null); setErroExclusao(null); setParaExcluir(u); }}
                           className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
                           <Trash2 size={14} />
                         </button>
                       </div>
                     </td>
-                  </tr>
-                ))}
+                  </tr>,
+                  // Erro da ação NA LINHA em que ela foi disparada
+                  erroLinha?.userId === u.id && (
+                    <tr key={`erro-${u.id}`}>
+                      <td colSpan={6} className="px-5 pb-3 pt-0">
+                        <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
+                          <AlertCircle size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
+                          <span className="text-xs text-red-700 leading-snug">{erroLinha.mensagem}</span>
+                          <button onClick={() => setErroLinha(null)}
+                            className="ml-auto text-red-400 hover:text-red-600 flex-shrink-0">
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ]))}
               </tbody>
             </table>
           </div>
@@ -434,15 +467,24 @@ const Usuarios = () => {
                 Esta ação não pode ser desfeita.
               </p>
             </div>
-            <div className="p-6 flex gap-3">
-              <button onClick={() => setParaExcluir(null)}
-                className="flex-1 py-3 border border-gray-300 rounded-2xl text-gray-700 font-medium hover:bg-gray-50 transition-colors text-sm">
-                Cancelar
-              </button>
-              <button onClick={confirmarExclusao}
-                className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-semibold transition-colors text-sm">
-                Sim, Excluir
-              </button>
+            <div className="p-6 space-y-3">
+              {/* Erro do backend AQUI, colado no botão que o usuário clicou */}
+              {erroExclusao && (
+                <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl">
+                  <AlertCircle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
+                  <span className="text-xs text-red-700 leading-snug">{erroExclusao}</span>
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button onClick={() => { setParaExcluir(null); setErroExclusao(null); }}
+                  className="flex-1 py-3 border border-gray-300 rounded-2xl text-gray-700 font-medium hover:bg-gray-50 transition-colors text-sm">
+                  {erroExclusao ? 'Fechar' : 'Cancelar'}
+                </button>
+                <button onClick={confirmarExclusao} disabled={excluindo}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded-2xl font-semibold transition-colors text-sm">
+                  {excluindo ? 'Excluindo...' : 'Sim, Excluir'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

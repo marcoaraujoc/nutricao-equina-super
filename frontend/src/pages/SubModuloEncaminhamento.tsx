@@ -107,10 +107,11 @@ const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
 
 // ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
 
-function EncaminhamentoCard({ enc, podeEditar, onStatus }: {
-  enc:         Encaminhamento;
-  podeEditar:  boolean;
-  onStatus:    (id: number, status: StatusEnc) => void;
+function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
+  enc:              Encaminhamento;
+  podeEditar:       boolean;
+  podeCompartilhar: boolean;
+  onStatus:         (id: number, status: StatusEnc) => void;
 }) {
   const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
@@ -150,14 +151,19 @@ function EncaminhamentoCard({ enc, podeEditar, onStatus }: {
       </p>
 
       <div className="flex flex-wrap gap-2 mt-2">
-        <button onClick={() => abrirWhatsApp(texto)}
-          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-          <MessageCircle size={11} /> WhatsApp
-        </button>
-        <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)}
-          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-          <Mail size={11} /> E-mail
-        </button>
+        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+        {podeCompartilhar && (
+          <button onClick={() => abrirWhatsApp(texto)}
+            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+            <MessageCircle size={11} /> WhatsApp
+          </button>
+        )}
+        {podeCompartilhar && (
+          <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)}
+            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+            <Mail size={11} /> E-mail
+          </button>
+        )}
         {enc.status === 'PENDENTE' && podeEditar && (
           <button onClick={() => onStatus(enc.id, 'CANCELADO')}
             className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
@@ -171,10 +177,11 @@ function EncaminhamentoCard({ enc, podeEditar, onStatus }: {
 
 // ─── Linha da tabela desktop (padrão do Histórico de Evolução Clínica) ─────────
 
-function EncaminhamentoRow({ enc, podeEditar, onStatus }: {
-  enc:         Encaminhamento;
-  podeEditar:  boolean;
-  onStatus:    (id: number, status: StatusEnc) => void;
+function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
+  enc:              Encaminhamento;
+  podeEditar:       boolean;
+  podeCompartilhar: boolean;
+  onStatus:         (id: number, status: StatusEnc) => void;
 }) {
   const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
@@ -214,14 +221,18 @@ function EncaminhamentoRow({ enc, podeEditar, onStatus }: {
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-start gap-1">
-          <button onClick={() => abrirWhatsApp(texto)} title="WhatsApp"
-            className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-            <MessageCircle size={14} />
-          </button>
-          <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} title="E-mail"
-            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-            <Mail size={14} />
-          </button>
+          {podeCompartilhar && (
+            <button onClick={() => abrirWhatsApp(texto)} title="WhatsApp"
+              className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
+              <MessageCircle size={14} />
+            </button>
+          )}
+          {podeCompartilhar && (
+            <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} title="E-mail"
+              className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+              <Mail size={14} />
+            </button>
+          )}
           {enc.status === 'PENDENTE' && podeEditar && (
             <button onClick={() => onStatus(enc.id, 'CANCELADO')} title="Cancelar"
               className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
@@ -532,6 +543,8 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
 
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
   const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
+  // WhatsApp/e-mail tiram o conteúdo do sistema — mesmo gate do IMPRIMIR.
+  const podeCompartilhar = isGestor || podeExecutar('atendimento.encaminhamentos.imprimir');
   // FORNECEDOR só cancela/edita encaminhamentos que ele próprio criou
 
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
@@ -665,6 +678,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
                   key={enc.id}
                   enc={enc}
                   podeEditar={podeEditar && (isGestor || eAutor)}
+                  podeCompartilhar={podeCompartilhar}
                   onStatus={handleStatus}
                 />
               );
@@ -692,6 +706,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
                       key={enc.id}
                       enc={enc}
                       podeEditar={podeEditar && (isGestor || eAutor)}
+                      podeCompartilhar={podeCompartilhar}
                       onStatus={handleStatus}
                     />
                   );

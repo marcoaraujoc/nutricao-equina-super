@@ -228,6 +228,7 @@ function HistoricoResumidoPanel({
   onItemClick,
   onEditClick,
   podeEditarEvolucao,
+  podeImprimir,
 }: {
   animalId:    number;
   animal:      AnimalExtended | null;
@@ -235,6 +236,7 @@ function HistoricoResumidoPanel({
   onItemClick: (tab: SubModulo, itemId: number) => void;
   onEditClick: (grupo: GrupoResumoHistorico) => void;
   podeEditarEvolucao: (ev: ResumoHistoricoItem) => boolean;
+  podeImprimir: boolean;
 }) {
   const [itens,             setItens]             = useState<ResumoHistoricoItem[]>([]);
   const [carregando,        setCarregando]        = useState(false);
@@ -389,7 +391,7 @@ function HistoricoResumidoPanel({
                       <span className="text-[10px] text-gray-400 truncate">{totalItens} registro{totalItens !== 1 ? 's' : ''}</span>
                       <ChevronDown size={12} className={`text-gray-400 flex-shrink-0 transition-transform ${expandido ? 'rotate-180' : ''}`} />
                     </button>
-                    {!emAndamento && (
+                    {!emAndamento && podeImprimir && (
                       <button onClick={() => handleImprimir(grupo)} disabled={gerandoRelatorio} title="Imprimir atendimento"
                         className="p-1 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40">
                         {gerandoRelatorio ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
@@ -434,10 +436,12 @@ function HistoricoResumidoPanel({
                 Atendimento {previewAtendimento.atendimentoNumero}
               </span>
               <div className="flex items-center gap-2">
-                <button onClick={() => imprimirAtendimento(previewAtendimento, printAnimal)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
-                  <Printer size={13} /> Imprimir
-                </button>
+                {podeImprimir && (
+                  <button onClick={() => imprimirAtendimento(previewAtendimento, printAnimal)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+                    <Printer size={13} /> Imprimir
+                  </button>
+                )}
                 <button onClick={() => setPreviewAtendimento(null)} className="p-1 text-gray-400 hover:text-gray-600">
                   <X size={18} />
                 </button>
@@ -570,6 +574,7 @@ const Atendimento = () => {
   const { animalId: animalIdParam }           = useParams<{ animalId?: string }>();
 
   const podeFinalizarEvolucao = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
+  const podeImprimirEvolucao  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
   // FORNECEDOR: regra de autoria — só finaliza a evolução que ele próprio criou
   const isFornecedor = user?.userType === 'FORNECEDOR';
 
@@ -1004,6 +1009,7 @@ const Atendimento = () => {
                   }}
                   onEditClick={abrirEdicaoAtendimento}
                   podeEditarEvolucao={podeEditarEvolucaoHist}
+                  podeImprimir={podeImprimirEvolucao}
                 />
               </div>
             </div>
@@ -1050,6 +1056,7 @@ const Atendimento = () => {
                         abrirEdicaoAtendimento(grupo);
                       }}
                       podeEditarEvolucao={podeEditarEvolucaoHist}
+                      podeImprimir={podeImprimirEvolucao}
                     />
                   </div>
                 </div>

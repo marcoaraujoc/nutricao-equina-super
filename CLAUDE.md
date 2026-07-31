@@ -315,7 +315,14 @@ OrcamentoItem       (migration 20260723000000). Item tipo PROCEDIMENTO|COMBO|MED
                     aplicações/dia) voltam preenchidos na importação para a Prescrição.
                     VACINA: `quantidade` é o nº de DOSES (unidade 'dose').
                     OUTROS (migration 20260725000000): cobrança avulsa com 3 campos (nome, qtd de vezes,
-                    valor), sempre no nível do proprietário (animalId null). NÃO entra na importação
+                    valor). É RATEADO POR ANIMAL como os demais tipos — uma linha por animal
+                    selecionado (corrigido em 2026-07-30; antes forçava `animalId: null` no
+                    `addItem` do front e ignorava a seleção, impedindo cobrar taxa/transporte por
+                    paciente). Para deixá-lo no nível do proprietário, use o checkbox "Não
+                    selecionar animais" — que vale para TODOS os tipos, não só OUTROS.
+                    O backend nunca impôs a restrição: `criar` e `lancarNaFatura` sempre gravaram o
+                    `animalId` recebido, então o FaturaItem já sai atribuído ao animal.
+                    NÃO entra na importação
                     clínica (`TIPOS_CLINICOS` exclui OUTROS) — depois de ACEITO vai DIRETO para a fatura
                     em Financeiro > Faturamento, e só depois que os demais itens aceitos do MESMO
                     orçamento já tiverem `importadoEm` (isto é, importados numa evolução).
@@ -396,6 +403,25 @@ ProprietarioPerfil → cadastro do PROPRIETÁRIO por EMPRESA (tb_proprietario_pe
                     removerDaEmpresa), AnimalController (listar/obterPorId/criar), FaturaController
                     (listarProprietarios + FATURA_INCLUDE), OrcamentoController (listar/obter/criar/
                     atualizar/WhatsApp), UserController (getMe/updateMe).
+ProprietarioLocalidade → localidades atendidas do CLIENTE, cada uma com a SUA frequência de visitas
+                    semanais (tb_proprietario_localidades, migration 20260810000000).
+                    unique(userId, empresaId, localizacaoId) — uma frequência por lugar (não há
+                    "turno" como no MembroLocalTrabalho do profissional). POR EMPRESA, mesma razão
+                    do [[ProprietarioPerfil]]. Ex.: Sociedade Hípica Brasileira 2x/semana + Haras
+                    H.P. 3x/semana. O campo único `frequenciaVisitas` (User/ProprietarioPerfil/
+                    UsuarioEmpresa) virou AGREGADO — a MAIOR entre as localidades (somar estouraria
+                    a escala 1-7 do campo) — e existe só para leituras legadas e para o ADMIN
+                    global, que não tem empresa de contexto.
+                    LEITURA/ESCRITA: SEMPRE via `lib/proprietarioLocalidades.js`
+                    (`normalizarLocalidades`, `anexar`/`anexarEmLista`, `salvarLocalidades`,
+                    `frequenciaAgregada`). Acesso por SQL cru parametrizado (mesmo padrão do
+                    `isConvidado`/`cadastroConfirmadoEm`): funciona com o client Prisma ainda não
+                    regenerado — no Windows o `prisma generate` falha com o backend rodando.
+                    Front: repeater em `CadastroProprietario.tsx` reusando o `LocalizacaoCombobox`
+                    de `UsuarioFormModal`; ao menos uma localidade é obrigatória (era o que o campo
+                    único exigia). Backfill da migration: só o cliente cujos animais ativos estavam
+                    num ÚNICO local herdou a frequência antiga — com animais em vários lugares não
+                    há como saber a divisão, e chutar produziria um combinado que ninguém acordou.
 EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (empresa pessoal/CPF) —
                     mesmo critério de escopo do EmpresaContext. Campos: logoUrl, tipoFechamento
                     (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|null=compat), diaFechamentoFatura (dia do mês
@@ -1030,6 +1056,30 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-07-30 — Agenda: local no lugar da espécie + adiantar × passado
+- [x] **A agenda mostra o LOCAL do animal, não a espécie** — quem vai atender precisa saber
+      para ONDE ir, e "Equino" não informa nada numa clínica de equinos.
+      `AgendamentoController.INCLUDE_GLOBAL` passou a trazer `animal.local` (texto legado) e
+      `animal.localizacao { id, nome }`; no front, `localDoAnimal()` (duplicado em
+      `Agendamentos.tsx` e `SubModuloMinhaAgenda.tsx`) resolve catálogo → legado → null.
+      Trocado na lista do dia (cards + tabela) das duas telas e nos dois seletores de animal
+      da tela de agendamento (o `<select>` simples e o combobox de busca), onde o rótulo
+      "(Equino)" virou "(SOCIEDADE HIPICA BRASILEIRA)".
+- [x] **Adiantar PODE; reagendar para o passado NÃO.** As duas metades da regra:
+      - `AGENDAMENTO_ANTECIPADO` foi REMOVIDO de `EvolucaoController.criar` (e com ele a
+        constante `TOLERANCIA_INICIO_MS` do controller). No front saíram os `disabled` do
+        botão "Iniciar" (`Agendamentos.tsx`, `SubModuloMinhaAgenda.tsx`) e o `disabled` da
+        opção do seletor "Agendamento vinculado" (`SubModuloEvolucao.tsx`) — o rótulo agora
+        só INFORMA ("— adiantando" / "iniciar agora adianta o atendimento").
+      - `AgendamentoController.atualizar` ganhou o mesmo `DATA_PASSADA` que o `criar` já
+        tinha: era o furo por onde o "Editar" da Minha Agenda movia um agendamento para
+        trás do relógio. Só dispara quando a data MUDA — o formulário reenvia a data
+        original ao corrigir só o título, e bloquear ali travaria a correção, não o
+        reagendamento.
+      ⚠️ `agendamentoAntecipado()` (`utils/dateUtils.ts`) NÃO bloqueia mais nada: usar só
+      para informar. Para "já passou?" existe `dataHoraNoPassado()`, com a mesma tolerância
+      de 1 min do backend.
+
 ### Sessão 2026-07-29 — Evolução: assumir, atendimento em paralelo e fim da antecipação
 - [x] **Assumir evolução (mesma lógica da agenda)** — `PATCH /clinica/evolucoes/:id/assumir`
       (`EvolucaoController.assumir`): qualquer profissional com `atendimento.evolucoes.editar`
@@ -1063,12 +1113,11 @@ New-Item -ItemType Junction `
 - [x] **Atendimento ativo do shell = o MEU** — com duas evoluções abertas, `carregarEvolucoes`
       prefere a do próprio usuário no `onEvolucaoChange`. É a ela que prescrição, vacina e
       exames do shell se vinculam — sem isso o item clínico cairia na evolução do outro.
-- [x] **Agendamento não se antecipa** — `criar` recusa 400 `AGENDAMENTO_ANTECIPADO` quando
-      `agendamento.dataHora` ainda não chegou (`TOLERANCIA_INICIO_MS` = 1 min, só folga de
-      relógio). Atender antes exige REAGENDAR. Espelho no front: `agendamentoAntecipado()`
-      (`utils/dateUtils.ts`) desabilita "Iniciar" em `Agendamentos.tsx` e
-      `SubModuloMinhaAgenda.tsx` e a opção do seletor "Agendamento vinculado".
-      `EM_ANDAMENTO` (continuar atendimento já iniciado) nunca é bloqueado.
+- [x] ~~**Agendamento não se antecipa**~~ — **REVERTIDO em 2026-07-30, ver abaixo.** A regra
+      era: `EvolucaoController.criar` recusava 400 `AGENDAMENTO_ANTECIPADO` quando
+      `agendamento.dataHora` ainda não tinha chegado, e atender antes exigia REAGENDAR.
+      Exigir um reagendamento para atender 20 min mais cedo era atrito puro — o paciente
+      chega antes, o profissional vaga, e a agenda não deve atrapalhar isso.
 - [ ] Prescrição/vacina/exame criados numa evolução assumida seguem com o `veterinarioId`
       de quem os lançou (correto), mas a tela não sinaliza que o condutor da evolução mudou —
       avaliar um marcador de "assumida por" no histórico.
@@ -2192,6 +2241,67 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Farmácia, vacina.estoque e todos os módulos de cadastro têm checkPermission — os slugs do seed
     estão alinhados com os routes a partir de 2026-06-24.
 
+28-f. **VER a agenda é tudo-ou-nada: quem tem o slug vê a de TODOS (2026-07-30).**
+    `atendimento.agendamentos.ler` concedido = enxerga os agendamentos de todo o contexto,
+    em QUALQUER nível e para QUALQUER perfil (vet, estagiário, enfermeiro, secretaria,
+    financeiro, prestador). `AgendamentoController.listarGlobal` filtrava
+    `OR: [{veterinarioId}, {criadoPorId}]` para quem não fosse GESTOR — restrição que a
+    matriz nem oferece configurar (28-c) e que impedia a equipe de saber quem atende quem.
+    O recorte da listagem é o CONTEXTO (empresa/equipe), não a autoria.
+    Continuam valendo, porque são ISOLAMENTO e não permissão:
+    - PROPRIETARIO → só os agendamentos dos animais dele;
+    - sem empresa ativa → só os próprios (não há equipe a que pertencer);
+    - **PRESTADOR** (cargo FORNECEDOR) → só animais com designação ativa
+      (`buildAnimalScopeWhere`, deny-by-default do DesignacaoPrestador) **OR os próprios**.
+      O `OR` não é opcional: a designação é INATIVADA ao concluir o encaminhamento, então
+      sem ele o prestador perderia de vista os atendimentos que ele mesmo fez (medido numa
+      base real: um caso ia de 5 para 0).
+    AGIR sobre o agendamento de outro segue sendo outra história — ver 28-b (só GESTOR
+    agenda/transfere para outro; o resto usa "assumir").
+
+28-c. **Sem filtro de autoria: quem decide é SÓ o Controle de Acesso (2026-07-30).**
+    A tela de Controle de Acesso é BINÁRIA — o `PermCheck` marca/desmarca a ação e nem
+    oferece escolha entre PROPRIO e EQUIPE. Diferenciar os dois no código criava restrição
+    que o gestor não via nem conseguia configurar (o estagiário com "criar" marcado não
+    agendava nada; o fornecedor não editava registro de outro mesmo com nível concedido).
+    Agora: **ação concedida ao perfil = pode operar o registro**, sem checar autoria nem
+    cargo. `podeOperarRegistro(nivel)` passou a receber só o nível e devolve true para
+    qualquer nível ≥ PROPRIO — os ~19 call sites (Evolução, Prescrição, PrescriçãoGrupo,
+    Exame, Encaminhamento, Vacina) seguem automaticamente, pois os argumentos extras são
+    ignorados. `AgendamentoController.podeAgendarParaOutro` idem, e o `assumir` deixou de
+    exigir `userType === 'VETERINARIO'`. No FRONT saíram os gates `eProprioAutor` /
+    `isFornecedor` de `SubModuloEvolucao` e os `souVeterinario` de `Agendamentos`.
+    Para restringir alguém, TIRE a ação do perfil na matriz — não há mais meio-termo.
+
+28-d. **Só VER = NENHUM botão de ação no Atendimento (2026-07-30).** Perfil com apenas
+    `*.ler` marcado não pode ter nada acionável na tela — nem escondido atrás de um
+    handler que só falha depois do clique. Corrigido em Evolução, Prescrição, Vacina,
+    Exames, Encaminhamento e no shell (`Atendimento.tsx`):
+    - **Aprovar** evolução era `role === 'ADMIN' || 'VETERINARIO'` → passou a seguir
+      `atendimento.evolucoes.finalizar` (é o slug que a rota `PATCH /aprovar` exige).
+    - **Cancelar** evolução finalizada era role → segue `...evolucoes.deletar`
+      (slug da rota `PATCH /cancelar`). NUNCA gatear botão por `user.role`/`userType`:
+      o tipo é por empresa (36-e) e o gestor não configura role, configura a matriz.
+    - **Imprimir** só aparece com `*.imprimir` (faltava em Evolução, Exames e no
+      Histórico do Paciente do shell).
+    - **WhatsApp / E-mail** são conteúdo SAINDO do sistema: mesmo gate do IMPRIMIR
+      (não existe coluna própria para eles no Controle de Acesso).
+    - `abrirEdicao` (Evolução) abre em SOMENTE LEITURA quando não há permissão de
+      alterar — o `editItemId` vem do shell e não pode ser a porta dos fundos.
+    Ao criar tela nova: todo botão que não seja "ver" nasce dentro de `{podeX && …}`,
+    e o handler mantém o guard `if (!podeX) { semPermissao(...); return; }`.
+
+28-b. **Agenda: "só o gestor agenda para OUTRO" é regra BASAL (2026-07-30).** Não é
+    permissão da matriz e não se configura: a agenda pertence a quem atende, então apenas
+    GESTOR (bypass FULL / cargo GESTOR) e ADMIN criam/transferem/trocam profissional na
+    agenda alheia. O Controle de Acesso decide SE a pessoa agenda; esta regra decide PARA
+    QUEM. Quem não é gestor tem o **assumir** como caminho para pegar atendimento de outro.
+    ⚠️ O ESTAGIÁRIO não conseguia agendar NADA por causa da GRADE, não da regra: a lista de
+    colunas filtrava `cargo VETERINARIO|GESTOR|FORNECEDOR`, então ele não tinha coluna
+    própria e toda coluna era "de outro". A grade passou a listar todos os PROFISSIONAIS da
+    equipe (exclui só cargo PROPRIETARIO e ADMIN) — cada um com a sua coluna. Corolário:
+    quem precisa marcar precisa de coluna na grade, não de nível maior na matriz.
+
 28. **Autoria clínica é 100% RBAC (2026-07-10) — NÃO checar cargo/userType em controller.**
     A ÚNICA regra fixa no backend é o bypass de ADMIN. "Só o gestor finaliza uma evolução" é
     CONFIGURAÇÃO da matriz (seed dá VET/EST NENHUM em `*.finalizar`), não código. Padrão nos
@@ -2352,6 +2462,64 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     tentava usar o mesmo nome. O nome é o que distingue automática de escolhida: sem essa
     checagem, TODA equipe nova renomeava a única existente e o gestor perdia a anterior.
 
+36-h. **Módulos só liberam com o cadastro CONFIRMADO PELO PRÓPRIO usuário na empresa
+    (migration `20260809000000`).** `UsuarioEmpresa.cadastroConfirmadoEm` (null = pendente)
+    é gravado no `PUT /users/me` — isto é, quando a PESSOA salva o Cadastro Pessoal naquela
+    empresa. `getMe` devolve `cadastroConfirmado`, e o `SelectedAnimalContext` passou a
+    exigir `cadastroConfirmado && phone && endereco && cep` para `cadastroCompleto` (que
+    alimenta `isNewUser` → o bloqueio do Sidebar/ProtectedRoute). POR QUÊ: o GESTOR preenche
+    telefone e endereço ao incluir o membro, então o cadastro "parecia" completo e a pessoa
+    entrava com tudo liberado sem nunca abrir a tela nem conferir o que a clínica preencheu
+    por ela. Sem backfill de propósito: cada vínculo (inclusive os existentes) exige a
+    confirmação UMA vez, por empresa. Coluna lida/gravada por SQL cru (client Prisma pode
+    estar desatualizado — mesmo padrão do `isConvidado`).
+    ⚠️ **Empresa do login (sem contexto escolhido) = a PRÓPRIA.** `auth.js` passou a
+    procurar primeiro a empresa em que o usuário é dono/GESTOR e só depois o vínculo de
+    equipe mais recente. Como `AuthContext.login()` LIMPA a seleção do localStorage, todo
+    login entra sem contexto — e o fallback antigo ("mais recente") jogava o dono de
+    clínica na empresa alheia em que foi convidado. Com o gate de cadastro sendo POR
+    EMPRESA, ele salvava o cadastro na clínica dele e, ao logar, a tela pedia de novo:
+    caía na outra empresa, onde de fato não havia confirmação.
+    ⚠️ **Sem empresa no contexto, `cadastroConfirmado` é `true`** (e idem quando não há linha
+    de vínculo naquela empresa). Não é permissividade: a GRAVAÇÃO também depende de
+    `req.empresaId`, então retornar `false` ali criava DEADLOCK — a tela pedia o cadastro,
+    o usuário salvava, nada era confirmado e ela pedia de novo. Quem não tem empresa
+    resolvida não tem o que confirmar.
+
+36-g. **`fetch` cru NÃO leva o contexto de empresa (2026-07-30).** Só o interceptor do
+    axios (`services/api.ts`) injeta `x-empresa-id`/`x-equipe-id`. Chamada escopada por
+    empresa feita com `fetch('/api/...')` sai SEM contexto e o backend cai no fallback do
+    `auth.js` — `membroEquipe.findFirst({ orderBy: { createdAt: 'desc' } })`, o vínculo MAIS
+    RECENTE. Foi o que fazia o Cadastro Pessoal mostrar o cadastro/tipo de OUTRA empresa
+    mesmo com `tb_usuario_empresa` correta: `CadastroPessoal` usava `fetch` no GET e no PUT,
+    e `AuthContext.fetchMe` (que alimenta `user` no app inteiro) também. Corrigido: a tela
+    usa `api.get/put` e o `fetchMe` monta os headers do mesmo `localStorage` que o
+    `EmpresaContext` escreve. REGRA: toda chamada escopada por empresa vai por `api`
+    (axios); `fetch` cru só para rotas de auth (login, refresh, logout, 2FA, register).
+    O `CadastroPessoal` também passou a esperar `useEmpresa().loading` e a recarregar na
+    troca de contexto — mesmo gate do `usePermissoes` e do `SelectedAnimalContext`.
+
+36-f. **`UsuarioEmpresa` — tabela de ligação usuário × empresa (migration `20260808000000`).**
+    Modelo pedido em 30/07 e implementado: `users` guarda SÓ identidade/autenticação
+    (e-mail, senha, refresh token, 2FA, `role`, `ativo` global). O **perfil** do usuário
+    naquela empresa e TODO o cadastro dele ali (nome, telefone, cpf/cnpj, endereço, CRMV,
+    condição comercial de cliente) vivem em `tb_usuario_empresa`, unique(userId, empresaId).
+    Unifica `ProfissionalPerfil` + `ProprietarioPerfil` e acrescenta a coluna `perfil`, que
+    antes só existia como `MembroEquipe.cargo` (por EQUIPE) ou como o `users.userType`
+    GLOBAL — este último era a origem do vazamento entre clínicas.
+    LEITURA/ESCRITA: SEMPRE por `lib/usuarioEmpresa.js` (`perfilDaEmpresa`,
+    `aplicarVinculo`/`aplicarVinculoEmLista`/`aplicarVinculoEmRelacao`, `salvarVinculo`,
+    `definirPerfil`). NUNCA leia nome/telefone/endereço/documento de `users` numa tela de
+    empresa. `resolverTipoNoContexto` lê o `perfil` daqui primeiro (origem `VINCULO`).
+    Backfill da migration: vínculos de equipe (perfil = cargo, cadastro do
+    ProfissionalPerfil e, na falta, do `users`), cadastros de proprietário, proprietários
+    legados que só tinham animal na empresa e donos de empresa sem vínculo (GESTOR).
+    ⚠️ As tabelas antigas seguem existindo e são gravadas em paralelo (dual-write) até a
+    migração dos leitores terminar — ver PENDENTE abaixo. Não apagar antes disso.
+    PENDENTE: `listarMembros`, `ProprietarioController.listar/obter`, `AnimalController` e
+    `FaturaController` ainda leem pelos libs antigos (`profissionalPerfil`/
+    `proprietarioPerfil`), que apontam para as tabelas legadas mantidas em sincronia.
+
 36-e. **`req.user.userType` é o tipo NA EMPRESA ATIVA, não o do login (2026-07-30).**
     `lib/tipoContexto.js#resolverTipoNoContexto` roda no `authenticate` e sobrescreve
     `req.user.userType`; o valor do token fica em `req.user.userTypeGlobal`. Ordem:
@@ -2375,6 +2543,21 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     quem atende com `user.userType === 'VETERINARIO'`, colocando na agenda a ESTAGIÁRIA daqui
     (veterinária em outra empresa) e deixando de fora a VETERINÁRIA daqui. Só o corte de ADMIN
     continua pelo userType.
+    ⚠️⚠️ **No BACK, `SELECT userType FROM users` para decidir ACESSO é sempre bug.** As duas
+    libs de escopo de animal liam o tipo GLOBAL do banco em vez do tipo do contexto, e
+    quebravam junto (corrigidas em 30/07, com o mesmo `resolverTipoNoContexto`):
+    - `lib/animalScope.js#buildAnimalScopeWhere` → o `where` da LISTAGEM virava
+      `{ userId }` (só os animais próprios). Usado por Animal/Prescricao/Orcamento/
+      Agendamento — 5 controllers.
+    - `lib/animalAccess.js#verificarAcessoAnimal` → caía no ramo PROPRIETARIO
+      (`animal.userId === userId`) e devolvia **403 em todo paciente que não fosse dele**.
+      Usada em 47 call sites de 8 controllers, então derrubava de uma vez o card do
+      paciente, histórico, evoluções, prescrições, exames e agendamentos daquele animal.
+    Sintoma clássico (relatado como "não carrega o card do animal mesmo com tudo liberado
+    no Controle de Acesso"): a LISTA vem cheia mas abrir qualquer animal dá 403 — ou pior,
+    a lista vem vazia. Se a matriz está FULL e ainda dá 403, o suspeito é o TIPO usado na
+    decisão, não a permissão. `verificarAcessoAnimal` aceita `userType` opcional (passe
+    `req.user.userType` quando tiver) e, sem ele, resolve pelo par empresaId/equipeId.
 
 36-c. **"Tipo de usuário" é POR EMPRESA e é o CARGO (2026-07-30).** O identificador
     compartilhado entre empresas é só o E-MAIL (para o seletor de contexto); nome, telefone,

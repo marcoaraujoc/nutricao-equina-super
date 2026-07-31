@@ -104,6 +104,20 @@ const STATUS_ORC: Record<StatusOrc, { label: string; cls: string }> = {
   CANCELADO:            { label: 'Cancelado',             cls: 'bg-gray-200 text-gray-500'       },
 };
 
+// A decisão do cliente é registrada UMA vez: aprovado, aprovado parcialmente ou
+// rejeitado já são o veredito. Só o RASCUNHO ainda aguarda decisão — e o CANCELADO
+// não recebe nenhuma. Reabrir o modal depois disso reescreveria itens que já podem
+// ter sido importados numa evolução ou lançados na fatura.
+const decisaoPendente = (status: StatusOrc): boolean => status === 'RASCUNHO';
+
+const MOTIVO_DECISAO_BLOQUEADA: Record<StatusOrc, string> = {
+  RASCUNHO:              'Registrar decisão (aceitar/rejeitar)',
+  APROVADO:              'Decisão já registrada: orçamento aprovado',
+  APROVADO_PARCIALMENTE: 'Decisão já registrada: aprovado parcialmente',
+  REJEITADO:             'Decisão já registrada: orçamento rejeitado',
+  CANCELADO:             'Orçamento cancelado',
+};
+
 // Base SEM largura — para campos que vivem em linha compacta: com `w-full` (100% do
 // container) o campo se recusa a encolher e a linha estoura o card "Adicionar itens".
 const inputClsBase = 'border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500';
@@ -149,6 +163,10 @@ const INTERVALOS_H: Record<string, number> = {
 // Nº de letras a partir do qual a busca consulta o servidor. Abaixo disso nada é
 // listado — as telas não despejam o catálogo inteiro, o usuário digita e vai filtrando.
 const MIN_BUSCA = 2;
+// Teto de itens RENDERIZADOS na lista de seleção. O catálogo de medicamentos da base
+// passa de 2.800 registros: com a carga automática (sem exigir busca), pintar tudo de
+// uma vez trava a rolagem do dropdown. Mostra-se o começo e a busca refina o resto.
+const LIMITE_LISTA = 50;
 
 const posologiaLabel = (v: string | null) =>
   (v && POSOLOGIAS.find(p => p.value === v)?.label) || v || '';
@@ -563,38 +581,48 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
   // ou valor de um animal sem afetar os outros. O total é o mesmo de antes.
   // Sem animal selecionado, o item fica no nível do proprietário (animalId null).
   //
-  // PROCEDIMENTO: o preço é da tabela da clínica, não do animal. Se o mesmo
-  // procedimento já está no orçamento, a nova linha nasce com o valor que está lá
-  // (que pode ter sido ajustado) em vez do valor do catálogo — mantendo o preço
-  // idêntico entre todos os animais já na inclusão.
+  // Tipos cujo PREÇO É DA TABELA DA CLÍNICA, não do animal: o mesmo item custa o
+  // mesmo para todo mundo no orçamento. Mexeu no valor de um, muda em todos.
+  // OUTROS entra junto: lançado para vários animais, é a mesma taxa para cada um.
+  // (COMBO fica de fora: o valor é do pacote montado, não de um item de tabela —
+  // dois combos de mesmo nome podem legitimamente ter preços diferentes.)
+  const TIPOS_PRECO_UNICO: TipoItem[] = ['PROCEDIMENTO', 'MEDICAMENTO', 'VACINA', 'OUTROS'];
+
+  // Duas linhas são o MESMO item quando apontam para o mesmo cadastro (refId); para
+  // item manual (refId null) o nome é o que identifica.
+  const mesmoItemDeTabela = (a: { tipo: TipoItem; refId: number | null; descricao: string },
+                             b: { tipo: TipoItem; refId: number | null; descricao: string }) =>
+    a.tipo === b.tipo
+    && TIPOS_PRECO_UNICO.includes(a.tipo)
+    && (a.refId !== null ? b.refId === a.refId : b.descricao === a.descricao);
+
+  // Se o item já está no orçamento, a nova linha nasce com o valor que está lá (que
+  // pode ter sido ajustado) em vez do valor do catálogo — mantendo o preço idêntico
+  // entre todos os animais já na inclusão.
   const addItem = (it: Omit<ItemLocal, 'key' | 'animalId'>) => {
-    // OUTROS não é rateado por animal: é uma cobrança avulsa do cliente, lançada
-    // depois direto na fatura — uma linha só, no nível do proprietário.
-    const alvos: (number | null)[] =
-      it.tipo === 'OUTROS' ? [null] : (animaisSel.length > 0 ? animaisSel : [null]);
+    // TODOS os tipos são rateados pelos animais selecionados — uma linha por animal,
+    // OUTROS inclusive. Antes ele ignorava a seleção e caía sempre no nível do
+    // proprietário, o que impedia cobrar uma taxa/transporte por paciente.
+    // Sem nenhum animal selecionado, a linha nasce no nível do proprietário.
+    const alvos: (number | null)[] = animaisSel.length > 0 ? animaisSel : [null];
     setItens(prev => {
       let valorUnitario = it.valorUnitario;
-      if (it.tipo === 'PROCEDIMENTO') {
-        const existente = prev.find(x =>
-          x.tipo === 'PROCEDIMENTO'
-          && (it.refId !== null ? x.refId === it.refId : x.descricao === it.descricao));
+      if (TIPOS_PRECO_UNICO.includes(it.tipo)) {
+        const existente = prev.find(x => mesmoItemDeTabela(it, x));
         if (existente) valorUnitario = existente.valorUnitario;
       }
       return [...prev, ...alvos.map(animalId => ({ ...it, valorUnitario, key: uid(), animalId }))];
     });
   };
 
-  // O preço de um PROCEDIMENTO é da tabela da clínica, não do animal: ao alterar o
-  // valor de um procedimento lançado para vários animais, replica nos demais. Os
-  // outros tipos (medicamento/vacina) variam por animal — esses mudam só na linha.
+  // Alterar o valor de um item de tabela replica em TODAS as linhas do mesmo item —
+  // inclusive nas de outros animais. Antes valia só para PROCEDIMENTO; medicamento e
+  // vacina obrigavam a repetir o ajuste animal por animal, e bastava esquecer um para
+  // o orçamento sair com dois preços para a mesma coisa.
   const alterarValorUnitario = (alvo: ItemLocal, valor: number) => {
-    const replicar = alvo.tipo === 'PROCEDIMENTO';
-    const mesmoProcedimento = (x: ItemLocal) =>
-      x.tipo === 'PROCEDIMENTO'
-      && (alvo.refId !== null ? x.refId === alvo.refId : x.descricao === alvo.descricao);
-
+    const replicar = TIPOS_PRECO_UNICO.includes(alvo.tipo);
     setItens(prev => prev.map(x =>
-      (replicar ? mesmoProcedimento(x) : x.key === alvo.key)
+      (replicar ? mesmoItemDeTabela(alvo, x) : x.key === alvo.key)
         ? { ...x, valorUnitario: valor }
         : x,
     ));
@@ -781,8 +809,8 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
                               <InputMoeda value={it.valorUnitario}
                                 onChange={v => alterarValorUnitario(it, v)}
                                 className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-xs text-right focus:outline-none focus:border-emerald-500"
-                                title={it.tipo === 'PROCEDIMENTO'
-                                  ? 'Valor unitário — replicado nos demais animais'
+                                title={TIPOS_PRECO_UNICO.includes(it.tipo)
+                                  ? 'Valor unitário — replicado nas demais linhas deste mesmo item'
                                   : 'Valor unitário'} />
                             </div>
                             {/* Desconto do item — percentual (0-100) ou valor em R$ */}
@@ -912,27 +940,35 @@ function TabProcedimentos({ especie, especiesEmpresa, onAdd }: {
     api.get('/procedimentos/cadastro/combos').then(r => { if (r.data) setCombos(r.data.dados ?? []); }).catch(() => {});
   }, []);
 
-  // Busca sob demanda: nada é listado até digitar MIN_BUSCA letras. A especialidade,
-  // quando escolhida, restringe a busca (e é ela que o item leva para a prescrição).
+  // A lista abre ao ESCOLHER A ESPECIALIDADE — mesma lógica do Atendimento, que carrega
+  // o catálogo e deixa o usuário filtrar depois. Antes nada aparecia até digitar
+  // MIN_BUSCA letras, o que obrigava a adivinhar o nome do procedimento.
+  // Sem especialidade ("— Todas —") a lista só abre com busca, para não despejar o
+  // catálogo inteiro de uma vez.
   const termo = busca.trim();
+  const podeListar = !!espSel || termo.length >= MIN_BUSCA;
   useEffect(() => {
-    if (termo.length < MIN_BUSCA) { setProcs([]); setLoading(false); return; }
+    if (!podeListar) { setProcs([]); setLoading(false); return; }
     setLoading(true);
     const t = setTimeout(() => {
       api.get('/procedimentos/cadastro/lista', {
-        params: { busca: termo, ...(espSel ? { especialidade: espSel } : {}), ...(especie ? { especie } : {}) },
+        params: {
+          ...(termo.length >= MIN_BUSCA ? { busca: termo } : {}),
+          ...(espSel ? { especialidade: espSel } : {}),
+          ...(especie ? { especie } : {}),
+        },
       })
         .then(r => { if (r.data) setProcs(r.data.dados ?? []); })
         .catch(() => {}).finally(() => setLoading(false));
-    }, 300);
+    }, termo.length >= MIN_BUSCA ? 300 : 0);   // troca de especialidade responde na hora
     return () => clearTimeout(t);
-  }, [termo, espSel, especie]);
+  }, [termo, espSel, especie, podeListar]);
 
-  // Combos são poucos (cadastro da empresa) e já vêm carregados — filtram junto pelo
-  // mesmo termo. Sem especialidade escolhida, só entram os que têm a própria.
-  const combosDaEsp = termo.length < MIN_BUSCA ? [] : combos.filter(c =>
+  // Combos são poucos (cadastro da empresa) e já vêm carregados — filtram client-side
+  // pela mesma especialidade/termo. Sem especialidade escolhida, só entram os que têm a própria.
+  const combosDaEsp = !podeListar ? [] : combos.filter(c =>
     (espSel ? (!c.especialidade || c.especialidade === espSel) : !!c.especialidade)
-    && c.nome.toLowerCase().includes(termo.toLowerCase()));
+    && (termo.length < MIN_BUSCA || c.nome.toLowerCase().includes(termo.toLowerCase())));
   const valorProc = (p: Proc) => p.valorEmpresa ?? p.valorVenda ?? 0;
 
   return (
@@ -1031,7 +1067,7 @@ function TabProcedimentos({ especie, especiesEmpresa, onAdd }: {
 
       {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {termo.length < MIN_BUSCA ? null : loading ? (
+          {!podeListar ? null : loading ? (
             <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
           ) : (<>
           {/* Combo/procedimento sem especialidade própria herda a do filtro (espSel):
@@ -1046,7 +1082,7 @@ function TabProcedimentos({ especie, especiesEmpresa, onAdd }: {
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{brl(c.valor)}</span>
             </button>
           ))}
-          {procs.map(p => (
+          {procs.slice(0, LIMITE_LISTA).map(p => (
             <button key={p.id} onClick={() => {
                 // Todo item do orçamento precisa de especialidade (é ela que volta na
                 // importação para a prescrição). Buscando em "Todas", um procedimento
@@ -1064,7 +1100,14 @@ function TabProcedimentos({ especie, especiesEmpresa, onAdd }: {
           ))}
           {combosDaEsp.length === 0 && procs.length === 0 && (
             <p className="text-xs text-gray-400 py-4 text-center">
-              Nenhum procedimento/combo para “{termo}”{espSel ? ` em ${espSel}` : ''}.
+              {termo.length >= MIN_BUSCA
+                ? <>Nenhum procedimento/combo para “{termo}”{espSel ? ` em ${espSel}` : ''}.</>
+                : <>Nenhum procedimento/combo em {espSel}.</>}
+            </p>
+          )}
+          {procs.length > LIMITE_LISTA && (
+            <p className="text-[11px] text-gray-400 py-2 text-center">
+              Mostrando {LIMITE_LISTA} de {procs.length} — use a busca para refinar.
             </p>
           )}
           </>)}
@@ -1106,17 +1149,21 @@ function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
   const especiesDoNovoItem = especiesEmpresa.length === 1 ? [especiesEmpresa[0].id] : mEspecies;
   const faltaEspecie = especiesEmpresa.length > 1 && mEspecies.length === 0;
 
-  // Busca sob demanda: só consulta a partir de MIN_BUSCA letras e vai refazendo a
-  // consulta conforme o usuário digita (debounce para não disparar a cada tecla).
+  // Lista carregada AUTOMATICAMENTE ao abrir a aba — mesma lógica do Atendimento
+  // (SubModuloPrescricao carrega o catálogo no mount e filtra depois). Antes nada
+  // aparecia até digitar MIN_BUSCA letras. A busca continua refinando (server-side,
+  // com debounce), mas deixou de ser pré-requisito para ver alguma coisa.
   const termo = busca.trim();
   useEffect(() => {
-    if (!animalId || termo.length < MIN_BUSCA) { setMeds([]); setLoading(false); return; }
+    if (!animalId) { setMeds([]); setLoading(false); return; }
     setLoading(true);
     const t = setTimeout(() => {
-      api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'medicamento', busca: termo } })
+      api.get('/medicamentos/para-atendimento', {
+        params: { animalId, tipo: 'medicamento', ...(termo.length >= MIN_BUSCA ? { busca: termo } : {}) },
+      })
         .then(r => { if (r.data) setMeds(r.data.dados ?? []); })
         .catch(() => {}).finally(() => setLoading(false));
-    }, 300);
+    }, termo.length >= MIN_BUSCA ? 300 : 0);   // carga inicial não espera debounce
     return () => clearTimeout(t);
   }, [termo, animalId]);
 
@@ -1126,16 +1173,9 @@ function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
     <div className="space-y-3">
       <InlineError message={erroInline} />
 
-      {/* Busca (linha própria — a lista abre logo abaixo, como em Vacinas) */}
-      {!manual && (
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-          <input value={busca} onChange={e => setBusca(e.target.value)}
-            placeholder="Buscar medicamento..." className={`${inputCls} pl-8`} />
-        </div>
-      )}
-
-      {/* Qtd. de dias + Frequência — mesma linha, cada um com título */}
+      {/* Qtd. de dias + Frequência — mesma linha, cada um com título.
+          Vem ANTES da busca: define-se a posologia e só então se escolhe o
+          medicamento na lista logo abaixo. */}
       <div className="flex items-end gap-1.5 w-full">
         <div className="w-16 flex-shrink-0">
           <label className="block text-[10px] font-medium text-gray-500 mb-1">Qtd. dias</label>
@@ -1154,6 +1194,15 @@ function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
           {qtdOrcada}x
         </span>
       </div>
+
+      {/* Busca — abaixo da posologia, encostada na lista que ela filtra */}
+      {!manual && (
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar medicamento..." className={`${inputCls} pl-8`} />
+        </div>
+      )}
 
       {manual && (
         <div className="flex flex-wrap items-end gap-2 p-3 bg-gray-50 rounded-xl">
@@ -1186,11 +1235,11 @@ function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
 
       {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {termo.length < MIN_BUSCA ? null : loading ? (
+          {loading ? (
             <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
           ) : meds.length === 0 ? (
             <p className="text-xs text-gray-400 py-4 text-center">Nenhum medicamento encontrado.</p>
-          ) : meds.map(m => (
+          ) : meds.slice(0, LIMITE_LISTA).map(m => (
             <button key={m.id} onClick={() => {
                 onAdd({ tipo: 'MEDICAMENTO', refId: m.id, descricao: m.nome, especialidade: null, quantidade: qtdOrcada, unidade: m.unidade, dias, frequencia, valorUnitario: m.precoUnitarioBase ?? 0, descontoTipo: null, descontoValor: 0, manual: false });
                 setBusca(''); setDias(1); setFrequencia('1xDia'); // inserido → fecha a lista e zera a posologia
@@ -1200,6 +1249,11 @@ function TabMedicamentos({ animalId, especiesEmpresa, onAdd }: {
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{m.precoUnitarioBase != null ? `${brl(m.precoUnitarioBase)}/${m.unidade}` : 'sem preço'}</span>
             </button>
           ))}
+          {!loading && meds.length > LIMITE_LISTA && (
+            <p className="text-[11px] text-gray-400 py-2 text-center">
+              Mostrando {LIMITE_LISTA} de {meds.length} — use a busca para refinar.
+            </p>
+          )}
           {/* Última opção do seletor — mesmo padrão do "Incluir novo" dos cadastros */}
           <button onClick={() => setManual(true)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-left text-sm font-medium">
@@ -1233,17 +1287,19 @@ function TabVacinas({ animalId, especiesEmpresa, onAdd }: {
   const especiesDoNovoItem = especiesEmpresa.length === 1 ? [especiesEmpresa[0].id] : mEspecies;
   const faltaEspecie = especiesEmpresa.length > 1 && mEspecies.length === 0;
 
-  // Busca sob demanda (mesma regra dos medicamentos): nada é listado antes de
-  // MIN_BUSCA letras; a consulta é refeita conforme o usuário digita.
+  // Lista carregada AUTOMATICAMENTE ao abrir a aba (mesma regra dos medicamentos e
+  // do Atendimento). A busca refina, mas não é mais pré-requisito para ver a lista.
   const termo = busca.trim();
   useEffect(() => {
-    if (!animalId || termo.length < MIN_BUSCA) { setVacs([]); setLoading(false); return; }
+    if (!animalId) { setVacs([]); setLoading(false); return; }
     setLoading(true);
     const t = setTimeout(() => {
-      api.get('/medicamentos/para-atendimento', { params: { animalId, tipo: 'vacina', busca: termo } })
+      api.get('/medicamentos/para-atendimento', {
+        params: { animalId, tipo: 'vacina', ...(termo.length >= MIN_BUSCA ? { busca: termo } : {}) },
+      })
         .then(r => { if (r.data) setVacs(r.data.dados ?? []); }) // com ou sem estoque
         .catch(() => {}).finally(() => setLoading(false));
-    }, 300);
+    }, termo.length >= MIN_BUSCA ? 300 : 0);   // carga inicial não espera debounce
     return () => clearTimeout(t);
   }, [termo, animalId]);
 
@@ -1305,11 +1361,11 @@ function TabVacinas({ animalId, especiesEmpresa, onAdd }: {
 
       {!manual && (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {termo.length < MIN_BUSCA ? null : loading ? (
+          {loading ? (
             <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-emerald-600" /></div>
           ) : vacs.length === 0 ? (
             <p className="text-xs text-gray-400 py-4 text-center">Nenhuma vacina encontrada.</p>
-          ) : vacs.map(v => (
+          ) : vacs.slice(0, LIMITE_LISTA).map(v => (
             <button key={v.id} onClick={() => {
                 onAdd({ tipo: 'VACINA', refId: v.id, descricao: v.nome, especialidade: null, quantidade: doses, unidade: 'dose', dias: null, frequencia: null, valorUnitario: v.valorPorDose ?? 0, descontoTipo: null, descontoValor: 0, manual: false });
                 setBusca(''); // inserido → fecha a lista
@@ -1321,6 +1377,11 @@ function TabVacinas({ animalId, especiesEmpresa, onAdd }: {
               <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">{v.valorPorDose != null ? `${brl(v.valorPorDose)}/dose` : 'sem preço'}</span>
             </button>
           ))}
+          {!loading && vacs.length > LIMITE_LISTA && (
+            <p className="text-[11px] text-gray-400 py-2 text-center">
+              Mostrando {LIMITE_LISTA} de {vacs.length} — use a busca para refinar.
+            </p>
+          )}
           {/* Última opção do seletor — mesmo padrão do "Incluir novo" dos cadastros */}
           <button onClick={() => setManual(true)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-left text-sm font-medium">
@@ -1541,7 +1602,10 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                     <Eye size={11} /> Visualizar
                   </button>
                   {podeAprovar && o.status !== 'CANCELADO' && (
-                    <button onClick={() => decidir(o)} className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                    <button onClick={() => decidir(o)}
+                      disabled={!decisaoPendente(o.status)}
+                      title={MOTIVO_DECISAO_BLOQUEADA[o.status]}
+                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                       <ListChecks size={11} /> Decidir
                     </button>
                   )}
@@ -1600,8 +1664,10 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                           <Eye size={14} />
                         </button>
                         {podeAprovar && o.status !== 'CANCELADO' && (
-                          <button onClick={() => decidir(o)} title="Registrar decisão (aceitar/rejeitar)"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                          <button onClick={() => decidir(o)}
+                            disabled={!decisaoPendente(o.status)}
+                            title={MOTIVO_DECISAO_BLOQUEADA[o.status]}
+                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                             <ListChecks size={14} />
                           </button>
                         )}
@@ -1652,8 +1718,13 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
         </>
       )}
 
+      {/* `decisaoPendente` também no modal: com a decisão registrada ele abre em modo
+          LEITURA mesmo que algum caminho novo chame `decidir` — os itens já podem ter
+          sido importados numa evolução ou lançados na fatura. */}
       {detalhe && (
-        <DetalheOrcamentoModal orc={detalhe.orc} podeAprovar={podeAprovar && !detalhe.somenteLeitura} onClose={() => setDetalhe(null)} onSalvo={() => { setDetalhe(null); carregar(); }} />
+        <DetalheOrcamentoModal orc={detalhe.orc}
+          podeAprovar={podeAprovar && !detalhe.somenteLeitura && decisaoPendente(detalhe.orc.status)}
+          onClose={() => setDetalhe(null)} onSalvo={() => { setDetalhe(null); carregar(); }} />
       )}
 
       <ModalJustificativa
@@ -1715,9 +1786,14 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
         <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
           {orc.itens.map(i => {
             const aceito = aceitos.has(i.id);
+            // Item recusado na decisão do cliente — destacado em VERMELHO para não se
+            // confundir com o que apenas não foi marcado (a decisão já foi tomada).
+            const rejeitado = i.statusItem === 'REJEITADO';
             return (
               <button key={i.id} disabled={!podeAprovar} onClick={() => toggle(i.id)}
-                className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors ${aceito ? 'bg-emerald-50/60' : 'hover:bg-gray-50'} ${!podeAprovar ? 'cursor-default' : ''}`}>
+                className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors ${
+                  rejeitado ? 'bg-red-50/60' : aceito ? 'bg-emerald-50/60' : 'hover:bg-gray-50'
+                } ${!podeAprovar ? 'cursor-default' : ''}`}>
                 {/* Checkbox só no modo de decisão — na visualização não aparece */}
                 {podeAprovar && (
                   <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${aceito ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'}`}>
@@ -1725,14 +1801,23 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
                   </span>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-800 truncate">{i.descricao}</p>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <p className={`text-sm truncate ${rejeitado ? 'text-red-700 line-through' : 'text-gray-800'}`}>{i.descricao}</p>
+                    {rejeitado && (
+                      <span className="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                        Rejeitado
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-gray-400">
                     {i.tipo === 'COMBO' ? 'Combo' : i.tipo.charAt(0) + i.tipo.slice(1).toLowerCase()}
                     {' · '}{i.animal?.nome ?? 'Proprietário'} · {i.quantidade} × {brl(i.valorUnitario)}
                     {i.importadoEm ? ' · importado' : ''}
                   </p>
                 </div>
-                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{brl(i.valorTotal)}</span>
+                <span className={`text-sm font-semibold flex-shrink-0 ${rejeitado ? 'text-red-400 line-through' : 'text-gray-700'}`}>
+                  {brl(i.valorTotal)}
+                </span>
               </button>
             );
           })}

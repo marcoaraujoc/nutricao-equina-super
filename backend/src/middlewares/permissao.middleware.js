@@ -375,26 +375,23 @@ function checkPermissaoProprietario(funcionalidade) {
 /**
  * Helper utilitário para uso dentro dos services/controllers:
  * Verifica se o usuário pode operar (alterar/excluir/finalizar) sobre um registro
- * CLÍNICO de outro usuário (Evolução, Prescrição, Exame, Encaminhamento).
+ * CLÍNICO (Evolução, Prescrição, Exame, Encaminhamento, Agendamento).
  *
- * REGRA (2026-07): SOMENTE o gestor (nível FULL, obtido por bypass de GESTOR/dono/
- * ADMIN) altera/exclui/finaliza registros de QUALQUER membro. Todos os demais —
- * mesmo com nível EQUIPE concedido na matriz — só operam o que eles próprios criaram.
- * Por isso EQUIPE aqui é tratado como PROPRIO (só o próprio); apenas FULL libera geral.
+ * REGRA (2026-07-30): quem decide é O CONTROLE DE ACESSO, e só ele. Tendo a ação
+ * concedida ao perfil (qualquer nível positivo), o usuário opera o registro — sem
+ * filtro adicional de autoria. Não existe mais "PROPRIO só mexe no que criou":
+ * a tela de Controle de Acesso é binária (a ação está marcada ou não; o PermCheck
+ * nem oferece escolha entre PROPRIO e EQUIPE), então diferenciar os dois no código
+ * criava restrição que o gestor não tinha como ver nem configurar.
  *
- * Retorna true se:
- *  - nível é FULL (gestor/dono/ADMIN via bypass) → qualquer registro
- *  - nível é EQUIPE ou PROPRIO → apenas registros do próprio usuário
+ * Retorna true para qualquer nível positivo (PROPRIO, EQUIPE, FULL) e false para
+ * NENHUM/NEGADO/LEITURA — estes já seriam barrados antes pelo checkPermission da rota.
  *
  * REGRA DE OURO: controllers NÃO devem checar cargo/userType diretamente — passam
  * req.permissaoNivel (setado pelo checkPermission) a este helper.
  */
-function podeOperarRegistro(nivelPermissao, registroCriadorId, userIdAtual) {
-  if (nivelPermissao === 'FULL') return true;
-  if (nivelPermissao === 'EQUIPE' || nivelPermissao === 'PROPRIO') {
-    return Number(registroCriadorId) === Number(userIdAtual);
-  }
-  return false;
+function podeOperarRegistro(nivelPermissao) {
+  return (NIVEL_ORDINAL[nivelPermissao] ?? 0) >= NIVEL_ORDINAL.PROPRIO;
 }
 
 /**

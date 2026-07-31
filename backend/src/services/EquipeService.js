@@ -4,6 +4,7 @@
 // =============================================================================
 
 const crypto = require('crypto');
+const { vincularMembro } = require('../lib/usuarioEmpresa');
 const prisma = require('../lib/prisma').default;
 const { aplicarPermissoesPadrao } = require('./PermissaoService');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -146,6 +147,9 @@ async function aceitarConvite({ token, userId }) {
     const membro = await tx.membroEquipe.create({
       data: { equipeId: convite.equipeId, userId, cargo: convite.cargo },
     });
+
+    // Vínculo usuário × empresa — define o PERFIL dele nesta empresa
+    await vincularMembro(tx, userId, convite.equipeId, convite.cargo);
 
     // Marca convite como aceito
     await tx.conviteEquipe.update({

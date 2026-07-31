@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isSubespecialidadeValida } from '../utils/subespecialidades';
-import { agendamentoAntecipado } from '../utils/dateUtils';
+import { agendamentoAntecipado, dataHoraNoPassado } from '../utils/dateUtils';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Check,
   X, Clock, User as UserIcon, RefreshCw, Search,
@@ -45,6 +45,9 @@ interface AgendamentoGlobal {
     id:      number;
     nome:    string;
     especie: { nome: string } | null;
+    // ONDE o animal está — do catálogo (`localizacao`) ou do campo textual legado
+    local:       string | null;
+    localizacao: { id: number; nome: string } | null;
     user:    { id: number; fullName: string } | null;
   } | null;
 }
@@ -56,6 +59,18 @@ interface AnimalOption {
   user:    { id: number; fullName: string; email: string; phone?: string; cpf?: string } | null;
   // Localização atual do animal (LocalizacaoAnimal) — filtra por onde o vet atende
   localizacaoId: number | null;
+  localizacaoNome: string | null;
+}
+
+/**
+ * Onde o animal está. A agenda mostra o LOCAL no lugar da espécie: quem vai atender
+ * precisa saber para onde ir, e "Equino" não diz nada numa clínica de equinos.
+ * Catálogo (`localizacao.nome`) → campo textual legado (`local`) → null.
+ */
+function localDoAnimal(
+  a: { local?: string | null; localizacao?: { nome: string } | null } | null | undefined,
+): string | null {
+  return a?.localizacao?.nome?.trim() || a?.local?.trim() || null;
 }
 
 interface BookingInfo {
@@ -456,11 +471,18 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate }:
 // ─── Componente Principal ─────────────────────────────────────────────────────
 
 export default function Agendamentos() {
-  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
   const { user }                                    = useAuth();
   const { contextoAtivo }                           = useEmpresa();
   const meuUserId                                   = user?.id ?? null;
-  // Só o gestor agenda/opera para OUTRO profissional; os demais só para si mesmos.
+  // Agendar/operar a agenda de OUTRO profissional é decidido pelo CONTROLE DE ACESSO,
+  // não pelo cargo: EQUIPE/FULL em `atendimento.agendamentos.criar` agenda para
+  // qualquer um; PROPRIO só para si. Antes era `isGestor`, e o estagiário com "criar"
+  // concedido não conseguia agendar nada — a grade só tem coluna de quem atende, então
+  // toda coluna era "de outro". Mesma regra do backend (podeAgendarParaOutro).
+  // REGRA BASAL: só o GESTOR agenda/opera na agenda de OUTRO profissional. Os demais
+  // — com qualquer nível concedido no Controle de Acesso — só na própria coluna.
+  // O Controle de Acesso decide SE a pessoa agenda; esta regra decide PARA QUEM.
   const podeAgendarParaOutro                        = isGestor;
   const location                                    = useLocation();
   const navigate                                    = useNavigate();
@@ -469,15 +491,13 @@ export default function Agendamentos() {
   const podeEditarAgendamento                       = podeExecutar('atendimento.agendamentos.editar');
   const podeDeletarAgendamento                      = podeExecutar('atendimento.agendamentos.deletar');
   const podeGerenciar                               = podeCriarAgendamento || podeEditarAgendamento || podeDeletarAgendamento;
-  // Veterinário (inclusive gestor, que é vet por cargo): pode ASSUMIR o atendimento de
-  // outro vet da equipe e TRANSFERIR os seus (o gestor transfere os de qualquer um).
-  const souVeterinario                              = user?.userType === 'VETERINARIO' || isGestor;
-  // Transferir: gestor move o de qualquer profissional; o profissional move o DELE.
+  // Transferir: o gestor move a agenda de qualquer um; o profissional move a DELE.
   const podeTransferir = (ag: AgendamentoGlobal) =>
-    podeAgendarParaOutro || (souVeterinario && ag.veterinario?.id === meuUserId);
-  // Assumir: qualquer veterinário puxa para si o atendimento de OUTRO vet.
+    podeEditarAgendamento && (isGestor || ag.veterinario?.id === meuUserId);
+  // Assumir (puxar para si) é o caminho de quem NÃO é gestor para pegar um
+  // atendimento de outro — segue o Controle de Acesso, sem filtro de cargo.
   const podeAssumir = (ag: AgendamentoGlobal) =>
-    souVeterinario && !!ag.veterinario?.id && ag.veterinario.id !== meuUserId;
+    podeEditarAgendamento && !!ag.veterinario?.id && ag.veterinario.id !== meuUserId;
 
   // Erro de ação exibido inline (substitui o toast de erro)
   // Erro fica NA SUPERFÍCIE onde a ação foi disparada — no topo da página (colado no
@@ -689,8 +709,14 @@ export default function Agendamentos() {
     try {
       const res = await api.get('/animais');
       if (!res.data) return;
-      const brutos = (res.data.dados ?? res.data) as Array<AnimalOption & { localizacao?: { id: number } | null }>;
-      setAnimais(brutos.map(a => ({ ...a, localizacaoId: a.localizacao?.id ?? a.localizacaoId ?? null })));
+      const brutos = (res.data.dados ?? res.data) as Array<
+        AnimalOption & { localizacao?: { id: number; nome: string } | null; local?: string | null }
+      >;
+      setAnimais(brutos.map(a => ({
+        ...a,
+        localizacaoId:   a.localizacao?.id ?? a.localizacaoId ?? null,
+        localizacaoNome: localDoAnimal(a),
+      })));
     } catch { /* silencioso */ }
     finally { setLoadingAnimais(false); }
   }, []);
@@ -731,12 +757,12 @@ export default function Agendamentos() {
         };
       }>;
       setVets(membros
-        // Veterinários, gestores E fornecedores (prestadores) — o fornecedor também
-        // agenda e ocupa horários (debita da cota do dia).
-        // Quem atende é decidido pelo CARGO NESTA empresa, não pelo `userType` do
-        // login: a veterinária que é cliente em outra clínica ficava fora da agenda,
-        // e a estagiária daqui entrava nela por ser veterinária em outra.
-        .filter(m => m.cargo === 'VETERINARIO' || m.cargo === 'GESTOR' || m.cargo === 'FORNECEDOR')
+        // A grade lista os PROFISSIONAIS da equipe — cada um com a sua coluna. Sem
+        // filtro por cargo: o estagiário (e enfermeiro, secretaria...) precisa da
+        // coluna dele para conseguir marcar na PRÓPRIA agenda, já que ninguém além
+        // do gestor agenda na agenda de outro (regra basal). Só o cliente fica fora.
+        // O CARGO desta empresa é quem manda, nunca o `userType` do login.
+        .filter(m => m.cargo !== 'PROPRIETARIO' && m.user?.userType !== 'ADMIN')
         .map(m => {
           let especialidades: string[];
           if (m.cargo === 'FORNECEDOR') {
@@ -942,8 +968,26 @@ export default function Agendamentos() {
     return { dias, horaInicio, horaFim };
   };
 
-  // Especialidade ativa do profissional na grade. Sem escolha explícita, usa a
-  // primeira do catálogo dele; sem catálogo configurado, null (grade de 1h).
+  // Especialidades que o profissional exerce no DIA selecionado — vêm das linhas de
+  // local cujo expediente cobre esse dia. É o que faz "clínico seg/qua/sex e
+  // dermatologista ter/qui na mesma Hípica" valer na grade: numa terça o padrão passa
+  // a ser Dermatologia, sem o usuário precisar trocar o chip.
+  const espsDoDia = (vetId: number): EspecialidadeVet[] => {
+    const v = vets.find(x => x.userId === vetId);
+    if (!v) return [];
+    const wd = new Date(`${selectedDate}T00:00:00`).getDay();
+    const out = new Map<number, EspecialidadeVet>();
+    for (const local of v.locais) {
+      const exp = expedienteDoLocal(local);
+      if (exp.dias && !exp.dias.includes(wd)) continue;
+      for (const e of local.especialidades) if (!out.has(e.id)) out.set(e.id, e);
+    }
+    return [...out.values()];
+  };
+
+  // Especialidade ativa do profissional na grade. Sem escolha explícita, usa a primeira
+  // que ele exerce NO DIA selecionado (e só então a primeira do catálogo); sem catálogo
+  // configurado, null (grade de 1h).
   const espDoVet = (vetId: number): EspecialidadeVet | null => {
     const v = vets.find(x => x.userId === vetId);
     const cat = v?.especialidadesCat ?? [];
@@ -955,7 +999,13 @@ export default function Agendamentos() {
       if (doFiltro) return doFiltro;
     }
     const escolhido = espSelPorVet.get(vetId);
-    return cat.find(e => e.id === escolhido) ?? cat[0];
+    const doChip = cat.find(e => e.id === escolhido);
+    if (doChip) return doChip;
+    // O tempo continua saindo do catálogo (MENOR entre os locais) — é o mesmo critério
+    // de AgendamentoController.tempoConsultaDoProfissional. Aqui o dia escolhe QUAL
+    // especialidade, não quanto ela dura.
+    const doDia = espsDoDia(vetId)[0];
+    return (doDia && cat.find(e => e.id === doDia.id)) ?? cat[0];
   };
 
   // Passo da grade = tempo de consulta da especialidade selecionada (ou o padrão da empresa).
@@ -1075,10 +1125,14 @@ export default function Agendamentos() {
       livres: string[];
     }> = [];
 
+    // `turno` = índice da linha de local no cadastro. O MESMO local aparece mais de uma
+    // vez quando o profissional exerce especialidades diferentes ali em dias diferentes
+    // (clínico seg/qua/sex, dermatologista ter/qui) — sem ele, duas linhas do mesmo
+    // local com a mesma especialidade colidiriam na key do React.
     const montar = (
       vet: VetMembro, localId: number | null, localNome: string,
       exp: { dias: number[] | null; horaInicio: string | null; horaFim: string | null },
-      esp: EspecialidadeVet | null,
+      esp: EspecialidadeVet | null, turno = 0,
     ) => {
       if (exp.dias && !exp.dias.includes(wd)) return;          // não é dia de trabalho
       const passo = passoDe(esp?.tempoMin);
@@ -1099,7 +1153,7 @@ export default function Agendamentos() {
       if (livres.length === 0) return;
 
       linhas.push({
-        key: `${vet.userId}-${localId ?? 0}-${esp?.id ?? 0}`,
+        key: `${vet.userId}-${localId ?? 0}-${turno}-${esp?.id ?? 0}`,
         vet, localNome, esp,
         dias: exp.dias, horaInicio: exp.horaInicio, horaFim: exp.horaFim,
         livres,
@@ -1120,8 +1174,8 @@ export default function Agendamentos() {
         continue;
       }
 
-      for (const local of vet.locais) {
-        if (localFiltro && local.localizacaoId !== localFiltro) continue;
+      vet.locais.forEach((local, turno) => {
+        if (localFiltro && local.localizacaoId !== localFiltro) return;
         const exp = expedienteDoLocal(local);
         const esps = espFiltro
           ? local.especialidades.filter(e => e.id === espFiltro)
@@ -1129,11 +1183,11 @@ export default function Agendamentos() {
         if (esps.length === 0) {
           // Local sem especialidade configurada: só entra quando não há filtro de
           // especialidade (não há o que casar).
-          if (!espFiltro) montar(vet, local.localizacaoId, local.localizacaoNome, exp, null);
+          if (!espFiltro) montar(vet, local.localizacaoId, local.localizacaoNome, exp, null, turno);
         } else {
-          for (const esp of esps) montar(vet, local.localizacaoId, local.localizacaoNome, exp, esp);
+          for (const esp of esps) montar(vet, local.localizacaoId, local.localizacaoNome, exp, esp, turno);
         }
-      }
+      });
     }
 
     return linhas.sort((a, b) =>
@@ -1379,12 +1433,7 @@ export default function Agendamentos() {
 
   function handleIniciarAtendimento(ag: AgendamentoGlobal) {
     if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
-    // Não se antecipa um agendamento: atender antes da hora marcada exige
-    // REAGENDAR (o backend recusa com AGENDAMENTO_ANTECIPADO).
-    if (ag.status !== 'EM_ANDAMENTO' && agendamentoAntecipado(ag.dataHora)) {
-      setErroLista(`Este atendimento está marcado para ${formatarHora(ag.dataHora)}. Para iniciar antes, reagende-o para o novo horário.`);
-      return;
-    }
+    // ADIANTAR é permitido — o paciente chegou antes, o profissional vagou.
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   }
 
@@ -1544,7 +1593,9 @@ export default function Agendamentos() {
     setErroModal(null);
     if (!reagendando || !novaDataHora) { setErroModal('Escolha o dia e o horário'); return; }
     if (novaDataHora === formatarDateInput(reagendando.dataHora)) { setErroModal('A nova data deve ser diferente da atual'); return; }
-    if (new Date(novaDataHora).getTime() < Date.now()) {
+    // Adiantar pode (para mais cedo, inclusive para daqui a pouco); para trás do
+    // relógio, não. Mesma tolerância de 1 min do backend (DATA_PASSADA).
+    if (dataHoraNoPassado(novaDataHora)) {
       setErroModal('Não é possível reagendar para um horário que já passou.'); return;
     }
     const avisoExpediente = foraDoExpediente(novaDataHora, expedienteReagendando);
@@ -1650,7 +1701,7 @@ export default function Agendamentos() {
                 >
                   <option value="">Todos os animais</option>
                   {animaisFiltradosBar.map(a => (
-                    <option key={a.id} value={a.id}>{a.nome}{a.especie?.nome ? ` (${a.especie.nome})` : ''}</option>
+                    <option key={a.id} value={a.id}>{a.nome}{a.localizacaoNome ? ` (${a.localizacaoNome})` : ''}</option>
                   ))}
                 </select>
                 <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
@@ -1995,12 +2046,12 @@ export default function Agendamentos() {
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
           <div className="flex items-center gap-2">
-            {(podeAgendarParaOutro || souVeterinario) && vets.length > 1 && (
+            {podeEditarAgendamento && vets.length > 1 && (
               <button
                 onClick={() => {
                   setTransferindoDia(true);
-                  // O gestor escolhe a origem; o profissional só transfere a própria agenda
-                  setTransDeVetId(podeAgendarParaOutro ? filtroVetId : String(meuUserId ?? ''));
+                  // Origem: a que está filtrada na tela; sem filtro, a própria agenda.
+                  setTransDeVetId(filtroVetId || String(meuUserId ?? ''));
                   setTransParaVetId('');
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-semibold transition-colors border border-blue-200 whitespace-nowrap"
@@ -2067,7 +2118,7 @@ export default function Agendamentos() {
                     </div>
                     <div>
                       {ag.animal
-                        ? <p className="font-bold text-sm text-gray-900">{ag.animal.nome}{ag.animal.especie && <span className="font-normal text-gray-500"> · {ag.animal.especie.nome}</span>}</p>
+                        ? <p className="font-bold text-sm text-gray-900">{ag.animal.nome}{localDoAnimal(ag.animal) && <span className="font-normal text-gray-500"> · {localDoAnimal(ag.animal)}</span>}</p>
                         : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                       {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
@@ -2082,10 +2133,11 @@ export default function Agendamentos() {
                     </div>
                     {podeGerenciar && !isCancelado && (
                       <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
+                        {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
                         {isAgendado && (
-                          <button onClick={() => handleIniciarAtendimento(ag)} disabled={antecipado}
-                            title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — reagende para iniciar antes` : 'Iniciar atendimento'}
-                            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 text-emerald-700 rounded-xl text-xs font-semibold">
+                          <button onClick={() => handleIniciarAtendimento(ag)}
+                            title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
                             <Stethoscope size={11} /> Iniciar
                           </button>
                         )}
@@ -2169,7 +2221,11 @@ export default function Agendamentos() {
                         </td>
                         <td className="py-3.5 px-4">
                           <p className="font-bold text-gray-900">{ag.animal?.nome ?? '—'}</p>
-                          {ag.animal?.especie && <p className="text-xs text-gray-400">{ag.animal.especie.nome}</p>}
+                          {localDoAnimal(ag.animal) && (
+                            <p className="flex items-center gap-1 text-xs text-gray-400">
+                              <MapPin size={10} className="flex-shrink-0" /> {localDoAnimal(ag.animal)}
+                            </p>
+                          )}
                           {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                         </td>
                         <td className="py-3.5 px-4">
@@ -2206,10 +2262,11 @@ export default function Agendamentos() {
                         {podeGerenciar && (
                           <td className="py-3.5 px-4">
                             <div className="flex items-center justify-center gap-1.5">
+                              {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
                               {isAgendado && (
-                                <button onClick={() => handleIniciarAtendimento(ag)} disabled={antecipado}
-                                  title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — reagende para iniciar antes` : 'Iniciar atendimento'}
-                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 text-emerald-700 rounded-xl transition-colors">
+                                <button onClick={() => handleIniciarAtendimento(ag)}
+                                  title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
+                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
                                   <Stethoscope size={13} />
                                 </button>
                               )}
@@ -2318,14 +2375,14 @@ export default function Agendamentos() {
                         <button key={a.id} type="button"
                           onMouseDown={e => {
                             e.preventDefault();
-                            setComboQuery(a.nome + (a.especie?.nome ? ` (${a.especie.nome})` : ''));
+                            setComboQuery(a.nome + (a.localizacaoNome ? ` (${a.localizacaoNome})` : ''));
                             setComboOpen(false);
                             setBookingForm({ animalId: String(a.id), proprietarioNome: a.user?.fullName ?? '', telefone: a.user?.phone ?? '', cpf: a.user?.cpf ?? '' });
                           }}
                           className={`w-full text-left px-4 py-2.5 text-sm transition-colors border-b border-gray-50 last:border-0 ${String(a.id) === bookingForm.animalId ? 'bg-emerald-50 text-emerald-800' : 'hover:bg-gray-50 text-gray-800'}`}
                         >
                           <span className="font-semibold">{a.nome}</span>
-                          {a.especie?.nome && <span className="text-xs text-gray-400 ml-1.5">({a.especie.nome})</span>}
+                          {a.localizacaoNome && <span className="text-xs text-gray-400 ml-1.5">({a.localizacaoNome})</span>}
                         </button>
                       ))}
                     </div>

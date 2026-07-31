@@ -90,14 +90,23 @@ type FiltroStatus = 'todos' | 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// Tipo de dose, em ordem CRESCENTE. "Reforço Mensal"/"Reforço Anual" disparam o
+// agendamento automático das doses seguintes na execução (ver INTERVALO_REFORCO_MESES).
 const DOSES = [
-  '1ª Dose (Filhote)',
+  '1ª Dose',
   '2ª Dose',
   '3ª Dose',
-  'Reforço Anual',
   'Dose Única',
-  'Revacinação',
+  'Reforço Mensal',
+  'Reforço Anual',
 ];
+
+// Reforço periódico → intervalo entre as doses, em MESES. Tipo fora deste mapa não
+// gera agendamento automático (dose avulsa//série sem periodicidade definida).
+const INTERVALO_REFORCO_MESES: Record<string, number> = {
+  'Reforço Mensal': 1,
+  'Reforço Anual':  12,
+};
 
 const VIAS_PADRAO = [
   'Subcutânea (SC)',
@@ -604,6 +613,18 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     if (itens.some(i => !i.medicamentoCatId)) {
       setErroInline('Há vacina sem cadastro no catálogo — remova a linha.'); return;
     }
+    // Dose e via são OBRIGATÓRIAS — o registro é o que documenta a aplicação. O item
+    // vindo do orçamento entra sem elas (o orçamento não tem esses campos), então a
+    // checagem precisa varrer a LISTA inteira, não só o formulário: sem isso, dava
+    // para importar e salvar a vacina sem dose nem via.
+    const semDose = itens.find(i => !String(i.dose ?? '').trim());
+    if (semDose) {
+      setErroInline(`Informe a dose de "${semDose.nome}" antes de salvar.`); return;
+    }
+    const semVia = itens.find(i => !String(i.via ?? '').trim());
+    if (semVia) {
+      setErroInline(`Informe a via de administração de "${semVia.nome}" antes de salvar.`); return;
+    }
     setSaving(true);
     let ok = 0;
     try {
@@ -863,8 +884,17 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   };
 
   const executarSalvar = async () => {
-    // Salva a lista + o que estiver no formulário, numa única ação
-    const itens = formEstaVazio() ? itensImport : [...itensImport, itemDoFormulario()];
+    // Salva a lista + o que estiver no formulário, numa única ação.
+    // Editando uma linha (`editandoKey`), o formulário SUBSTITUI aquele item — não
+    // entra como novo. Mesmo motivo da prescrição: quem preenche a dose/via de um
+    // item importado e clica direto em "Salvar" (sem passar por "Atualizar item")
+    // salvaria a linha duplicada e a original continuaria sem dose.
+    const doForm = formEstaVazio() ? null : itemDoFormulario();
+    const itens = !doForm
+      ? itensImport
+      : (editandoKey
+          ? itensImport.map(i => (i.key === editandoKey ? { ...doForm, key: i.key, orcamentoItemId: i.orcamentoItemId } : i))
+          : [...itensImport, doForm]);
     await salvarItens(itens);
   };
 
@@ -1130,6 +1160,16 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
             </div>
           </div>
 
+          {/* Prévia do agendamento automático — o backend cria os reforços na EXECUÇÃO
+              (a 1ª dose é a própria aplicação, por isso qtd-1). */}
+          {INTERVALO_REFORCO_MESES[dose] && qtd > 1 && (
+            <p className="-mt-1 mb-3 text-[11px] text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
+              Ao executar, serão agendadas as <b>{qtd - 1} doses seguintes</b>, a cada{' '}
+              {INTERVALO_REFORCO_MESES[dose] === 1 ? 'mês' : `${INTERVALO_REFORCO_MESES[dose]} meses`}.
+              A 1ª dose é esta aplicação.
+            </p>
+          )}
+
           {/* Linha 4: Observação */}
           <div className="mb-3">
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">OBSERVAÇÃO</label>
@@ -1350,14 +1390,19 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                         {finalizandoId === v.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />} Finalizar
                       </button>
                     )}
-                    <button onClick={() => abrirWhatsApp(montarTextoVacina(v))}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                      <MessageCircle size={11} /> WhatsApp
-                    </button>
-                    <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                      <Mail size={11} /> E-mail
-                    </button>
+                    {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+                    {podeImprimir && (
+                      <button onClick={() => abrirWhatsApp(montarTextoVacina(v))}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                        <MessageCircle size={11} /> WhatsApp
+                      </button>
+                    )}
+                    {podeImprimir && (
+                      <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                        <Mail size={11} /> E-mail
+                      </button>
+                    )}
                     {podeImprimir && (
                       <button onClick={() => imprimirVacina(v, animal)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">

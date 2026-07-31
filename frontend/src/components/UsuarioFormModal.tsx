@@ -198,23 +198,38 @@ export function HoraInput({ value, onChange, className }: {
   );
 }
 
-// Dois locais do mesmo profissional não podem coincidir: dia da semana em comum +
-// horários que se cruzam. Espelha `conflitoEntreLocais` do EquipeController (backend
-// continua sendo a autoridade; aqui é só o aviso imediato ao usuário).
+// Duas linhas de trabalho do mesmo profissional não podem coincidir: dia da semana em
+// comum + horários que se cruzam. O MESMO local pode se repetir (clínico seg/qua/sex e
+// dermatologista ter/qui na mesma Hípica) — o que não pode é sobrepor os turnos.
+// Dias em branco herdam os da empresa: entre locais DIFERENTES ficam fora do confronto
+// (regra antiga), mas no MESMO local caem sobre os mesmos dias e sempre colidem.
+// Espelha `conflitoEntreLocais` do EquipeController (backend continua sendo a
+// autoridade; aqui é só o aviso imediato ao usuário).
 export function conflitoEntreLocais(locais: LocalTrabalhoForm[]): string | null {
   const faixa = (l: LocalTrabalhoForm): [string, string] =>
     [l.horaInicioTrabalho || '00:00', l.horaFimTrabalho || '23:59'];
 
   for (let i = 0; i < locais.length; i++) {
     for (let j = i + 1; j < locais.length; j++) {
-      const comuns = locais[i].diasTrabalho.filter(d => locais[j].diasTrabalho.includes(d));
-      if (comuns.length === 0) continue;
+      const mesmoLocal = locais[i].localizacaoId === locais[j].localizacaoId;
+      const semDias = locais[i].diasTrabalho.length === 0 || locais[j].diasTrabalho.length === 0;
+      // null = "todos os dias herdados da empresa" (só ocorre no mesmo local)
+      const comuns = (mesmoLocal && semDias)
+        ? null
+        : locais[i].diasTrabalho.filter(d => locais[j].diasTrabalho.includes(d));
+      if (comuns !== null && comuns.length === 0) continue;
 
       const [iniA, fimA] = faixa(locais[i]);
       const [iniB, fimB] = faixa(locais[j]);
       if (iniA < fimB && iniB < fimA) {
-        const dias = [...comuns].sort((a, b) => a - b)
-          .map(d => DIAS_SEMANA_TRAB.find(x => x.v === d)?.l ?? d).join(', ');
+        const dias = comuns === null
+          ? 'todos os dias herdados da empresa'
+          : [...comuns].sort((a, b) => a - b)
+              .map(d => DIAS_SEMANA_TRAB.find(x => x.v === d)?.l ?? d).join(', ');
+        if (mesmoLocal) {
+          return `Este local já tem outro horário em ${dias} (${iniA}–${fimA} e ${iniB}–${fimB}). `
+               + 'Para repetir o local, informe dias ou horários que não se sobreponham.';
+        }
         return `Os locais de trabalho não podem coincidir: há sobreposição em ${dias} `
              + `(${iniA}–${fimA} e ${iniB}–${fimB}).`;
       }
@@ -681,11 +696,8 @@ export default function UsuarioFormModal({
           && rascunhoLocal.horaInicioTrabalho >= rascunhoLocal.horaFimTrabalho) {
         setErroInline('A hora de entrada deve ser menor que a de saída no local em preenchimento.'); return;
       }
-      // Ao editar, ignora o próprio item (ele será substituído, não duplicado)
-      const outros = editIndexLocal === null ? locaisTrabalho : locaisTrabalho.filter((_, i) => i !== editIndexLocal);
-      if (outros.some(l => l.localizacaoId === rascunhoLocal.localizacaoId)) {
-        setErroInline('O local em preenchimento já foi adicionado.'); return;
-      }
+      // O mesmo local PODE se repetir com outros dias/horário/especialidade — quem
+      // barra a linha inválida é o conflito de turno logo abaixo.
       const foraEmp = validarExpedienteEmpresa(rascunhoLocal);
       if (foraEmp) { setErroInline(foraEmp); return; }
       locaisTrabalho = editIndexLocal === null
@@ -975,11 +987,18 @@ export default function UsuarioFormModal({
 
               {/* Botão que revela o formulário — os campos só aparecem após o clique */}
               {!mostrarFormLocal && (
-                <button type="button"
-                  onClick={() => { setErroLocal(null); setEditIndexLocal(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
-                  className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
-                  <Plus size={13} /> Adicionar local e horário de trabalho
-                </button>
+                <>
+                  <button type="button"
+                    onClick={() => { setErroLocal(null); setEditIndexLocal(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                    <Plus size={13} /> Adicionar local e horário de trabalho
+                  </button>
+                  <p className="text-[11px] text-gray-400 mt-1.5">
+                    O mesmo local pode entrar mais de uma vez, com outros dias, horário e
+                    especialidade — ex.: clínico seg/qua/sex e dermatologista ter/qui na
+                    mesma hípica.
+                  </p>
+                </>
               )}
 
               {/* Formulário do novo local: local · horário · dias · especialidades · tempo */}
@@ -1013,9 +1032,8 @@ export default function UsuarioFormModal({
                     }
                     // Ao editar, ignora o próprio item (não conflita consigo mesmo)
                     const outros = (form.locaisTrabalho ?? []).filter((_, i) => i !== editIndexLocal);
-                    // Mesmo local não se repete; horários não podem coincidir
-                    const jaTem = outros.some(l => l.localizacaoId === rascunhoLocal.localizacaoId);
-                    if (jaTem) { setErroLocal('Este local já foi adicionado'); return; }
+                    // O mesmo local pode se repetir com outros dias/horário/especialidade;
+                    // o que não pode é sobrepor o turno de outra linha.
                     const conflito = conflitoEntreLocais([...outros, rascunhoLocal]);
                     if (conflito) { setErroLocal(conflito); return; }
                     // Todo membro fica restrito ao dia/horário da empresa

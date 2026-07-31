@@ -23,21 +23,33 @@ export const formatDateShort = (d: string | Date | null | undefined): string => 
 };
 
 /**
- * Tolerância de relógio para "o horário marcado já chegou?" — espelha
- * TOLERANCIA_INICIO_MS do EvolucaoController. NÃO é folga de antecipação:
- * atender antes da hora exige REAGENDAR o agendamento.
+ * Tolerância de relógio para comparações de "já passou?" — espelha o 1 min que o
+ * AgendamentoController usa em DATA_PASSADA.
  */
 export const TOLERANCIA_INICIO_MS = 60_000;
 
 /**
- * true quando o agendamento ainda não chegou — iniciar a evolução dele seria
- * ANTECIPAR o atendimento, o que o backend recusa (AGENDAMENTO_ANTECIPADO).
+ * true quando o horário marcado ainda não chegou.
+ *
+ * ATENÇÃO: isto NÃO bloqueia nada. ADIANTAR um atendimento é permitido (o paciente
+ * chegou antes, o profissional vagou) — o backend deixou de recusar com
+ * AGENDAMENTO_ANTECIPADO. O que continua proibido é mover a agenda para TRÁS do
+ * relógio (`DATA_PASSADA` em criar/atualizar). Use esta função só para INFORMAR
+ * ("marcado para as 14h"), nunca para desabilitar o botão de iniciar.
  */
 export const agendamentoAntecipado = (dataHora: string | Date | null | undefined): boolean => {
   if (!dataHora) return false;
   const t = (dataHora instanceof Date ? dataHora : new Date(dataHora)).getTime();
   if (isNaN(t)) return false;
   return t - Date.now() > TOLERANCIA_INICIO_MS;
+};
+
+/** true quando a data/hora já passou (com a tolerância de relógio). */
+export const dataHoraNoPassado = (dataHora: string | Date | null | undefined): boolean => {
+  if (!dataHora) return false;
+  const t = (dataHora instanceof Date ? dataHora : new Date(dataHora)).getTime();
+  if (isNaN(t)) return false;
+  return t < Date.now() - TOLERANCIA_INICIO_MS;
 };
 
 // DD/MM/YYYY HH:MM — para timestamps com hora, exibidos no fuso Brasil

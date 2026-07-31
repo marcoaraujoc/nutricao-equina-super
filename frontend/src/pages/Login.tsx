@@ -32,12 +32,19 @@ export default function Login() {
   const [forgotSuccess,   setForgotSuccess]   = useState(false);
   const [forgotError,     setForgotError]     = useState('');
 
-  const redirecionarAposLogin = () => {
+  // Destino pós-login. Profissional (vet, gestor, estagiário, fornecedor...) vai
+  // DIRETO ao Mapa de Atendimento — antes passava por `/` (Dashboard), que só
+  // redirecionava para o mapa quando reconhecia o perfil como clínico, deixando os
+  // demais numa tela intermediária. O PROPRIETÁRIO mantém `/` (portal do cliente).
+  // Cadastro pessoal pendente NAQUELA empresa continua sendo interceptado pelo
+  // ProtectedRoute; já confirmado, não aparece mais e o login cai no mapa.
+  const redirecionarAposLogin = (u?: { userType?: string } | null) => {
     if (returnUrl) {
       navigate(decodeURIComponent(returnUrl), { replace: true });
-    } else {
-      navigate('/', { replace: true });
+      return;
     }
+    const ehCliente = (u?.userType ?? '').toUpperCase() === 'PROPRIETARIO';
+    navigate(ehCliente ? '/' : '/mapa-atendimento', { replace: true });
   };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
@@ -65,13 +72,21 @@ export default function Login() {
           return;
         }
         // Backend já setou os cookies HttpOnly — carrega a identidade via /me
-        await login();
+        const logado = await login();
         localStorage.removeItem('s2vet_ob');
-        redirecionarAposLogin();
+        redirecionarAposLogin(logado);
       } else if (res.status === 503) {
         setError(data.error ?? 'Não foi possível enviar o código de verificação.');
+      } else if (res.status === 429) {
+        // Rate limit do /api/auth. Mostrar "usuário ou senha inválidos" aqui era uma
+        // ARMADILHA: com a senha CERTA a tela acusava credencial errada, o usuário
+        // tentava de novo e cada tentativa renovava o bloqueio.
+        setError(data.mensagem ?? data.error
+          ?? 'Muitas tentativas de login. Aguarde alguns minutos e tente novamente.');
+      } else if (res.status >= 500) {
+        setError('O servidor não conseguiu processar o login. Tente novamente em instantes.');
       } else {
-        setError('Usuário ou senha inválidos');
+        setError(data.error ?? data.mensagem ?? 'Usuário ou senha inválidos');
       }
     } catch {
       setError('Erro de conexão com o servidor');
@@ -92,9 +107,9 @@ export default function Login() {
         });
         const data = await res.json();
         if (res.ok && data.token) {
-          await login();
+          const logado = await login();
           localStorage.removeItem('s2vet_ob');
-          redirecionarAposLogin();
+          redirecionarAposLogin(logado);
         } else {
           setGoogleError(data.error || 'Erro no login Google');
         }
@@ -142,9 +157,9 @@ export default function Login() {
           <Verificacao2FA
             desafio={desafio2fa}
             onVerificado={async () => {
-              await login();
+              const logado = await login();
               localStorage.removeItem('s2vet_ob');
-              redirecionarAposLogin();
+              redirecionarAposLogin(logado);
             }}
             onCancelar={() => { setDesafio2fa(null); setPassword(''); }}
           />

@@ -8,6 +8,10 @@ const { setAuthCookies } = require('../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { whereProprietarioNoEscopo } = require('./ProprietarioController');
+// MESMA função que resolve o escopo em GET /equipes/configuracoes — reusada aqui para
+// o `/me` já dizer se a pessoa é dona/gestora, sem o front precisar sondar aquele
+// endpoint só para ler o 404. Ver `isGestorEmpresa` no getMe.
+const { resolverEscopoConfiguracao, buscarConfiguracao } = require('./EquipeController');
 const { parseLocaisTrabalho, gravarLocaisTrabalho, csvParaIds, validarLocaisContraExpedienteEmpresa,
         especialidadesPadraoVeterinario } = require('./EquipeController');
 const {
@@ -21,6 +25,12 @@ const {
   aplicarPerfil: aplicarPerfilProfissional,
   obterPerfil:   obterPerfilProfissional,
 } = require('../lib/profissionalPerfil');
+// Tabela de ligação usuário × empresa — fonte do PERFIL e do cadastro por empresa.
+const {
+  perfilDaEmpresa,
+  aplicarVinculo,
+  salvarVinculo,
+} = require('../lib/usuarioEmpresa');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
@@ -210,16 +220,64 @@ const UserController = {
       const tipoNoContexto = req.user?.userType ?? userBruto.userType;
       const ehClienteAqui  = tipoNoContexto === 'PROPRIETARIO';
 
-      // Cadastro da EMPRESA ATIVA — cada clínica mantém o seu, para proprietário
-      // (ProprietarioPerfil) e para profissional (ProfissionalPerfil).
-      const userData = ehClienteAqui
-        ? await aplicarPerfilProprietario(userBruto, req.empresaId)
-        : await aplicarPerfilProfissional(userBruto, req.empresaId);
-      const perfilProf = ehClienteAqui
-        ? null
-        : await obterPerfilProfissional(user.id, req.empresaId);
+      // Cadastro da EMPRESA ATIVA. FONTE: tb_usuario_empresa (tabela de ligação —
+      // nome, telefone, documento, endereço, CRMV e condição comercial por empresa).
+      // Sem vínculo lá (legado ainda não migrado), cai nas tabelas antigas.
+      const vinculoEmpresa = await perfilDaEmpresa(user.id, req.empresaId);
+      const userData = vinculoEmpresa
+        ? await aplicarVinculo(userBruto, req.empresaId)
+        : (ehClienteAqui
+            ? await aplicarPerfilProprietario(userBruto, req.empresaId)
+            : await aplicarPerfilProfissional(userBruto, req.empresaId));
+      const perfilProf = vinculoEmpresa
+        ? { crmv: vinculoEmpresa.crmv }
+        : (ehClienteAqui ? null : await obterPerfilProfissional(user.id, req.empresaId));
+
+      // Confirmação do cadastro NESTA empresa: o gestor ter preenchido o endereço na
+      // inclusão NÃO libera os módulos — quem confirma é o próprio profissional,
+      // salvando o Cadastro Pessoal aqui. Coluna nova lida por SQL cru (o client
+      // Prisma pode estar desatualizado — mesmo padrão do `isConvidado`).
+      // Sem empresa no contexto não há o que confirmar (vet autônomo, usuário sem
+      // vínculo, chamada antes do seletor resolver). Travar aqui criava DEADLOCK: o
+      // gate pedia o cadastro, e salvar não confirmava nada — a gravação também
+      // depende de `req.empresaId`. Nesse caso, vale o cadastro em si.
+      let cadastroConfirmado = !req.empresaId;
+      if (req.empresaId) {
+        try {
+          const rows = await prisma.$queryRawUnsafe(
+            `SELECT cadastro_confirmado_em FROM schs2vet.tb_usuario_empresa
+              WHERE user_id = $1 AND empresa_id = $2 LIMIT 1`,
+            user.id, Number(req.empresaId),
+          );
+          const vinculoExiste = rows?.length > 0;
+          // Sem linha de vínculo nesta empresa também não há o que confirmar —
+          // não é caso de bloquear (é legado/ADMIN olhando outra empresa).
+          cadastroConfirmado = vinculoExiste ? !!rows[0].cadastro_confirmado_em : true;
+        } catch { cadastroConfirmado = true; /* coluna ainda não migrada — não bloqueia */ }
+      }
+
+      // É dona/gestora da empresa do contexto? Resolvido pela MESMA função de
+      // GET /equipes/configuracoes (ownerId ou cargo GESTOR), para a resposta ser
+      // idêntica à daquele endpoint. O front lia isso sondando aquela rota e
+      // interpretando o 404 como "não é gestor" — funcionava, mas gerava um 404 no
+      // DevTools a cada login, e o navegador loga a requisição na camada de rede,
+      // antes de qualquer tratamento em JS. Agora vem junto do /me, sem round-trip.
+      // `empresaConfigurada` acompanha porque saía do MESMO endpoint (`configurado`
+      // = já existe registro salvo) e alimenta o gate de primeiro acesso do gestor.
+      // Para quem não é gestor vale `true`: esse gate nunca se aplica a ele.
+      let isGestorEmpresa   = false;
+      let empresaConfigurada = true;
+      try {
+        const escopoCfg = await resolverEscopoConfiguracao(req);
+        isGestorEmpresa = !!escopoCfg;
+        if (escopoCfg) empresaConfigurada = !!(await buscarConfiguracao(escopoCfg));
+      } catch { isGestorEmpresa = false; empresaConfigurada = true; }
+
       return res.status(200).json({
         ...userData,
+        cadastroConfirmado,
+        isGestorEmpresa,
+        empresaConfigurada,
         userType:       tipoNoContexto,
         userTypeGlobal: userBruto.userType,
         isConvidado,
@@ -347,13 +405,32 @@ const UserController = {
           ...(cidade      !== undefined ? { cidade }      : {}),
           ...(estado      !== undefined ? { estado }      : {}),
         };
-        if (updatedUser.userType === 'PROPRIETARIO') {
+        const ehCliente = (req.user?.userType ?? updatedUser.userType) === 'PROPRIETARIO';
+        const dadosProf = {
+          ...dadosCadastro,
+          ...(crmv !== undefined ? { crmv: crmv ? normalizarCRMV(crmv) : null } : {}),
+        };
+
+        // FONTE NOVA: tabela de ligação usuário × empresa. O perfil não é tocado aqui
+        // (quem define é o gestor); só o cadastro daquela empresa.
+        await salvarVinculo(prisma, updatedUser.id, req.empresaId, ehCliente ? dadosCadastro : dadosProf);
+
+        // É AQUI que o cadastro daquela empresa passa a valer como confirmado pelo
+        // próprio usuário — e só então os módulos são liberados para ele ali.
+        try {
+          await prisma.$executeRawUnsafe(
+            `UPDATE schs2vet.tb_usuario_empresa
+                SET cadastro_confirmado_em = COALESCE(cadastro_confirmado_em, CURRENT_TIMESTAMP)
+              WHERE user_id = $1 AND empresa_id = $2`,
+            updatedUser.id, Number(req.empresaId),
+          );
+        } catch { /* coluna ainda não migrada */ }
+
+        // Legado (mantido em sincronia enquanto as tabelas antigas existirem)
+        if (ehCliente) {
           await salvarPerfilProprietario(prisma, updatedUser.id, req.empresaId, dadosCadastro);
         } else {
-          await salvarPerfilProfissional(prisma, updatedUser.id, req.empresaId, {
-            ...dadosCadastro,
-            ...(crmv !== undefined ? { crmv: crmv ? normalizarCRMV(crmv) : null } : {}),
-          });
+          await salvarPerfilProfissional(prisma, updatedUser.id, req.empresaId, dadosProf);
         }
       }
 
@@ -510,11 +587,31 @@ const UserController = {
     } catch (error) {
       console.error('Erro ao atualizar cadastro pessoal:', error);
 
-      // CRMV duplicado
-      if (error.code === 'P2002' && error.meta?.target?.includes('crmv')) {
+      // Violação de unicidade: diz QUAL campo colidiu, em vez de "erro interno".
+      // `meta.target` pode vir como array de colunas ou como string (nome do índice).
+      if (error.code === 'P2002') {
+        const alvo = Array.isArray(error.meta?.target)
+          ? error.meta.target.join(',')
+          : String(error.meta?.target ?? '');
+        if (/crmv/i.test(alvo)) {
+          return res.status(409).json({
+            success: false,
+            code:  'CRMV_DUPLICADO',
+            error: 'Este CRMV já está cadastrado para outro usuário. Confira o número e a UF; '
+                 + 'se o CRMV é seu, fale com o administrador para liberar o cadastro anterior.',
+          });
+        }
+        if (/email/i.test(alvo)) {
+          return res.status(409).json({
+            success: false,
+            code:  'EMAIL_DUPLICADO',
+            error: 'Este e-mail já está cadastrado para outro usuário.',
+          });
+        }
         return res.status(409).json({
           success: false,
-          error: 'Este CRMV já está cadastrado no sistema.',
+          code:  'REGISTRO_DUPLICADO',
+          error: `Já existe um cadastro com este dado${alvo ? ` (${alvo})` : ''}.`,
         });
       }
 

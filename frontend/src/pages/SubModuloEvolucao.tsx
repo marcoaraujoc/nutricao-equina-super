@@ -257,11 +257,12 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
 
 // ─── ViewEvolucaoModal ────────────────────────────────────────────────────────
 
-function ViewEvolucaoModal({ ev, animal, onClose, onImprimir }: {
+function ViewEvolucaoModal({ ev, animal, onClose, onImprimir, podeImprimir }: {
   ev:         EvolucaoItem;
   animal:     AnimalInfo | null;
   onClose:    () => void;
   onImprimir: () => void;
+  podeImprimir: boolean;
 }) {
   const midias = ev.midias ?? [];
 
@@ -329,10 +330,12 @@ function ViewEvolucaoModal({ ev, animal, onClose, onImprimir }: {
             className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Fechar
           </button>
-          <button onClick={onImprimir}
-            className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            <Printer size={14} /> Imprimir
-          </button>
+          {podeImprimir && (
+            <button onClick={onImprimir}
+              className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+              <Printer size={14} /> Imprimir
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -539,6 +542,7 @@ function NovaEvolucaoModal({
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
   onArquivosChange, onRemoverMidia, somenteLeitura = false,
+  podeSalvar, podeFinalizar,
 }: {
   form:              FormEvolucao;
   editingId:         number | null;
@@ -555,6 +559,10 @@ function NovaEvolucaoModal({
   onArquivosChange:  (files: File[]) => void;
   onRemoverMidia:    (id: number) => void;
   somenteLeitura?:   boolean;
+  // Cada botão segue o SEU slug: Salvar = criar/alterar, Finalizar = finalizar.
+  // Ter "alterar" não dá direito a finalizar, e vice-versa.
+  podeSalvar:        boolean;
+  podeFinalizar:     boolean;
 }) {
   const [gravacaoAtiva,        setGravacaoAtiva]        = useState(false);
   const [transcrevendo,        setTranscrevendo]        = useState(false);
@@ -567,6 +575,10 @@ function NovaEvolucaoModal({
   const [audiosPendentes,      setAudiosPendentes]      = useState<File[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+
+  // Ditado, anexo e "Limpar" só existem para quem pode gravar a evolução —
+  // com apenas VER na matriz, o formulário é vitrine.
+  const podeEscrever = !somenteLeitura && podeSalvar;
 
   const recognitionRef   = useRef<ISpeechRecognition | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -750,15 +762,15 @@ function NovaEvolucaoModal({
                 <option value="">Sem agendamento (EV-XXXX)</option>
                 {agendamentos.map(a => {
                   const d = new Date(a.dataHora);
-                  // Agendamento futuro não pode ser antecipado: atender antes da hora
-                  // exige REAGENDAR (o backend recusa com AGENDAMENTO_ANTECIPADO).
+                  // ADIANTAR é permitido: o agendamento futuro pode ser atendido agora.
+                  // O rótulo só AVISA que o horário marcado ainda não chegou.
                   const futuro = d.getTime() - Date.now() > TOLERANCIA_INICIO_MS;
                   const label = a.numero
                     ? `AG-${String(a.numero).padStart(4, '0')} — ${a.titulo} (${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`
                     : `${a.titulo} (${d.toLocaleDateString('pt-BR')})`;
                   return (
-                    <option key={a.id} value={a.id} disabled={futuro}>
-                      {label}{futuro ? ' — aguardando o horário (reagende para antecipar)' : ''}
+                    <option key={a.id} value={a.id}>
+                      {label}{futuro ? ' — adiantando' : ''}
                     </option>
                   );
                 })}
@@ -780,11 +792,12 @@ function NovaEvolucaoModal({
             <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Evolução clínica *</label>
               <div className="flex items-center gap-2">
-                {!somenteLeitura && form.texto && !gravacaoAtiva && !transcrevendo && (
+                {podeEscrever && form.texto && !gravacaoAtiva && !transcrevendo && (
                   <button onClick={() => onFormChange('texto', '')}
                     className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
-                {!somenteLeitura && !showRecordAgain && !transcrevendo && (
+                {/* Ditado escreve na evolução — sem permissão de gravar, não existe */}
+                {podeEscrever && !showRecordAgain && !transcrevendo && (
                   mobile ? (
                     <button
                       onClick={() => (gravacaoAtiva ? pararGravacao() : iniciarGravacao())}
@@ -840,7 +853,7 @@ function NovaEvolucaoModal({
               </div>
             )}
 
-            {showRecordAgain && !gravacaoAtiva && !transcrevendo && (
+            {podeEscrever && showRecordAgain && !gravacaoAtiva && !transcrevendo && (
               <div className="flex items-center justify-end mt-2">
                 <button onClick={() => { setShowRecordAgain(false); iniciarGravacao(); }}
                   className="flex items-center justify-center gap-1 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
@@ -944,16 +957,20 @@ function NovaEvolucaoModal({
               className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
               Cancelar
             </button>
-            <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-              className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
-              {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
-              Salvar
-            </button>
-            <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
-              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
-              {interpretando && <Loader2 size={13} className="animate-spin" />}
-              {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
-            </button>
+            {podeSalvar && (
+              <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+                className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
+                {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
+                Salvar
+              </button>
+            )}
+            {podeFinalizar && (
+              <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+                className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                {interpretando && <Loader2 size={13} className="animate-spin" />}
+                {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
+              </button>
+            )}
           </>
         )}
       </div>
@@ -988,10 +1005,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const podeEditar    = isGestor || podeExecutar('atendimento.evolucoes.editar');
   const podeFinalizar = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
   const podeImprimir  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
+  const podeDeletar   = isGestor || podeExecutar('atendimento.evolucoes.deletar');
 
-  // FORNECEDOR nunca tem bypass de autoria: só edita/finaliza o que criou,
-  // mesmo que o GESTOR tenha configurado nível EQUIPE/FULL explicitamente.
-  const isFornecedor = user?.userType === 'FORNECEDOR';
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -1300,7 +1315,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
     setArquivosModal([]);
-    setFormLeitura(false);
+    // Sem permissão de alterar (ex: entrada pelo `editItemId` do Histórico do
+    // Paciente), o formulário abre em SOMENTE LEITURA — nunca editável.
+    setFormLeitura(!podeEditar);
     setShowModal(true);
     rolarParaFormulario();
   };
@@ -1357,10 +1374,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     if (editingEv ? !podeEditar : !podeCriar) {
       semPermissao(editingEv ? 'editar evolução' : 'criar evolução'); return;
     }
-    // FORNECEDOR: regra de autoria no frontend — bloqueia antes de chamar a API
-    if (editingEv && isFornecedor && editingEv.veterinarioId !== (user?.id ?? 0)) {
-      semPermissao('editar evolução de outro profissional'); return;
-    }
     if (!form.texto.trim()) {
       setErroInline('O texto da evolução é obrigatório');
       return;
@@ -1412,10 +1425,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleFinalizar = async () => {
     if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
-    // FORNECEDOR: regra de autoria — só finaliza o que criou
-    if (editingEv && isFornecedor && editingEv.veterinarioId !== (user?.id ?? 0)) {
-      semPermissao('finalizar evolução de outro profissional'); return;
-    }
     if (!form.texto.trim()) {
       setErroInline('O texto da evolução é obrigatório');
       return;
@@ -1473,10 +1482,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleExcluir = async (justificativa: string) => {
     if (!deletingEv) return;
-    // FORNECEDOR: regra de autoria — só exclui o que criou
-    if (isFornecedor && deletingEv.veterinarioId !== (user?.id ?? 0)) {
-      semPermissao('excluir evolução de outro profissional'); return;
-    }
+    if (!podeDeletar) { semPermissao('excluir evolução'); return; }
     setSavingExclusao(true);
     try {
       await api.delete(`/clinica/evolucoes/${deletingEv.id}`, { data: { justificativa } });
@@ -1490,6 +1496,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleCancelarFinalizada = async (justificativa: string) => {
     if (!cancelandoEv) return;
+    // Cancelar usa o mesmo slug de EXCLUIR (é o que a rota /cancelar exige).
+    if (!podeDeletar) { semPermissao('cancelar evolução'); return; }
     setSavingCancelamento(true);
     const eraAtiva = cancelandoEv.status === 'EM_ANDAMENTO';
     try {
@@ -1545,6 +1553,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleAprovar = async (id: number) => {
+    // Aprovar é gateado pelo slug de FINALIZAR (é o que a rota exige).
+    if (!podeFinalizar) { semPermissao('aprovar evolução'); return; }
     try {
       await api.patch(`/clinica/evolucoes/${id}/aprovar`);
       toast.success('Evolução aprovada');
@@ -1599,7 +1609,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const userId = user?.id ?? 0;
-  const role   = user?.role ?? 'USER';
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.evolucoes.ler')) {
     return (
@@ -1724,6 +1733,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           onArquivosChange={setArquivosModal}
           onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
           somenteLeitura={formLeitura}
+          podeSalvar={editingEv ? podeEditar : podeCriar}
+          podeFinalizar={podeFinalizar}
         />
       )}
 
@@ -1751,21 +1762,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
               const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
               const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
-              const podeEditarEsta  = isFornecedor
-                ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
-                : (nivelEditar  === 'FULL' || ((nivelEditar  === 'EQUIPE' || nivelEditar  === 'PROPRIO') && eProprioAutor));
-              const podeExcluir    = emAndamento && (isFornecedor
-                ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
-                : (nivelDeletar === 'FULL' || ((nivelDeletar === 'EQUIPE' || nivelDeletar === 'PROPRIO') && eProprioAutor)));
-              const podeFinalizarEsta = emAndamento && (isFornecedor
-                ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
-                : (nivelFinalizar === 'FULL' || ((nivelFinalizar === 'EQUIPE' || nivelFinalizar === 'PROPRIO') && eProprioAutor)));
-              const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
+              // Só o Controle de Acesso decide: ação concedida ao perfil = pode.
+              // Sem filtro de autoria nem de cargo (a matriz é binária na tela).
+              const podeEditarEsta    = nivelEditar    !== 'NENHUM' && nivelEditar    !== 'NEGADO';
+              const podeExcluir       = emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
+              const podeFinalizarEsta = emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
+              // Aprovar segue o slug de FINALIZAR (é o que a rota /aprovar exige) —
+              // não é mais um check de role, senão quem só tem VER via o botão.
+              const podeAprovar    = !ev.aprovado && podeFinalizar;
               const podeAlterar    = (emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
               // Assumir é um "puxar para si": basta ter a permissão de alterar em
               // qualquer nível — não exige ser o autor (que é justamente o outro).
-              const podeAssumirEsta = emAndamento && !eProprioAutor && nivelEditar !== 'NENHUM';
-              const podeCancelarFinalizada = ev.status === 'FINALIZADA' && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId));
+              const podeAssumirEsta = emAndamento && !eProprioAutor && podeEditarEsta;
+              // Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar).
+              const podeCancelarFinalizada = ev.status === 'FINALIZADA' && podeDeletar;
               const tituloDisplay = ev.titulo
                 ? ev.titulo
                 : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
@@ -1809,14 +1819,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                       className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
-                    <button onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                      <MessageCircle size={11} /> WhatsApp
-                    </button>
-                    <button onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                      <Mail size={11} /> E-mail
-                    </button>
+                    {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+                    {podeImprimir && (
+                      <button onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
+                        <MessageCircle size={11} /> WhatsApp
+                      </button>
+                    )}
+                    {podeImprimir && (
+                      <button onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                        <Mail size={11} /> E-mail
+                      </button>
+                    )}
                     {podeAlterar && (
                       <button onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
@@ -1848,10 +1863,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         <Ban size={11} /> Cancelar
                       </button>
                     )}
-                    <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors disabled:opacity-50">
-                      {imprimindoId === ev.id ? <Loader2 size={11} className="animate-spin" /> : <Printer size={11} />} Imprimir
-                    </button>
+                    {podeImprimir && (
+                      <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors disabled:opacity-50">
+                        {imprimindoId === ev.id ? <Loader2 size={11} className="animate-spin" /> : <Printer size={11} />} Imprimir
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1883,17 +1900,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
 
                 // FORNECEDOR: autoria obrigatória independente do nível configurado
-                const podeEditarEsta  = isFornecedor
-                  ? (nivelEditar  !== 'NENHUM' && eProprioAutor)
-                  : (nivelEditar  === 'FULL' || ((nivelEditar  === 'EQUIPE' || nivelEditar  === 'PROPRIO') && eProprioAutor));
-                // FORNECEDOR: autoria obrigatória independente do nível configurado
-                const podeExcluir    = emAndamento && (isFornecedor
-                  ? (nivelDeletar !== 'NENHUM' && eProprioAutor)
-                  : (nivelDeletar === 'FULL' || ((nivelDeletar === 'EQUIPE' || nivelDeletar === 'PROPRIO') && eProprioAutor)));
-                const podeFinalizarEsta = emAndamento && (isFornecedor
-                  ? (nivelFinalizar !== 'NENHUM' && eProprioAutor)
-                  : (nivelFinalizar === 'FULL' || ((nivelFinalizar === 'EQUIPE' || nivelFinalizar === 'PROPRIO') && eProprioAutor)));
-                const podeAprovar    = !ev.aprovado && (role === 'ADMIN' || role === 'VETERINARIO');
+                const podeEditarEsta    = nivelEditar    !== 'NENHUM' && nivelEditar    !== 'NEGADO';
+                const podeExcluir       = emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
+                const podeFinalizarEsta = emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
+                const podeAprovar    = !ev.aprovado && podeFinalizar;
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
                   : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
@@ -1970,7 +1980,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
                         {/* Assumir a evolução em andamento de outro profissional —
                             ele é comunicado por e-mail e WhatsApp. */}
-                        {emAndamento && !eProprioAutor && nivelEditar !== 'NENHUM' && (
+                        {emAndamento && !eProprioAutor && podeEditarEsta && (
                           <button onClick={() => handleAssumirEvolucao(ev.id)} disabled={assumindoEv}
                             title={`Assumir a evolução de ${ev.veterinario?.fullName ?? 'outro profissional'}`}
                             className="p-1.5 text-teal-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors disabled:opacity-60">
@@ -1999,17 +2009,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           </button>
                         )}
 
-                        {ev.status === 'FINALIZADA' && (role === 'ADMIN' || (role === 'VETERINARIO' && ev.veterinarioId === userId)) && (
+                        {ev.status === 'FINALIZADA' && podeDeletar && (
                           <button onClick={() => setCancelandoEv(ev)} title="Cancelar evolução"
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                             <Ban size={14} />
                           </button>
                         )}
 
-                        <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id} title="Imprimir"
-                          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50">
-                          {imprimindoId === ev.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                        </button>
+                        {podeImprimir && (
+                          <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id} title="Imprimir"
+                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50">
+                            {imprimindoId === ev.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2055,6 +2067,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           animal={animal}
           onClose={() => setViewingEv(null)}
           onImprimir={() => handleImprimir(viewingEv)}
+          podeImprimir={podeImprimir}
         />
       )}
 
@@ -2077,8 +2090,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
       {relatorioModal && (() => {
         const relEv = relatorioModal.ev;
-        const eProprioAutorRel     = relEv.veterinarioId === userId;
-        const podeEditarRelatorio  = isGestor || (podeEditar && (!isFornecedor || eProprioAutorRel));
+        // Segue o Controle de Acesso (alterar evolução), sem filtro de autoria/cargo
+        const podeEditarRelatorio  = isGestor || podeEditar;
         const podeAlterarEvolucao  = (relEv.status === 'EM_ANDAMENTO' && podeEditarRelatorio)
           || (isGestor && relEv.status === 'FINALIZADA');
         return (

@@ -97,14 +97,30 @@ const limiter = rateLimit({
   message: { sucesso: false, mensagem: 'Muitas requisições. Tente novamente em instantes.' },
 });
 
-// Rate limiting restrito para rotas de autenticação: 20 req/15min por IP
+// Rate limiting restrito para as rotas que ADIVINHAM credencial: 20 req/15min por IP.
+//
+// Só entram aqui login/registro/recuperação de senha — é contra força bruta. NÃO cobre
+// `/auth/refresh` e `/auth/logout`: refresh é disparado SOZINHO pelo interceptor do axios
+// a cada 401, então incluí-lo fazia o uso normal do sistema consumir a cota de login e o
+// usuário levar 429 na tela de entrada com a senha CERTA (relatado em 2026-07-30). Eles
+// ficam no limitador geral (200/min), que já barra abuso.
+//
+// `skipSuccessfulRequests`: quem acertou a senha não gasta cota. O objetivo é limitar
+// TENTATIVA errada; sem isso, trocar de conta algumas vezes no mesmo IP (clínica com
+// vários usuários atrás de um NAT) esgotava o limite.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   message: { sucesso: false, mensagem: 'Muitas tentativas de login. Tente novamente em 15 minutos.' },
 });
+
+// Rotas de /api/auth que NÃO são adivinhação de credencial (o app as chama sozinho).
+const ROTAS_AUTH_SEM_LIMITE_ESTRITO = ['/refresh', '/logout'];
+const authLimiterSeletivo: express.RequestHandler = (req, res, next) =>
+  (ROTAS_AUTH_SEM_LIMITE_ESTRITO.includes(req.path) ? next() : authLimiter(req, res, next));
 
 app.use('/api', limiter);
 
@@ -197,7 +213,7 @@ const monitoracaoRoutes        = require('./routes/monitoracao');
 const orcamentosRoutes         = require('./routes/orcamentos');
 
 // ===================== MONTAGEM DAS ROTAS =====================
-app.use('/api/auth',                  authLimiter, authRoutes);
+app.use('/api/auth',                  authLimiterSeletivo, authRoutes);
 app.use('/api/animais',               animaisRoutes);
 app.use('/api/alimentos',             alimentosRoutes);
 app.use('/api/dietas',                dietasRoutes);

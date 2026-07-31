@@ -84,7 +84,9 @@ model User {
   permissoesMembro       PermissaoMembro[]
   permissoesProprietario PermissaoProprietario[]
   proprietarioPerfis       ProprietarioPerfil[]    @relation("ProprietarioPerfilUser")
+  proprietarioLocalidades  ProprietarioLocalidade[] @relation("ProprietarioLocalidadeUser")
   profissionalPerfis       ProfissionalPerfil[]    @relation("ProfissionalPerfilUser")
+  empresasVinculadas       UsuarioEmpresa[]        @relation("UsuarioEmpresaUser")
   fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
   encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
   designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
@@ -584,6 +586,10 @@ model PrescricaoGrupo {
   empresaId       Int?
   evolucaoId      Int?      @map("evolucao_id")   // evolução que originou este grupo
   status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
+  // Quem aplica é o PROPRIETÁRIO, em casa. A prescrição é orientação clínica, não
+  // serviço da clínica: não entra na lista de Execução de Prescrição (plantão) e,
+  // por consequência, nunca gera FaturaItem nem movimenta estoque.
+  executadaPeloProprietario Boolean @default(false) @map("executada_pelo_proprietario")
   motivoCancelamento String? @db.Text
   finalizadoPorId Int?
   finalizadoEm    DateTime?
@@ -1343,7 +1349,9 @@ model Empresa {
   iaPlano         IaPlanoEmpresa?  @relation("EmpresaIaPlano")
   proprietarios   User[]           @relation("ProprietarioEmpresa")
   proprietarioPerfis ProprietarioPerfil[] @relation("ProprietarioPerfilEmpresa")
+  proprietarioLocalidades ProprietarioLocalidade[] @relation("ProprietarioLocalidadeEmpresa")
   profissionalPerfis ProfissionalPerfil[] @relation("ProfissionalPerfilEmpresa")
+  usuariosVinculados UsuarioEmpresa[]     @relation("UsuarioEmpresaEmpresa")
   especialidadesMembros UsuarioEspecialidade[] @relation("UsuarioEspecialidadeEmpresa")
   equipes         Equipe[]
   animais         Animal[]         @relation("EmpresaAnimais")
@@ -1378,6 +1386,72 @@ model Empresa {
 /// por empresa. O mesmo profissional pode atuar em várias clínicas com cadastros
 /// INDEPENDENTES; ao ser incluído numa empresa nova, nada é pré-carregado da outra.
 /// LEITURA/ESCRITA: sempre via `lib/profissionalPerfil.js`.
+// ─────────────────────────────────────────────────────────────────────────────
+// UsuarioEmpresa — TABELA DE LIGAÇÃO usuário × empresa (decisão 2026-07-30)
+//
+// `users` guarda APENAS a identidade/autenticação (e-mail, senha, refresh token,
+// 2FA, role de plataforma, ativo global). TUDO o que a pessoa é e tem DENTRO de
+// uma empresa mora aqui: o PERFIL (tipo de usuário naquela clínica) e o cadastro
+// (nome, telefone, documento, endereço, CRMV, condição comercial de cliente).
+//
+// É o que permite o mesmo e-mail ser gestora na empresa 1, veterinária na 2,
+// estagiária na 3 e proprietária na 4 — cada uma com endereço e telefone próprios —
+// mantendo UM login (e sem duplicar linha em `users`, o que quebraria login, 2FA,
+// OAuth e reset de senha, todos indexados por e-mail único).
+//
+// Substitui e unifica ProfissionalPerfil + ProprietarioPerfil (mantidos por ora
+// como legado, sem uso novo, para não perder histórico antes do backfill validado).
+// ─────────────────────────────────────────────────────────────────────────────
+model UsuarioEmpresa {
+  id        Int @id @default(autoincrement())
+  userId    Int @map("user_id")
+  empresaId Int @map("empresa_id")
+
+  // PERFIL do usuário NESTA empresa — é o "tipo de usuário" por empresa.
+  // GESTOR | VETERINARIO | ESTAGIARIO | ENFERMEIRO | SECRETARIA | FINANCEIRO |
+  // FORNECEDOR | PRESTADOR | PROPRIETARIO
+  perfil String @db.VarChar(20)
+
+  // Cadastro nesta empresa (nada é herdado de outra nem do `users`)
+  fullName    String? @map("full_name") @db.VarChar(255)
+  phone       String? @db.VarChar(30)
+  phone2      String? @db.VarChar(30)
+  cpf         String? @db.VarChar(14)
+  cnpj        String? @db.VarChar(18)
+  cep         String? @db.VarChar(10)
+  endereco    String? @db.VarChar(255)
+  complemento String? @db.VarChar(100)
+  bairro      String? @db.VarChar(100)
+  cidade      String? @db.VarChar(100)
+  estado      String? @db.VarChar(2)
+  // CRMV por empresa (VetPerfil.crmv é @unique global e não comporta o mesmo
+  // profissional cadastrado por duas clínicas)
+  crmv        String? @db.VarChar(20)
+
+  // Condição comercial do CLIENTE nesta empresa
+  mensalista          Boolean @default(false)
+  valorAssistencia    Float?  @map("valor_assistencia")
+  frequenciaVisitas   Int?    @map("frequencia_visitas")
+  diaVencimentoFatura Int?    @map("dia_vencimento_fatura")
+
+  // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
+  ativo     Boolean  @default(true)
+  // Quando o PRÓPRIO usuário salvou o Cadastro Pessoal nesta empresa. NULL = ainda
+  // não confirmou → módulos bloqueados (o gestor ter preenchido não conta).
+  cadastroConfirmadoEm DateTime? @map("cadastro_confirmado_em")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation("UsuarioEmpresaUser",    fields: [userId],    references: [id], onDelete: Cascade)
+  empresa Empresa @relation("UsuarioEmpresaEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, empresaId])
+  @@index([empresaId])
+  @@index([perfil])
+  @@map("tb_usuario_empresa")
+  @@schema("schs2vet")
+}
+
 model ProfissionalPerfil {
   id        Int @id @default(autoincrement())
   userId    Int @map("user_id")
@@ -1438,6 +1512,37 @@ model ProprietarioPerfil {
   @@unique([userId, empresaId])
   @@index([empresaId])
   @@map("tb_proprietario_perfis")
+  @@schema("schs2vet")
+}
+
+// Localidades atendidas de um PROPRIETÁRIO, cada uma com a SUA frequência de visitas
+// (ex.: Sociedade Hípica Brasileira 2x/semana + Haras H.P. 3x/semana). Um cliente pode
+// ter animais em mais de um lugar, e o combinado de visitas é por lugar — por isso não
+// cabia no campo único `frequenciaVisitas`, que segue existindo como AGREGADO (o maior
+// entre as localidades) para as leituras legadas e para o ADMIN global.
+// POR EMPRESA, pela mesma razão do ProprietarioPerfil: o combinado da clínica A não é
+// o da clínica B, mesmo sendo o mesmo cliente (e-mail único).
+model ProprietarioLocalidade {
+  id            Int @id @default(autoincrement())
+  userId        Int @map("user_id")
+  empresaId     Int @map("empresa_id")
+  localizacaoId Int @map("localizacao_id")
+  // Visitas por SEMANA naquela localidade (1-7). Validado na aplicação.
+  frequenciaVisitas Int @map("frequencia_visitas")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user        User              @relation("ProprietarioLocalidadeUser",    fields: [userId],        references: [id], onDelete: Cascade)
+  empresa     Empresa           @relation("ProprietarioLocalidadeEmpresa", fields: [empresaId],     references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal @relation("ProprietarioLocalidadeLocal",   fields: [localizacaoId], references: [id], onDelete: Cascade)
+
+  // A mesma localidade não se repete para o mesmo cliente na mesma empresa — ao
+  // contrário do local de trabalho do profissional, aqui não há turno: é uma
+  // frequência por lugar.
+  @@unique([userId, empresaId, localizacaoId])
+  @@index([empresaId])
+  @@index([localizacaoId])
+  @@map("tb_proprietario_localidades")
   @@schema("schs2vet")
 }
 
@@ -2027,6 +2132,7 @@ model LocalizacaoAnimal {
   animais         Animal[]
   tratadores      Tratador[]
   locaisTrabalho  MembroLocalTrabalho[]
+  proprietarios   ProprietarioLocalidade[] @relation("ProprietarioLocalidadeLocal")
   equipe          Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
 
   @@index([tipoLocalizacao])

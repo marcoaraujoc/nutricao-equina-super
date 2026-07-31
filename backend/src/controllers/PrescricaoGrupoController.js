@@ -533,7 +533,9 @@ const listarPorAnimal = async (req, res) => {
     const salvos = contagens.SALVO ?? 0;
 
     return res.json({
-      dados:   grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
+      dados:   await anexarFlagProprietario(
+        grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
+      ),
       total,
       salvos,
       contagens,
@@ -553,7 +555,9 @@ const obterPorId = async (req, res) => {
       include: GRUPO_INCLUDE,
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
-    return res.json({ dados: { ...grupo, numeroFormatado: formatNumero(grupo.numero) } });
+    return res.json({
+      dados: await anexarFlagProprietario({ ...grupo, numeroFormatado: formatNumero(grupo.numero) }),
+    });
   } catch (err) {
     console.error('PrescricaoGrupoController.obterPorId:', err);
     return res.status(500).json({ error: 'Erro ao buscar prescrição.' });
@@ -561,19 +565,55 @@ const obterPorId = async (req, res) => {
 };
 
 // ─── Criar grupo(s) com itens ─────────────────────────────────────────────────
-// Itens de tipos diferentes geram PRESCRIÇÕES SEPARADAS (uma por categoria), pois
-// legalmente são documentos distintos:
-//   CONTROLADO   → medicamento com Medicamento.controlado = true (receituário de controle especial)
-//   NORMAL       → medicamento comum (controlado = false / sem catálogo)
-//   PROCEDIMENTO → itens tipo PROCEDIMENTO
-// Se todos os itens forem da mesma categoria, cria uma única prescrição.
+// Medicamento comum e PROCEDIMENTO saem JUNTOS, numa única prescrição — o
+// atendimento é um só e separá-los obrigava o profissional a lidar com dois
+// documentos para a mesma conduta (alterado em 2026-07-30, a pedido).
+//
+// O CONTROLADO continua em prescrição PRÓPRIA, e isso NÃO é preferência de UI: o
+// receituário de controle especial é um documento legalmente distinto (Portaria
+// SVS/MS 344/98), com numeração e retenção próprias. Misturá-lo com item comum
+// produziria um receituário inválido para dispensação.
+//   CONTROLADO → medicamento com Medicamento.controlado = true
+//   GERAL      → medicamento comum (controlado = false / sem catálogo) + PROCEDIMENTO
+// Com itens de uma só categoria, cria uma única prescrição.
 // Retorna SEMPRE um array em `dados` (1 ou mais grupos), ordenado por número.
 
-const ORDEM_CATEGORIAS = ['CONTROLADO', 'NORMAL', 'PROCEDIMENTO'];
+const ORDEM_CATEGORIAS = ['CONTROLADO', 'GERAL'];
+
+/**
+ * Anexa `executadaPeloProprietario` a grupos já carregados.
+ * Lido por SQL cru porque o client Prisma pode não conhecer a coluna ainda (no
+ * Windows o `prisma generate` falha com o backend rodando) — mesmo padrão do
+ * `isConvidado`/`cadastroConfirmadoEm`. Sem a coluna, devolve false.
+ */
+async function anexarFlagProprietario(grupos) {
+  const lista = Array.isArray(grupos) ? grupos : [grupos];
+  const ids = lista.map(g => g?.id).filter(Number.isInteger);
+  if (ids.length === 0) return grupos;
+  let marcados = new Set();
+  try {
+    const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT id FROM schs2vet.tb_prescricao_grupos
+        WHERE executada_pelo_proprietario = true AND id IN (${ph})`,
+      ...ids,
+    );
+    marcados = new Set(rows.map(r => r.id));
+  } catch { /* coluna ainda não migrada */ }
+  const aplicar = (g) => ({ ...g, executadaPeloProprietario: marcados.has(g.id) });
+  return Array.isArray(grupos) ? grupos.map(aplicar) : aplicar(grupos);
+}
+
+// Categoria de um item cru (do body). `controladoDe` resolve o flag do catálogo.
+// FONTE ÚNICA da regra de agrupamento — criação e edição usam esta função.
+function categoriaPara({ tipo, medicamentoCatId }, controladoDe) {
+  if ((tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'GERAL';
+  return controladoDe(medicamentoCatId) ? 'CONTROLADO' : 'GERAL';
+}
 
 const criar = async (req, res) => {
   try {
-    const { animalId, empresaId, evolucaoId, itens = [] } = req.body;
+    const { animalId, empresaId, evolucaoId, itens = [], executadaPeloProprietario = false } = req.body;
     const veterinarioId = req.user.id;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
@@ -615,17 +655,12 @@ const criar = async (req, res) => {
       for (const m of meds) controladoPorId.set(m.id, m.controlado);
     }
 
-    const categoriaDoItem = (item) => {
-      if ((item.tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'PROCEDIMENTO';
-      const controlado = item.medicamentoCatId
-        ? controladoPorId.get(Number(item.medicamentoCatId)) === true
-        : false;
-      return controlado ? 'CONTROLADO' : 'NORMAL';
-    };
+    const ehControlado = (catId) =>
+      !!catId && controladoPorId.get(Number(catId)) === true;
 
     // Agrupa preservando a ordem original dentro de cada categoria
-    const buckets = { CONTROLADO: [], NORMAL: [], PROCEDIMENTO: [] };
-    for (const item of itens) buckets[categoriaDoItem(item)].push(item);
+    const buckets = { CONTROLADO: [], GERAL: [] };
+    for (const item of itens) buckets[categoriaPara(item, ehControlado)].push(item);
     const categoriasComItens = ORDEM_CATEGORIAS.filter(c => buckets[c].length > 0);
 
     // Espécie do animal atendido — usada para cadastrar no catálogo da empresa o item
@@ -652,6 +687,15 @@ const criar = async (req, res) => {
             status:       'SALVO',
           },
         });
+        // Coluna nova gravada por SQL cru — o client Prisma pode não tê-la ainda
+        // (no Windows o `generate` falha com o backend rodando). Mesmo padrão do
+        // `isConvidado`/`cadastroConfirmadoEm`.
+        if (executadaPeloProprietario) {
+          await tx.$executeRawUnsafe(
+            'UPDATE schs2vet.tb_prescricao_grupos SET executada_pelo_proprietario = true WHERE id = $1',
+            grp.id,
+          );
+        }
 
         for (const item of buckets[categoria]) {
           // Item fora do catálogo (digitado à mão) → cadastra para a EMPRESA e, no
@@ -729,11 +773,12 @@ const criar = async (req, res) => {
 
 // Categoria homogênea de uma lista de itens (cada item com medicamentoCat.controlado
 // carregado): null = vazio | 'MISTO' = categorias diferentes | senão a categoria única.
+// Usa a MESMA regra da criação (`categoriaPara`): medicamento comum e procedimento
+// convivem em GERAL; só o CONTROLADO se separa. Sem isso, editar uma prescrição
+// mista criada agora a estilhaçaria de novo em dois documentos.
 function categoriaDeItens(itens) {
   const cats = new Set(itens.map(i =>
-    (i.tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO'
-      ? 'PROCEDIMENTO'
-      : (i.medicamentoCat?.controlado ? 'CONTROLADO' : 'NORMAL'),
+    categoriaPara(i, () => !!i.medicamentoCat?.controlado),
   ));
   if (cats.size === 0) return null;
   if (cats.size === 1) return [...cats][0];
@@ -742,13 +787,13 @@ function categoriaDeItens(itens) {
 
 // Categoria de um item a partir do body/estado (consulta o flag controlado quando med).
 async function categoriaDoItem(client, { tipo, medicamentoCatId }) {
-  if ((tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'PROCEDIMENTO';
-  if (!medicamentoCatId) return 'NORMAL';
+  if ((tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') return 'GERAL';
+  if (!medicamentoCatId) return 'GERAL';
   const med = await client.medicamento.findUnique({
     where:  { id: Number(medicamentoCatId) },
     select: { controlado: true },
   });
-  return med?.controlado ? 'CONTROLADO' : 'NORMAL';
+  return med?.controlado ? 'CONTROLADO' : 'GERAL';
 }
 
 // Encontra um grupo SALVO irmão (mesma evolução/animal) da categoria alvo, ou cria
@@ -1570,6 +1615,18 @@ const listarParaExecucao = async (req, res) => {
     };
     if (empresaId) whereGrupo.empresaId = Number(empresaId);
     if (animalId)  whereGrupo.animalId  = Number(animalId);
+
+    // Prescrição que o PROPRIETÁRIO aplica em casa não é serviço da clínica: fica fora
+    // do plantão. Como o FaturaItem e a baixa de estoque só nascem na EXECUÇÃO, não
+    // aparecer aqui é o que garante que ela nunca chegue à fatura.
+    // Coluna nova lida por SQL cru (client pode estar desatualizado) — os ids marcados
+    // saem do resultado via `notIn`.
+    try {
+      const marcados = await prisma.$queryRawUnsafe(
+        'SELECT id FROM schs2vet.tb_prescricao_grupos WHERE executada_pelo_proprietario = true',
+      );
+      if (marcados.length > 0) whereGrupo.id = { notIn: marcados.map(r => r.id) };
+    } catch { /* coluna ainda não migrada — não filtra */ }
 
     // Escopo base × convidado por ANIMAL (mesma regra da listagem/agendamento): o vet
     // vinculado (convidado) só vê os grupos dos SEUS animais + os liberados por outros

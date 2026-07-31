@@ -72,13 +72,15 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
     if (empresaLoading) return;
 
     try {
-      const [animaisRes, perfilRes, configRes] = await Promise.allSettled([
+      // `isGestorEmpresa`/`empresaConfigurada` vêm DENTRO do /me. Antes eram deduzidos
+      // sondando GET /equipes/configuracoes e lendo o 404 como "não é gestor" — o
+      // resultado era certo, mas o DevTools registra todo 4xx na camada de rede, antes
+      // de qualquer tratamento em JS, então a cada login sobrava um 404 vermelho no
+      // console (dois, com o StrictMode). O backend usa a MESMA
+      // `resolverEscopoConfiguracao` daquele endpoint, então a resposta é idêntica.
+      const [animaisRes, perfilRes] = await Promise.allSettled([
         api.get('/animais'),
         api.get('/users/me'),
-        // 404 é o resultado NORMAL para quem não é gestor/dono de empresa
-        // (resolverEscopoConfiguracao só resolve para ownerId/cargo GESTOR) —
-        // não é um erro a logar, só o sinal de "não é gestor".
-        api.get('/equipes/configuracoes'),
       ]);
 
       // Animais
@@ -93,10 +95,19 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       if (perfilRes.status === 'fulfilled') {
         const perfil         = perfilRes.value.data;
         const prop           = perfil?.userType === 'PROPRIETARIO';
-        const perfilCompleto = !!(perfil?.phone && perfil?.endereco && perfil?.cep);
+        // Completo = tem os dados E foi CONFIRMADO pelo próprio usuário nesta empresa.
+        // O gestor preenche endereço/telefone ao incluir o membro; sem a confirmação,
+        // a pessoa entrava com os módulos já liberados sem nunca abrir o Cadastro
+        // Pessoal (nem conferir o que a clínica preencheu por ela).
+        const perfilCompleto = !!(perfil?.cadastroConfirmado && perfil?.phone && perfil?.endereco && perfil?.cep);
 
         setCadastroCompleto(perfilCompleto);
         setIsProprietario(prop);
+
+        // Escopo de gestor — agora vem do próprio /me (ver comentário acima).
+        setIsGestorEmpresa(!!perfil?.isGestorEmpresa);
+        // Só o gestor é barrado por este gate; para os demais o backend manda `true`.
+        setEmpresaConfigurada(perfil?.empresaConfigurada !== false);
 
         // Só o PROPRIETÁRIO precisa de animal para liberar os módulos — vet,
         // gestor e fornecedor sem animais continuam com acesso
@@ -107,16 +118,8 @@ export const SelectedAnimalProvider = ({ children }: { children: ReactNode }) =>
       } else {
         console.warn('Não foi possível carregar cadastro pessoal:', perfilRes.reason);
         setCadastroCompleto(false);
-      }
-
-      // Escopo de gestor: sucesso = é dono/gestor de alguma empresa (404 = não é,
-      // caso comum e esperado — não loga como erro).
-      if (configRes.status === 'fulfilled') {
-        setIsGestorEmpresa(true);
-        setEmpresaConfigurada(!!configRes.value.data?.dados?.configurado);
-      } else {
         setIsGestorEmpresa(false);
-        setEmpresaConfigurada(true); // não-gestor nunca é bloqueado por este gate
+        setEmpresaConfigurada(true); // sem perfil, não bloqueia por este gate
       }
 
       setPerfilCarregado(true);

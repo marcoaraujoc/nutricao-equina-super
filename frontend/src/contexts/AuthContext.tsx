@@ -30,7 +30,7 @@ interface AuditLog {
 
 interface AuthContextType {
   user: User | null;
-  login: () => Promise<void>;
+  login: () => Promise<User | null>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   loading: boolean;
@@ -55,7 +55,18 @@ function limparDicaDeSessao(): void {
 
 async function fetchMe(): Promise<User | null> {
   try {
-    const res = await fetch('/api/users/me', { credentials: 'include' });
+    // `fetch` cru NÃO leva `x-empresa-id`/`x-equipe-id` (só o axios injeta): o /me
+    // voltava com o tipo e o cadastro do FALLBACK do backend — o vínculo de equipe
+    // mais recente — em vez dos da empresa selecionada. Como o `userType` daqui
+    // alimenta o app inteiro (rotas, Sidebar, gates), o app inteiro via a empresa
+    // errada. Headers lidos do mesmo localStorage que o EmpresaContext escreve.
+    const headers: Record<string, string> = {};
+    const empresaId = localStorage.getItem('s2vet_empresa_id');
+    const equipeId  = localStorage.getItem('s2vet_equipe_id');
+    if (empresaId) headers['x-empresa-id'] = empresaId;
+    if (equipeId)  headers['x-equipe-id']  = equipeId;
+
+    const res = await fetch('/api/users/me', { credentials: 'include', headers });
     if (!res.ok) return null;
     const perfil = await res.json();
     return {
@@ -197,7 +208,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // O backend já autenticou e setou os cookies HttpOnly na resposta de login.
   // Aqui apenas carregamos a identidade a partir de /me e limpamos o contexto ativo.
-  const login = async () => {
+  // Devolve o usuário carregado para quem chamou decidir o destino pós-login
+  // (a tela de Login manda profissional para o Mapa de Atendimento).
+  const login = async (): Promise<User | null> => {
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
     const me = await fetchMe();
@@ -205,6 +218,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(me);
       registrarAuditoria('LOGIN', me);
     }
+    return me;
   };
 
   const logout = () => {

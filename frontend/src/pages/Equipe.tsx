@@ -90,20 +90,28 @@ function formatarDiasHorario(dias: string | null | undefined, inicio?: string | 
   return [diasLabel, horaLabel].filter(Boolean).join(' · ');
 }
 
-// Expediente POR LOCAL — o membro pode trabalhar em vários locais, cada um com seus
-// dias e horário. Sem locais cadastrados, cai no expediente agregado do vínculo
-// (compatibilidade com quem configurou antes dos locais); vazio = herda da empresa.
-function expedientePorLocal(m: Membro): { local: string | null; quando: string }[] {
-  const locais = (m.locaisTrabalho ?? [])
-    .map(l => ({
-      local:  l.localizacaoNome ?? `Local #${l.localizacaoId}`,
-      quando: formatarDiasHorario(l.diasTrabalho, l.horaInicioTrabalho, l.horaFimTrabalho),
-    }))
-    .filter((l): l is { local: string; quando: string } => !!l.quando);
+// Expediente POR LOCAL — o membro pode trabalhar em vários locais (e no MESMO local
+// mais de uma vez, com outra especialidade e outros dias). Cada linha carrega a
+// ESPECIALIDADE daquele turno, para se ler tudo junto:
+//   "Clínica Médica · Centro Hípico H.P — Seg, Qua, Qui · 08:00–14:00"
+// Sem locais cadastrados, cai no expediente agregado do vínculo (compatibilidade com
+// quem configurou antes dos locais); vazio = herda da empresa.
+function expedientePorLocal(
+  m: Membro,
+  nomeEspecialidade: (id: number) => string,
+): { especialidades: string[]; local: string | null; quando: string | null }[] {
+  // `quando` null = dias/horário em branco no cadastro, que HERDAM o expediente da
+  // empresa. A linha continua valendo (o local e a especialidade são reais) — antes
+  // ela era descartada e o turno sumia da tela junto com a especialidade dele.
+  const locais = (m.locaisTrabalho ?? []).map(l => ({
+    especialidades: (l.especialidadeIds ?? []).map(nomeEspecialidade),
+    local:  l.localizacaoNome ?? `Local #${l.localizacaoId}`,
+    quando: formatarDiasHorario(l.diasTrabalho, l.horaInicioTrabalho, l.horaFimTrabalho),
+  }));
   if (locais.length > 0) return locais;
 
   const agregado = formatarDiasHorario(m.diasTrabalho, m.horaInicioTrabalho, m.horaFimTrabalho);
-  return agregado ? [{ local: null, quando: agregado }] : [];
+  return agregado ? [{ especialidades: [], local: null, quando: agregado }] : [];
 }
 
 // Perfis de acesso atribuíveis a membros da equipe
@@ -166,6 +174,9 @@ export default function Equipe() {
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
   const [erroSenhaEdicao,   setErroSenhaEdicao]            = useState('');
+  // Catálogo de especialidades (id → nome) — nomeia a especialidade de cada linha
+  // de local, inclusive as que não estão no vínculo do próprio membro.
+  const [catalogoEspec,     setCatalogoEspec]               = useState<Record<number, string>>({});
   const [nomeEquipe,        setNomeEquipe]                  = useState('');
   const [editandoNome,      setEditandoNome]                = useState(false);
   const [novoNome,          setNovoNome]                    = useState('');
@@ -173,7 +184,18 @@ export default function Equipe() {
 
   const carregarMembros = async () => {
     try {
-      const res = await api.get('/equipes/membros');
+      // Catálogo id→nome buscado junto (mesmo padrão da Agenda): a especialidade
+      // configurada no LOCAL pode não estar no vínculo UsuarioEspecialidade do membro
+      // (ex.: fornecedor), e "Especialidade #4" na tela não ajuda ninguém.
+      const [res, resCat] = await Promise.all([
+        api.get('/equipes/membros'),
+        api.get('/especialidades').catch(() => null),
+      ]);
+      const cat: Record<number, string> = {};
+      for (const e of (resCat?.data?.dados ?? []) as Array<{ id: number; nome: string }>) {
+        cat[e.id] = e.nome;
+      }
+      setCatalogoEspec(cat);
       const dados = res.data?.dados ?? [];
       setMembros(dados);
       setEquipeId(res.data?.equipeId ?? null);
@@ -298,6 +320,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     : porStatus;
 
   // ─── Render ───────────────────────────────────────────────────────────────
+
+  const nomeEspecialidade = (id: number): string => catalogoEspec[id] ?? `Especialidade #${id}`;
+  // "Clínica Médica · Centro Hípico H.P — Seg, Qua, Qui · 08:00–14:00"
+  const linhasExpediente = (m: Membro) => expedientePorLocal(m, nomeEspecialidade);
 
   return (
     <PageContainer maxWidth="7xl">
@@ -439,21 +465,37 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       {m.user.phone && (
                         <p className="text-xs text-gray-500 mt-0.5">{m.user.phone}</p>
                       )}
-                      {especialidadesDoMembro(m).length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {especialidadesDoMembro(m).map(t => (
-                            <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {expedientePorLocal(m).map((e, i) => (
-                        <p key={i} className="text-[11px] text-gray-500 mt-1">
-                          🕒 {e.local ? <span className="font-semibold text-gray-600">{e.local}</span> : null}
-                          {e.local ? ' — ' : ''}{e.quando}
-                        </p>
-                      ))}
+                      {/* Especialidade + local + dias/horário na MESMA linha (um bloco
+                          por turno) — mesma leitura da tabela do desktop. */}
+                      {linhasExpediente(m).length === 0
+                        ? especialidadesDoMembro(m).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {especialidadesDoMembro(m).map(t => (
+                                <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )
+                        : linhasExpediente(m).map((e, i) => {
+                            // Local sem especialidade própria (cadastro anterior ao campo
+                            // por local): cai nas do membro, para não sumir da tela.
+                            const chips = e.especialidades.length > 0 ? e.especialidades : especialidadesDoMembro(m);
+                            return (
+                              <div key={i} className="flex flex-wrap items-center gap-1 mt-1">
+                                {chips.map(t => (
+                                  <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                    {t}
+                                  </span>
+                                ))}
+                                <span className="text-[11px] text-gray-500">
+                                  🕒 {e.local ? <span className="font-semibold text-gray-600">{e.local}</span> : null}
+                                  {e.local ? ' — ' : ''}
+                                  {e.quando ?? <span className="text-gray-400">expediente da empresa</span>}
+                                </span>
+                              </div>
+                            );
+                          })}
                       <div className="flex flex-wrap gap-1 mt-1">
                         {cargos.map(c => (
                           <span key={c} className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ativo ? badgeCargo(c) : 'bg-gray-100 text-gray-400'}`}>
@@ -497,8 +539,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Expediente</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade e expediente</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cargo</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   {(isGestor) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
@@ -519,29 +560,40 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                         </div>
                         <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                       </td>
+                      {/* Especialidade + local + dias/horário na MESMA linha: cada turno
+                          se lê inteiro, sem cruzar duas colunas. Um mesmo local aparece
+                          uma vez por turno (clínico seg/qua/sex, dermato ter/qui). */}
                       <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {especialidadesDoMembro(m).length > 0
-                            ? especialidadesDoMembro(m).map(t => (
-                                <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
-                                  {t}
-                                </span>
-                              ))
-                            : <span className="text-gray-300 text-xs">—</span>
-                          }
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {expedientePorLocal(m).length === 0 ? (
-                          <span className="text-xs text-gray-300">Padrão da empresa</span>
-                        ) : (
-                          <div className="space-y-0.5">
-                            {expedientePorLocal(m).map((e, i) => (
-                              <p key={i} className="text-xs text-gray-600 whitespace-nowrap">
-                                {e.local && <span className="font-semibold text-gray-700">{e.local}</span>}
-                                {e.local ? ' — ' : ''}{e.quando}
-                              </p>
+                        {linhasExpediente(m).length === 0 ? (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {especialidadesDoMembro(m).map(t => (
+                              <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                {t}
+                              </span>
                             ))}
+                            <span className="text-xs text-gray-300">Padrão da empresa</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {linhasExpediente(m).map((e, i) => {
+                              // Local sem especialidade própria (cadastro anterior ao campo
+                              // por local): cai nas do membro, para não sumir da tela.
+                              const chips = e.especialidades.length > 0 ? e.especialidades : especialidadesDoMembro(m);
+                              return (
+                                <div key={i} className="flex flex-wrap items-center gap-1">
+                                  {chips.map(t => (
+                                    <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                      {t}
+                                    </span>
+                                  ))}
+                                  <span className="text-xs text-gray-600 whitespace-nowrap">
+                                    {e.local && <span className="font-semibold text-gray-700">{e.local}</span>}
+                                    {e.local ? ' — ' : ''}
+                                    {e.quando ?? <span className="text-gray-400">expediente da empresa</span>}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </td>

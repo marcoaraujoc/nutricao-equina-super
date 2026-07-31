@@ -3,14 +3,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban, ShieldCheck, Stethoscope } from 'lucide-react';
+import { Calendar, CheckCircle2, Pencil, Loader2, X, Clock, Users, Ban, ShieldCheck, Stethoscope, MapPin } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
-import { agendamentoAntecipado } from '../utils/dateUtils';
+import { agendamentoAntecipado, dataHoraNoPassado } from '../utils/dateUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,22 @@ interface Agendamento {
     id:      number;
     nome:    string;
     especie: { nome: string } | null;
+    // ONDE o animal está — do catálogo (`localizacao`) ou do campo textual legado
+    local:       string | null;
+    localizacao: { id: number; nome: string } | null;
     user:    { id: number; fullName: string } | null;
   };
+}
+
+/**
+ * Onde o animal está. A agenda mostra o LOCAL no lugar da espécie: quem vai atender
+ * precisa saber para onde ir, e "Equino" não diz nada numa clínica de equinos.
+ * Catálogo (`localizacao.nome`) → campo textual legado (`local`) → null.
+ */
+function localDoAnimal(
+  a: { local?: string | null; localizacao?: { nome: string } | null } | null | undefined,
+): string | null {
+  return a?.localizacao?.nome?.trim() || a?.local?.trim() || null;
 }
 
 interface VetMembro {
@@ -163,12 +177,7 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   const handleIniciarAtendimento = (ag: Agendamento) => {
     if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
-    // Não se antecipa um agendamento: atender antes da hora exige REAGENDAR
-    // (o backend recusa com AGENDAMENTO_ANTECIPADO).
-    if (ag.status !== 'EM_ANDAMENTO' && agendamentoAntecipado(ag.dataHora)) {
-      setErroInline(`Este atendimento está marcado para ${formatHora(ag.dataHora)}. Para iniciar antes, reagende-o para o novo horário.`);
-      return;
-    }
+    // ADIANTAR é permitido — o paciente chegou antes, o profissional vagou.
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   };
 
@@ -218,19 +227,28 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
     if (!editando) return;
     if (!editTitulo.trim()) { setErroInline('Título é obrigatório'); return; }
     if (!editData || !editHora) { setErroInline('Data e hora são obrigatórias'); return; }
+    // Adiantar pode; jogar para trás do relógio, não (o backend recusa com
+    // DATA_PASSADA — aqui é só o aviso imediato). Só vale se a data MUDOU: corrigir
+    // o título de um agendamento que já passou continua liberado.
+    const novoQuando = new Date(`${editData}T${editHora}:00`);
+    const dataMudou  = novoQuando.getTime() !== new Date(editando.dataHora).getTime();
+    if (dataMudou && dataHoraNoPassado(novoQuando)) {
+      setErroInline('Não é possível reagendar para uma data/horário que já passou.'); return;
+    }
     setSaving(true);
     try {
       await api.patch(`/clinica/agendamentos/${editando.id}`, {
         titulo:   editTitulo,
         tipo:     editTipo,
-        dataHora: new Date(`${editData}T${editHora}:00`).toISOString(),
+        dataHora: novoQuando.toISOString(),
         observacao: editObs || null,
       });
       toast.success('Agendamento atualizado');
       setEditando(null);
       carregar();
-    } catch {
-      setErroInline('Erro ao atualizar agendamento');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao atualizar agendamento');
     } finally {
       setSaving(false);
     }
@@ -349,7 +367,11 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                   <td className="px-4 py-3">
                     <button onClick={() => onSelecionarAnimal(ag.animal.id)} className="text-left group">
                       <p className="font-semibold text-emerald-700 group-hover:underline text-sm">{ag.animal.nome}</p>
-                      {ag.animal.especie && <p className="text-xs text-gray-400">{ag.animal.especie.nome}</p>}
+                      {localDoAnimal(ag.animal) && (
+                        <p className="flex items-center gap-1 text-xs text-gray-400">
+                          <MapPin size={10} className="flex-shrink-0" /> {localDoAnimal(ag.animal)}
+                        </p>
+                      )}
                       {ag.animal.user    && <p className="text-xs text-gray-400">{ag.animal.user.fullName}</p>}
                     </button>
                   </td>
@@ -386,13 +408,13 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
+                      {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
                       {isAgendado && (
                         <button onClick={() => handleIniciarAtendimento(ag)}
-                          disabled={agendamentoAntecipado(ag.dataHora)}
                           title={agendamentoAntecipado(ag.dataHora)
-                            ? `Marcado para ${formatHora(ag.dataHora)} — reagende para iniciar antes`
+                            ? `Marcado para ${formatHora(ag.dataHora)} — iniciar agora adianta o atendimento`
                             : 'Iniciar atendimento'}
-                          className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 disabled:text-gray-300 disabled:hover:bg-transparent rounded-lg transition-colors">
+                          className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-lg transition-colors">
                           <Stethoscope size={13} />
                         </button>
                       )}
@@ -453,8 +475,8 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                     className="font-semibold text-emerald-700 hover:underline text-sm text-left">
                     {ag.animal.nome}
                   </button>
-                  {ag.animal.especie && (
-                    <span className="text-xs text-gray-400 ml-1">· {ag.animal.especie.nome}</span>
+                  {localDoAnimal(ag.animal) && (
+                    <span className="text-xs text-gray-400 ml-1">· {localDoAnimal(ag.animal)}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -487,12 +509,12 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
                 )}
                 {isAgendado && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
                     <button onClick={() => handleIniciarAtendimento(ag)}
-                      disabled={agendamentoAntecipado(ag.dataHora)}
                       title={agendamentoAntecipado(ag.dataHora)
-                        ? `Marcado para ${formatHora(ag.dataHora)} — reagende para iniciar antes`
+                        ? `Marcado para ${formatHora(ag.dataHora)} — iniciar agora adianta o atendimento`
                         : undefined}
-                      className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400 transition-colors">
+                      className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors">
                       <Stethoscope size={11} /> Iniciar
                     </button>
                     {podeEditar && <>

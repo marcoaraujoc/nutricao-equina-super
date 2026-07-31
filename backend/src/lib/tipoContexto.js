@@ -43,7 +43,7 @@ const ehAdminPlataforma = (u) => u?.role === 'ADMIN' || u?.userType === 'ADMIN';
 
 /**
  * Tipo efetivo do usuário na empresa/equipe do contexto.
- * @returns {Promise<{ tipo: string, cargo: string|null, origem: 'ADMIN'|'CARGO'|'CLIENTE'|'LEGADO' }>}
+ * @returns {Promise<{ tipo: string, cargo: string|null, origem: 'ADMIN'|'VINCULO'|'CARGO'|'CLIENTE'|'LEGADO' }>}
  */
 async function resolverTipoNoContexto({ userId, userType, role, empresaId, equipeId }) {
   const base = userType ?? null;
@@ -51,7 +51,24 @@ async function resolverTipoNoContexto({ userId, userType, role, empresaId, equip
     return { tipo: 'ADMIN', cargo: null, origem: 'ADMIN' };
   }
 
+  // 0. FONTE PRIMÁRIA: a tabela de ligação usuário × empresa. O `perfil` gravado ali
+  //    É o tipo de usuário naquela empresa (ver lib/usuarioEmpresa.js).
+  if (empresaId) {
+    const vinculo = await prisma.usuarioEmpresa.findUnique({
+      where:  { userId_empresaId: { userId: Number(userId), empresaId: Number(empresaId) } },
+      select: { perfil: true },
+    });
+    if (vinculo?.perfil) {
+      return {
+        tipo:   CARGO_PARA_TIPO[vinculo.perfil] ?? vinculo.perfil,
+        cargo:  vinculo.perfil,
+        origem: 'VINCULO',
+      };
+    }
+  }
+
   // 1. Vínculo de equipe no contexto ativo — equipe explícita vence a empresa.
+  //    (fallback enquanto houver vínculo de equipe sem linha em tb_usuario_empresa)
   let membro = null;
   if (equipeId) {
     membro = await prisma.membroEquipe.findFirst({

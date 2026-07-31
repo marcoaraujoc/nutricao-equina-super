@@ -18,6 +18,8 @@ const {
   salvarPerfil:           salvarPerfilProfissional,
   aplicarPerfilEmRelacao: aplicarPerfilProfEmRelacao,
 } = require('../lib/profissionalPerfil');
+// Tabela de ligação usuário × empresa — PERFIL + cadastro por empresa (fonte nova)
+const { salvarVinculo, vincularMembro } = require('../lib/usuarioEmpresa');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -423,25 +425,44 @@ function csvParaIds(csv) {
   return String(csv).split(',').map(s => Number(s.trim())).filter(Number.isInteger);
 }
 
-// Dois locais do MESMO profissional não podem coincidir: se compartilham algum dia da
-// semana e as faixas de horário se cruzam, ele estaria em dois lugares ao mesmo tempo.
-// Local sem dias definidos não entra no confronto (não está agendado em dia nenhum);
-// local sem horário é tratado como o dia inteiro.
+// Duas linhas de trabalho do MESMO profissional não podem coincidir: se compartilham
+// algum dia da semana e as faixas de horário se cruzam, ele estaria em dois lugares (ou
+// em duas especialidades) ao mesmo tempo. Local sem horário é tratado como o dia inteiro.
+//
+// O MESMO local pode se repetir — é assim que o profissional é clínico seg/qua/sex e
+// dermatologista ter/qui na mesma Hípica. Cada linha é um turno com seus dias, horário
+// e especialidades. O que esta função garante é que os turnos não se sobreponham.
+//
+// Dias em branco = herda os dias da empresa. Entre locais DIFERENTES isso segue fora do
+// confronto (regra antiga, preservada: cadastro sem dias não trava o salvamento); no
+// MESMO local as duas linhas cairiam exatamente sobre os mesmos dias herdados, então a
+// sobreposição é certa e precisa ser barrada — senão a agenda teria duas grades
+// concorrentes para o mesmo lugar no mesmo dia.
 function conflitoEntreLocais(locais) {
   const diasDe = (l) => (l.diasTrabalho ? String(l.diasTrabalho).split(',').map(Number) : []);
   const faixaDe = (l) => [l.horaInicioTrabalho || '00:00', l.horaFimTrabalho || '23:59'];
 
   for (let i = 0; i < locais.length; i++) {
     for (let j = i + 1; j < locais.length; j++) {
+      const mesmoLocal = Number(locais[i].localizacaoId) === Number(locais[j].localizacaoId);
       const diasA = diasDe(locais[i]);
       const diasB = diasDe(locais[j]);
-      const comuns = diasA.filter(d => diasB.includes(d));
-      if (comuns.length === 0) continue;
+      // null = "todos os dias herdados da empresa" (só acontece no mesmo local)
+      const comuns = (mesmoLocal && (diasA.length === 0 || diasB.length === 0))
+        ? null
+        : diasA.filter(d => diasB.includes(d));
+      if (comuns !== null && comuns.length === 0) continue;
 
       const [iniA, fimA] = faixaDe(locais[i]);
       const [iniB, fimB] = faixaDe(locais[j]);
       if (iniA < fimB && iniB < fimA) {
-        const dias = comuns.sort((a, b) => a - b).map(d => DIAS_LABEL[d]).join(', ');
+        const dias = comuns === null
+          ? 'todos os dias herdados da empresa'
+          : comuns.sort((a, b) => a - b).map(d => DIAS_LABEL[d]).join(', ');
+        if (mesmoLocal) {
+          return `Este local já tem outro horário em ${dias} (${iniA}–${fimA} e ${iniB}–${fimB}). `
+               + 'Para repetir o local, informe dias ou horários que não se sobreponham.';
+        }
         return `Os locais de trabalho não podem coincidir: há sobreposição em ${dias} `
              + `(${iniA}–${fimA} e ${iniB}–${fimB}).`;
       }
@@ -509,16 +530,12 @@ function parseLocaisTrabalho(body, opts = {}) {
       temposConsulta:     Object.keys(tempos).length ? tempos : null,
     });
   }
-  // Ninguém trabalha em dois lugares ao mesmo tempo
+  // Ninguém trabalha em dois lugares (nem em duas especialidades) ao mesmo tempo.
+  // O MESMO local PODE se repetir com outros dias/horário/especialidade — é o turno,
+  // não o lugar, que é único. Quem garante isso é o conflito acima.
   const conflito = conflitoEntreLocais(locais);
   if (conflito) return { erro: conflito };
 
-  // Um mesmo local não deve se repetir (usaria duas linhas para o mesmo lugar)
-  const vistos = new Set();
-  for (const l of locais) {
-    if (vistos.has(l.localizacaoId)) return { erro: 'Local de trabalho repetido — use um horário por local.' };
-    vistos.add(l.localizacaoId);
-  }
   return { locais };
 }
 
@@ -708,6 +725,8 @@ const EquipeController = {
             membros:   { create: { userId: req.user.id, cargo: 'GESTOR' } },
           },
         });
+        // Vínculo usuário × empresa — é ele que define o PERFIL do dono nesta empresa
+        await salvarVinculo(tx, req.user.id, emp.id, { perfil: 'GESTOR' });
         return emp;
       });
       // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort,
@@ -1763,6 +1782,7 @@ const EquipeController = {
         data:    { equipeId: equipe.id, userId: usuario.id, cargo },
         include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true } } },
       });
+      await vincularMembro(prisma, usuario.id, equipe.id, cargo);
       res.status(201).json({ sucesso: true, dados: membro });
     } catch (err) {
       console.error('Erro ao adicionar membro:', err);
@@ -1876,6 +1896,22 @@ const EquipeController = {
       // Cadastro desta empresa
       const empresaDoMembro = membro.equipe?.empresaId ?? null;
       if (empresaDoMembro) {
+        const cadastroEmpresa = {
+          ...(fullName    !== undefined && fullName.trim() ? { fullName: fullName.trim() } : {}),
+          ...(phone       !== undefined && { phone:       phone?.trim()       || null }),
+          ...(cep         !== undefined && { cep:         cep?.trim()         || null }),
+          ...(endereco    !== undefined && { endereco:    endereco?.trim()    || null }),
+          ...(complemento !== undefined && { complemento: complemento?.trim() || null }),
+          ...(bairro      !== undefined && { bairro:      bairro?.trim()      || null }),
+          ...(cidade      !== undefined && { cidade:      cidade?.trim()      || null }),
+          ...(estado      !== undefined && { estado:      estado?.trim()      || null }),
+          ...(ativo       !== undefined && { ativo:       Boolean(ativo) }),
+        };
+        // Fonte nova: tabela de ligação. O PERFIL na empresa é o cargo do membro.
+        await salvarVinculo(prisma, membro.userId, empresaDoMembro, {
+          perfil: cargo?.trim() || membro.cargo,
+          ...cadastroEmpresa,
+        });
         await salvarPerfilProfissional(prisma, membro.userId, empresaDoMembro, {
           ...(fullName    !== undefined && fullName.trim() ? { fullName: fullName.trim() } : {}),
           ...(phone       !== undefined && { phone:       phone?.trim()       || null }),
@@ -2356,7 +2392,7 @@ const EquipeController = {
       // Cadastro do profissional NESTA empresa. Profissional que já existe (cadastrado
       // por outra clínica) entra como cadastro NOVO: o que vale é o que ESTA empresa
       // informou agora — nada é herdado do cadastro da outra.
-      await salvarPerfilProfissional(prisma, usuario.id, equipe.empresaId, {
+      const cadastroNestaEmpresa = {
         fullName:    fullName.trim(),
         phone:       phone.trim(),
         cep:         cep?.trim()         || null,
@@ -2366,7 +2402,11 @@ const EquipeController = {
         cidade:      cidade?.trim()      || null,
         estado:      estado?.trim()      || null,
         ativo:       true,
-      });
+      };
+      // Fonte nova: tabela de ligação usuário × empresa. O PERFIL é o cargo que o
+      // gestor escolheu AQUI — é ele que vale nesta empresa, não o tipo do login.
+      await salvarVinculo(prisma, usuario.id, equipe.empresaId, { perfil: cargo, ...cadastroNestaEmpresa });
+      await salvarPerfilProfissional(prisma, usuario.id, equipe.empresaId, cadastroNestaEmpresa);
 
       // Locais de trabalho (múltiplos). Quando enviados, eles são a fonte do
       // expediente — a agregação sincroniza os campos únicos que a Agenda lê. Sem
@@ -2599,6 +2639,7 @@ const EquipeController = {
       const membro = await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: convidadoId, cargo: 'GESTOR' },
       });
+      await vincularMembro(prisma, convidadoId, equipe.id, 'GESTOR');
 
       // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort
       require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
@@ -2796,6 +2837,7 @@ const EquipeController = {
         prisma.membroEquipe.create({ data: { equipeId: convite.equipeId, userId, cargo: convite.cargo } }),
         prisma.conviteEquipe.update({ where: { token }, data: { status: 'ACEITO' } }),
       ]);
+      await vincularMembro(prisma, userId, convite.equipeId, convite.cargo);
 
       // Aplica permissões padrão para o cargo
       await PermissaoService.aplicarPermissoesPadrao({
@@ -2970,6 +3012,7 @@ const EquipeController = {
           prisma.membroEquipe.create({ data: { equipeId: convite.equipeId, userId, cargo: convite.cargo } }),
           prisma.conviteEquipe.update({ where: { id: convite.id }, data: { status: 'ACEITO' } }),
         ]);
+        await vincularMembro(prisma, userId, convite.equipeId, convite.cargo);
 
         await PermissaoService.aplicarPermissoesPadrao({
           equipeId:      convite.equipeId,
@@ -3187,6 +3230,8 @@ const EquipeController = {
           where: { equipeId_userId: { equipeId, userId: alvoUserId } },
           data:  { cargo },
         });
+        // O perfil na empresa acompanha o cargo — é ele que a tela lê.
+        await vincularMembro(tx, alvoUserId, equipeId, cargo);
         await tx.permissaoMembro.deleteMany({ where: { equipeId, userId: alvoUserId } });
         await PermissaoService.aplicarPermissoesPadrao({ equipeId, userId: alvoUserId, cargo, atualizadoPor: req.user.id });
       });
@@ -3224,6 +3269,7 @@ const EquipeController = {
         await tx.membroEquipe.create({
           data: { equipeId: equipe.id, userId: req.user.id, cargo: 'GESTOR' },
         });
+        await salvarVinculo(tx, req.user.id, empresa.id, { perfil: 'GESTOR' });
         return { empresa, equipe };
       });
 
@@ -3559,6 +3605,9 @@ module.exports = EquipeController;
 // Reuso do escopo de configuração (empresa CNPJ ou equipe de empresa pessoal)
 // por outros controllers — ex.: WhatsappController (Evolution API).
 module.exports.resolverEscopoConfiguracao = resolverEscopoConfiguracao;
+// Usada pelo GET /users/me para responder `isGestorEmpresa` e `empresaConfigurada`
+// sem o front ter de sondar GET /equipes/configuracoes (e gerar 404 no DevTools).
+module.exports.buscarConfiguracao         = buscarConfiguracao;
 // Locais de trabalho do membro — reusados pelo Cadastro Pessoal (UserController.updateMe),
 // para que a validação (inclusive a de horários coincidentes) seja a MESMA das duas telas.
 module.exports.parseLocaisTrabalho  = parseLocaisTrabalho;

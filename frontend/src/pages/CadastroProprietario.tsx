@@ -5,10 +5,12 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Pencil, Trash2, Search, Loader2, X, Users,
-  Building2, User as UserIcon,
+  Building2, User as UserIcon, Plus,
   Phone, MapPin, BadgeCheck, AlertCircle, Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+// Mesmo seletor de localidade usado no card "Locais de trabalho" do profissional
+import { LocalizacaoCombobox } from '../components/UsuarioFormModal';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
@@ -91,6 +93,14 @@ function parseMoeda(v: string): number {
 
 type TipoDoc = 'cpf' | 'cnpj';
 
+// Uma localidade atendida do cliente, com a frequência de visitas DELA.
+// Ex.: Sociedade Hípica Brasileira 2x/semana + Haras H.P. 3x/semana.
+export interface LocalidadeProp {
+  localizacaoId:     number;
+  localizacaoNome:   string;
+  frequenciaVisitas: number;
+}
+
 interface Proprietario {
   id:               number;
   fullName:         string;
@@ -101,6 +111,7 @@ interface Proprietario {
   mensalista:       boolean;
   valorAssistencia: number | null;
   frequenciaVisitas: number | null;
+  localidades:      LocalidadeProp[];
   diaVencimentoFatura: number | null;
   cep:              string | null;
   endereco:         string | null;
@@ -121,7 +132,9 @@ interface FormProp {
   cnpj:              string;
   mensalista:        boolean;
   valorAssistencia:  string;
-  frequenciaVisitas: string;
+  // A frequência é POR LOCALIDADE — o campo único saiu do formulário e passou a ser
+  // derivado (o maior valor) no backend, só para as leituras legadas.
+  localidades:       LocalidadeProp[];
   diaVencimentoFatura: string;
   cep:               string;
   endereco:          string;
@@ -134,9 +147,17 @@ interface FormProp {
 const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
-  mensalista: false, valorAssistencia: '', frequenciaVisitas: '', diaVencimentoFatura: '5',
+  mensalista: false, valorAssistencia: '', localidades: [], diaVencimentoFatura: '5',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
+
+const RASCUNHO_LOCALIDADE: LocalidadeProp = {
+  localizacaoId: 0, localizacaoNome: '', frequenciaVisitas: 0,
+};
+
+// "Sociedade Hípica Brasileira · 2x/semana"
+const resumoLocalidade = (l: LocalidadeProp): string =>
+  `${l.localizacaoNome || `Local #${l.localizacaoId}`} · ${l.frequenciaVisitas}x/semana`;
 
 const VISITAS_OPTIONS = [
   { value: '1', label: '1x na semana' },
@@ -175,7 +196,34 @@ function ModalProprietario({
   const [buscandoCEP,   setBuscandoCEP]   = useState(false);
   const cnpjTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Localidade em preenchimento — mesmo padrão do card "Locais de trabalho":
+  // o formulário só aparece após o clique e "Adicionar" empurra para a lista.
+  const [rascunhoLoc,      setRascunhoLoc]      = useState<LocalidadeProp>(RASCUNHO_LOCALIDADE);
+  const [mostrarFormLoc,   setMostrarFormLoc]   = useState(false);
+  const [editIndexLoc,     setEditIndexLoc]     = useState<number | null>(null);
+  const [erroLoc,          setErroLoc]          = useState<string | null>(null);
+
   const diaVencimentoErro = validarDiaVencimento(form.diaVencimentoFatura);
+
+  const confirmarLocalidade = () => {
+    if (!rascunhoLoc.localizacaoId) { setErroLoc('Selecione a localidade'); return; }
+    if (!rascunhoLoc.frequenciaVisitas) { setErroLoc('Selecione a frequência de visitas'); return; }
+    // Uma frequência por lugar: repetir a localidade deixaria dois combinados para o
+    // mesmo local, sem como saber qual vale.
+    const outras = form.localidades.filter((_, i) => i !== editIndexLoc);
+    if (outras.some(l => l.localizacaoId === rascunhoLoc.localizacaoId)) {
+      setErroLoc('Esta localidade já foi adicionada — altere a linha existente.'); return;
+    }
+    onFormChange({
+      localidades: editIndexLoc === null
+        ? [...form.localidades, rascunhoLoc]
+        : form.localidades.map((x, i) => i === editIndexLoc ? rascunhoLoc : x),
+    });
+    setRascunhoLoc(RASCUNHO_LOCALIDADE);
+    setErroLoc(null);
+    setMostrarFormLoc(false);
+    setEditIndexLoc(null);
+  };
 
   const handleTipoDoc = (tipo: TipoDoc) => {
     setDocError('');
@@ -452,17 +500,104 @@ function ModalProprietario({
               </div>
             )}
 
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Frequência de Visitas *</label>
-              <select
-                value={form.frequenciaVisitas}
-                onChange={e => onFormChange({ frequenciaVisitas: e.target.value })}
-                className={`${inputCls} ${!form.frequenciaVisitas ? 'border-red-200 focus:border-red-400' : ''}`}>
-                <option value="">Selecione a frequência...</option>
-                {VISITAS_OPTIONS.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+            {/* ── Localidades atendidas + frequência de CADA uma ──────────────
+                Ex.: Sociedade Hípica Brasileira 2x/semana e Haras H.P. 3x/semana.
+                Mesmo padrão do card "Locais de trabalho" do profissional. */}
+            <div className="mb-3">
+              <label className="block text-xs text-gray-500 mb-1">
+                Localidades e frequência de visitas *
+              </label>
+
+              {form.localidades.length > 0 ? (
+                <div className="space-y-1.5 mb-2">
+                  {form.localidades.map((loc, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+                      <MapPin size={13} className="text-emerald-600 flex-shrink-0" />
+                      <span className="flex-1 min-w-0 text-sm text-gray-800 truncate">
+                        {resumoLocalidade(loc)}
+                      </span>
+                      <button type="button"
+                        onClick={() => {
+                          setRascunhoLoc(loc);
+                          setEditIndexLoc(idx);
+                          setErroLoc(null);
+                          setMostrarFormLoc(true);
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0">
+                        <Pencil size={13} /> Alterar
+                      </button>
+                      <button type="button"
+                        onClick={() => {
+                          onFormChange({ localidades: form.localidades.filter((_, i) => i !== idx) });
+                          if (editIndexLoc === idx) {
+                            setMostrarFormLoc(false); setEditIndexLoc(null); setRascunhoLoc(RASCUNHO_LOCALIDADE);
+                          }
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0">
+                        <Trash2 size={13} /> Excluir
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 mb-2">
+                  Nenhuma localidade informada.
+                  {editando?.frequenciaVisitas
+                    ? ` Frequência cadastrada antes: ${editando.frequenciaVisitas}x/semana — informe em qual localidade.`
+                    : ''}
+                </p>
+              )}
+
+              {!mostrarFormLoc && (
+                <button type="button"
+                  onClick={() => { setErroLoc(null); setEditIndexLoc(null); setRascunhoLoc(RASCUNHO_LOCALIDADE); setMostrarFormLoc(true); }}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                  <Plus size={13} /> Adicionar localidade
+                </button>
+              )}
+
+              {mostrarFormLoc && (
+                <div className="p-3 bg-gray-50/60 border border-gray-200 rounded-2xl space-y-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Localidade</label>
+                    <LocalizacaoCombobox
+                      value={rascunhoLoc.localizacaoId || null}
+                      nome={rascunhoLoc.localizacaoNome}
+                      onSelect={(id, nome) => {
+                        setErroLoc(null);
+                        setRascunhoLoc(r => ({ ...r, localizacaoId: id, localizacaoNome: nome }));
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Frequência de visitas</label>
+                    <select
+                      value={rascunhoLoc.frequenciaVisitas || ''}
+                      onChange={e => {
+                        setErroLoc(null);
+                        setRascunhoLoc(r => ({ ...r, frequenciaVisitas: Number(e.target.value) }));
+                      }}
+                      className={inputCls}>
+                      <option value="">Selecione a frequência...</option>
+                      {VISITAS_OPTIONS.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button type="button"
+                      onClick={() => { setMostrarFormLoc(false); setRascunhoLoc(RASCUNHO_LOCALIDADE); setErroLoc(null); setEditIndexLoc(null); }}
+                      className="px-3 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-xs font-semibold hover:bg-gray-100">
+                      Cancelar
+                    </button>
+                    <button type="button" onClick={confirmarLocalidade}
+                      className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold">
+                      {editIndexLoc === null ? 'Adicionar' : 'Salvar'}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {erroLoc && <p className="text-xs text-red-600 mt-1.5">{erroLoc}</p>}
             </div>
 
             <div>
@@ -565,7 +700,7 @@ export default function CadastroProprietario() {
       valorAssistencia:  p.valorAssistencia
         ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
         : '',
-      frequenciaVisitas: p.frequenciaVisitas ? String(p.frequenciaVisitas) : '',
+      localidades:       p.localidades ?? [],
       diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
       cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
       endereco:          p.endereco    ?? '',
@@ -588,7 +723,11 @@ export default function CadastroProprietario() {
     if (!form.fullName.trim())      { setErroInline('Nome é obrigatório'); return; }
     if (!form.email.trim())         { setErroInline('E-mail é obrigatório'); return; }
     if (!form.phone.trim())         { setErroInline('Telefone é obrigatório'); return; }
-    if (!form.frequenciaVisitas)    { setErroInline('Frequência de visitas é obrigatória'); return; }
+    // Pelo menos uma localidade com frequência — é o que o campo único exigia antes,
+    // agora por lugar (o cliente pode ser visitado 2x na Hípica e 3x no Haras).
+    if (form.localidades.length === 0) {
+      setErroInline('Informe ao menos uma localidade com a frequência de visitas'); return;
+    }
     if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro já exibido inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
@@ -607,7 +746,12 @@ export default function CadastroProprietario() {
       cnpj:              form.tipoDoc === 'cnpj' && form.cnpj.trim() ? form.cnpj : null,
       mensalista:        form.mensalista,
       valorAssistencia:  form.mensalista && form.valorAssistencia ? parseMoeda(form.valorAssistencia) : null,
-      frequenciaVisitas: form.frequenciaVisitas ? Number(form.frequenciaVisitas) : null,
+      // O campo único `frequenciaVisitas` é derivado no backend (a maior entre as
+      // localidades) — a tela manda só o combinado por lugar.
+      localidades:       form.localidades.map(l => ({
+        localizacaoId:     l.localizacaoId,
+        frequenciaVisitas: l.frequenciaVisitas,
+      })),
       diaVencimentoFatura: Number(form.diaVencimentoFatura),
       cep:               form.cep         || null,
       endereco:          form.endereco    || null,
@@ -783,12 +927,23 @@ export default function CadastroProprietario() {
                         {p.mensalista && (
                           <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium w-fit">Mensalista</span>
                         )}
-                        {p.frequenciaVisitas && (
+                        {/* Uma linha por localidade — a frequência é de cada lugar */}
+                        {(p.localidades ?? []).map(loc => (
+                          <span key={loc.localizacaoId}
+                            className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium w-fit max-w-[220px] truncate"
+                            title={resumoLocalidade(loc)}>
+                            {resumoLocalidade(loc)}
+                          </span>
+                        ))}
+                        {/* Legado: cadastro anterior às localidades, só com o campo único */}
+                        {(p.localidades ?? []).length === 0 && p.frequenciaVisitas && (
                           <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium w-fit">
                             {p.frequenciaVisitas}x/semana
                           </span>
                         )}
-                        {!p.mensalista && !p.frequenciaVisitas && <span className="text-gray-400 text-xs">—</span>}
+                        {!p.mensalista && (p.localidades ?? []).length === 0 && !p.frequenciaVisitas && (
+                          <span className="text-gray-400 text-xs">—</span>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -859,7 +1014,15 @@ export default function CadastroProprietario() {
               {p.mensalista && (
                 <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">Mensalista</span>
               )}
-              {p.frequenciaVisitas && (
+              {/* Uma tag por localidade — a frequência é de cada lugar */}
+              {(p.localidades ?? []).map(loc => (
+                <span key={loc.localizacaoId}
+                  className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                  {resumoLocalidade(loc)}
+                </span>
+              ))}
+              {/* Legado: cadastro anterior às localidades, só com o campo único */}
+              {(p.localidades ?? []).length === 0 && p.frequenciaVisitas && (
                 <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
                   {p.frequenciaVisitas}x/sem
                 </span>

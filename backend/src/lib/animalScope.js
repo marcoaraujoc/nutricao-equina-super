@@ -8,6 +8,8 @@
 const prisma = require('./prisma').default;
 const { getEquipeScopeDoUsuario } = require('./vetUtils');
 
+// Fallback: tipo GLOBAL do login. Só entra quando o request não traz o tipo do
+// contexto (chamada fora do `authenticate`, script, teste).
 async function obterUserType(userId) {
   const u = await prisma.user.findUnique({
     where:  { id: Number(userId) },
@@ -26,7 +28,19 @@ async function obterUserType(userId) {
  */
 async function buildAnimalScopeWhere(req) {
   const userId = req.user?.id;
-  const { userType, role } = await obterUserType(userId);
+  // TIPO POR EMPRESA (armadilha 36-e): quem manda é o tipo do CONTEXTO ATIVO, que o
+  // `authenticate` já resolveu em `req.user.userType` (lib/tipoContexto). O `userType`
+  // da tabela `users` é o GLOBAL/legado e NÃO serve para decidir escopo.
+  //
+  // Era o bug de 2026-07-30: profissional com `users.userType = PROPRIETARIO` mas cargo
+  // VETERINARIO na empresa caía no ramo de proprietário e o `where` virava
+  // `{ userId }` — 0 animais, tela de pacientes vazia, mesmo com a matriz dando FULL.
+  // Só não quebrava sempre porque `isProprietarioMulticargo` a resgatava QUANDO
+  // `req.membroCargo` vinha preenchido; nos caminhos em que ele é null (veterinário
+  // sem equipe resolvida no checkPermission) a lista zerava.
+  const doBanco = await obterUserType(userId);
+  const userType = req.user?.userType ?? doBanco.userType;
+  const role     = req.user?.role     ?? doBanco.role;
   const isAdmin = role === 'ADMIN' && userType !== 'PROPRIETARIO';
 
   const CARGOS_EQUIPE = ['VETERINARIO', 'ESTAGIARIO', 'GESTOR'];
