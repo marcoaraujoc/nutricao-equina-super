@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { imprimirOrcamento, gerarPdfOrcamento, nomeArquivoOrcamento } from '../utils/OrcamentoPrint';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 // OUTROS: item avulso (nome + qtd de vezes + valor) que não passa pelas telas
@@ -70,6 +71,17 @@ interface OrcamentoResumo {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+/** (11) 98765-4321 — o telefone é persistido só com dígitos */
+const fmtTelefone = (v?: string | null): string => {
+  const d = (v ?? '').replace(/\D/g, '');
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return v ?? '';
+};
+/** "(11) 98765-4321 · cliente@email.com" — omite o que não houver */
+const contatoProprietario = (p: { phone?: string | null; email?: string | null }): string =>
+  [fmtTelefone(p.phone), p.email].filter(Boolean).join(' · ');
+
 const brl = (v: number | null | undefined): string =>
   v === null || v === undefined ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const formatData = (iso: string) => new Date(iso).toLocaleDateString('pt-BR');
@@ -97,9 +109,9 @@ function montarTextoOrcamento(o: OrcamentoResumo): string {
 }
 
 const STATUS_ORC: Record<StatusOrc, { label: string; cls: string }> = {
-  RASCUNHO:              { label: 'Rascunho',              cls: 'bg-gray-100 text-gray-600'      },
+  RASCUNHO:              { label: 'Aguardando decisão',   cls: 'bg-amber-100 text-amber-700'    },
   APROVADO:             { label: 'Aprovado',              cls: 'bg-emerald-100 text-emerald-700' },
-  APROVADO_PARCIALMENTE: { label: 'Aprovado parcialmente', cls: 'bg-amber-100 text-amber-700'    },
+  APROVADO_PARCIALMENTE: { label: 'Aprovado Parcialmente', cls: 'bg-amber-100 text-amber-700'    },
   REJEITADO:            { label: 'Rejeitado',             cls: 'bg-red-100 text-red-700'         },
   CANCELADO:            { label: 'Cancelado',             cls: 'bg-gray-200 text-gray-500'       },
 };
@@ -113,7 +125,7 @@ const decisaoPendente = (status: StatusOrc): boolean => status === 'RASCUNHO';
 const MOTIVO_DECISAO_BLOQUEADA: Record<StatusOrc, string> = {
   RASCUNHO:              'Registrar decisão (aceitar/rejeitar)',
   APROVADO:              'Decisão já registrada: orçamento aprovado',
-  APROVADO_PARCIALMENTE: 'Decisão já registrada: aprovado parcialmente',
+  APROVADO_PARCIALMENTE: 'Decisão já registrada: Aprovado Parcialmente',
   REJEITADO:             'Decisão já registrada: orçamento rejeitado',
   CANCELADO:             'Orçamento cancelado',
 };
@@ -515,6 +527,9 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
   const [tipoAba, setTipoAba] = useState<'PROCEDIMENTO' | 'MEDICAMENTO' | 'VACINA' | 'OUTROS'>('PROCEDIMENTO');
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do SALVAR — o botão fica no rodapé de um builder longo; no topo da
+  // página a mensagem sai da área visível e o clique parece não ter efeito.
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   // Orçamento no nível do proprietário: nenhum animal é vinculado aos itens.
   // Na edição, um orçamento cujos itens não têm animal já abre nesse modo.
   const [semAnimais, setSemAnimais] = useState<boolean>(
@@ -645,9 +660,10 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
   const nomeAnimal = (id: number | null) => id == null ? 'Proprietário' : (nomesAnimais.get(id) ?? `#${id}`);
 
   const salvar = async () => {
-    if (!podeCriar) { setErroInline('Sem permissão para criar orçamento.'); return; }
-    if (!propSel) { setErroInline('Selecione o proprietário'); return; }
-    if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
+    setErroAcao(null);
+    if (!podeCriar) { setErroAcao({ mensagem: 'Sem permissão para criar orçamento.' }); return; }
+    if (!propSel) { setErroAcao({ mensagem: 'Selecione o proprietário', campos: ['proprietario'] }); return; }
+    if (itens.length === 0) { setErroAcao({ mensagem: 'Adicione ao menos um item', campos: ['itens'] }); return; }
     setSalvando(true);
     try {
       const payloadItens = itens.map(i => ({
@@ -667,7 +683,7 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
       onSalvo();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao salvar orçamento');
+      if (!e.isPermissionError) setErroAcao({ mensagem: e.response?.data?.error ?? 'Erro ao salvar orçamento' });
     } finally { setSalvando(false); }
   };
 
@@ -887,7 +903,8 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
             )}
           </div>
 
-          <div className="flex justify-end gap-2">
+          <ErroAcao erro={erroAcao} className="mb-3" />
+            <div className="flex justify-end gap-2">
             <button onClick={onCancelar} disabled={salvando}
               className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm font-semibold rounded-2xl hover:bg-gray-50 disabled:opacity-50 transition-colors">
               Cancelar
@@ -1489,7 +1506,7 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
 
   // Só RASCUNHO é editável (o backend recusa os demais em PUT /orcamentos/:id)
   const editar = (o: OrcamentoResumo) => {
-    if (o.status !== 'RASCUNHO') { setErroInline('Só é possível editar orçamentos em rascunho.'); return; }
+    if (o.status !== 'RASCUNHO') { setErroInline('Só é possível editar orçamentos que ainda aguardam decisão.'); return; }
     onEditar(o);
   };
 
@@ -1564,9 +1581,9 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
           <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500">
             <option value="">Todos os status</option>
-            <option value="RASCUNHO">Rascunho</option>
+            <option value="RASCUNHO">Aguardando decisão</option>
             <option value="APROVADO">Aprovado</option>
-            <option value="APROVADO_PARCIALMENTE">Aprovado parcialmente</option>
+            <option value="APROVADO_PARCIALMENTE">Aprovado Parcialmente</option>
             <option value="REJEITADO">Rejeitado</option>
             <option value="CANCELADO">Cancelado</option>
           </select>
@@ -1592,6 +1609,9 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                   <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_ORC[o.status].cls}`}>{STATUS_ORC[o.status].label}</span>
                 </div>
                 <p className="text-sm font-semibold text-gray-800 truncate">{o.proprietario.fullName}</p>
+                {contatoProprietario(o.proprietario) && (
+                  <p className="text-[11px] text-gray-500 truncate">{contatoProprietario(o.proprietario)}</p>
+                )}
                 <p className="text-[11px] text-gray-400 mt-0.5">{formatData(o.createdAt)} · {o.itens.length} itens</p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   Total: <b className="text-gray-800">{brl(o.valorTotal)}</b>
@@ -1650,7 +1670,12 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                 {pageItems.map(o => (
                   <tr key={o.id} onClick={() => visualizar(o)} className="hover:bg-gray-50 transition-colors cursor-pointer">
                     <td className="px-4 py-3 whitespace-nowrap"><span className="font-mono font-bold text-emerald-700">#{o.numeroFormatado}</span></td>
-                    <td className="px-4 py-3"><p className="text-xs font-medium text-gray-800">{o.proprietario.fullName}</p></td>
+                    <td className="px-4 py-3">
+                      <p className="text-xs font-medium text-gray-800">{o.proprietario.fullName}</p>
+                      {contatoProprietario(o.proprietario) && (
+                        <p className="text-[11px] text-gray-500">{contatoProprietario(o.proprietario)}</p>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatData(o.createdAt)}</td>
                     <td className="px-4 py-3 text-center text-xs text-gray-600">{o.itens.length}</td>
                     <td className="px-4 py-3 text-right text-xs text-gray-800 whitespace-nowrap">{brl(o.valorTotal)}</td>
@@ -1673,7 +1698,7 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                         )}
                         {podeEditar && (
                           <button onClick={() => editar(o)}
-                            title={o.status === 'RASCUNHO' ? 'Editar' : 'Só é possível editar orçamentos em rascunho'}
+                            title={o.status === 'RASCUNHO' ? 'Editar' : 'Só é possível editar orçamentos que ainda aguardam decisão'}
                             disabled={o.status !== 'RASCUNHO'}
                             className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                             <Pencil size={14} />
@@ -1750,16 +1775,37 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
 
   const toggle = (id: number) => setAceitos(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // Marcar/desmarcar todos — atalho para as duas decisões extremas (aceitar tudo,
+  // rejeitar tudo) sem precisar clicar item a item.
+  const todosMarcados   = orc.itens.length > 0 && orc.itens.every(i => aceitos.has(i.id));
+  const algunsMarcados  = aceitos.size > 0 && !todosMarcados;
+  const alternarTodos   = () => setAceitos(todosMarcados ? new Set() : new Set(orc.itens.map(i => i.id)));
+
   const total  = orc.itens.reduce((s, i) => s + i.valorTotal, 0);
   const aceito = orc.itens.filter(i => aceitos.has(i.id)).reduce((s, i) => s + i.valorTotal, 0);
 
-  const salvar = async (aceitarTudo: boolean) => {
+  /**
+   * A SELEÇÃO é o alvo da ação: "Aceitar" aceita os itens marcados; "Rejeitar"
+   * rejeita os marcados (ou seja, aceita os NÃO marcados). Com "Marcar todos" as
+   * duas decisões extremas ficam a um clique. O backend rejeita automaticamente
+   * tudo que não for enviado como ACEITO — por isso os dois modos mandam só a
+   * lista de aceitos.
+   */
+  const salvar = async (modo: 'ACEITAR' | 'REJEITAR') => {
+    setErroInline(null);
+    if (aceitos.size === 0) {
+      setErroInline(modo === 'ACEITAR'
+        ? 'Selecione ao menos um item para aceitar.'
+        : 'Selecione ao menos um item para rejeitar.');
+      return;
+    }
+    const idsAceitos = orc.itens
+      .filter(i => modo === 'ACEITAR' ? aceitos.has(i.id) : !aceitos.has(i.id))
+      .map(i => i.id);
+
     setSalvando(true);
     try {
-      // O backend rejeita automaticamente tudo que não vier como ACEITO.
-      const body = aceitarTudo
-        ? { aceitarTudo: true }
-        : { decisoes: orc.itens.filter(i => aceitos.has(i.id)).map(i => ({ itemId: i.id, statusItem: 'ACEITO' })) };
+      const body = { decisoes: idsAceitos.map(itemId => ({ itemId, statusItem: 'ACEITO' })) };
       await api.post(`/orcamentos/${orc.id}/decidir`, body);
       toast.success('Decisão registrada');
       onSalvo();
@@ -1778,10 +1824,34 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
           <div>
             <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-widest">Orçamento #{orc.numeroFormatado}</span>
             <h3 className="font-bold text-gray-900">{orc.proprietario.fullName}</h3>
+            {contatoProprietario(orc.proprietario) && (
+              <p className="text-xs text-gray-500">{contatoProprietario(orc.proprietario)}</p>
+            )}
             <span className={`inline-flex mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_ORC[orc.status].cls}`}>{STATUS_ORC[orc.status].label}</span>
           </div>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
+
+        {/* Seletor "marcar todos" — topo da lista, antes dos itens */}
+        {podeAprovar && orc.itens.length > 0 && (
+          <div className="flex items-center gap-3 px-5 py-2.5 border-b border-emerald-100 bg-emerald-600/10 flex-shrink-0">
+            <button type="button" onClick={alternarTodos}
+              className="flex items-center gap-2 text-sm font-semibold text-emerald-900 hover:text-emerald-950">
+              {/* Mesmo esmeralda dos checkboxes dos itens abaixo — o controle do topo
+                  e os das linhas precisam ler como a mesma coisa. */}
+              <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${
+                todosMarcados || algunsMarcados ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300 bg-white'
+              }`}>
+                {todosMarcados && <Check size={13} className="text-white" />}
+                {algunsMarcados && <span className="w-2.5 h-0.5 bg-white rounded-full" />}
+              </span>
+              Marcar todos
+            </button>
+            <span className="ml-auto text-xs font-medium text-emerald-900/70">
+              {aceitos.size} de {orc.itens.length} selecionado{aceitos.size === 1 ? '' : 's'}
+            </span>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
           {orc.itens.map(i => {
@@ -1853,17 +1923,20 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
           <span className="text-emerald-700 font-semibold">Aceito: {brl(aceito)}</span>
         </div>
 
+        {/* Decisão: os três juntos à direita, na ordem Aceitar · Rejeitar · Fechar */}
         {podeAprovar ? (
-          <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-gray-100">
-            <button onClick={onClose} className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">Fechar</button>
-            <div className="flex-1" />
-            <button onClick={() => salvar(true)} disabled={salvando}
-              className="flex items-center gap-1.5 px-4 py-2.5 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold disabled:opacity-50">
-              <CheckCircle2 size={14} /> Aceitar tudo
-            </button>
-            <button onClick={() => salvar(false)} disabled={salvando}
+          <div className="flex flex-wrap justify-end gap-2 px-5 py-4 border-t border-gray-100">
+            <button onClick={() => salvar('ACEITAR')} disabled={salvando}
               className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold">
-              {salvando ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />} Salvar seleção (rejeita o resto)
+              {salvando ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Aceitar
+            </button>
+            <button onClick={() => salvar('REJEITAR')} disabled={salvando}
+              className="flex items-center gap-1.5 px-4 py-2.5 border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-sm font-semibold disabled:opacity-50">
+              <Ban size={14} /> Rejeitar
+            </button>
+            <button onClick={onClose} disabled={salvando}
+              className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50">
+              Fechar
             </button>
           </div>
         ) : (

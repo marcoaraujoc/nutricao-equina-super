@@ -128,9 +128,265 @@ async function vincularMembro(client, userId, equipeId, perfil) {
   return salvarVinculo(client, userId, equipe.empresaId, { perfil });
 }
 
+// ─── Remuneração e acesso ao sistema (migration 20260812000002) ───────────────
+//
+// Lidos/gravados por SQL CRU porque o client Prisma pode não conhecer as colunas
+// ainda (no Windows o `generate` falha com o backend rodando) — mesmo padrão do
+// `isConvidado`/`cadastroConfirmadoEm`. Passar campo desconhecido para o
+// `usuarioEmpresa.upsert` derrubaria a INCLUSÃO DE MEMBRO inteira, então o extra
+// vai num UPDATE à parte.
+
+const TIPOS_PAGAMENTO  = ['SALARIO', 'COMISSAO'];
+const FORMAS_PAGAMENTO = ['VALOR', 'PERCENTUAL'];
+
+/**
+ * As colunas novas já existem no banco?
+ *
+ * ⚠️ SQL cru para coluna inexistente DENTRO de uma transaction aborta a TRANSACTION
+ * INTEIRA no Postgres (25P02) — e o `try/catch` em JS não desfaz isso: quem estoura
+ * é o comando SEGUINTE, longe do culpado. Hoje estes helpers são chamados fora de
+ * transaction, mas o guard impede que isso vire uma armadilha para o próximo caller.
+ * `false` expira em 60s: rodar a migration com o backend no ar volta a funcionar
+ * sem restart.
+ */
+let _temColunas = null;
+let _temColunasEm = 0;
+async function temColunasPagamento() {
+  if (_temColunas === true) return true;
+  if (_temColunas === false && Date.now() - _temColunasEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_usuario_empresa'
+          AND column_name = 'acesso_sistema' LIMIT 1`,
+    );
+    _temColunas = rows.length > 0;
+  } catch { _temColunas = false; }
+  _temColunasEm = Date.now();
+  return _temColunas;
+}
+
+/**
+ * Valida e normaliza a remuneração informada pelo gestor.
+ * @returns {{ erro: string|null, dados: {tipoPagamento,formaPagamento,valorPagamento}|null }}
+ */
+function normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento } = {}) {
+  const tipo  = String(tipoPagamento  ?? '').trim().toUpperCase();
+  const forma = String(formaPagamento ?? '').trim().toUpperCase();
+
+  if (!tipo)  return { erro: 'Informe o tipo de pagamento (salário ou comissão).', dados: null };
+  if (!TIPOS_PAGAMENTO.includes(tipo)) return { erro: 'Tipo de pagamento inválido.', dados: null };
+  if (!forma) return { erro: 'Informe se o valor do pagamento é em R$ ou em percentual.', dados: null };
+  if (!FORMAS_PAGAMENTO.includes(forma)) return { erro: 'Forma do valor de pagamento inválida.', dados: null };
+
+  // String vazia vira NaN aqui de propósito: campo em branco é ausência, não zero.
+  const valor = valorPagamento === '' || valorPagamento === null || valorPagamento === undefined
+    ? NaN
+    : Number(valorPagamento);
+  if (!Number.isFinite(valor))  return { erro: 'Informe o valor do pagamento.', dados: null };
+  if (valor <= 0)               return { erro: 'O valor do pagamento deve ser maior que zero.', dados: null };
+  if (forma === 'PERCENTUAL' && valor > 100) {
+    return { erro: 'O percentual de pagamento não pode passar de 100%.', dados: null };
+  }
+
+  return { erro: null, dados: { tipoPagamento: tipo, formaPagamento: forma, valorPagamento: valor } };
+}
+
+/** Grava remuneração e/ou acesso. `undefined` não toca no valor já gravado. */
+async function salvarPagamentoEAcesso(client, userId, empresaId, { tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = {}) {
+  if (!userId || !empresaId) return;
+  const sets = [];
+  const vals = [];
+  const push = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+  if (tipoPagamento  !== undefined) push('tipo_pagamento',  tipoPagamento);
+  if (formaPagamento !== undefined) push('forma_pagamento', formaPagamento);
+  if (valorPagamento !== undefined) push('valor_pagamento', valorPagamento);
+  if (acessoSistema  !== undefined) push('acesso_sistema',  acessoSistema === true);
+  if (sets.length === 0) return;
+  if (!(await temColunasPagamento())) return;
+  vals.push(Number(userId), Number(empresaId));
+  try {
+    await client.$executeRawUnsafe(
+      `UPDATE schs2vet.tb_usuario_empresa SET ${sets.join(', ')}
+        WHERE user_id = $${vals.length - 1} AND empresa_id = $${vals.length}`,
+      ...vals,
+    );
+  } catch { /* colunas ainda não migradas */ }
+}
+
+/** Remuneração + acesso de vários usuários numa empresa: Map(userId → dados). */
+async function lerPagamentoEAcesso(client, userIds, empresaId) {
+  const ids = [...new Set((userIds ?? []).map(Number).filter(Number.isInteger))];
+  const mapa = new Map();
+  if (ids.length === 0 || !empresaId) return mapa;
+  if (!(await temColunasPagamento())) return mapa;
+  try {
+    const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await client.$queryRawUnsafe(
+      `SELECT user_id, tipo_pagamento, forma_pagamento, valor_pagamento, acesso_sistema
+         FROM schs2vet.tb_usuario_empresa
+        WHERE empresa_id = $${ids.length + 1} AND user_id IN (${ph})`,
+      ...ids, Number(empresaId),
+    );
+    for (const r of rows) {
+      mapa.set(r.user_id, {
+        tipoPagamento:  r.tipo_pagamento,
+        formaPagamento: r.forma_pagamento,
+        valorPagamento: r.valor_pagamento,
+        acessoSistema:  r.acesso_sistema !== false,
+      });
+    }
+  } catch { /* colunas ainda não migradas */ }
+  return mapa;
+}
+
+/** Anexa a remuneração/acesso ao usuário sob `chave` (ex.: membro.user). */
+async function anexarPagamentoEmRelacao(itens, chave, empresaId, client = prisma) {
+  if (!empresaId || !Array.isArray(itens) || itens.length === 0) return itens;
+  const mapa = await lerPagamentoEAcesso(client, itens.map(i => i?.[chave]?.id), empresaId);
+  return itens.map(item => {
+    const u = item?.[chave];
+    const d = u ? mapa.get(u.id) : null;
+    return d ? { ...item, [chave]: { ...u, ...d } } : item;
+  });
+}
+
+// ─── Foto da pessoa na empresa (migration 20260814000000) ─────────────────────
+//
+// Mesma justificativa de SQL cru da remuneração acima: coluna nova, client Prisma
+// possivelmente desatualizado. `_temFoto` segue o mesmo cache com expiração de 60s.
+
+let _temFoto = null;
+let _temFotoEm = 0;
+async function temColunaFoto() {
+  if (_temFoto === true) return true;
+  if (_temFoto === false && Date.now() - _temFotoEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_usuario_empresa'
+          AND column_name = 'foto_url' LIMIT 1`,
+    );
+    _temFoto = rows.length > 0;
+  } catch { _temFoto = false; }
+  _temFotoEm = Date.now();
+  return _temFoto;
+}
+
+/** Foto do usuário nesta empresa. null = sem foto (ou coluna ainda não migrada). */
+async function lerFoto(userId, empresaId, client = prisma) {
+  if (!userId || !empresaId) return null;
+  if (!(await temColunaFoto())) return null;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      'SELECT foto_url FROM schs2vet.tb_usuario_empresa WHERE user_id = $1 AND empresa_id = $2 LIMIT 1',
+      Number(userId), Number(empresaId),
+    );
+    return rows?.[0]?.foto_url ?? null;
+  } catch { return null; }
+}
+
+/**
+ * Grava (ou apaga, com null) a foto. Devolve a URL ANTERIOR para o caller decidir
+ * apagar o arquivo velho do storage — sem isso cada troca deixa um órfão em disco.
+ */
+async function salvarFoto(client, userId, empresaId, fotoUrl) {
+  if (!userId || !empresaId) return null;
+  if (!(await temColunaFoto())) return null;
+  const anterior = await lerFoto(userId, empresaId, client);
+  try {
+    await client.$executeRawUnsafe(
+      'UPDATE schs2vet.tb_usuario_empresa SET foto_url = $1 WHERE user_id = $2 AND empresa_id = $3',
+      fotoUrl ?? null, Number(userId), Number(empresaId),
+    );
+  } catch { /* coluna ainda não migrada */ }
+  return anterior;
+}
+
+/** Fotos de vários usuários numa empresa: Map(userId → url). */
+async function lerFotos(client, userIds, empresaId) {
+  const ids = [...new Set((userIds ?? []).map(Number).filter(Number.isInteger))];
+  const mapa = new Map();
+  if (ids.length === 0 || !empresaId) return mapa;
+  if (!(await temColunaFoto())) return mapa;
+  try {
+    const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await client.$queryRawUnsafe(
+      `SELECT user_id, foto_url FROM schs2vet.tb_usuario_empresa
+        WHERE empresa_id = $${ids.length + 1} AND user_id IN (${ph})`,
+      ...ids, Number(empresaId),
+    );
+    for (const r of rows) if (r.foto_url) mapa.set(r.user_id, r.foto_url);
+  } catch { /* coluna ainda não migrada */ }
+  return mapa;
+}
+
+/** Anexa `fotoUrl` ao usuário sob `chave` (ex.: membro.user). */
+async function anexarFotoEmRelacao(itens, chave, empresaId, client = prisma) {
+  if (!empresaId || !Array.isArray(itens) || itens.length === 0) return itens;
+  const mapa = await lerFotos(client, itens.map(i => i?.[chave]?.id), empresaId);
+  return itens.map(item => {
+    const u = item?.[chave];
+    if (!u) return item;
+    return { ...item, [chave]: { ...u, fotoUrl: mapa.get(u.id) ?? null } };
+  });
+}
+
+/**
+ * O usuário pode entrar na aplicação?
+ *
+ * Regra: quem TEM vínculo de empresa precisa de ao menos UM com acesso liberado.
+ * Quem não tem vínculo nenhum (vet autônomo, proprietário legado, ADMIN da
+ * plataforma) não é barrado — não há quem tenha concedido ou negado nada a ele.
+ */
+async function podeAcessarSistema(userId, client = prisma) {
+  if (!userId) return true;
+  if (!(await temColunasPagamento())) return true;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE acesso_sistema)::int AS liberados
+         FROM schs2vet.tb_usuario_empresa WHERE user_id = $1`,
+      Number(userId),
+    );
+    const r = rows?.[0];
+    if (!r || r.total === 0) return true;
+    return r.liberados > 0;
+  } catch {
+    return true; // coluna ainda não migrada — não tranca ninguém para fora
+  }
+}
+
+/** Ids das empresas em que este usuário está SEM acesso (some do seletor de contexto). */
+async function empresasSemAcesso(userId, client = prisma) {
+  const bloqueadas = new Set();
+  if (!userId) return bloqueadas;
+  if (!(await temColunasPagamento())) return bloqueadas;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      'SELECT empresa_id FROM schs2vet.tb_usuario_empresa WHERE user_id = $1 AND acesso_sistema = false',
+      Number(userId),
+    );
+    for (const r of rows) bloqueadas.add(r.empresa_id);
+  } catch { /* coluna ainda não migrada */ }
+  return bloqueadas;
+}
+
 module.exports = {
   CAMPOS_CADASTRO,
   PERFIS_PROFISSIONAIS,
+  TIPOS_PAGAMENTO,
+  FORMAS_PAGAMENTO,
+  normalizarPagamento,
+  salvarPagamentoEAcesso,
+  lerPagamentoEAcesso,
+  anexarPagamentoEmRelacao,
+  podeAcessarSistema,
+  empresasSemAcesso,
+  lerFoto,
+  lerFotos,
+  salvarFoto,
+  anexarFotoEmRelacao,
   ehPerfilProfissional,
   perfilDaEmpresa,
   empresasDoUsuario,

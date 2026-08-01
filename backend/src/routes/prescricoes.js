@@ -20,6 +20,16 @@ router.delete('/grupos/:id/itens/:itemId', authenticate, checkPermission('atendi
 router.post('/grupos/:id/finalizar',      authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.finalizar);
 router.post('/grupos/:id/cancelar',       authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
 router.post('/grupos/:id/cancelar-execucao', authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelarNaExecucao);
+// Cancelar A PARTIR DO PLANTÃO (/execucao-prescricao). MESMO controller — e portanto
+// mesma regra — do cancelar da tela de prescrição: bloqueia se houve qualquer execução.
+// O que muda é só QUEM pode: quem opera o plantão não tem, e não deveria precisar ter,
+// `atendimento.prescricoes.finalizar` (permissão de quem prescreve). Por isso o slug
+// próprio do módulo Enfermagem, configurável na coluna CANCELAR do Controle de Acesso.
+router.post('/grupos/:id/cancelar-plantao', authenticate, checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
+// Cancelar UM ITEM pelo plantão (botão ao lado do item no modal de execução). Mesmo
+// controller do remover item da tela de prescrição — mesma regra e mesma auditoria;
+// só o slug muda, pelo mesmo motivo do cancelar-plantao acima.
+router.delete('/grupos/:id/itens/:itemId/cancelar-plantao', authenticate, checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), PrescricaoGrupoController.removerItem);
 router.post('/grupos/:id/reabrir',        authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.reabrirParaEdicao);
 router.post('/grupos/:id/executar',       authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.executar);
 

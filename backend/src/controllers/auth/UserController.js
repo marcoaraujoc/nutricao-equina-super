@@ -8,6 +8,7 @@ const prisma = require('../../lib/prisma').default;
 const { setAuthCookies } = require('../../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const mfa = require('../../services/mfaService');
+const { podeAcessarSistema } = require('../../lib/usuarioEmpresa');
 const SECRET          = process.env.JWT_SECRET;
 const REFRESH_SECRET  = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -19,6 +20,18 @@ function generateRefreshToken(userId) {
     REFRESH_SECRET,
     { expiresIn: REFRESH_EXPIRES }
   );
+}
+
+// Acesso ao sistema é concedido pela EMPRESA, no cadastro do membro (checkbox
+// "Terá acesso ao sistema"). Quem não tem esse acesso em NENHUMA empresa fica só
+// como cadastro da clínica e não entra na aplicação. ADMIN da plataforma nunca é
+// barrado — é ele quem socorre a clínica que se trancou para fora.
+const MSG_SEM_ACESSO = 'Seu acesso ao sistema está desativado. Fale com o gestor da clínica.';
+
+async function acessoBloqueado(user) {
+  if (!user) return false;
+  if (user.role === 'ADMIN' || user.userType === 'ADMIN') return false;
+  return !(await podeAcessarSistema(user.id));
 }
 
 /**
@@ -118,6 +131,9 @@ class UserController {
       const match = await bcrypt.compare(password, user.passwordHash);
       if (!match) return res.status(401).json({ error: 'Credenciais inválidas' });
 
+      // Antes do 2FA: não faz sentido mandar código a quem não pode entrar.
+      if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });
+
       // ── Segundo fator (2FA por e-mail) ───────────────────────────────────
       // Senha correta NÃO abre sessão: cria o desafio e devolve o desafioId.
       // Nenhum cookie é emitido aqui — a sessão nasce em verificar2fa().
@@ -182,6 +198,7 @@ class UserController {
       if (!user)                return res.status(401).json({ error: 'Código inválido.' });
       // Revalidado aqui: a conta pode ter sido desativada entre a senha e o código.
       if (user.ativo === false) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });
 
       console.log('✅ 2FA verificado — login concluído:', user.email);
       res.json(await emitirSessao(res, user));

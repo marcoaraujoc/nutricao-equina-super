@@ -11,6 +11,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 interface Solicitacao {
@@ -252,6 +253,8 @@ const AnimaisVet = () => {
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO (confirmar/excluir/desvincular): vai para o modal que disparou
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
   const [showBuscarModal,  setShowBuscarModal]  = useState(false);
   const [buscaAnimal,      setBuscaAnimal]      = useState('');
@@ -339,7 +342,7 @@ const AnimaisVet = () => {
       }
       loadAnimais();
     } catch {
-      setErroInline('Erro ao responder solicitação');
+      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
     }
   };
 
@@ -353,7 +356,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success(`Solicitação de desvinculação enviada ao proprietário de ${animalToUnlink.nome}`);
     } catch {
-      setErroInline('Erro ao desvincular');
+      setErroAcao({ mensagem: 'Erro ao desvincular' });
     } finally {
       setUnlinking(false);
     }
@@ -382,7 +385,7 @@ const AnimaisVet = () => {
       }
       loadAnimais();
     } catch {
-      setErroInline('Erro ao responder solicitação');
+      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
     }
   };
 
@@ -413,7 +416,7 @@ const AnimaisVet = () => {
       setResultadoBusca(null);
       loadAnimais();
     } catch (err: any) {
-      setErroInline(err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo');
+      setErroAcao({ mensagem: err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo' });
     } finally {
       setSolicitando(false);
     }

@@ -17,6 +17,7 @@ import { formatDateShort, formatDate } from '../utils/dateUtils';
 import DateInput from '../components/DateInput';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -151,6 +152,8 @@ export default function Farmacia() {
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do SALVAR do painel de formulário — no topo da página fica fora da vista
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [fornecedores, setFornecedores] = useState<FornecedorItem[]>([]);
   const [showNovoForn, setShowNovoForn] = useState(false);
   const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
@@ -417,19 +420,20 @@ export default function Farmacia() {
   };
 
   const salvar = async () => {
+    setErroAcao(null);
     if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de estoque'); return; }
-    if (!form.medicamentoId) return setErroInline('Selecione um medicamento do catálogo.');
-    if (!form.lote.trim())   return setErroInline('Lote é obrigatório.');
-    if (!form.validade)      return setErroInline('Validade é obrigatória.');
+    if (!form.medicamentoId) return setErroAcao({ mensagem: 'Selecione um medicamento do catálogo.', campos: ['medicamentoId'] });
+    if (!form.lote.trim())   return setErroAcao({ mensagem: 'Lote é obrigatório.', campos: ['lote'] });
+    if (!form.validade)      return setErroAcao({ mensagem: 'Validade é obrigatória.', campos: ['validade'] });
     // Não permite validade vencida (anterior a hoje) sempre que o campo for editável —
     // na criação e na edição de item ainda não movimentado (item em uso tem a validade travada).
     if (validadeVencida) {
-      return setErroInline('Validade vencida: informe uma data igual ou posterior a hoje.');
+      return setErroAcao({ mensagem: 'Validade vencida: informe uma data igual ou posterior a hoje.', campos: ['validade'] });
     }
 
-    if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return setErroInline('Quantidades não podem ser negativas.');
-    if (!editandoId && form.qtdEstoque < 0) return setErroInline('Estoque não pode ser negativo.');
+    if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return setErroAcao({ mensagem: 'Quantidades não podem ser negativas.', campos: ['estoqueMinimo','estoqueAlarmante'] });
+    if (!editandoId && form.qtdEstoque < 0) return setErroAcao({ mensagem: 'Estoque não pode ser negativo.', campos: ['qtdEstoque'] });
     if (!form.valor || form.valor <= 0) return setErroInline('Valor é obrigatório.');
 
     // Na criação, valor e valorRepassado são por embalagem — multiplicar pelo nº de embalagens
@@ -1084,6 +1088,7 @@ export default function Farmacia() {
                 </div>
               </div>
 
+              <ErroAcao erro={erroAcao} className="mb-2" />
               <div className="flex gap-2">
                 <button onClick={salvar} disabled={salvando}
                   className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">

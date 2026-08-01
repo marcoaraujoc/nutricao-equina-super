@@ -494,9 +494,9 @@ const OrcamentoController = {
 
   // GET /api/orcamentos/outros-para-fatura?proprietarioId=
   // Itens tipo OUTROS já ACEITO e ainda não lançados, do proprietário, agrupados por
-  // orçamento. `liberado` diz se o item pode ir para a fatura AGORA: só depois que os
-  // demais itens aceitos do MESMO orçamento (medicamento/procedimento/vacina) já foram
-  // importados numa evolução — o OUTROS é sempre o último passo do orçamento.
+  // orçamento. `pendentesClinicos` é AVISO (quantos itens clínicos do mesmo orçamento
+  // ainda não foram importados numa evolução) — NÃO bloqueia o lançamento: importar é
+  // opcional, e travar nisso deixava taxa/transporte impossível de cobrar.
   listarOutrosParaFatura: async (req, res) => {
     try {
       const proprietarioId = req.query.proprietarioId ? Number(req.query.proprietarioId) : null;
@@ -520,7 +520,9 @@ const OrcamentoController = {
           return {
             id:              o.id,
             numeroFormatado: formatNumero(o.numero),
-            liberado:        pendentes.length === 0,
+            // AVISO, não permissão: o item OUTROS pode ser lançado mesmo com item
+            // clínico pendente (ver `lancarNaFatura`). Serve para o financeiro saber
+            // que aquele orçamento ainda não foi consumido por inteiro.
             pendentesClinicos: pendentes.length,
             itens:           outros,
           };
@@ -536,7 +538,7 @@ const OrcamentoController = {
 
   // POST /api/orcamentos/lancar-na-fatura — { faturaId, itemIds }
   // Lança itens OUTROS aceitos direto como FaturaItem e os marca como importados.
-  // Recusa (sem lançar nada) se algum item não estiver liberado pela regra acima.
+  // Sem trava por item clínico pendente (removida em 2026-08-01 — ver `lancarNaFatura`).
   lancarNaFatura: async (req, res) => {
     try {
       const faturaId = Number(req.body?.faturaId);
@@ -574,18 +576,13 @@ const OrcamentoController = {
         return res.status(400).json({ error: 'O orçamento é de outro proprietário.' });
       }
 
-      // Trava: os demais itens aceitos do orçamento precisam ter sido importados antes
-      const orcamentoIds = [...new Set(itens.map(i => i.orcamento.id))];
-      const pendentes = await prisma.orcamentoItem.findMany({
-        where:  { orcamentoId: { in: orcamentoIds }, statusItem: 'ACEITO', importadoEm: null, tipo: { in: TIPOS_CLINICOS } },
-        select: { orcamentoId: true },
-      });
-      if (pendentes.length > 0) {
-        return res.status(400).json({
-          error: 'Importe primeiro os demais itens do orçamento em uma evolução.',
-          code:  'ORCAMENTO_COM_PENDENCIAS',
-        });
-      }
+      // NÃO existe mais trava por "itens clínicos ainda não importados" (removida em
+      // 2026-08-01). Ela prendia o item OUTROS para SEMPRE: `importadoEm` do item
+      // clínico só é gravado quando alguém importa aquele item numa prescrição/vacina,
+      // e importar é OPCIONAL — o orçamento inteiro é etapa opcional. Vet que atendeu
+      // sem importar (ou que orçou 3 animais e atendeu 1) deixava a taxa/transporte
+      // impossível de cobrar, sem nenhuma saída na tela. A pendência continua sendo
+      // INFORMADA no modal (`pendentesClinicos`), como aviso — não como bloqueio.
 
       const total = await prisma.$transaction(async (tx) => {
         for (const item of itens) {

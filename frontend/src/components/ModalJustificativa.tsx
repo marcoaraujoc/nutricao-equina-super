@@ -4,6 +4,7 @@
 // backend e registrado na Auditoria (módulo Geral).
 
 import { useState, useEffect } from 'react';
+import ErroAcao, { type ErroAcaoDados } from './ErroAcao';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface ModalJustificativaProps {
@@ -13,6 +14,9 @@ interface ModalJustificativaProps {
   acaoLabel?: string;          // rótulo do botão de confirmação (default "Excluir")
   placeholder?: string;
   processando?: boolean;
+  /** Erro da própria ação (ex.: 400 do backend). Renderizado AQUI, junto ao botão —
+      no topo da página ficaria atrás deste overlay e o usuário não veria. */
+  erro?: ErroAcaoDados | string | null;
   onConfirmar: (motivo: string) => void | Promise<void>;
   onFechar: () => void;
 }
@@ -24,6 +28,7 @@ export default function ModalJustificativa({
   acaoLabel = 'Excluir',
   placeholder = 'Descreva o motivo (obrigatório)...',
   processando = false,
+  erro = null,
   onConfirmar,
   onFechar,
 }: ModalJustificativaProps) {
@@ -68,7 +73,12 @@ export default function ModalJustificativa({
           </div>
         </div>
 
-        <div className="p-4 border-t border-gray-100 flex gap-2 flex-shrink-0">
+        <div className="p-4 border-t border-gray-100 flex-shrink-0">
+          <ErroAcao
+            erro={typeof erro === 'string' ? { mensagem: erro } : (erro ?? null)}
+            className="mb-3"
+          />
+          <div className="flex gap-2">
           <button
             onClick={() => onConfirmar(motivo.trim())}
             disabled={processando || !motivoValido}
@@ -79,6 +89,7 @@ export default function ModalJustificativa({
             className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
             Cancelar
           </button>
+          </div>
         </div>
       </div>
     </div>

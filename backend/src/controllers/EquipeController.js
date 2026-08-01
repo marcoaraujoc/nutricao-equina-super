@@ -8,6 +8,7 @@ const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
+const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 const prisma = require('../lib/prisma').default;
@@ -19,7 +20,8 @@ const {
   aplicarPerfilEmRelacao: aplicarPerfilProfEmRelacao,
 } = require('../lib/profissionalPerfil');
 // Tabela de ligação usuário × empresa — PERFIL + cadastro por empresa (fonte nova)
-const { salvarVinculo, vincularMembro } = require('../lib/usuarioEmpresa');
+const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAcesso,
+        anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso } = require('../lib/usuarioEmpresa');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -792,9 +794,16 @@ const EquipeController = {
         }),
       ]);
 
+      // Empresa que revogou o acesso desta pessoa não aparece no seletor — ela não
+      // deve poder trabalhar por lá nem saber que o vínculo segue cadastrado.
+      // O dono nunca é barrado da própria empresa (senão ele se trancaria para fora).
+      const semAcesso = await empresasSemAcesso(userId);
+      const idsProprios = new Set(empresasOwned.map(e => e.id));
+
       const opcoes = [];
       const visto  = new Set();
       const add = (o) => {
+        if (semAcesso.has(o.empresaId) && !idsProprios.has(o.empresaId)) return;
         const k = `${o.empresaId}:${o.equipeId ?? ''}`;
         if (visto.has(k)) return;
         visto.add(k);
@@ -889,6 +898,10 @@ const EquipeController = {
           // null = ainda não configurado; o sistema aplica TEMPO_CONSULTA_PADRAO_SISTEMA
           tempoConsultaPadraoMin: config?.tempoConsultaPadraoMin ?? null,
           tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
+          // null = sem validade (o orçamento não expira)
+          validadeOrcamentoDias: config
+            ? await lerValidade(prisma, escopo.empresaId, escopo.equipeId)
+            : null,
         },
       });
     } catch (err) {
@@ -968,8 +981,13 @@ const EquipeController = {
       const {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
-        especiesAtendidas, tempoConsultaPadraoMin,
+        especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias,
       } = req.body;
+
+      // Validade do orçamento em dias. undefined = não altera; vazio = sem validade.
+      const validade = normalizarValidade(validadeOrcamentoDias);
+      if (validade.erro) return res.status(400).json({ sucesso: false, mensagem: validade.erro });
+      const validadeFinal = validade.valor;
 
       // Tempo de consulta padrão da empresa. undefined = não altera; vazio = remove
       // (volta ao padrão do sistema). Mesmas regras do tempo por especialidade.
@@ -990,15 +1008,19 @@ const EquipeController = {
         }
       }
 
-      // Espécies atendidas — aceita array [1,2] ou CSV "1,2". undefined = não altera;
-      // vazio = null (todas as espécies). Persiste como CSV de IDs.
+      // Espécies atendidas — aceita array [1,2] ou CSV "1,2". undefined = não altera.
+      // OBRIGATÓRIO quando informado: sem espécie, o cadastro de profissionais não tem
+      // de onde tirar as especialidades. Persiste como CSV de IDs.
       let especiesFinal;
       if (especiesAtendidas !== undefined) {
         const arr = Array.isArray(especiesAtendidas)
           ? especiesAtendidas
           : String(especiesAtendidas).split(',').map(s => s.trim()).filter(Boolean);
         const nums = [...new Set(arr.map(Number))].filter(Number.isInteger).sort((a, b) => a - b);
-        especiesFinal = nums.length ? nums.join(',') : null;
+        if (!nums.length) {
+          return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma espécie atendida.' });
+        }
+        especiesFinal = nums.join(',');
       }
 
       // WhatsApp da empresa — normaliza para somente dígitos (DDD+número, DDI opcional).
@@ -1015,29 +1037,29 @@ const EquipeController = {
         }
       }
 
-      // Expediente de atendimento. undefined = não altera; vazio = remove (sem restrição).
+      // Expediente de atendimento. undefined = não altera. OBRIGATÓRIO quando informado:
+      // é dele que a Agenda gera a grade de horários — sem dia ou sem faixa não há grade.
       const parseHora = (v) => {
         if (v === undefined) return undefined;
         const s = String(v).trim();
-        if (s === '') return null;
+        if (s === '') throw new Error('Informe o horário de abertura e de fechamento.');
         if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) throw new Error('Horário de atendimento inválido — use HH:MM.');
         return s;
       };
       let diasFinal;
       if (diasAtendimento !== undefined) {
-        // Aceita array [1,2,..] ou CSV "1,2,..". Vazio = null (todos os dias).
+        // Aceita array [1,2,..] ou CSV "1,2,..".
         const arr = Array.isArray(diasAtendimento)
           ? diasAtendimento
           : String(diasAtendimento).split(',').map(s => s.trim()).filter(Boolean);
         if (arr.length === 0) {
-          diasFinal = null;
-        } else {
-          const nums = [...new Set(arr.map(Number))].sort((a, b) => a - b);
-          if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 6)) {
-            return res.status(400).json({ sucesso: false, mensagem: 'Dias de atendimento inválidos (0=Dom … 6=Sáb).' });
-          }
-          diasFinal = nums.join(',');
+          return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos um dia de atendimento.' });
         }
+        const nums = [...new Set(arr.map(Number))].sort((a, b) => a - b);
+        if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 6)) {
+          return res.status(400).json({ sucesso: false, mensagem: 'Dias de atendimento inválidos (0=Dom … 6=Sáb).' });
+        }
+        diasFinal = nums.join(',');
       }
       let horaInicioFinal, horaFimFinal;
       try {
@@ -1121,6 +1143,13 @@ const EquipeController = {
             },
           });
 
+      // Validade do orçamento: gravada por SQL cru DEPOIS do upsert (a linha já existe).
+      // Ver lib/validadeOrcamento.js para o porquê de não ir junto no update/create.
+      await salvarValidade(prisma, escopo.empresaId, escopo.equipeId, validadeFinal);
+      const validadeAtual = validadeFinal !== undefined
+        ? validadeFinal
+        : await lerValidade(prisma, escopo.empresaId, escopo.equipeId);
+
       res.json({
         sucesso: true,
         dados: {
@@ -1134,6 +1163,7 @@ const EquipeController = {
           especiesAtendidas:     parseEspeciesAtendidas(config.especiesAtendidas),
           tempoConsultaPadraoMin: config.tempoConsultaPadraoMin ?? null,
           tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
+          validadeOrcamentoDias:  validadeAtual,
         },
       });
     } catch (err) {
@@ -1366,10 +1396,12 @@ const EquipeController = {
 
         return res.json({
           sucesso: true,
-          // Cadastro do profissional é o DESTA empresa (ver lib/profissionalPerfil.js)
-          dados:        await aplicarPerfilProfEmRelacao(
+          // Cadastro do profissional é o DESTA empresa (ver lib/profissionalPerfil.js).
+          // A remuneração/acesso vêm por fora (colunas novas, SQL cru) para o
+          // formulário de edição reabrir com o que já foi acordado.
+          dados:        await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
             await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true }))), // ADMIN da plataforma vê tudo
-            'user', equipe.empresaId),
+            'user', equipe.empresaId), 'user', equipe.empresaId), 'user', equipe.empresaId),
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -1417,9 +1449,9 @@ const EquipeController = {
         });
         return res.json({
           sucesso:  true,
-          dados:    await aplicarPerfilProfEmRelacao(
+          dados:    await anexarFotoEmRelacao(await aplicarPerfilProfEmRelacao(
             await anexarLocaisTrabalho(await anexarExpedienteTrabalho(membrosDaEquipe)),
-            'user', equipeDoVinculo?.empresaId ?? null),
+            'user', equipeDoVinculo?.empresaId ?? null), 'user', equipeDoVinculo?.empresaId ?? null),
           equipeId: vinculo.equipeId,
           isGestor: false,
         });
@@ -1443,9 +1475,9 @@ const EquipeController = {
       res.json({
         sucesso: true,
         // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
-        dados:        await aplicarPerfilProfEmRelacao(
+        dados:        await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
           await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id }))),
-          'user', empresa.id),
+          'user', empresa.id), 'user', empresa.id), 'user', empresa.id),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -1794,7 +1826,8 @@ const EquipeController = {
   atualizarMembro: async (req, res) => {
     try {
       const { id } = req.params;
-      const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado, especialidadeIds } = req.body;
+      const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado, especialidadeIds,
+              tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = req.body;
 
       const membro = await prisma.membroEquipe.findUnique({
         where:   { id: Number(id) },
@@ -1848,6 +1881,20 @@ const EquipeController = {
         if (await senhaReutilizada(membro.userId, senha, membro.user.passwordHash)) {
           return res.status(400).json({ sucesso: false, mensagem: MENSAGEM_SENHA_REUTILIZADA });
         }
+      }
+
+      // Remuneração e acesso: obrigatórios como na inclusão. Só valida quando o
+      // formulário os envia — o PATCH de outra tela (ex.: toggle de ativo) não
+      // precisa reenviar o acordo de pagamento para poder salvar.
+      const enviouPagamento = tipoPagamento !== undefined || formaPagamento !== undefined || valorPagamento !== undefined;
+      let pagamentoEdicao = null;
+      if (enviouPagamento) {
+        const p = normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
+        if (p.erro) return res.status(400).json({ sucesso: false, mensagem: p.erro });
+        pagamentoEdicao = p.dados;
+      }
+      if (acessoSistema !== undefined && typeof acessoSistema !== 'boolean') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe se o membro terá acesso ao sistema.' });
       }
 
       if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
@@ -1911,6 +1958,10 @@ const EquipeController = {
         await salvarVinculo(prisma, membro.userId, empresaDoMembro, {
           perfil: cargo?.trim() || membro.cargo,
           ...cadastroEmpresa,
+        });
+        await salvarPagamentoEAcesso(prisma, membro.userId, empresaDoMembro, {
+          ...(pagamentoEdicao ?? {}),
+          ...(acessoSistema !== undefined && { acessoSistema }),
         });
         await salvarPerfilProfissional(prisma, membro.userId, empresaDoMembro, {
           ...(fullName    !== undefined && fullName.trim() ? { fullName: fullName.trim() } : {}),
@@ -2227,7 +2278,8 @@ const EquipeController = {
   incluirMembroDireto: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
-      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, especialidadeIds, equipeId: equipeIdBody } = req.body;
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, especialidadeIds, equipeId: equipeIdBody,
+              tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
@@ -2295,6 +2347,16 @@ const EquipeController = {
 
       // ── Validações que podem falhar ANTES de qualquer gravação ─────────────
       // (evita usuário/membro órfão quando a requisição é rejeitada no meio)
+
+      // Remuneração — OBRIGATÓRIA na inclusão. Validada aqui, antes de existir
+      // usuário/membro, para não deixar cadastro pela metade quando o gestor erra o campo.
+      const pagamento = normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
+      if (pagamento.erro) return res.status(400).json({ sucesso: false, mensagem: pagamento.erro });
+
+      // Acesso ao sistema — decisão explícita do gestor, sem padrão implícito.
+      if (typeof acessoSistema !== 'boolean') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe se o membro terá acesso ao sistema.' });
+      }
 
       // Expediente de trabalho (dias/horários) — valida o formato já aqui
       const expediente = parseExpedienteTrabalho(req.body);
@@ -2406,6 +2468,11 @@ const EquipeController = {
       // Fonte nova: tabela de ligação usuário × empresa. O PERFIL é o cargo que o
       // gestor escolheu AQUI — é ele que vale nesta empresa, não o tipo do login.
       await salvarVinculo(prisma, usuario.id, equipe.empresaId, { perfil: cargo, ...cadastroNestaEmpresa });
+      // Remuneração e acesso: colunas novas, gravadas à parte (ver lib/usuarioEmpresa.js)
+      await salvarPagamentoEAcesso(prisma, usuario.id, equipe.empresaId, {
+        ...pagamento.dados,
+        acessoSistema,
+      });
       await salvarPerfilProfissional(prisma, usuario.id, equipe.empresaId, cadastroNestaEmpresa);
 
       // Locais de trabalho (múltiplos). Quando enviados, eles são a fonte do
@@ -2685,11 +2752,19 @@ const EquipeController = {
   convidarParaEquipe: async (req, res) => {
     try {
       const equipeId = Number(req.params.equipeId);
-      const { email: emailRaw, cargo, fullName } = req.body;
+      const { email: emailRaw, cargo, fullName, tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
         return res.status(400).json({ sucesso: false, mensagem: 'email e cargo são obrigatórios' });
+      }
+
+      // Remuneração e acesso são decididos AQUI e aplicados ao vínculo no aceite —
+      // é o mesmo acordo da inclusão direta, só que adiantado.
+      const pagamentoConvite = normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
+      if (pagamentoConvite.erro) return res.status(400).json({ sucesso: false, mensagem: pagamentoConvite.erro });
+      if (typeof acessoSistema !== 'boolean') {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe se o membro terá acesso ao sistema.' });
       }
 
       // Apenas ADMIN (role sistêmica) ou GESTOR da equipe podem usar esta rota
@@ -2733,6 +2808,20 @@ const EquipeController = {
       const convite   = await prisma.conviteEquipe.create({
         data: { equipeId, email, cargo, expiresAt },
       });
+      // Colunas novas gravadas por SQL cru — o client Prisma pode não conhecê-las
+      // (no Windows o `generate` falha com o backend rodando).
+      try {
+        await prisma.$executeRawUnsafe(
+          `UPDATE schs2vet.tb_convites_equipe
+              SET tipo_pagamento = $1, forma_pagamento = $2, valor_pagamento = $3, acesso_sistema = $4
+            WHERE id = $5`,
+          pagamentoConvite.dados.tipoPagamento,
+          pagamentoConvite.dados.formaPagamento,
+          pagamentoConvite.dados.valorPagamento,
+          acessoSistema === true,
+          convite.id,
+        );
+      } catch { /* colunas ainda não migradas */ }
 
       // Cria usuário se ainda não existir
       const SENHA_INICIAL     = 'Inicial_001';
@@ -2838,6 +2927,29 @@ const EquipeController = {
         prisma.conviteEquipe.update({ where: { token }, data: { status: 'ACEITO' } }),
       ]);
       await vincularMembro(prisma, userId, convite.equipeId, convite.cargo);
+
+      // O acordo definido no convite passa a valer agora que existe vínculo.
+      const equipeDoConvite = await prisma.equipe.findUnique({
+        where: { id: convite.equipeId }, select: { empresaId: true },
+      });
+      if (equipeDoConvite?.empresaId) {
+        try {
+          const rows = await prisma.$queryRawUnsafe(
+            `SELECT tipo_pagamento, forma_pagamento, valor_pagamento, acesso_sistema
+               FROM schs2vet.tb_convites_equipe WHERE id = $1`,
+            convite.id,
+          );
+          const c = rows?.[0];
+          if (c) {
+            await salvarPagamentoEAcesso(prisma, userId, equipeDoConvite.empresaId, {
+              ...(c.tipo_pagamento  != null && { tipoPagamento:  c.tipo_pagamento }),
+              ...(c.forma_pagamento != null && { formaPagamento: c.forma_pagamento }),
+              ...(c.valor_pagamento != null && { valorPagamento: c.valor_pagamento }),
+              acessoSistema: c.acesso_sistema !== false,
+            });
+          }
+        } catch { /* convite legado, sem as colunas */ }
+      }
 
       // Aplica permissões padrão para o cargo
       await PermissaoService.aplicarPermissoesPadrao({

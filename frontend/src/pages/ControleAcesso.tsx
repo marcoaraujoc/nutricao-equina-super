@@ -240,9 +240,13 @@ const ACAO_COLS: Array<{ acao: string; label: string; icon?: React.ReactNode }> 
 const MODULO_ACAO_COLS_OVERRIDE: Record<string, Array<{ acao: string; label: string }>> = {
   // Enfermagem = execução de prescrições (enfermagem.prescricao.executar). A ação
   // principal é EXECUTAR — não existe criar/editar/finalizar aqui.
+  // CANCELAR (= `deletar`, mesmo apelido usado em `agenda`) é o cancelamento da
+  // prescrição pelo plantão: separado de EXECUTAR de propósito, senão quem aplica o
+  // medicamento cancelaria o documento do veterinário sem que o gestor decidisse isso.
   enfermagem: [
     { acao: 'ler',      label: 'VER'      },
     { acao: 'executar', label: 'EXECUTAR' },
+    { acao: 'deletar',  label: 'CANCELAR' },
     { acao: 'imprimir', label: 'IMPRIMIR' },
   ],
   // Agenda = atendimento.agendamentos.* (o que o app realmente enforça).
@@ -2968,6 +2972,10 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           fornecedorId: values.fornecedorId ?? null,
           tipoServico:  values.tipoServico  ?? null,
           especialidadeIds: values.especialidadeIds ?? [],
+          tipoPagamento:  values.tipoPagamento,
+          formaPagamento: values.formaPagamento ?? 'VALOR',
+          valorPagamento: Number(values.valorPagamento),
+          acessoSistema:  values.acessoSistema !== false,
           equipeId,
         });
         toast.success('Fornecedor incluído. Selecione os animais com acesso.');
@@ -2980,10 +2988,15 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           setModalAcesso({ userId: dados.userId, nome: dados.fullName ?? values.fullName });
         }
       } else {
+        // O convite carrega o acordo: é aplicado ao vínculo quando a pessoa aceita
         await api.post(`/equipes/${equipeId}/convidar`, {
           email:    values.email,
           fullName: values.fullName || undefined,
           cargo:    values.perfil,
+          tipoPagamento:  values.tipoPagamento,
+          formaPagamento: values.formaPagamento ?? 'VALOR',
+          valorPagamento: Number(values.valorPagamento),
+          acessoSistema:  values.acessoSistema !== false,
         });
         toast.success('Convite enviado por e-mail');
         setShowModal(false);
@@ -3262,6 +3275,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           infoNota="Fornecedor: incluído imediatamente. Veterinário/Estagiário: convite por e-mail."
           textoBotao="Incluir"
           comFornecedor
+          comVinculoEmpresa
           salvando={enviando}
           erroServidor={erroModal}
           onClose={() => { setShowModal(false); setErroModal(null); }}

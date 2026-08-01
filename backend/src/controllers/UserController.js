@@ -30,7 +30,11 @@ const {
   perfilDaEmpresa,
   aplicarVinculo,
   salvarVinculo,
+  lerPagamentoEAcesso,
+  lerFoto,
+  salvarFoto,
 } = require('../lib/usuarioEmpresa');
+const { storage } = require('../storage');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
@@ -273,11 +277,26 @@ const UserController = {
         if (escopoCfg) empresaConfigurada = !!(await buscarConfiguracao(escopoCfg));
       } catch { isGestorEmpresa = false; empresaConfigurada = true; }
 
+      // Remuneração e acesso ao sistema desta empresa. Vão para o Cadastro Pessoal
+      // SOMENTE PARA LEITURA: são o acordo da clínica com o profissional e quem os
+      // define é o gestor, na inclusão/edição do membro — `updateMe` não os grava.
+      const vinculoExtra = req.empresaId
+        ? (await lerPagamentoEAcesso(prisma, [user.id], Number(req.empresaId))).get(user.id) ?? null
+        : null;
+
+      // Foto DESTA empresa (o cadastro é por empresa — ver lib/usuarioEmpresa.js).
+      const fotoUrl = req.empresaId ? await lerFoto(user.id, req.empresaId) : null;
+
       return res.status(200).json({
         ...userData,
+        fotoUrl,
         cadastroConfirmado,
         isGestorEmpresa,
         empresaConfigurada,
+        tipoPagamento:  vinculoExtra?.tipoPagamento  ?? null,
+        formaPagamento: vinculoExtra?.formaPagamento ?? null,
+        valorPagamento: vinculoExtra?.valorPagamento ?? null,
+        acessoSistema:  vinculoExtra ? vinculoExtra.acessoSistema : null,
         userType:       tipoNoContexto,
         userTypeGlobal: userBruto.userType,
         isConvidado,
@@ -413,6 +432,10 @@ const UserController = {
 
         // FONTE NOVA: tabela de ligação usuário × empresa. O perfil não é tocado aqui
         // (quem define é o gestor); só o cadastro daquela empresa.
+        // Remuneração e acesso ao sistema também NÃO passam por aqui, por construção:
+        // `salvarVinculo` só grava CAMPOS_CADASTRO, então mesmo que alguém os poste
+        // neste PUT eles são descartados — ninguém edita o próprio salário nem se
+        // autoconcede acesso. Quem define é o gestor, no cadastro do membro.
         await salvarVinculo(prisma, updatedUser.id, req.empresaId, ehCliente ? dadosCadastro : dadosProf);
 
         // É AQUI que o cadastro daquela empresa passa a valer como confirmado pelo
@@ -652,6 +675,48 @@ const UserController = {
     } catch (err) {
       console.error('[UserController.buscarProprietarioPorEmail]', err);
       return res.status(500).json({ error: 'Erro interno' });
+    }
+  },
+
+  /**
+   * PUT /api/users/me/foto  (multipart: foto) — grava a foto do cadastro NA EMPRESA
+   * ATIVA. DELETE na mesma rota remove.
+   *
+   * Rota própria (e não um campo do PUT /me) porque `updateMe` é JSON: transformá-lo
+   * em multipart obrigaria a reescrever o payload inteiro do Cadastro Pessoal —
+   * incluindo os arrays de locais de trabalho e especialidades — só por causa do arquivo.
+   *
+   * Sem empresa no contexto não há onde gravar: o cadastro é POR EMPRESA e a linha
+   * fica em tb_usuario_empresa.
+   */
+  salvarFotoMe: async (req, res) => {
+    try {
+      if (!req.empresaId) {
+        return res.status(400).json({ success: false, error: 'Selecione a empresa antes de enviar a foto.' });
+      }
+      const remover = req.method === 'DELETE';
+      if (!remover && !req.file) {
+        return res.status(400).json({ success: false, error: 'Envie um arquivo de imagem.' });
+      }
+
+      const vinculo = await perfilDaEmpresa(req.user.id, req.empresaId);
+      if (!vinculo) {
+        return res.status(404).json({ success: false, error: 'Você não tem cadastro nesta empresa.' });
+      }
+
+      const novaUrl = remover ? null : await storage.upload(req.file, 'profissionais');
+      // salvarFoto devolve a URL anterior — o arquivo velho é apagado DEPOIS de o
+      // banco já apontar para o novo, senão uma falha na gravação deixaria o cadastro
+      // apontando para um arquivo que não existe mais.
+      const anterior = await salvarFoto(prisma, req.user.id, req.empresaId, novaUrl);
+      if (anterior && anterior !== novaUrl) {
+        try { await storage.delete(anterior); } catch { /* arquivo já sumiu — segue */ }
+      }
+
+      return res.json({ success: true, dados: { fotoUrl: novaUrl } });
+    } catch (error) {
+      console.error('Erro em salvarFotoMe:', error);
+      return res.status(500).json({ success: false, error: 'Erro ao salvar a foto' });
     }
   },
 

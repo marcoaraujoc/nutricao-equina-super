@@ -211,6 +211,8 @@ const relatoriosGerenciaisRoutes = require('./routes/relatoriosGerenciais');
 const monitoracaoRoutes        = require('./routes/monitoracao');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const orcamentosRoutes         = require('./routes/orcamentos');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const buscaRoutes              = require('./routes/busca');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiterSeletivo, authRoutes);
@@ -258,6 +260,7 @@ app.use('/api/dashboard',             dashboardRoutes);
 app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
+app.use('/api/busca',                 buscaRoutes); // busca global do header
 // Configuração global de segurança (2FA da plataforma) — ADMIN
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 app.use('/api/seguranca',             require('./routes/seguranca'));
@@ -679,9 +682,12 @@ async function resolverConfigsFechamento(proprietarioId: number | null): Promise
 async function fecharFaturasDoMes() {
   try {
     const hoje = new Date();
+    // Sem `include` do proprietário de propósito: `users.valorAssistencia`/`mensalista`
+    // são campos LEGADOS (o cadastro é por empresa em ProprietarioPerfil desde a
+    // migration 20260724000000). Quem resolve o valor é `adicionarAssistenciaMensal`.
     const faturas = await prisma.fatura.findMany({
-      where:   { status: 'ABERTA' },
-      include: { proprietario: { select: { id: true, valorAssistencia: true, mensalista: true } } },
+      where:  { status: 'ABERTA' },
+      select: { id: true, proprietarioId: true, empresaId: true },
     });
 
     logger.info(`[FaturaFechamento-Cron] ${faturas.length} fatura(s) ABERTA(s) — verificando dia de fechamento`);
@@ -696,7 +702,9 @@ async function fecharFaturasDoMes() {
 
         if (!deveFechar) continue;
 
-        await adicionarAssistenciaMensal(fatura.id, fatura.proprietario, null);
+        // A assistência é a da EMPRESA DA FATURA. Só fatura legada (empresaId null,
+        // anterior à migration 20260812000000) cai na dedução por ProprietarioPerfil.
+        await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, fatura.empresaId);
 
         const total = await recalcularTotal(fatura.id);
 
@@ -737,15 +745,25 @@ registrarJob('fechamento_faturas', {
 async function marcarFaturasAtrasadas() {
   try {
     const hoje = new Date();
+    // Só FECHADA: PAGA (marcada manualmente em "Marcar como Pago") e CANCELADA nunca
+    // atrasam; ABERTA ainda não venceu — ela primeiro fecha, pela configuração de
+    // fechamento da EMPRESA (fecharFaturasDoMes/deveFecharHoje), e só depois vence.
     const faturas = await prisma.fatura.findMany({
-      where:   { status: 'FECHADA', mesReferencia: { not: null } },
-      include: { proprietario: { select: { diaVencimentoFatura: true } } },
+      where:  { status: 'FECHADA', mesReferencia: { not: null } },
+      select: { id: true, mesReferencia: true, proprietarioId: true, empresaId: true },
     });
+
+    // O dia de vencimento é o do cadastro do cliente NAQUELA EMPRESA
+    // (`ProprietarioPerfil.diaVencimentoFatura`, a tela de Proprietários). Ler de
+    // `users` — como era feito aqui — pegava o valor legado/global: o mesmo cliente
+    // pode vencer dia 5 numa clínica e dia 20 na outra.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { diaVencimentoDoProprietario } = require('./controllers/FaturaController');
 
     let atrasadas = 0;
     for (const fatura of faturas) {
       try {
-        const dia = fatura.proprietario?.diaVencimentoFatura;
+        const dia = await diaVencimentoDoProprietario(fatura.proprietarioId, fatura.empresaId);
         if (!dia || !fatura.mesReferencia) continue;
         const [y, m] = String(fatura.mesReferencia).split('-').map(Number);
         if (!y || !m) continue;
@@ -810,6 +828,18 @@ registrarJob('cancelar_prescricoes_nao_executadas', {
   nome: 'Cancelamento de prescrições não executadas',
   exprPadrao: '40 23 * * *', // diariamente às 23:40
   fn: () => comAlerta('Cancelamento de prescrições não executadas', cancelarPrescricoesNaoExecutadas),
+});
+
+// ===================== CRON — CANCELAMENTO DE ORÇAMENTOS VENCIDOS =====================
+// Corporativo (todas as empresas que configuraram "Validade do orçamento"). Orçamento
+// que passou do prazo sem aprovação (nem parcial) vira CANCELADO. Empresa sem validade
+// configurada não expira nada.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { cancelarOrcamentosVencidos } = require('./services/orcamentoCronService');
+registrarJob('cancelar_orcamentos_vencidos', {
+  nome: 'Cancelamento de orçamentos vencidos',
+  exprPadrao: '50 23 * * *', // diariamente às 23:50
+  fn: () => comAlerta('Cancelamento de orçamentos vencidos', cancelarOrcamentosVencidos),
 });
 
 // ===================== CRON — HIGIENE DOS DESAFIOS DE 2FA =====================

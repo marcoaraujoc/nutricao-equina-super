@@ -368,7 +368,8 @@ const EncaminhamentoController = {
               ? (enc.prestador?.fullName ?? especialidade)
               : (veterinarioDestino || clinicaDestino || 'externo');
             const descricao = `[${atendNum}] ${especialidade} — ${destino}`;
-            const fatura    = await getOrCreateFatura(tx, animal.userId);
+            // Escopo por empresa: a cobrança entra na fatura DESTA clínica
+            const fatura    = await getOrCreateFatura(tx, animal.userId, req.empresaId);
             await adicionarFaturaItem(tx, {
               faturaId:     fatura.id,
               animalId:     Number(animalId),

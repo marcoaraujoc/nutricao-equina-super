@@ -281,15 +281,17 @@ const PrescricaoController = {
       const proprietarioId = animal?.userId;
       const mesRef = new Date().toISOString().slice(0, 7);
 
+      // Escopo por empresa: cada clínica tem a SUA fatura aberta para o mesmo cliente
+      const empresaFatura = req.empresaId ? Number(req.empresaId) : null;
       let fatura = proprietarioId
-        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } })
-        : await prisma.fatura.findFirst({ where: { animalId: prescricao.animalId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } });
+        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA', empresaId: empresaFatura }, orderBy: { criadoEm: 'desc' } })
+        : await prisma.fatura.findFirst({ where: { animalId: prescricao.animalId, status: 'ABERTA', empresaId: empresaFatura }, orderBy: { criadoEm: 'desc' } });
 
       if (!fatura) {
         fatura = await prisma.fatura.create({
           data: proprietarioId
-            ? { proprietarioId, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
-            : { animalId: prescricao.animalId, total: 0, status: 'ABERTA' },
+            ? { proprietarioId, empresaId: empresaFatura, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
+            : { animalId: prescricao.animalId, empresaId: empresaFatura, total: 0, status: 'ABERTA' },
         });
       }
 
@@ -347,15 +349,17 @@ const PrescricaoController = {
       const proprietarioId = animal?.userId;
       const mesRef = new Date().toISOString().slice(0, 7);
 
+      // Escopo por empresa: cada clínica tem a SUA fatura aberta para o mesmo cliente
+      const empresaFatura = req.empresaId ? Number(req.empresaId) : null;
       let fatura = proprietarioId
-        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } })
-        : await prisma.fatura.findFirst({ where: { animalId: Number(animalId), status: 'ABERTA' }, orderBy: { criadoEm: 'desc' } });
+        ? await prisma.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA', empresaId: empresaFatura }, orderBy: { criadoEm: 'desc' } })
+        : await prisma.fatura.findFirst({ where: { animalId: Number(animalId), status: 'ABERTA', empresaId: empresaFatura }, orderBy: { criadoEm: 'desc' } });
 
       if (!fatura) {
         fatura = await prisma.fatura.create({
           data: proprietarioId
-            ? { proprietarioId, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
-            : { animalId: Number(animalId), total: 0, status: 'ABERTA' },
+            ? { proprietarioId, empresaId: empresaFatura, mesReferencia: mesRef, total: 0, status: 'ABERTA' }
+            : { animalId: Number(animalId), empresaId: empresaFatura, total: 0, status: 'ABERTA' },
         });
       }
 

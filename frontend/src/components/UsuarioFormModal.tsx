@@ -9,7 +9,7 @@
 import { useState, useEffect } from 'react';
 import {
   X, AlertCircle, Info, Eye, EyeOff, Loader2, Plus,
-  User as UserIcon, MapPin, Users, Pencil, Trash2,
+  User as UserIcon, MapPin, Users, Pencil, Trash2, Wallet,
 } from 'lucide-react';
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
@@ -33,6 +33,13 @@ export interface UsuarioFormValues {
   bairro: string;
   cidade: string;
   estado: string;
+  /** Remuneração do profissional NESTA empresa — obrigatória no cadastro do membro.
+   *  O acordo é com cada clínica: salário aqui, comissão ali (ver tb_usuario_empresa). */
+  tipoPagamento?:  'SALARIO' | 'COMISSAO' | '';
+  formaPagamento?: 'VALOR' | 'PERCENTUAL';
+  valorPagamento?: string;
+  /** Sem acesso, a pessoa fica só como cadastro da clínica e NÃO loga na aplicação. */
+  acessoSistema?: boolean;
   /** Perfil FORNECEDOR (comFornecedor): cadastro Fornecedor selecionado, null = criar novo */
   fornecedorId?: number | null;
   /** Perfil FORNECEDOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
@@ -126,7 +133,27 @@ const FORM_VAZIO: UsuarioFormValues = {
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
   diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '', especialidadeIds: [],
   locaisTrabalho: [],
+  // Pagamento nasce em branco DE PROPÓSITO: é acordo com a pessoa, não tem padrão
+  // razoável a chutar. Acesso nasce marcado — é o caso da esmagadora maioria.
+  tipoPagamento: '', formaPagamento: 'VALOR', valorPagamento: '', acessoSistema: true,
 };
+
+export const TIPOS_PAGAMENTO: Array<{ value: 'SALARIO' | 'COMISSAO'; label: string }> = [
+  { value: 'SALARIO',  label: 'Salário'  },
+  { value: 'COMISSAO', label: 'Comissão' },
+];
+
+/** Rótulo pronto da remuneração — usado no Cadastro Pessoal (somente leitura). */
+export function rotuloPagamento(
+  tipo?: string | null, forma?: string | null, valor?: number | null,
+): string | null {
+  if (!tipo || valor == null) return null;
+  const nomeTipo = TIPOS_PAGAMENTO.find(t => t.value === tipo)?.label ?? tipo;
+  const numero = forma === 'PERCENTUAL'
+    ? `${String(valor).replace('.', ',')}%`
+    : valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return `${nomeTipo} · ${numero}`;
+}
 
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
 const DIAS_SEMANA_TRAB = [
@@ -258,6 +285,9 @@ interface UsuarioFormModalProps {
   ocultarPerfil?: boolean;
   /** Exibe a seção de expediente de trabalho (dias + horário) — usado em Equipe */
   comExpediente?: boolean;
+  /** Exibe (e exige) remuneração + acesso ao sistema — cadastro de MEMBRO da equipe.
+   *  Fora da equipe (Usuários/admin) não há acordo de pagamento a registrar. */
+  comVinculoEmpresa?: boolean;
   /** Equipe gerenciada pela tela — filtra as especialidades pelas espécies dessa empresa */
   equipeId?: number | null;
   /** Erro de senha vindo do backend (ex.: reuso das últimas 6 senhas) — exibido inline sob o campo. */
@@ -348,7 +378,6 @@ export interface LocalTrabalhoFieldsProps {
   comEspecialidades: boolean;
   /** Espécies que filtram o catálogo de especialidades */
   especieIds:    number[];
-  espNomeById:   Record<number, string>;
   tempoPadraoEmpresa: number;
   diasEmpresaLabel:    string;
   horarioEmpresaLabel: string;
@@ -358,7 +387,7 @@ export interface LocalTrabalhoFieldsProps {
 }
 
 export function LocalTrabalhoFields({
-  rascunho, onChange, onDirty, comEspecialidades, especieIds, espNomeById,
+  rascunho, onChange, onDirty, comEspecialidades, especieIds,
   tempoPadraoEmpresa, diasEmpresaLabel, horarioEmpresaLabel, textoEspecialidade,
   emptyTextEspecialidade = 'A empresa ainda não configurou as espécies atendidas (Configurações).',
 }: LocalTrabalhoFieldsProps) {
@@ -419,7 +448,13 @@ export function LocalTrabalhoFields({
         </div>
       </div>
 
-      {/* Especialidades exercidas NESTE local (multi-seleção) */}
+      {/* Especialidades exercidas NESTE local, cada uma com o SEU tempo de consulta
+          NA MESMA LINHA (chip · tempo · remover). Antes eram dois blocos separados —
+          a faixa de chips aqui e um card de tempos abaixo — e o usuário tinha de casar
+          nome com nome para saber a que especialidade cada tempo pertencia.
+          O nome vem do próprio EspecialidadeSelector, que é quem carrega o catálogo:
+          o mapa local `espNomeById` depende de um segundo fetch que falha em silêncio
+          (403/erro de rede) e deixava a linha sem rótulo. */}
       {comEspecialidades && (
         <div>
           <label className={labelCls}>
@@ -437,22 +472,21 @@ export function LocalTrabalhoFields({
             })}
             especieIds={especieIds}
             emptyText={emptyTextEspecialidade}
-          />
-        </div>
-      )}
-
-      {/* Tempo de consulta POR especialidade — define o passo da grade da Agenda.
-          Em branco = usa o padrão configurado pela empresa. */}
-      {comEspecialidades && rascunho.especialidadeIds.length > 0 && (
-        <div>
-          <label className={labelCls}>Tempo de consulta</label>
-          <div className="space-y-1.5">
-            {rascunho.especialidadeIds.map(id => (
-              <div key={id} className="flex items-center gap-2">
-                <span className="flex-1 min-w-0 truncate text-sm text-gray-700">
-                  {espNomeById[id] ?? `Especialidade #${id}`}
+            cabecalhoSelecionados={
+              <div className="flex items-center gap-2">
+                <span className="w-40 flex-shrink-0 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                  Especialidade
                 </span>
+                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                  Tempo de consulta
+                </span>
+              </div>
+            }
+            renderSelecionado={({ id, nome, chip, remover }) => (
+              <div className="flex items-center gap-2">
+                <span className="w-40 flex-shrink-0 truncate">{chip}</span>
                 <select
+                  aria-label={`Tempo de consulta — ${nome}`}
                   value={rascunho.temposConsulta?.[id] ?? ''}
                   onChange={e => {
                     const min = Number(e.target.value);
@@ -463,21 +497,32 @@ export function LocalTrabalhoFields({
                       return { ...r, temposConsulta: tempos };
                     });
                   }}
-                  className={`w-44 ${inputCls}`}
+                  className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors"
                 >
                   <option value="">Padrão da empresa ({tempoPadraoEmpresa} min)</option>
                   {TEMPOS_CONSULTA.map(m => (
                     <option key={m} value={m}>{m} min</option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  onClick={remover}
+                  aria-label={`Remover ${nome}`}
+                  title={`Remover ${nome}`}
+                  className="flex-shrink-0 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <X size={14} />
+                </button>
               </div>
-            ))}
-          </div>
-          <p className="text-[11px] text-gray-400 mt-1.5">
-            Define de quanto em quanto tempo a agenda oferece horários deste
-            profissional em cada especialidade. Em branco, vale o padrão da
-            empresa ({tempoPadraoEmpresa} min).
-          </p>
+            )}
+          />
+          {rascunho.especialidadeIds.length > 0 && (
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              O tempo define de quanto em quanto tempo a agenda oferece horários deste
+              profissional em cada especialidade. Em branco, vale o padrão da empresa
+              ({tempoPadraoEmpresa} min).
+            </p>
+          )}
         </div>
       )}
     </>
@@ -489,6 +534,7 @@ export function LocalTrabalhoFields({
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
   comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
+  comVinculoEmpresa = false,
   equipeId = null, erroSenhaServidor, erroServidor, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
@@ -682,6 +728,17 @@ export default function UsuarioFormModal({
     if (permitirMultiCargos && cargosFinais.length === 0) {
       setErroInline('Selecione ao menos um perfil de acesso'); return;
     }
+    if (comVinculoEmpresa) {
+      // Mesmas regras do backend (lib/usuarioEmpresa.normalizarPagamento), que é a autoridade
+      if (!form.tipoPagamento) { setErroInline('Informe o tipo de pagamento (salário ou comissão)'); return; }
+      const valorNum = Number(String(form.valorPagamento ?? '').replace(',', '.'));
+      if (!Number.isFinite(valorNum) || valorNum <= 0) {
+        setErroInline('Informe o valor do pagamento'); return;
+      }
+      if (form.formaPagamento === 'PERCENTUAL' && valorNum > 100) {
+        setErroInline('O percentual de pagamento não pode passar de 100%'); return;
+      }
+    }
     if (permitirSenha && form.senha) {
       const erroSenha = validarSenha(form.senha);
       if (erroSenha) { setErroSenhaLocal(erroSenha); return; }
@@ -740,6 +797,11 @@ export default function UsuarioFormModal({
       perfil:       perfilFinal,
       fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
+      // Vírgula decimal do teclado brasileiro: normaliza aqui para o caller poder
+      // fazer Number() direto (o backend recebe número, não string localizada).
+      valorPagamento: comVinculoEmpresa
+        ? String(form.valorPagamento ?? '').replace(',', '.')
+        : undefined,
       // [] (e não undefined) para o perfil sem especialidade: limpa vínculo herdado
       // de quando o membro era veterinário.
       especialidadeIds: enviaEspec ? especEnviar : [],
@@ -767,42 +829,57 @@ export default function UsuarioFormModal({
               <UserIcon size={12} /> Dados Pessoais
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {!ocultarPerfil && <div className="sm:col-span-2">
-                <label className={labelCls}>Perfil de acesso *</label>
-                {permitirMultiCargos ? (
-                  <div className="flex flex-wrap gap-2 mt-0.5">
-                    {PERFIS_ACESSO.map(p => {
-                      const sel = (form.cargos ?? [form.perfil]).includes(p.value);
-                      return (
-                        <label key={p.value} className={`flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer select-none text-sm transition-colors ${
-                          sel ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                        }`}>
-                          <input type="checkbox" checked={sel}
-                            onChange={e => { toggleCargo(p.value, e.target.checked); }}
-                            className="w-3.5 h-3.5 accent-emerald-600" />
-                          {p.label}
-                        </label>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <select value={form.perfil}
-                    onChange={e => {
-                      const val = e.target.value;
-                      setFornecedorId(''); setCriandoNovo(false);
-                      if (modoEdicao) {
-                        set('perfil', val); set('cargos', [val]);
-                      } else {
-                        // Inclusão: trocar o perfil zera o formulário (evita dados do perfil
-                        // anterior — fornecedor selecionado, especialidades, etc.).
-                        setForm({ ...FORM_VAZIO, perfil: val, cargos: [val] });
-                      }
-                    }}
-                    className={inputCls}>
-                    {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                )}
-              </div>}
+              {/* Nome completo + perfil de acesso na MESMA linha. Sem o perfil
+                  (ocultarPerfil), o nome ocupa a linha inteira em vez de deixar
+                  metade vazia. */}
+              {/* 3 frações: o perfil é um select de rótulos curtos ("Veterinário",
+                  "Estagiário") e não precisa de metade da linha — a sobra vai para o
+                  nome, que é o campo longo. */}
+              <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className={ocultarPerfil ? 'sm:col-span-3' : 'sm:col-span-2'}>
+                  <label className={labelCls}>Nome completo *</label>
+                  <input type="text" value={form.fullName}
+                    onChange={e => set('fullName', e.target.value)}
+                    placeholder="Nome do usuário" className={inputCls} />
+                </div>
+
+                {!ocultarPerfil && <div>
+                  <label className={labelCls}>Perfil de acesso *</label>
+                  {permitirMultiCargos ? (
+                    <div className="flex flex-wrap gap-2 mt-0.5">
+                      {PERFIS_ACESSO.map(p => {
+                        const sel = (form.cargos ?? [form.perfil]).includes(p.value);
+                        return (
+                          <label key={p.value} className={`flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer select-none text-sm transition-colors ${
+                            sel ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                          }`}>
+                            <input type="checkbox" checked={sel}
+                              onChange={e => { toggleCargo(p.value, e.target.checked); }}
+                              className="w-3.5 h-3.5 accent-emerald-600" />
+                            {p.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <select value={form.perfil}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFornecedorId(''); setCriandoNovo(false);
+                        if (modoEdicao) {
+                          set('perfil', val); set('cargos', [val]);
+                        } else {
+                          // Inclusão: trocar o perfil zera o formulário (evita dados do perfil
+                          // anterior — fornecedor selecionado, especialidades, etc.).
+                          setForm({ ...FORM_VAZIO, perfil: val, cargos: [val] });
+                        }
+                      }}
+                      className={inputCls}>
+                      {opcoesPerfil.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  )}
+                </div>}
+              </div>
 
               {/* Seletor de fornecedor existente */}
               {mostrarSeletorFornecedor && (
@@ -831,28 +908,48 @@ export default function UsuarioFormModal({
               )}
 
               <>
-                  <div className="sm:col-span-2">
-                    <label className={labelCls}>Nome completo *</label>
-                    <input type="text" value={form.fullName}
-                      onChange={e => set('fullName', e.target.value)}
-                      placeholder="Nome do usuário" className={inputCls} />
-                  </div>
+                  {/* Telefone + e-mail + acesso ao sistema na MESMA linha. O checkbox
+                      fica ao lado do e-mail, que é a credencial a que ele se refere
+                      ("poderá entrar com o e-mail ao lado"). Desmarcado, o cadastro
+                      existe (agenda, comissão, encaminhamento) mas o login é recusado. */}
+                  <div className={`sm:col-span-2 grid grid-cols-1 gap-3 ${comVinculoEmpresa ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+                    <div>
+                      <label className={labelCls}>Telefone *</label>
+                      <input type="text" value={form.phone}
+                        onChange={e => set('phone', mascaraTelefone(e.target.value))}
+                        placeholder="(00) 00000-0000" className={inputCls} />
+                    </div>
 
-                  <div>
-                    <label className={labelCls}>E-mail *</label>
-                    <input type="email" value={form.email}
-                      onChange={e => set('email', e.target.value)}
-                      disabled={emailBloqueado}
-                      title={emailBloqueado ? 'O e-mail de acesso não pode ser alterado aqui' : undefined}
-                      placeholder="email@exemplo.com"
-                      className={`${inputCls} ${emailBloqueado ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
-                  </div>
+                    <div>
+                      <label className={labelCls}>E-mail *</label>
+                      <input type="email" value={form.email}
+                        onChange={e => set('email', e.target.value)}
+                        disabled={emailBloqueado}
+                        title={emailBloqueado ? 'O e-mail de acesso não pode ser alterado aqui' : undefined}
+                        placeholder="email@exemplo.com"
+                        className={`${inputCls} ${emailBloqueado ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                    </div>
 
-                  <div>
-                    <label className={labelCls}>Telefone *</label>
-                    <input type="text" value={form.phone}
-                      onChange={e => set('phone', mascaraTelefone(e.target.value))}
-                      placeholder="(00) 00000-0000" className={inputCls} />
+                    {comVinculoEmpresa && (
+                      // pt-5 = altura do label dos campos ao lado (text-xs 16px + mb-1),
+                      // para o checkbox nascer alinhado com os inputs, não com os rótulos.
+                      <div className="sm:pt-5">
+                        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                          <input type="checkbox"
+                            checked={form.acessoSistema !== false}
+                            onChange={e => set('acessoSistema', e.target.checked)}
+                            className="w-4 h-4 mt-0.5 rounded border-gray-300 accent-emerald-600 cursor-pointer" />
+                          <span className="text-sm text-gray-700">
+                            Terá acesso ao sistema
+                            <span className="block text-[11px] text-gray-400">
+                              {form.acessoSistema !== false
+                                ? 'Poderá entrar na aplicação com o e-mail ao lado.'
+                                : 'Ficará apenas como cadastro da clínica — o login será recusado.'}
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    )}
                   </div>
 
                   {modoEdicao && permitirSenha && (
@@ -923,6 +1020,59 @@ export default function UsuarioFormModal({
             </div>
           </section>
 
+          {/* ── Endereço ── */}
+          <section>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <MapPin size={12} /> Endereço
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className={labelCls}>CEP</label>
+                <div className="relative">
+                  <input type="text" value={form.cep} name="cep-empresa" autoComplete="off"
+                    onChange={e => {
+                      const masked = mascaraCEP(e.target.value);
+                      set('cep', masked);
+                      if (masked.replace(/\D/g, '').length === 8) buscarCep(masked);
+                    }}
+                    placeholder="00000-000"
+                    className={`${inputCls} pr-8`} />
+                  {buscandoCEP && <Loader2 size={12} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className={labelCls}>Endereço</label>
+                <input type="text" value={form.endereco} name="endereco-empresa" autoComplete="off"
+                  onChange={e => set('endereco', e.target.value)}
+                  placeholder="Rua, av., rodovia..." className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Complemento</label>
+                <input type="text" value={form.complemento} name="complemento-empresa" autoComplete="off"
+                  onChange={e => set('complemento', e.target.value)}
+                  placeholder="Apto, sala..." className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Bairro</label>
+                <input type="text" value={form.bairro} name="bairro-empresa" autoComplete="off"
+                  onChange={e => set('bairro', e.target.value)}
+                  placeholder="Bairro" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Cidade</label>
+                <input type="text" value={form.cidade} name="cidade-empresa" autoComplete="off"
+                  onChange={e => set('cidade', e.target.value)}
+                  placeholder="Cidade" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Estado</label>
+                <input type="text" value={form.estado} name="estado-empresa" autoComplete="off"
+                  onChange={e => set('estado', e.target.value.toUpperCase().slice(0, 2))}
+                  placeholder="SP" maxLength={2} className={inputCls} />
+              </div>
+            </div>
+          </section>
+
           {/* ── Locais de trabalho (dias + horário por local) ──
               Padrão da prescrição: um formulário em linha (local · dias · horas) →
               "Adicionar" empurra para a lista compacta acima e limpa o formulário. */}
@@ -987,18 +1137,11 @@ export default function UsuarioFormModal({
 
               {/* Botão que revela o formulário — os campos só aparecem após o clique */}
               {!mostrarFormLocal && (
-                <>
-                  <button type="button"
-                    onClick={() => { setErroLocal(null); setEditIndexLocal(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
-                    className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
-                    <Plus size={13} /> Adicionar local e horário de trabalho
-                  </button>
-                  <p className="text-[11px] text-gray-400 mt-1.5">
-                    O mesmo local pode entrar mais de uma vez, com outros dias, horário e
-                    especialidade — ex.: clínico seg/qua/sex e dermatologista ter/qui na
-                    mesma hípica.
-                  </p>
-                </>
+                <button type="button"
+                  onClick={() => { setErroLocal(null); setEditIndexLocal(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                  <Plus size={13} /> Adicionar local e horário de trabalho
+                </button>
               )}
 
               {/* Formulário do novo local: local · horário · dias · especialidades · tempo */}
@@ -1010,7 +1153,6 @@ export default function UsuarioFormModal({
                   onDirty={() => setErroLocal(null)}
                   comEspecialidades={mostrarEspecialidades}
                   especieIds={especiesEmpresa}
-                  espNomeById={espNomeById}
                   tempoPadraoEmpresa={tempoPadraoEmpresa}
                   diasEmpresaLabel={diasEmpresaLabel}
                   horarioEmpresaLabel={horarioEmpresaLabel}
@@ -1062,58 +1204,58 @@ export default function UsuarioFormModal({
             </section>
           )}
 
-          {/* ── Endereço ── */}
-          <section>
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-              <MapPin size={12} /> Endereço
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className={labelCls}>CEP</label>
-                <div className="relative">
-                  <input type="text" value={form.cep} name="cep-empresa" autoComplete="off"
+          {/* ── Forma de Pagamento ── obrigatória: é o acordo desta clínica com a
+              pessoa. Última seção porque é o que se decide DEPOIS de saber o que ela
+              faz e onde atende. */}
+          {comVinculoEmpresa && (
+            <section>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                <Wallet size={12} /> Forma de Pagamento
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Tipo de pagamento *</label>
+                  <select value={form.tipoPagamento ?? ''}
                     onChange={e => {
-                      const masked = mascaraCEP(e.target.value);
-                      set('cep', masked);
-                      if (masked.replace(/\D/g, '').length === 8) buscarCep(masked);
+                      const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
+                      // Comissão quase sempre é percentual, e salário é valor fixo —
+                      // a forma acompanha o tipo escolhido. Continua editável: quem
+                      // acertou comissão em R$ fixo só troca o seletor ao lado.
+                      setForm(prev => ({
+                        ...prev,
+                        tipoPagamento:  tipo,
+                        formaPagamento: tipo === 'COMISSAO' ? 'PERCENTUAL'
+                                      : tipo === 'SALARIO'  ? 'VALOR'
+                                      : prev.formaPagamento,
+                      }));
                     }}
-                    placeholder="00000-000"
-                    className={`${inputCls} pr-8`} />
-                  {buscandoCEP && <Loader2 size={12} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+                    className={inputCls}>
+                    <option value="">Selecionar…</option>
+                    {TIPOS_PAGAMENTO.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Valor *</label>
+                  <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                    <span className="px-3 flex items-center text-sm text-gray-400 bg-gray-50 border-r border-gray-200">
+                      {form.formaPagamento === 'PERCENTUAL' ? '%' : 'R$'}
+                    </span>
+                    <input type="number" min="0" step="0.01"
+                      value={form.valorPagamento ?? ''}
+                      onChange={e => set('valorPagamento', e.target.value)}
+                      placeholder={form.formaPagamento === 'PERCENTUAL' ? 'Ex.: 30' : 'Ex.: 3500,00'}
+                      className="flex-1 min-w-0 px-3 py-2.5 text-sm text-gray-900 focus:outline-none" />
+                    <select value={form.formaPagamento ?? 'VALOR'}
+                      onChange={e => set('formaPagamento', e.target.value as 'VALOR' | 'PERCENTUAL')}
+                      className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer">
+                      <option value="VALOR">R$</option>
+                      <option value="PERCENTUAL">%</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <div className="sm:col-span-2">
-                <label className={labelCls}>Endereço</label>
-                <input type="text" value={form.endereco} name="endereco-empresa" autoComplete="off"
-                  onChange={e => set('endereco', e.target.value)}
-                  placeholder="Rua, av., rodovia..." className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Complemento</label>
-                <input type="text" value={form.complemento} name="complemento-empresa" autoComplete="off"
-                  onChange={e => set('complemento', e.target.value)}
-                  placeholder="Apto, sala..." className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Bairro</label>
-                <input type="text" value={form.bairro} name="bairro-empresa" autoComplete="off"
-                  onChange={e => set('bairro', e.target.value)}
-                  placeholder="Bairro" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Cidade</label>
-                <input type="text" value={form.cidade} name="cidade-empresa" autoComplete="off"
-                  onChange={e => set('cidade', e.target.value)}
-                  placeholder="Cidade" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Estado</label>
-                <input type="text" value={form.estado} name="estado-empresa" autoComplete="off"
-                  onChange={e => set('estado', e.target.value.toUpperCase().slice(0, 2))}
-                  placeholder="SP" maxLength={2} className={inputCls} />
-              </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           {/* Nota informativa */}
           {infoNota && (
@@ -1128,13 +1270,15 @@ export default function UsuarioFormModal({
             do modal em que o cadastro está sendo feito. */}
         <InlineError message={erroInline ?? erroServidor ?? null} className="mx-5 mt-3 flex-shrink-0" />
 
-        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+        {/* Botões no tamanho padrão da aplicação (mesmas classes da tela de
+            prescrição), alinhados à direita — não mais dois blocos largos. */}
+        <div className="flex justify-end gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} disabled={salvando}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
+            className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancelar
           </button>
           <button onClick={handleSubmit} disabled={salvando}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+            className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
             {salvando && <Loader2 size={13} className="animate-spin" />}
             {salvando ? 'Salvando…' : textoBotao ?? (modoEdicao ? 'Atualizar' : 'Criar Usuário')}
           </button>

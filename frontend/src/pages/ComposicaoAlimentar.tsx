@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 // =====================================================================
@@ -54,6 +55,8 @@ const ComposicaoAlimentar = () => {
   const [composicoes, setComposicoes] = useState<ComposicaoItem[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [especies, setEspecies] = useState<Especie[]>([]);
 
   const [search, setSearch] = useState('');
@@ -121,7 +124,7 @@ const ComposicaoAlimentar = () => {
       isNaN(parseFloat(editValues.valorPorKg)) ||
       parseFloat(editValues.valorPorKg) < 0
     ) {
-      setErroInline('Informe um valor numérico válido');
+      setErroAcao({ mensagem: 'Informe um valor numérico válido', campos: ['valor'] });
       return;
     }
 
@@ -133,7 +136,7 @@ const ComposicaoAlimentar = () => {
       cancelEdit();
       loadComposicoes();
     } catch {
-      setErroInline('Erro ao salvar edição');
+      setErroAcao({ mensagem: 'Erro ao salvar edição' });
     }
   };
 
@@ -150,7 +153,7 @@ const ComposicaoAlimentar = () => {
       loadComposicoes();
     } catch (error) {
       console.error(error);
-      setErroInline('Erro ao excluir composição');
+      setErroAcao({ mensagem: 'Erro ao excluir composição' });
     }
   };
 
@@ -374,7 +377,9 @@ const ComposicaoAlimentar = () => {
                   ?
                 </p>
               </div>
-              <div className="p-6 flex gap-4">
+              <div className="p-6">
+                <ErroAcao erro={erroAcao} className="mb-3" />
+                <div className="flex gap-4">
                 <button
                   onClick={() => setItemToDelete(null)}
                   className="flex-1 py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50"
@@ -387,6 +392,7 @@ const ComposicaoAlimentar = () => {
                 >
                   Excluir
                 </button>
+                </div>
               </div>
             </div>
           </div>

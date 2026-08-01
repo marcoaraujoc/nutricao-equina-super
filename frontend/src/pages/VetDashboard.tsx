@@ -21,6 +21,7 @@ import {
 } from 'chart.js';
 import { Bar, Line } from 'react-chartjs-2';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 ChartJS.register(
@@ -309,6 +310,8 @@ export default function VetDashboard() {
   const [animalToUnlink, setAnimalToUnlink] = useState<AnimalResumido | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO (confirmar/excluir/desvincular): vai para o modal que disparou
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
 
   const carregar = async () => {
@@ -362,7 +365,7 @@ export default function VetDashboard() {
       }
       carregar();
     } catch {
-      setErroInline('Erro ao responder solicitação');
+      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
     }
   };
 
@@ -380,7 +383,7 @@ export default function VetDashboard() {
       toast.success(`${animalToUnlink.nome} removido da sua lista`);
       carregar();
     } catch {
-      setErroInline('Erro ao desvincular');
+      setErroAcao({ mensagem: 'Erro ao desvincular' });
     } finally {
       setUnlinking(false);
     }
@@ -429,7 +432,7 @@ export default function VetDashboard() {
       }
       carregar();
     } catch {
-      setErroInline('Erro ao responder solicitação');
+      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
     }
   };
 

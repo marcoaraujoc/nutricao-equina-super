@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Loader2, X } from 'lucide-react';
 import api from '../services/api';
 
@@ -23,6 +23,15 @@ interface Props {
   emptyText?: string;
   /** 'checkbox' (grade, padrão) ou 'dropdown' (select + chips, ideal para modais). */
   variant?: 'checkbox' | 'dropdown';
+  /**
+   * Dropdown: troca a faixa de chips por UMA LINHA por especialidade selecionada,
+   * deixando o chamador acrescentar colunas ao lado do chip (ex.: tempo de consulta).
+   * O NOME vem resolvido daqui de dentro — este componente é quem carrega o catálogo,
+   * então quem consome não precisa (nem deve) manter um segundo mapa id→nome.
+   */
+  renderSelecionado?: (args: { id: number; nome: string; chip: ReactNode; remover: () => void }) => ReactNode;
+  /** Cabeçalho das colunas, exibido acima das linhas quando há algo selecionado. */
+  cabecalhoSelecionados?: ReactNode;
 }
 
 /**
@@ -32,6 +41,7 @@ interface Props {
  */
 export default function EspecialidadeSelector({
   value, onChange, especieIds, disabled = false, emptyText, variant = 'checkbox',
+  renderSelecionado, cabecalhoSelecionados,
 }: Props) {
   const [todas,   setTodas]   = useState<Especialidade[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,19 +135,41 @@ export default function EspecialidadeSelector({
           ))}
         </select>
         {value.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {value.map(id => (
-              <span key={id} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
-                {nomeById.get(id) ?? `#${id}`}
-                {!disabled && (
-                  <button type="button" onClick={() => onChange(value.filter(v => v !== id))}
-                    className="ml-0.5 hover:text-emerald-900 transition-colors">
-                    <X size={11} />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
+          renderSelecionado ? (
+            <div className="space-y-1.5">
+              {cabecalhoSelecionados}
+              {value.map(id => {
+                const nome = nomeById.get(id) ?? `#${id}`;
+                const chip = (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                    {nome}
+                  </span>
+                );
+                return (
+                  <div key={id}>
+                    {renderSelecionado({
+                      id, nome, chip,
+                      remover: () => { if (!disabled) onChange(value.filter(v => v !== id)); },
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {value.map(id => (
+                <span key={id} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                  {nomeById.get(id) ?? `#${id}`}
+                  {!disabled && (
+                    <button type="button" onClick={() => onChange(value.filter(v => v !== id))}
+                      className="ml-0.5 hover:text-emerald-900 transition-colors">
+                      <X size={11} />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )
         )}
       </div>
     );

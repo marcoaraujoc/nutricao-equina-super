@@ -5,12 +5,15 @@ import toast from 'react-hot-toast';
 import { Edit, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 const Nutrientes = () => {
   const navigate = useNavigate();
   const [nutrientes, setNutrientes] = useState<any[]>([]);
   // Erro de ação exibido inline (substitui o alert de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [nutrienteToDelete, setNutrienteToDelete] = useState<any | null>(null);
@@ -42,7 +45,7 @@ const Nutrientes = () => {
       loadNutrientes();
     } catch (error) {
       console.error(error);
-      setErroInline('Erro ao excluir nutriente');
+      setErroAcao({ mensagem: 'Erro ao excluir nutriente' });
     }
   };
 
@@ -131,7 +134,9 @@ const Nutrientes = () => {
                   Tem certeza que deseja excluir <strong>{nutrienteToDelete.nome}</strong>?
                 </p>
               </div>
-              <div className="p-4 sm:p-6 flex gap-4">
+              <div className="p-4 sm:p-6">
+                <ErroAcao erro={erroAcao} className="mb-3" />
+                <div className="flex gap-4">
                 <button onClick={() => setNutrienteToDelete(null)}
                   className="flex-1 py-3 sm:py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50">
                   Cancelar
@@ -140,6 +145,7 @@ const Nutrientes = () => {
                   className="flex-1 py-3 sm:py-4 bg-red-600 text-white font-semibold rounded-3xl hover:bg-red-700">
                   Excluir
                 </button>
+                </div>
               </div>
             </div>
           </div>

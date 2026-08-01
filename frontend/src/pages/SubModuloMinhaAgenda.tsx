@@ -175,9 +175,20 @@ export default function SubModuloMinhaAgenda({ onSelecionarAnimal }: Props) {
 
   // ── Iniciar atendimento ────────────────────────────────────────────────────
 
-  const handleIniciarAtendimento = (ag: Agendamento) => {
+  const handleIniciarAtendimento = async (ag: Agendamento) => {
     if (!ag.animal?.id) { setErroInline('Animal não identificado no agendamento'); return; }
     // ADIANTAR é permitido — o paciente chegou antes, o profissional vagou.
+    // Mesma regra da agenda global: o status vira EM_ANDAMENTO no ato do início,
+    // não só quando a evolução for criada.
+    if (ag.status === 'AGENDADO' || ag.status === 'ATRASADA') {
+      try {
+        await api.patch(`/clinica/agendamentos/${ag.id}/status`, { status: 'EM_ANDAMENTO' });
+        setAgendamentos(prev => prev.map(a =>
+          a.id === ag.id ? { ...a, status: 'EM_ANDAMENTO' as StatusAgendamento } : a));
+      } catch {
+        // silencioso — a criação da evolução também marca EM_ANDAMENTO
+      }
+    }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   };
 

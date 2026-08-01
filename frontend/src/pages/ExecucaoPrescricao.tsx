@@ -263,18 +263,24 @@ export function ModalExecucao({
   grupo,
   onClose,
   soVisualizacao = false,
+  podeCancelar = false,
 }: {
   grupo:           GrupoExecucao;
   onClose:         () => void;
   soVisualizacao?: boolean;
+  /** `enfermagem.prescricao.deletar` — o botão Cancelar do rodapé era o único da tela
+   *  sem gate de permissão. Default false: quem não passar a prop não mostra a ação. */
+  podeCancelar?:   boolean;
 }) {
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
   const [erroEstoque, setErroEstoque] = useState<AlertaEstoque[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
-  const [showCancel,  setShowCancel]  = useState(false);
-  const [cancelando,  setCancelando]  = useState(false);
+  // Item escolhido para cancelar (botão ao lado do item). O cancelamento da PRESCRIÇÃO
+  // inteira não mora mais aqui — é o botão da linha na lista de /execucao-prescricao.
+  const [cancelarItem, setCancelarItem] = useState<ItemExecucao | null>(null);
+  const [cancelando,   setCancelando]   = useState(false);
 
   const itensDoDia = grupo.itens.filter(
     i => i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias,
@@ -374,17 +380,27 @@ export function ModalExecucao({
     }
   };
 
-  // Cancela toda a prescrição (justificada + auditada) — itens já executados são preservados.
-  const handleCancelar = async (motivo: string) => {
+  // Cancela UM item da prescrição (justificado + auditado). Mesma regra da tela de
+  // prescrição: se QUALQUER item do documento já foi executado, o backend recusa com
+  // 400 — o que já foi aplicado tem fatura e baixa de estoque e não pode ficar órfão.
+  // Fecha o modal ao concluir: o `onClose` do pai recarrega a lista, que é a fonte da
+  // verdade dos itens (evita a tela seguir mostrando um item que não existe mais).
+  const handleCancelarItem = async (motivo: string) => {
+    if (!cancelarItem) return;
+    const alvo = cancelarItem;
     setCancelando(true);
     try {
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/cancelar-execucao`, { motivo });
-      toast.success('Prescrição cancelada');
-      setShowCancel(false);
+      await api.delete(
+        `/clinica/prescricoes/grupos/${grupo.id}/itens/${alvo.id}/cancelar-plantao`,
+        { data: { motivo } },
+      );
+      toast.success(`${alvo.medicamento} — cancelado`);
+      setCancelarItem(null);
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      setErroInline(e?.response?.data?.error ?? 'Erro ao cancelar prescrição');
+      setCancelarItem(null);
+      setErroInline(e?.response?.data?.error ?? 'Erro ao cancelar item');
     } finally {
       setCancelando(false);
     }
@@ -503,22 +519,33 @@ export function ModalExecucao({
                     Somente leitura
                   </span>
                 ) : (
-                  <button
-                    // Execução item a item: já debita o estoque e lança este item na fatura.
-                    onClick={() => handleExecutarItem(item, slots)}
-                    disabled={activeIdx < 0 || activeDone || salvando}
-                    className={`flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
-                      activeDone
-                        ? 'bg-emerald-500 text-white cursor-default'
-                        : activeIdx < 0
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-white border border-gray-300 text-gray-600 hover:border-teal-500 hover:text-teal-600'
-                    }`}>
-                    {activeDone ? 'Executado'
-                      : activeIdx < 0 ? 'Aguardando'
-                      : salvando ? 'Executando…'
-                      : 'Executar'}
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                    <button
+                      // Execução item a item: já debita o estoque e lança este item na fatura.
+                      onClick={() => handleExecutarItem(item, slots)}
+                      disabled={activeIdx < 0 || activeDone || salvando}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
+                        activeDone
+                          ? 'bg-emerald-500 text-white cursor-default'
+                          : activeIdx < 0
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      }`}>
+                      {activeDone ? 'Executado'
+                        : activeIdx < 0 ? 'Aguardando'
+                        : salvando ? 'Executando…'
+                        : 'Executar'}
+                    </button>
+                    {podeCancelar && (
+                      <button
+                        onClick={() => { setErroInline(null); setCancelarItem(item); }}
+                        disabled={salvando || cancelando}
+                        title="Cancelar item"
+                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50">
+                        <Ban size={14} />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -551,25 +578,25 @@ export function ModalExecucao({
             </div>
           ) : (
             <>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowCancel(true)}
-                  disabled={salvando}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors">
-                  <Ban size={14} /> Cancelar
-                </button>
+              {/* Rodapé é só Executar + FECHAR, à direita e no tamanho padrão da aplicação
+                  (mesmas classes dos botões de ação da tela de prescrição). Cancelar a
+                  prescrição inteira é o botão da linha na lista; cancelar item é o botão
+                  ao lado de cada item, acima. */}
+              <div className="flex justify-end gap-2">
                 <button
                   onClick={handleExecutarTodos}
                   disabled={salvando || todosFeitos}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
-                    !todosFeitos
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  }`}>
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                   {salvando
-                    ? <Loader2 size={14} className="animate-spin" />
-                    : <CheckCircle2 size={14} />}
-                  {isUltimoDia ? 'Executar todos e finalizar' : 'Executar todos do dia'}
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <CheckCircle2 size={13} />}
+                  Executar Todos
+                </button>
+                <button
+                  onClick={onClose}
+                  disabled={salvando}
+                  className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                  Fechar
                 </button>
               </div>
               <p className="text-center text-[10px] text-gray-400 mt-1">
@@ -586,14 +613,14 @@ export function ModalExecucao({
       </div>
     </div>
 
-    {showCancel && (
+    {cancelarItem && (
       <ModalJustificativa
-        aberto={showCancel}
-        titulo={`Cancelar prescrição #${grupo.numeroFormatado}`}
-        descricao="Cancela toda a prescrição. Itens já executados permanecem na fatura; os não executados são cancelados. A justificativa vai para a auditoria."
-        acaoLabel="Cancelar prescrição"
-        onConfirmar={handleCancelar}
-        onFechar={() => { if (!cancelando) setShowCancel(false); }}
+        aberto
+        titulo={`Cancelar item — ${cancelarItem.medicamento}`}
+        descricao={`Cancela este item da prescrição #${grupo.numeroFormatado} e libera o estoque reservado dele. Os demais itens seguem normalmente. A justificativa vai para a auditoria.`}
+        acaoLabel="Cancelar item"
+        onConfirmar={handleCancelarItem}
+        onFechar={() => { if (!cancelando) setCancelarItem(null); }}
       />
     )}
     </>
@@ -814,8 +841,10 @@ function LinhaGrupo({
   onExecutar,
   onVer,
   onImprimir,
+  onCancelar,
   podeExecutarAcao,
   podeImprimir,
+  podeCancelar = false,
   soVisualizacao,
   executada = false,
   horaExecucao = null,
@@ -824,8 +853,12 @@ function LinhaGrupo({
   onExecutar: () => void;
   onVer: () => void;
   onImprimir: () => void;
+  onCancelar?: () => void;
   podeExecutarAcao: boolean;
   podeImprimir: boolean;
+  /** `enfermagem.prescricao.deletar`. O chamador já desconta prescrição cancelada
+   *  ou executada — cancelar depois da execução é recusado pelo backend (400). */
+  podeCancelar?: boolean;
   soVisualizacao: boolean;
   executada?: boolean;
   horaExecucao?: string | null;
@@ -900,15 +933,26 @@ function LinhaGrupo({
             Executar
           </button>
         )}
-        <button onClick={onVer}
-          className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg hover:bg-gray-50 transition-colors">
+        {/* Ações disponíveis nascem PINTADAS (mesma paleta da tela de prescrição):
+            emerald = ver, azul = imprimir, vermelho = cancelar. Cinza fica reservado
+            para o que está indisponível — ação habilitada não se disfarça de desativada. */}
+        {podeCancelar && onCancelar && (
+          <button
+            onClick={onCancelar}
+            title="Cancelar prescrição"
+            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+            <Ban size={14} />
+          </button>
+        )}
+        <button onClick={onVer} title="Ver prescrição"
+          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
           <Eye size={14} />
         </button>
         {podeImprimir && (
           <button
             onClick={onImprimir}
             title="Imprimir prescrição"
-            className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
+            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
             <Printer size={14} />
           </button>
         )}
@@ -924,6 +968,8 @@ export default function ExecucaoPrescricao() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
   const podeExecutarAcao = isGestor || podeExecutar('enfermagem.prescricao.executar');
   const podeImprimir     = isGestor || podeExecutar('enfermagem.prescricao.imprimir');
+  // Cancelar a prescrição pelo plantão — slug próprio, separado de executar.
+  const podeCancelar     = isGestor || podeExecutar('enfermagem.prescricao.deletar');
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -941,6 +987,9 @@ export default function ExecucaoPrescricao() {
   // prescrição de hoje ainda executável — só o botão "Executar" abre em modo de execução.
   const [modalVer, setModalVer] = useState(false);
   const [dataSel,  setDataSel]  = useState(localToday());
+  // Prescrição escolhida para cancelar (abre o ModalJustificativa da lista)
+  const [cancelarAlvo, setCancelarAlvo] = useState<GrupoExecucao | null>(null);
+  const [cancelando,   setCancelando]   = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
 
@@ -984,6 +1033,30 @@ export default function ExecucaoPrescricao() {
   }, [dataSel]);
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
+
+  // Cancela a prescrição a partir do plantão. Aponta para `cancelar-plantao`, que no
+  // backend é o MESMO controller do cancelar da tela de prescrição — logo, mesma regra:
+  // prescrição com QUALQUER execução é recusada (400 EXECUTADO), porque o que já foi
+  // aplicado tem item de fatura e baixa de estoque e não pode ficar órfão.
+  const handleCancelarGrupo = async (motivo: string) => {
+    if (!cancelarAlvo) return;
+    if (!podeCancelar) { semPermissao('cancelar prescrição'); return; }
+    const alvo = cancelarAlvo;
+    setCancelando(true);
+    try {
+      await api.post(`/clinica/prescricoes/grupos/${alvo.id}/cancelar-plantao`, { motivo });
+      toast.success(`Prescrição #${alvo.numeroFormatado} cancelada`);
+      setCancelarAlvo(null);
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      // Fecha o modal para o erro não ficar atrás dele (o InlineError vive na página)
+      setCancelarAlvo(null);
+      setErroInline(msg ?? 'Erro ao cancelar prescrição');
+    } finally {
+      setCancelando(false);
+    }
+  };
 
   // Impressão da vacina — reutiliza o gerador da prescrição (a vacina vira um "grupo"
   // de um único item), igual ao imprimirVacina da tela de Vacina.
@@ -1214,8 +1287,10 @@ export default function ExecucaoPrescricao() {
                     onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModal(g); }}
                     onVer={() => { setModalVer(true); setModal(g); }}
                     onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+                    onCancelar={() => { setErroInline(null); setCancelarAlvo(g); }}
                     podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
                     podeImprimir={podeImprimir}
+                    podeCancelar={podeCancelar && g.status !== 'CANCELADO'}
                     soVisualizacao={!isHoje || g.status === 'CANCELADO'}
                   />
                 ))}
@@ -1321,6 +1396,18 @@ export default function ExecucaoPrescricao() {
           grupo={modal}
           onClose={() => { setModal(null); carregar(); }}
           soVisualizacao={modalVer || !isHoje || modal.status === 'CANCELADO' || foiExecutadoHoje(modal)}
+          podeCancelar={podeCancelar}
+        />
+      )}
+
+      {cancelarAlvo && (
+        <ModalJustificativa
+          aberto
+          titulo={`Cancelar prescrição #${cancelarAlvo.numeroFormatado}`}
+          descricao={`Cancela toda a prescrição de ${cancelarAlvo.animal.nome} e libera o estoque reservado. Prescrição que já teve execução não pode ser cancelada. A justificativa vai para a auditoria.`}
+          acaoLabel="Cancelar prescrição"
+          onConfirmar={handleCancelarGrupo}
+          onFechar={() => { if (!cancelando) setCancelarAlvo(null); }}
         />
       )}
 

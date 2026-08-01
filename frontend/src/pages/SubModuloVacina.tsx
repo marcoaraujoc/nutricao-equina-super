@@ -981,7 +981,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
       {/* ── Formulário de registro ─────────────────────────────────────────── */}
       {podeCriar && (
-        <div ref={formRef} className="p-5 border-b border-gray-100">
+        // Alterou qualquer campo → o erro anterior some (change borbulha)
+        <div ref={formRef} className="p-5 border-b border-gray-100"
+          onChange={() => setErroInline(null)}
+          onInput={() => setErroInline(null)}>
 
           {/* Importar orçamento (opcional) */}
           <button onClick={() => setShowImportOrc(true)}

@@ -136,6 +136,8 @@ interface ItemPrescricao {
   dosagem: string | null; unidade: string | null; via: string;
   frequencia: string; duracaoDias: number; dataInicio: string;
   observacao: string | null; medicamentoCliente: boolean;
+  /** Aplicado pelo proprietário em casa: fora do plantão, da fatura e do estoque. */
+  aplicadaPeloProprietario?: boolean;
 }
 
 interface DetalhePrescricao {
@@ -567,6 +569,12 @@ function DetalheModalPrescricao({ dados }: { dados: DetalhePrescricao }) {
                   {item.medicamentoCliente && (
                     <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
                       Cliente
+                    </span>
+                  )}
+                  {item.aplicadaPeloProprietario && (
+                    <span title="Aplicado pelo proprietário — fora da Execução de Prescrição"
+                      className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                      Proprietário
                     </span>
                   )}
                 </div>

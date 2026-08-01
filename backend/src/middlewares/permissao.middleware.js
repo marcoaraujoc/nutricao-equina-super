@@ -430,11 +430,66 @@ async function getNivelEfetivo(req, moduloSlug) {
   return 'NENHUM';
 }
 
+/**
+ * Resolve o CONTEXTO de permissão (req.equipeId / req.membroCargo) sem exigir nenhum
+ * slug — mesma ordem de resolução do checkPermission, mas nunca responde 403.
+ *
+ * Existe para rotas que atravessam VÁRIOS módulos e por isso não podem ser gateadas
+ * por um slug único (a busca global do header: paciente + atendimento + agenda). Sem
+ * isto, `getNivelEfetivo` não teria req.equipeId/req.membroCargo e devolveria NENHUM
+ * para todo mundo que não é ADMIN. Quem decide o que entra no resultado é o
+ * getNivelEfetivo de CADA módulo, chamado pelo controller.
+ */
+async function resolverContextoPermissao(req) {
+  if (!req.user) return;
+
+  if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') {
+    req.membroCargo = 'GESTOR';
+    return;
+  }
+
+  const equipeId = await resolveEquipeId(req);
+  if (equipeId) {
+    const membro = await prisma.membroEquipe.findUnique({
+      where:  { equipeId_userId: { equipeId, userId: req.user.id } },
+      select: { cargo: true },
+    });
+    if (membro) {
+      req.equipeId    = equipeId;
+      req.membroCargo = membro.cargo;
+      return;
+    }
+
+    // Não é membro: pode ser o dono da empresa daquela equipe (bypass de gestor)
+    const equipe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { empresaId: true } });
+    const dono = equipe
+      ? await prisma.empresa.findFirst({ where: { id: equipe.empresaId, ownerId: req.user.id }, select: { id: true } })
+      : null;
+    if (dono && req.user.userType !== 'FORNECEDOR') {
+      req.equipeId    = equipeId;
+      req.membroCargo = 'GESTOR';
+      return;
+    }
+  }
+
+  const empresaOwned = await prisma.empresa.findFirst({
+    where:  { ownerId: req.user.id, ...(req.empresaId ? { id: req.empresaId } : {}) },
+    select: { id: true },
+  });
+  if (empresaOwned && req.user.userType !== 'FORNECEDOR') {
+    req.membroCargo = 'GESTOR';
+    return;
+  }
+
+  if (req.user.userType === 'PROPRIETARIO') req.membroCargo = 'PROPRIETARIO';
+}
+
 module.exports = {
   checkPermission,
   checkPermissaoProprietario,
   podeOperarRegistro,
   getNivelEfetivo,
+  resolverContextoPermissao,
   getEquipeIdsDoProprietario,
   NIVEL_ORDINAL,
 };

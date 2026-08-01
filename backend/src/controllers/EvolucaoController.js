@@ -362,8 +362,13 @@ const EvolucaoController = {
           if (!agendamento) {
             throw Object.assign(new Error('Agendamento não encontrado para este animal'), { statusCode: 404, code: 'AGENDAMENTO_NOT_FOUND' });
           }
-          if (agendamento.status !== 'AGENDADO') {
-            throw Object.assign(new Error('Agendamento já foi iniciado, concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
+          // EM_ANDAMENTO é aceito: o botão "Iniciar" da agenda já marca o agendamento
+          // como em atendimento ANTES de a evolução existir (é o que faz a tela refletir
+          // o início na hora). Recusar aqui impediria o profissional de escrever a
+          // evolução do atendimento que ele mesmo acabou de iniciar.
+          // ATRASADA idem: atraso não pode impedir o atendimento de acontecer.
+          if (!['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'].includes(agendamento.status)) {
+            throw Object.assign(new Error('Agendamento já foi concluído ou cancelado'), { statusCode: 400, code: 'AGENDAMENTO_INVALIDO' });
           }
           // ADIANTAR é permitido: o paciente chegou antes, o profissional vagou —
           // atende-se e pronto. O que continua proibido é o inverso, mexer na
@@ -811,14 +816,27 @@ const EvolucaoController = {
 
       const anteriorId = existente.veterinarioId;
 
-      const assumida = await prisma.evolucaoClinica.update({
-        where: { id: existente.id },
-        data:  {
-          veterinarioId:   userId,
-          modificadoPorId: userId,
-          dataModificacao: new Date(),
-        },
-        include: INCLUDE_PADRAO,
+      // Assumir o ATENDIMENTO arrasta a AGENDA junto: a evolução nascida de um
+      // agendamento (AG-XXXX) tem o agendamento apontando para o vet anterior.
+      // Mover só a evolução deixaria o atendimento na agenda de quem não o conduz
+      // mais — e ele não apareceria na agenda de quem assumiu.
+      const assumida = await prisma.$transaction(async (tx) => {
+        const evo = await tx.evolucaoClinica.update({
+          where: { id: existente.id },
+          data:  {
+            veterinarioId:   userId,
+            modificadoPorId: userId,
+            dataModificacao: new Date(),
+          },
+          include: INCLUDE_PADRAO,
+        });
+        if (existente.agendamentoId) {
+          await tx.agendamentoClinico.updateMany({
+            where: { id: existente.agendamentoId, ativo: true, status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] } },
+            data:  { veterinarioId: userId },
+          });
+        }
+        return evo;
       });
 
       await registrarAuditoria(

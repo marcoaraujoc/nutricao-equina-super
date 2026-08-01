@@ -83,7 +83,9 @@ const stats = async (req, res) => {
         where: { ativo: true, validade: { gte: hoje, lte: em30dias }, ...(empresaId ? { empresaId } : {}) },
       }),
       prisma.fatura.findMany({
-        where:  { status: { in: ['ABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...propWhere },
+        // Contas a receber são as DESTA empresa — a fatura da outra clínica para o
+        // mesmo cliente não entra no indicador daqui.
+        where:  { status: { in: ['ABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...(empresaId ? { empresaId } : {}), ...propWhere },
         select: { total: true },
       }),
       carregarAnimaisComUltimoAtendimento(animalWhere),

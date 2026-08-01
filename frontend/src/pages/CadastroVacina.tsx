@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,10 +109,12 @@ interface MedVacinaPayload {
   apresentacao: string; unidade: string; vias: string[]; especieIds: number[];
 }
 
-function MedVacinaModal({ vacina, especies, onSalvar, onFechar, saving }: {
+function MedVacinaModal({ vacina, especies, onSalvar, onFechar, saving, erroAcao }: {
   vacina:   MedVacina | null;
   especies: Especie[];
   onSalvar: (data: MedVacinaPayload) => void;
+  /** Erro do salvar — exibido no rodapé do modal, não no topo da página */
+  erroAcao?: ErroAcaoDados | null;
   onFechar: () => void;
   saving:   boolean;
 }) {
@@ -240,7 +243,9 @@ function MedVacinaModal({ vacina, especies, onSalvar, onFechar, saving }: {
           )}
         </div>
 
-        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
+        <div className="px-5 pb-5 pt-3 border-t border-gray-100">
+          <ErroAcao erro={erroAcao ?? null} className="mb-3" />
+          <div className="flex gap-3">
           <button onClick={onFechar} disabled={saving}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Cancelar
@@ -252,6 +257,7 @@ function MedVacinaModal({ vacina, especies, onSalvar, onFechar, saving }: {
             {saving && <Loader2 size={14} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
+          </div>
         </div>
       </div>
     </div>
@@ -272,6 +278,8 @@ function CatalogoVacinasTab() {
   const [confirmVacina, setConfirmVacina] = useState<MedVacina | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,    setErroInline]    = useState<string | null>(null);
+  // Erro do SALVAR do modal — no topo da página ele ficaria atrás do overlay
+  const [erroAcao,      setErroAcao]      = useState<ErroAcaoDados | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -306,6 +314,7 @@ function CatalogoVacinasTab() {
   };
 
   const handleSalvar = async (data: MedVacinaPayload) => {
+    setErroAcao(null);
     setSaving(true);
     try {
       if (editando) {
@@ -320,7 +329,7 @@ function CatalogoVacinasTab() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao salvar vacina');
+      setErroAcao({ mensagem: msg ?? 'Erro ao salvar vacina' });
     } finally {
       setSaving(false);
     }
@@ -512,6 +521,7 @@ function CatalogoVacinasTab() {
 
       {modal && (
         <MedVacinaModal
+          erroAcao={erroAcao}
           key={editando?.id ?? 'new'}
           vacina={editando}
           especies={especies}
@@ -535,9 +545,10 @@ function CatalogoVacinasTab() {
 
 // ─── VacinaModal (legado) ─────────────────────────────────────────────────────
 
-function VacinaModal({ vacina, onSalvar, onFechar, saving }: {
+function VacinaModal({ vacina, onSalvar, onFechar, saving, erroAcao }: {
   vacina:   VacinaLegada | null;
   onSalvar: (data: { nome: string; fabricante: string; via: string }) => void;
+  erroAcao?: ErroAcaoDados | null;
   onFechar: () => void;
   saving:   boolean;
 }) {
@@ -573,7 +584,9 @@ function VacinaModal({ vacina, onSalvar, onFechar, saving }: {
             </select>
           </div>
         </div>
-        <div className="flex gap-3 px-5 pb-5 pt-2 border-t border-gray-100">
+        <div className="px-5 pb-5 pt-2 border-t border-gray-100">
+          <ErroAcao erro={erroAcao ?? null} className="mb-3" />
+          <div className="flex gap-3">
           <button onClick={onFechar} disabled={saving}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Cancelar
@@ -585,6 +598,7 @@ function VacinaModal({ vacina, onSalvar, onFechar, saving }: {
             {saving && <Loader2 size={14} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
+          </div>
         </div>
       </div>
     </div>
@@ -593,11 +607,12 @@ function VacinaModal({ vacina, onSalvar, onFechar, saving }: {
 
 // ─── LoteModal (legado) ───────────────────────────────────────────────────────
 
-function LoteModal({ vacinaId, lote, empresas, onSalvar, onFechar, saving }: {
+function LoteModal({ vacinaId, lote, empresas, onSalvar, onFechar, saving, erroAcao }: {
   vacinaId:  number;
   lote:      Lote | null;
   empresas:  Empresa[];
   onSalvar:  (data: { empresaId: number | null; lote: string; validade: string; qtdTotal: number }) => void;
+  erroAcao?: ErroAcaoDados | null;
   onFechar:  () => void;
   saving:    boolean;
 }) {
@@ -644,7 +659,9 @@ function LoteModal({ vacinaId, lote, empresas, onSalvar, onFechar, saving }: {
             </div>
           </div>
         </div>
-        <div className="flex gap-3 px-5 pb-5 pt-2 border-t border-gray-100">
+        <div className="px-5 pb-5 pt-2 border-t border-gray-100">
+          <ErroAcao erro={erroAcao ?? null} className="mb-3" />
+          <div className="flex gap-3">
           <button onClick={onFechar} disabled={saving}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
             Cancelar
@@ -656,6 +673,7 @@ function LoteModal({ vacinaId, lote, empresas, onSalvar, onFechar, saving }: {
             {saving && <Loader2 size={14} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
+          </div>
         </div>
       </div>
     </div>
@@ -678,6 +696,7 @@ export default function CadastroVacina() {
   const [expandido,       setExpandido]       = useState<number | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,      setErroInline]      = useState<string | null>(null);
+  const [erroAcao,        setErroAcao]        = useState<ErroAcaoDados | null>(null);
   const [showVacinaModal, setShowVacinaModal] = useState(false);
   const [editandoVacina,  setEditandoVacina]  = useState<VacinaLegada | null>(null);
   const [showLoteModal,   setShowLoteModal]   = useState(false);
@@ -735,7 +754,7 @@ export default function CadastroVacina() {
       setEditandoVacina(null);
       carregarLegado();
     } catch {
-      setErroInline('Erro ao salvar vacina');
+      setErroAcao({ mensagem: 'Erro ao salvar vacina' });
     } finally {
       setSavingLegado(false);
     }
@@ -760,6 +779,7 @@ export default function CadastroVacina() {
   };
 
   const handleSalvarLote = async (data: { empresaId: number | null; lote: string; validade: string; qtdTotal: number }) => {
+    setErroAcao(null);
     if (!vacinaIdLote) return;
     setSavingLegado(true);
     try {
@@ -775,7 +795,7 @@ export default function CadastroVacina() {
       carregarLegado();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao salvar lote');
+      setErroAcao({ mensagem: msg ?? 'Erro ao salvar lote' });
     } finally {
       setSavingLegado(false);
     }
@@ -1029,6 +1049,7 @@ export default function CadastroVacina() {
 
           {showVacinaModal && (
             <VacinaModal
+              erroAcao={erroAcao}
               vacina={editandoVacina}
               onSalvar={handleSalvarVacina}
               onFechar={() => { setShowVacinaModal(false); setEditandoVacina(null); }}
@@ -1038,6 +1059,7 @@ export default function CadastroVacina() {
 
           {showLoteModal && vacinaIdLote && (
             <LoteModal
+              erroAcao={erroAcao}
               vacinaId={vacinaIdLote}
               lote={editandoLote}
               empresas={empresas}

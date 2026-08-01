@@ -273,7 +273,7 @@ const STATUS_COM_ATENDIMENTO = ['CONCLUIDO', 'FINALIZADO', 'EXECUTADO'];
 
 export default function MapaAtendimento() {
   const navigate = useNavigate();
-  const { podeExecutar, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const [resumo,        setResumo]        = useState<ResumoData | null>(null);
   const [loading,       setLoading]       = useState(false);
@@ -923,6 +923,7 @@ export default function MapaAtendimento() {
           grupo={execModal}
           soVisualizacao={!isHoje}
           onClose={() => { setExecModal(null); carregar(); }}
+          podeCancelar={isGestor || podeExecutar('enfermagem.prescricao.deletar')}
         />
       )}
     </PageContainer>

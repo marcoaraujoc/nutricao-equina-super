@@ -149,6 +149,7 @@ const Usuarios = () => {
   const [editando,    setEditando]    = useState<Usuario | null>(null);
   const [salvando,    setSalvando]    = useState(false);
   const [erroSenha,   setErroSenha]   = useState('');
+  const [erroModal,   setErroModal]   = useState<string | null>(null);
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
   // Erro fica na SUPERFÍCIE da ação: `erroLinha` na linha do usuário (ativar/inativar)
   // e `erroExclusao` dentro do modal, junto do botão que confirma.
@@ -206,6 +207,7 @@ const Usuarios = () => {
   // ── Submit ────────────────────────────────────────────────────────────────
 
   const handleSubmit = async (values: UsuarioFormValues) => {
+    setErroModal(null);
     setSalvando(true);
     setErroSenha('');
     try {
@@ -241,7 +243,8 @@ const Usuarios = () => {
         ? err.response?.data?.mensagem ?? 'Erro ao salvar'
         : 'Erro inesperado';
       if (/senha/i.test(msg)) setErroSenha(msg);
-      else setErroInline(msg);
+      // Modal aberto: a mensagem vai PARA ELE (o topo da página fica atrás do overlay)
+      else setErroModal(msg);
     } finally {
       setSalvando(false);
     }
@@ -437,6 +440,7 @@ const Usuarios = () => {
           modoEdicao={!!editando}
           permitirSenha={!!editando}
           erroSenhaServidor={erroSenha}
+          erroServidor={erroModal}
           salvando={salvando}
           onClose={fecharModal}
           onSubmit={handleSubmit}

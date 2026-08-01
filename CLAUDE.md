@@ -1,5 +1,6 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-07-31 (Shell: header e rodapé globais, busca global por empresa (/api/busca), marca no EmpresaContext, sidebar só com o logo da clínica)
 # Atualizado em: 2026-07-29 (Evolução: assumir SÓ a de outro profissional c/ e-mail+WhatsApp, própria aberta continua bloqueando, paralelo por decisão (409) e proibição de antecipar agendamento)
 # Atualizado em: 2026-07-25 (Vacina com a lógica da Prescrição: SALVA→FINALIZADA→EXECUTADA — fatura e estoque só na Execução de Prescrição/plantão)
 # Atualizado em: 2026-07-25 (Vacina no Atendimento com ciclo SALVA→FINALIZADA, igual a Exames/Encaminhamento — migration 20260729000000)
@@ -324,9 +325,16 @@ OrcamentoItem       (migration 20260723000000). Item tipo PROCEDIMENTO|COMBO|MED
                     `animalId` recebido, então o FaturaItem já sai atribuído ao animal.
                     NÃO entra na importação
                     clínica (`TIPOS_CLINICOS` exclui OUTROS) — depois de ACEITO vai DIRETO para a fatura
-                    em Financeiro > Faturamento, e só depois que os demais itens aceitos do MESMO
-                    orçamento já tiverem `importadoEm` (isto é, importados numa evolução).
+                    em Financeiro > Faturamento, pelo botão "Importar do orçamento".
                     `importadoEm` do OUTROS = lançado na fatura.
+                    ⚠️ **A trava "só depois que os demais itens do orçamento forem importados numa
+                    evolução" foi REMOVIDA em 2026-08-01** (existia no modal E em `lancarNaFatura`).
+                    Ela prendia o OUTROS para SEMPRE: `importadoEm` do item clínico só é gravado
+                    quando alguém o importa numa prescrição/vacina, e importar é OPCIONAL — o
+                    orçamento inteiro é etapa opcional. Vet que atendeu sem importar, ou que orçou
+                    3 animais e atendeu 1, ficava sem NENHUMA saída para cobrar a taxa/transporte.
+                    A pendência virou AVISO no modal (`pendentesClinicos`), nunca bloqueio.
+                    NUNCA reintroduzir bloqueio sem um caminho de escape na tela.
 Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
 AuditLog          → log de ações dos usuários
@@ -429,10 +437,17 @@ EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (
                     20260710000002 — somente dígitos DDD+número, 10-15, p/ envio/recebimento de
                     mensagens; integração de mensageria ainda não existe). unique(empresaId, equipeId).
                     Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes.
-                    Expediente de atendimento (migration 20260713020000): diasAtendimento (CSV 0-6,
-                    null=todos), horaInicioAtendimento/horaFimAtendimento (HH:MM, null=sem restrição) —
-                    usados por Agendamentos p/ liberar horários; leitura por qualquer membro via
-                    GET /api/equipes/horario-atendimento.
+                    Expediente de atendimento (migration 20260713020000): diasAtendimento (CSV 0-6),
+                    horaInicioAtendimento/horaFimAtendimento (HH:MM) — usados por Agendamentos p/
+                    liberar horários; leitura por qualquer membro via GET /api/equipes/horario-atendimento.
+                    ⚠️ Expediente e `especiesAtendidas` viraram OBRIGATÓRIOS na tela (2026-08-01):
+                    o salvar recusa 400 com dia/hora/espécie vazios. O "vazio = sem restrição"
+                    documentado antes só vale para a linha LEGADA que nunca foi salva de novo —
+                    os leitores (Agenda, herança de expediente) continuam tratando null como
+                    "sem restrição" e NÃO devem passar a exigir o campo.
+                    validadeOrcamentoDias (migration 20260813000000): validade do ORÇAMENTO em dias,
+                    null = não expira. Lida/gravada SEMPRE por `lib/validadeOrcamento.js` (SQL cru —
+                    ver armadilha 41), consumida pelo cron `cancelar_orcamentos_vencidos`.
 AgendamentoClinico → (+ migration 20260713010000) lembreteWa1DiaEnviadoEm / lembreteWa2hEnviadoEm
                     (DateTime?) — idempotência dos lembretes de WhatsApp (D-1 e 2h antes).
 CronAlertaConfig  → config global dos alertas de cron (linha única): emails (CSV, null=ADMINs),
@@ -513,6 +528,7 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 | atendimento | agendamentos | `atendimento.agendamentos.deletar` | excluir | PROPRIO | NENHUM |
 | enfermagem | prescricao | `enfermagem.prescricao.ler` | ver | EQUIPE | EQUIPE |
 | enfermagem | prescricao | `enfermagem.prescricao.executar` | executar | PROPRIO | EQUIPE |
+| enfermagem | prescricao | `enfermagem.prescricao.deletar` | cancelar | PROPRIO | NENHUM |
 | enfermagem | prescricao | `enfermagem.prescricao.imprimir` | imprimir | EQUIPE | EQUIPE |
 | exames | laboratorial | `exames.laboratorial.ler` | ver | EQUIPE | EQUIPE |
 | exames | laboratorial | `exames.laboratorial.criar` | criar | PROPRIO | NENHUM |
@@ -575,6 +591,31 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 - `farmacia.movimentacoes` não tem `editar`/`deletar` — movimentos são imutáveis por auditoria
 - `medicamentos` e `procedimentos`: criar/editar/excluir reservados para ADMIN (catálogo global)
 - `enfermagem.prescricao.executar`: estagiários têm EQUIPE por padrão (técnicos executam prescrições)
+- `enfermagem.prescricao.deletar` (2026-08-01): CANCELAR a prescrição pelo PLANTÃO, em
+  `/execucao-prescricao`. Rota `POST /clinica/prescricoes/grupos/:id/cancelar-plantao` — MESMO
+  controller (`PrescricaoGrupoController.cancelar`) do cancelar da tela de prescrição, logo mesma
+  regra: qualquer execução já feita recusa com 400 `EXECUTADO` (o executado tem FaturaItem e baixa
+  de estoque e não pode ficar órfão). Slug PRÓPRIO em vez de reusar
+  `atendimento.prescricoes.finalizar` porque quem opera o plantão não tem — nem deveria ter — a
+  permissão de quem prescreve. Separado de `executar` de propósito: senão quem aplica o medicamento
+  cancelaria o documento do veterinário sem o gestor ter decidido isso. Defaults: GESTOR FULL,
+  VETERINARIO e ENFERMEIRO PROPRIO, demais NENHUM (ENFERMEIRO tem porque a tela é a casa dele —
+  sem isso a ação nasceria morta para o perfil que vive no plantão). Coluna CANCELAR no
+  ControleAcesso via `MODULO_ACAO_COLS_OVERRIDE.enfermagem`, mesmo apelido de `deletar` usado em `agenda`.
+  O MESMO slug cobre o cancelamento de UM ITEM no modal de execução (botão ao lado do item):
+  `DELETE /grupos/:id/itens/:itemId/cancelar-plantao` → `PrescricaoGrupoController.removerItem`,
+  de novo o mesmo controller da tela de prescrição. Cancelar item também é bloqueado quando
+  QUALQUER item do documento já foi executado (guard de `removerItem`) — na prática o botão serve
+  para corrigir a prescrição ANTES da primeira aplicação do dia.
+  ⚠️ O rodapé do modal de execução deixou de cancelar: virou **Sair** (2026-08-01), e
+  "Executar todos do dia"/"Executar todos e finalizar" virou **Executar Todos**. Com isso o
+  endpoint `cancelar-execucao` (`cancelarNaExecucao` — cancela tratamento com execução PARCIAL
+  preservando os itens já executados/faturados) FICOU SEM ENTRADA NA UI. Ele continua montado e
+  funcional; se voltar a ser necessário, é ele que atende o caso "parar um tratamento de vários
+  dias no meio" — que nenhum dos dois botões atuais resolve, porque ambos recusam grupo com execução.
+  ⚠️ Ações disponíveis nesta tela nascem PINTADAS, na paleta da tela de prescrição (emerald = ver/
+  executar, azul = imprimir, vermelho = cancelar). Cinza é reservado ao indisponível — botão
+  habilitado com cara de desabilitado foi reclamação real do usuário.
 - `atendimento.agendamentos` não tem `finalizar`/`imprimir` — agendamentos são gerenciados por status (AGENDADO/CONCLUIDO/CANCELADO)
 - `vacina.estoque` não tem `finalizar` — estoque de vacinas segue o mesmo padrão de farmácia
 - Sidebar usa `podeExecutar('vacina.estoque.ler')` para exibir o módulo Vacina; agenda ainda usa role check (`isVetOuSuperior`) — ver TODO em seção 12
@@ -1055,6 +1096,133 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-08-01 (parte 2) — Foto do profissional
+- [x] **Foto no Cadastro Pessoal, exibida na Equipe** (migration `20260814000000`) —
+      `UsuarioEmpresa.fotoUrl`, rota `PUT`/`DELETE /api/users/me/foto` (multipart),
+      helpers em `lib/usuarioEmpresa.js`, `getMe` devolve `fotoUrl` e `listarMembros`
+      anexa a de cada membro. Ver o bloco de `UsuarioEmpresa` na seção 5.
+      A foto é enviada **ao salvar o formulário**, não ao escolher o arquivo — sair da
+      tela sem salvar não pode trocar a foto que a clínica já tem.
+- [x] `/equipe`: avatar de **48px** (≈3 linhas da lista) no card mobile e na coluna Nome
+      do desktop; clicar abre a **ficha do membro** (somente leitura) com especialidade,
+      local, horário, telefone e e-mail. É `<button>`, não `<div onClick>`: foco por
+      teclado e Enter/Espaço são o mínimo para o que abre um diálogo.
+- [x] **Foto com zoom e reposicionamento** — `components/FotoEditorModal.tsx`. Escolher o
+      arquivo NÃO grava: abre o editor, e o que sobe é o recorte. Botão "Ajustar foto"
+      reabre o editor sobre a foto já salva (mesma origem `/uploads`, sem taint de canvas).
+- [x] **Ordem das seções do Incluir/Editar Membro** (`UsuarioFormModal`): Dados Pessoais →
+      Endereço → Locais de trabalho → **Forma de Pagamento** (extraída de Dados Pessoais,
+      onde estava embutida). O checkbox "Terá acesso ao sistema" FICA em Dados Pessoais —
+      é a outra metade do "o que essa pessoa é aqui", não remuneração.
+      Rodapé no padrão da aplicação, alinhado à direita.
+- [ ] `ControleAcesso > Equipe` e a Agenda listam as mesmas pessoas e continuam sem foto —
+      usam outros endpoints (`listarMembrosPorEquipe`, `/equipes/membros`). Ligar quando
+      for pedido: basta o `anexarFotoEmRelacao` no controller correspondente.
+
+### Sessão 2026-08-01 — Configurações da empresa: obrigatoriedades + validade do orçamento
+- [x] **Validade do orçamento em dias** (migration `20260813000000`) —
+      `EmpresaConfiguracao.validadeOrcamentoDias`, campo em `/configuracoes`, lib
+      `lib/validadeOrcamento.js` (SQL cru — ver armadilha 41) e job
+      `cancelar_orcamentos_vencidos` (`services/orcamentoCronService.js`, padrão 23:50).
+      Passado o prazo contado de `Orcamento.createdAt`, o orçamento vira **CANCELADO**
+      com o motivo ACRESCENTADO à `observacao` (nunca sobrescrita — o texto é do usuário).
+      `STATUS_PRESERVADOS = APROVADO | APROVADO_PARCIALMENTE | CANCELADO`: aprovado já é
+      compromisso (vai para prescrição/fatura) e não pode sumir por prazo.
+      ⚠️ **REJEITADO expira junto** — é a regra como foi pedida ("cancelar se não for
+      Aprovado ou Aprovado Parcialmente"), mas tem efeito colateral: a decisão do cliente
+      vira CANCELADO e o relatório gerencial perde a contagem de rejeitados. Para preservá-la,
+      basta acrescentar `'REJEITADO'` a `STATUS_PRESERVADOS`.
+      `null` = sem validade é o default de propósito: prazo na migration cancelaria em massa,
+      na 1ª execução do cron, orçamento que a clínica ainda considera vivo.
+- [x] **Espécies atendidas e expediente viraram OBRIGATÓRIOS** — validação na tela E no
+      `salvarConfiguracao` (400). A tela passou a oferecer só **Equino e Bovino**
+      (`ESPECIES_PERMITIDAS`, casado por NOME e não por id — o id de `Especie` varia por base);
+      espécie fora da lista numa config antiga é descartada na carga e no salvar.
+- [x] **`<ErroAcao>` passou a ser RENDERIZADO em Configurações** — o componente era importado
+      e o estado preenchido em 5 pontos, mas nunca aparecia: toda validação da tela (WhatsApp,
+      dia útil…) falhava em SILÊNCIO, e as novas cairiam no mesmo buraco.
+- [x] Rodapé de Configurações no padrão da aplicação (mesmas classes da tela de prescrição),
+      alinhado à direita; textos auxiliares de espécies/expediente/tempo de consulta removidos.
+- [x] `"Aprovado parcialmente"` → **`"Aprovado Parcialmente"`** (Orcamento.tsx, OrcamentoPrint.ts,
+      RelatoriosController). O ENUM `APROVADO_PARCIALMENTE` não mudou — só o rótulo.
+- [ ] A tela do Orçamento não mostra a validade nem quanto falta para expirar; o cliente só
+      descobre quando o status já virou CANCELADO. Avaliar um selo "vence em N dias".
+
+### Sessão 2026-07-31 — Shell: header e rodapé globais + busca global
+- [x] **Shell virou COLUNA** (`App.tsx`): `AppHeader` / corpo (`Sidebar` + `<main>`) /
+      `AppFooter`. Header e rodapé são irmãos flex de ALTURA FIXA (`flex-shrink-0`), o
+      corpo é `flex flex-1 min-h-0` (sem o `min-h-0` o `<main>` não rola) e só o
+      `<main>` tem scroll. NADA de `position: fixed` — no iOS Safari o elemento fixo se
+      desloca dentro de um shell com scroll interno. A `MobileTopBar` foi REMOVIDA: o
+      gatilho do menu mobile mora no `AppHeader`.
+- [x] **Busca global do header** — `GET /api/busca?q=` (`BuscaGlobalController` +
+      `routes/busca.js`), devolvendo pacientes, atendimentos (evoluções) e agendamentos,
+      cada item já com a `rota` de destino resolvida pelo backend (o front só navega).
+      Front: `components/BuscaGlobal.tsx` (debounce 350ms, mínimo 2 caracteres, navegação
+      por setas/Enter/Esc, resultado agrupado). Ver as duas regras na seção 16.
+- [x] **`resolverContextoPermissao(req)`** (`permissao.middleware.js`) — resolve
+      `req.equipeId`/`req.membroCargo` com a MESMA ordem do `checkPermission`, mas sem
+      nunca responder 403. Criado para a busca, que atravessa três módulos e por isso não
+      pode ser gateada por um slug único. Reuse em toda rota multi-módulo futura.
+- [x] **Menu do usuário saiu da Sidebar e foi para o header** — identidade, selo de
+      perfil, Cadastro Pessoal, Configurações (gestor) e **Sair** agora só existem no
+      dropdown do `AppHeader`. A Sidebar não tem mais rodapé de usuário (fonte única).
+- [x] **`EmpresaContext.marca`** — `{ logoUrl, empresaNome }` de `/equipes/logo` passou a
+      viver no contexto, não na Sidebar. Header, Sidebar e rodapé mostram a MESMA marca;
+      três cópias do fetch dariam três requisições e três estados divergindo na troca de
+      contexto. Recarrega no evento `s2vet:config-atualizada` e ao trocar empresa/equipe.
+- [x] **`useVetPendentes` virou STORE ÚNICO de módulo** — o hook é consumido em DOIS
+      lugares (sino do header e badge de Pacientes na Sidebar). Um estado por componente
+      significaria polling dobrado a cada 30s e **DOIS toasts** para a mesma solicitação.
+      Agora há um só `setInterval`, compartilhado por assinantes e encerrado quando o
+      último sai. Regra: hook de polling consumido em mais de um lugar precisa de store.
+- [x] **Card da empresa na Sidebar: SÓ o logo**, centralizado no eixo do sidebar. Sem
+      nome, sem cargo e sem o rótulo "Empresa ativa"/"Equipe ativa" do seletor de
+      contexto. EXCEÇÃO deliberada: empresa SEM logo cadastrado cai no nome — senão o
+      card viraria um quadrado com uma letra e ninguém saberia em que clínica está.
+      A caixa fixa só os limites (`max-h-20 max-w-[13rem] w-auto object-contain`): a logo
+      do cliente pode ser deitada (1200x551) ou em pé (750x1334) e não pode distorcer.
+- [x] **Espaçamento do menu uniformizado** — ver armadilha 39.
+- [x] **Marca do produto**: `backend/uploads/empresas/s2vet-logo.png` (mesmo diretório das
+      logos das clínicas, por decisão). Ver armadilha 40.
+- [ ] **`podeVerMedicamentos` / `podeVerProcedimentos` são código morto na Sidebar** e
+      escondem um descompasso: os links de Medicamentos e Procedimentos são gateados por
+      `isAdmin`, não pelo slug calculado (`medicamentos.catalogo.ler` /
+      `procedimentos.catalogo.ler`). Um GESTOR que receba o slug na matriz NÃO vê o item —
+      exatamente o antipadrão da armadilha 28-d. Decisão pendente: trocar o gate para a
+      permissão (o slug passa a valer) OU assumir ADMIN-only e remover as variáveis
+      (os slugs viram órfãos, como `exames.laboratorial.*`).
+- [ ] Busca global cobre paciente/atendimento/agenda. Proprietário, fatura e orçamento
+      ficaram de fora — avaliar quando houver demanda (cada um exige o seu `*.ler`).
+
+#### ⏸️ PONTO DE RETOMADA — documentação funcional (parado em 2026-07-31)
+O **CLAUDE.md está COMPLETO** para esta sessão (topo, seção 12, seção 16 nova, armadilhas
+39/40, mapa de controllers/rotas/middlewares/componentes/contextos/hooks). Falta propagar
+as MESMAS mudanças para a documentação funcional em `docs/`:
+
+- [ ] `docs/ESPECIFICACAO_FUNCIONAL.md`
+      - §17 — o parágrafo **"Sidebar:"** ainda descreve os accordions "Geral/Clínica/
+        Enfermagem" e diz que há "badge do perfil ao lado do usuário": está desatualizado
+        desde 2026-07-30 (cabeçalhos removidos) e agora também porque o bloco de usuário
+        migrou para o header. Reescrever + descrever o shell (header/rodapé).
+      - §18 — a linha de `useVetPendentes` diz "Badge no Sidebar"; hoje alimenta TAMBÉM o
+        sino do header e virou store único.
+      - Seção NOVA de busca global (ou subseção do shell), com as 2 regras da seção 16
+        do CLAUDE.md: escopo por empresa ativa e permissão por grupo.
+      - Anexo A (mapa de rotas) — incluir `GET /api/busca`.
+      - ⚠️ §19 diz "interface AIProvider (implementação **Groq**)" — DESATUALIZADO desde
+        2026-07-28 (provider único é Gemini). Corrigir de passagem.
+- [ ] `docs/efa/EFA-00-TRANSVERSAL.md`
+      - §6 (fluxo geral) — citar header/rodapé globais e a busca do header.
+      - §8 (padrões de telas) — nova linha "Shell"; a linha **Mobile-first** ainda diz
+        "Sidebar vira menu hambúrguer (fixed top-6 left-6)", que deixou de ser verdade
+        (o gatilho está no `AppHeader`, sem `position: fixed`).
+      - §10 — avaliar `RN-G` nova para o escopo por empresa da busca global.
+- [ ] `docs/efa/00-INDICE.md` — a busca é transversal (EFA-00), então provavelmente NÃO
+      exige documento novo; confirmar antes de criar EFA-16.
+- [ ] `docs/efa/EFA-02-CONTROLE-DE-ACESSO.md` — registrar `resolverContextoPermissao` como
+      variante sem enforcement do `checkPermission` (rotas multi-módulo).
 
 ### Sessão 2026-07-30 — Agenda: local no lugar da espécie + adiantar × passado
 - [x] **A agenda mostra o LOCAL do animal, não a espécie** — quem vai atender precisa saber
@@ -1769,6 +1937,50 @@ Frontend (`Agendamentos.tsx`):
 
 ---
 
+## 16. SHELL DA APLICAÇÃO E BUSCA GLOBAL
+
+### Shell (App.tsx)
+```
+<div flex flex-col h-full overflow-hidden>   ← trava na viewport
+  <AppHeader />                              ← flex-shrink-0, h-16 md:h-20
+  <div flex flex-1 min-h-0>                  ← min-h-0 é o que deixa o <main> rolar
+    <Sidebar />                              ← w-72 (fixed no mobile, static no desktop)
+    <main flex-1 min-w-0 overflow-y-scroll>  ← ÚNICO elemento que rola
+  </div>
+  <AppFooter />                              ← flex-shrink-0, h-12
+</div>
+```
+Rotas públicas (login, register, reset, aprovar-vínculo) NÃO têm shell — ficam fora do
+`ProtectedRoute` e rolam livremente.
+
+**Alinhamento do logo com o sidebar:** o bloco da marca no header tem `md:w-72`
+(a MESMA largura do sidebar) + `md:justify-center`, e o padding lateral do `<header>`
+existe só à DIREITA (`pr-4 md:pr-6`). Com `px` no header o bloco começaria deslocado e o
+centro não coincidiria com o do menu. No mobile não há sidebar (é drawer): largura
+natural, à esquerda, ao lado do gatilho do menu.
+
+### Busca global — `GET /api/busca?q=termo&limit=5`
+Duas regras que NÃO podem ser afrouxadas:
+
+**1. Escopo é a EMPRESA DO CONTEXTO ATIVO — nunca "todos os vínculos do usuário".**
+`buildAnimalScopeWhere` inclui, na base própria, vínculos de QUALQUER empresa (regra
+base × convidado da seção 5). Para a busca isso seria vazamento entre tenants: o
+resultado é intersectado com `req.empresaId`, e evoluções/agendamentos usam o escopo
+clínico por empresa (`escopoEvolucaoWhere` / mesmo critério para `AgendamentoClinico`,
+que tem `empresaId`/`veterinarioId` próprios).
+
+**2. Permissão é POR GRUPO, resolvida em runtime.** A rota atravessa três módulos, então
+não tem `checkPermission` de slug único (barraria quem só enxerga um deles). O contexto
+vem de `resolverContextoPermissao` e cada bloco só entra no resultado se
+`getNivelEfetivo` devolver ≥ LEITURA para o seu slug: `animais.ler`,
+`atendimento.evolucoes.ler`, `atendimento.agendamentos.ler`. Sem nenhum dos três →
+resultado vazio (não 403). **Grupo novo exige o seu próprio slug** — nunca herdar o gate.
+
+A `rota` de cada resultado é montada no BACKEND (`/animal/:id`,
+`/clinica/evolucao/:animalId`) para o front não replicar regra de rota.
+
+---
+
 ## 13. MAPA DE ARQUIVOS — REFERÊNCIA RÁPIDA
 
 > Leia esta seção antes de explorar o código. Evita reads desnecessários.
@@ -1797,6 +2009,7 @@ Frontend (`Agendamentos.tsx`):
 | `ComposicaoAlimentarController.js` | Composição nutricional por alimento/espécie |
 | `NutrientesController.js` | Banco de nutrientes |
 | `AnaliseController.js` | Análise nutricional via NRC |
+| `BuscaGlobalController.js` | Busca global do header — pacientes, evoluções e agendamentos da EMPRESA ATIVA. Escopo intersectado com `req.empresaId`; permissão POR GRUPO via `getNivelEfetivo`; devolve a `rota` de destino pronta. Ver seção 16 |
 | `emailService.js` | Todos os templates de email (ver lista abaixo) |
 
 ### Backend — Funções e Constantes Críticas
@@ -1900,6 +2113,55 @@ POST   /:id/midias                      → upload de mídia (multipart: midia, 
 DELETE /:id/midias/:midiaId             → remover mídia
 
 # clinica/prescricoes — prefixo /api/clinica/prescricoes
+# Quem FORNECE e quem APLICA são do ITEM, nunca do documento (migration
+# `20260812000001`). `Prescricao.medicamentoCliente` (fornecido pelo cliente → sem baixa de
+# estoque) e `Prescricao.aplicadaPeloProprietario` (aplicado em casa → fora do plantão)
+# são irmãos e viajam no payload de CADA item — em `POST /grupos`
+# (criação), `POST /grupos/:id/itens` e `PUT /grupos/:id/itens/:itemId` (edição). A mesma
+# prescrição mistura o injetável que a clínica aplica na baia com a pomada que o tratador
+# passa em casa; com a marca no GRUPO (como era até 2026-08-01) o vet tinha de escolher entre
+# dois documentos e cobrar o que ninguém da clínica aplica.
+# `aplicadaPeloProprietario` é lida/gravada por SQL CRU (`anexarAplicadaProprietario` /
+# `anexarFlagEmGrupos` / `gravarAplicadaProprietario`) — o client Prisma pode não conhecer a
+# coluna (no Windows o `generate` falha com o backend rodando). TODA leitura que decida
+# EXECUÇÃO, FATURA ou ESTOQUE precisa passar pelo helper: sem a flag, o item aplicado em casa
+# volta a ser cobrado e a debitar estoque. Já aplicado em `finalizar` (fatura + reservas),
+# `executar` (inclusive contra POST com `itemIds`), `listarParaExecucao` (filtra ITENS; grupo
+# que ficou sem nenhum some da tela) e nos 6 helpers de estoque.
+# ⚠️ O item aplicado pelo proprietário também sai da conta do "tudo executado" em `executar` —
+# senão o documento ficaria eternamente FINALIZADO, preso na tela de execução.
+#
+# MATRIZ "quem FORNECE × quem APLICA" (2026-08-01) — é ela que decide execução e fatura.
+# Vale para MEDICAMENTO:
+#   fornecido p/ Cliente | aplicado p/ Proprietário | Execução de Prescrição | Fatura
+#           não         |           não            |         ENTRA          | na EXECUÇÃO
+#           SIM         |           não            |         ENTRA          | nunca
+#           não         |           SIM            |        não vai         | na FINALIZAÇÃO
+#           SIM         |           SIM            |        não vai         | nunca
+# PROCEDIMENTO marcado "Será executado pelo Proprietário" NÃO vai à execução e **NUNCA
+# é cobrado** — não existe a linha "na FINALIZAÇÃO" para ele. Procedimento é SERVIÇO,
+# não bem entregue: se quem executa é o proprietário, a clínica não faz nada e não há o
+# que faturar; o medicamento é diferente porque a clínica ainda entrega o frasco mesmo
+# sem aplicar. Por isso `itensParaFaturarAgora` (em `finalizar`) filtra por
+# `i.tipo === 'MEDICAMENTO'` — critério POSITIVO ("só o que a clínica entrega pode ser
+# cobrado sem execução"), e não "não é procedimento". Espelho no front: `destinoDoItem()`
+# recebe `isMed` e escreve "não é cobrado" nesse caso.
+# ⚠️ MUDANÇA DE PREMISSA: até 2026-08-01 a finalização lançava TODO item cobrável na
+# fatura (medicamento zerado, valor preenchido na 1ª execução). Agora `finalizar` só
+# lança o item que a clínica FORNECE e o proprietário APLICA — ele nunca chega ao
+# plantão, então aquela é a única chance de cobrá-lo. Todo o resto vira linha de fatura
+# em `executar`, quando o serviço acontece. `finalizar` também não abre mais fatura
+# quando não há nada a cobrar agora (evitava fatura vazia todo mês).
+# Prescrição finalizada ANTES da mudança tem a linha zerada da finalização: `executar`
+# a reaproveita na 1ª execução (não duplica) — não remover esse caminho.
+# ⚠️ LACUNA CONHECIDA: MEDICAMENTO fornecido pela clínica e aplicado pelo proprietário
+# entra na fatura com valor 0, porque o preço nasce do LOTE debitado e esse item nunca é
+# executado (logo, não há lote nem baixa de estoque). Saídas hoje: orçar o item antes
+# (`valorOrcado` tem precedência) ou ajustar o valor na fatura. Debitar estoque na
+# finalização para esse caso é decisão em aberto — não foi pedida.
+# Front: `destinoDoItem()` (SubModuloPrescricao) é o espelho da matriz e escreve a
+# consequência em uma linha só sob os dois checkboxes — dicas separadas por checkbox se
+# contradiziam ("fora da fatura" quando o item É cobrado ao salvar).
 POST   /finalizar/:animalId             → finaliza rascunhos → ATIVA + cria FaturaItems
 GET    /animal/:animalId                → lista prescrições (page/limit/tipo/status/busca)
 POST   /                                → criar prescrição (status RASCUNHO, gera horariosGerados se horaInicio)
@@ -1950,6 +2212,12 @@ POST   /clinica/agendamentos                  → criar (ADMIN/VET/EST; body: an
 PATCH  /clinica/agendamentos/:id/status       → AGENDADO|CONCLUIDO|CANCELADO
 DELETE /clinica/agendamentos/:id              → soft delete
 
+# busca.js — prefixo /api/busca (BuscaGlobalController)
+GET    /?q=termo&limit=5                → busca global do header: { dados: { pacientes[],
+                                          atendimentos[], agendamentos[] }, total }.
+                                          Mínimo 2 caracteres; SEM checkPermission de slug
+                                          único (gate por grupo no controller). Ver seção 16
+
 # Outros prefixos relevantes
 /api/auth          → AuthController (login, refresh, logout)
 /api/users         → UserController (/me, CRUD)
@@ -1978,8 +2246,8 @@ PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipa
 # orcamentos.js — prefixo /api/orcamentos (OrcamentoController)
 GET    /para-importar?animalId=&tipos=   → itens ACEITO p/ importar na Prescrição/Vacina (OUTROS nunca entra)
 POST   /importar                         → marca itens como importados (após SALVAR a prescrição/vacina)
-GET    /outros-para-fatura?proprietarioId= → itens OUTROS ACEITO pendentes, por orçamento, com `liberado`
-                                           (false enquanto houver item clínico aceito sem importadoEm)
+GET    /outros-para-fatura?proprietarioId= → itens OUTROS ACEITO pendentes, por orçamento, com
+                                           `pendentesClinicos` (AVISO — não bloqueia o lançamento)
 POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaItem tipo OUTROS + marca
                                            importadoEm + recalcularTotal. Permissão financeiro.faturas.lancar
 ```
@@ -1991,7 +2259,7 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `auth.js` | `authenticate` — valida JWT, injeta `req.user` |
 | `tenant.js` | `injectTenant` — injeta `empresaId` no contexto (usado em animais e evolução) |
 | `validate.js` | Roda express-validator, retorna 422 em erros |
-| `permissao.middleware.js` | RBAC por userType. `checkPermission(moduloSlug, nivelMinimo)` — verifica permissão real para todos os roles. ADMIN: bypass. GESTOR: bypass. PROPRIETARIO: chama `getNivelPermissaoProprietario()` — lê MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes vinculadas via Animal.empresaId; aplica deny-wins se NEGADO. `NIVEL_ORDINAL` inclui `NEGADO: -1`. |
+| `permissao.middleware.js` | ⚠️ Além do abaixo, exporta `resolverContextoPermissao(req)` — resolve `req.equipeId`/`req.membroCargo` na mesma ordem do `checkPermission` mas SEM 403. Para rotas multi-módulo que não podem ser gateadas por um slug único (busca global). RBAC por userType. `checkPermission(moduloSlug, nivelMinimo)` — verifica permissão real para todos os roles. ADMIN: bypass. GESTOR: bypass. PROPRIETARIO: chama `getNivelPermissaoProprietario()` — lê MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes vinculadas via Animal.empresaId; aplica deny-wins se NEGADO. `NIVEL_ORDINAL` inclui `NEGADO: -1`. |
 | `requestId.js` | Injeta `x-request-id` em toda requisição |
 
 ### Frontend — Páginas
@@ -2044,7 +2312,11 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | Arquivo | Propósito |
 |---|---|
 | `PageContainer.tsx` | Wrapper obrigatório de toda página interna. Props: `maxWidth` (`7xl`\|`5xl`\|`3xl`), `noPadding` |
-| `Sidebar.tsx` | Navegação lateral. Chama `useProprietarioNotificacoes` e `useVetSolicitacaoMonitor` |
+| `AppHeader.tsx` | Header global do shell: marca do produto (alinhada ao eixo do sidebar via `md:w-72`), `BuscaGlobal`, sino de notificações (`useVetPendentes`) e menu do usuário — nome, e-mail, selo de perfil, Cadastro Pessoal, Configurações (gestor) e **Sair**. Abriga o gatilho do menu no mobile. Ver seção 16 |
+| `AppFooter.tsx` | Rodapé global: logomarca + nome da clínica assinante (`EmpresaContext.marca`) à esquerda, marca do produto à direita |
+| `BrandS2Vet.tsx` | Marca do PRODUTO (`/uploads/empresas/s2vet-logo.png`). Só a arte — o PNG já traz nome e tagline, por isso header e rodapé não escrevem "S2Vet" ao lado. Ver armadilha 40 |
+| `BuscaGlobal.tsx` | Campo de busca do header: debounce 350ms, mínimo 2 caracteres, resultado agrupado (Pacientes/Atendimentos/Agenda), navegação por setas/Enter/Esc, clique-fora. Navega pela `rota` que o backend devolve |
+| `Sidebar.tsx` | Navegação lateral. Chama `useProprietarioNotificacoes` e `useVetSolicitacaoMonitor`. Topo = card da empresa com SÓ o logo (centralizado); NÃO tem mais rodapé de usuário (foi para o `AppHeader`) |
 | `AnimalCard.tsx` | Card de resumo do animal. Resolve vet via `solicitacaoAceita ?? veterinarioNome`. Exibe badge PENDENTE |
 | `VetNotificationModal.tsx` | Modal bloqueante para vets: mostra solicitações recebidas (não as que o vet iniciou). Tracking via localStorage |
 | `ProtectedRoute.tsx` | Guarda de rota por `userType` |
@@ -2056,6 +2328,7 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `ConsumoPorClienteIA.tsx` | Metering de IA por empresa em /ai-usage (ADMIN): consumo, % do limite e edição do plano. Ver seção 7. |
 | `MemoriaClinicaPanel.tsx` | Memória Clínica do Paciente (IA) em AnimalDetail. Highlights clicáveis no topo (realçam e rolam até os tópicos que os comprovam) + resumo por tópicos; tópico abre o registro de origem via `onAbrirRef`. Ver seção 7. |
 | `relatorios/AnaliseFinanceiraIA.tsx` | IA Financeira em Relatórios > Financeiro. Highlights + análise textual do período; chamada SOB DEMANDA (botão), nunca no load. |
+| `FotoEditorModal.tsx` | Editor da foto do Cadastro Pessoal: ZOOM (slider) + ARRASTAR (pointer events — mouse e toque no mesmo código), devolvendo o arquivo já RECORTADO (512px). Sem biblioteca externa: preview e canvas usam a MESMA conta, só multiplicada por `SAIDA/lado`. ⚠️ O lado do quadro é MEDIDO (`ResizeObserver`), não constante — em tela estreita o quadro encolhe, e com valor fixo o canvas geraria um recorte diferente do que a pessoa enquadrou. |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 
 ### Frontend — Hooks e Contextos
@@ -2064,10 +2337,10 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 |---|---|
 | `AuthContext.tsx` | `useAuth()` → `{ user, login, logout, loading }`. `user` tem `{ id, email, fullName, userType }` |
 | `SelectedAnimalContext.tsx` | `useSelectedAnimal()` → `{ selectedAnimal, setSelectedAnimal, refreshSelectedAnimal }` |
-| `EmpresaContext.tsx` | `useEmpresa()` → `{ opcoes, contextoAtivo, trocarContexto, loading }`. Busca `/equipes/empresas` (só VETERINARIO/ADMIN). Opções: empresa CNPJ = 1 por empresa (equipeId null); empresa pessoal/CPF = 1 por equipe. Persiste `s2vet_empresa_id`/`s2vet_equipe_id`; `trocarContexto` faz reload. Seletor no Sidebar quando `opcoes.length > 1` (label "Empresa ativa" ou "Equipe ativa") |
+| `EmpresaContext.tsx` | `useEmpresa()` → `{ opcoes, contextoAtivo, trocarContexto, loading, marca }`. **`marca` = `{ logoUrl, empresaNome }`** de `/equipes/logo` — FONTE ÚNICA da identidade visual da clínica, consumida por Sidebar e `AppFooter` (antes o fetch vivia na Sidebar; três consumidores dariam três requisições e estados divergentes). Recarrega no evento `s2vet:config-atualizada` e na troca de contexto. Busca `/equipes/empresas` (só VETERINARIO/ADMIN). Opções: empresa CNPJ = 1 por empresa (equipeId null); empresa pessoal/CPF = 1 por equipe. Persiste `s2vet_empresa_id`/`s2vet_equipe_id`; `trocarContexto` faz reload. Seletor no Sidebar quando `opcoes.length > 1` (label "Empresa ativa" ou "Equipe ativa") |
 | `useProprietarioNotificacoes.ts` | Polling 15s em `/animais/minhas-solicitacoes`. Inicializa mapa apenas com PENDENTE/ACEITO — RECUSADO/CANCELADO excluídos para detecção retroativa via updatedAt <10min. Só para PROPRIETARIO |
 | `useVetSolicitacaoMonitor.ts` | Polling 30s em `/veterinarios/solicitacoes`. Detecta novas solicitações PENDENTE e mudanças CANCELADO. Só para VETERINARIO |
-| `useVetPendentes.ts` | Badge de contagem de pendentes no sidebar do vet |
+| `useVetPendentes.ts` | Contagem de pendências do vet — badge de Pacientes (Sidebar) E sino (AppHeader). **STORE ÚNICO de módulo**: um só `setInterval` (30s) compartilhado por assinantes, encerrado quando o último sai. Um estado por componente daria polling dobrado e DOIS toasts para a mesma solicitação. Padrão obrigatório para hook de polling com mais de um consumidor |
 | `useDraggableModals.ts` | Modais arrastáveis no desktop — delegação global de eventos (montado 1x no App.tsx). Alça: `.rounded-t-2xl`/`h2`/`h3`/`[data-drag-handle]`. Só mouse ≥768px; backdrop não move; suprime click pós-arraste |
 | `services/api.ts` | Instância Axios configurada. Interceptor 401 → refresh automático. Interceptor 403 → GET resolve `{ data: null }` (silencioso); mutations rejeitam com `{ isPermissionError: true }` (sem log). Base URL: `/api` |
 | `hooks/usePermissoes.ts` | `Nivel` inclui `'NEGADO'`. `NIVEL_ORDINAL` inclui `NEGADO: -1`. `podeExecutar` retorna false para NEGADO (ordinal -1 < qualquer mínimo). `loading` deve ser usado para gating de useEffects. |
@@ -2507,6 +2780,40 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Unifica `ProfissionalPerfil` + `ProprietarioPerfil` e acrescenta a coluna `perfil`, que
     antes só existia como `MembroEquipe.cargo` (por EQUIPE) ou como o `users.userType`
     GLOBAL — este último era a origem do vazamento entre clínicas.
+    **Remuneração e acesso ao sistema (migration `20260812000002`)** — `tipoPagamento`
+    (SALARIO|COMISSAO) + `formaPagamento` (VALOR|PERCENTUAL) + `valorPagamento`, e
+    `acessoSistema` (default true). POR EMPRESA, porque o acordo é com cada clínica
+    (salário aqui, comissão ali) e o acesso concedido por uma não vale pela outra.
+    OBRIGATÓRIOS na inclusão/edição do membro — validação da APLICAÇÃO
+    (`normalizarPagamento`); a coluna é nullable para não inventar salário nos vínculos
+    legados. O CONVITE (`tb_convites_equipe`) carrega o mesmo acordo e o aplica no
+    aceite: sem isso, quem entra por convite (vet/estagiário) nasceria sem remuneração e
+    o campo só seria "obrigatório" no caminho da inclusão direta.
+    **`acessoSistema = false` impede LOGIN** (`podeAcessarSistema`): barrado em `login`
+    (antes do 2FA — não se manda código a quem não pode entrar), `2fa/verificar`, Google
+    OAuth e `refresh` (a sessão já aberta morre no próximo refresh). A empresa que
+    revogou some do seletor de contexto (`empresasSemAcesso` em `meusContextos`), com o
+    DONO sempre preservado — senão ele se trancaria para fora da própria clínica. Sem
+    vínculo nenhum (vet autônomo, ADMIN de plataforma) NÃO bloqueia: não há quem tenha
+    concedido ou negado nada. Base do futuro controle de usuários por plano.
+    **Foto da pessoa (migration `20260814000000`)** — `fotoUrl` (coluna `foto_url`), POR
+    EMPRESA pela mesma razão do nome/endereço: o cadastro é da clínica, e trocar a foto
+    numa não reescreve o cadastro da outra. Enviada pelo PRÓPRIO usuário em
+    `/cadastro-pessoal` (`PUT`/`DELETE /api/users/me/foto`, multipart — rota à parte
+    porque `updateMe` é JSON e virar multipart obrigaria a reescrever o payload inteiro
+    da tela) e exibida HOJE só em `/equipe` (avatar de 48px que abre a ficha do membro
+    com especialidade, local, horário, telefone e e-mail). Lida/gravada por SQL cru
+    (`lerFoto`/`lerFotos`/`salvarFoto`/`anexarFotoEmRelacao`) — mesma razão do
+    `acessoSistema`. `salvarFoto` devolve a URL ANTERIOR: o arquivo velho só é apagado
+    do storage DEPOIS de o banco apontar para o novo — senão uma falha na gravação
+    deixaria o cadastro apontando para arquivo que não existe mais.
+    ⚠️ SOMENTE LEITURA no Cadastro Pessoal: `getMe` os devolve para conferência e
+    `updateMe` não os grava — por construção, `salvarVinculo` só escreve CAMPOS_CADASTRO,
+    então nem postando no PUT alguém edita o próprio salário ou se autoconcede acesso.
+    ⚠️ As 4 colunas são lidas/gravadas por SQL CRU (`salvarPagamentoEAcesso`,
+    `lerPagamentoEAcesso`, `anexarPagamentoEmRelacao`) — passar campo desconhecido ao
+    `usuarioEmpresa.upsert` derrubaria a INCLUSÃO DE MEMBRO inteira quando o client
+    Prisma está desatualizado (no Windows o `generate` falha com o backend rodando).
     LEITURA/ESCRITA: SEMPRE por `lib/usuarioEmpresa.js` (`perfilDaEmpresa`,
     `aplicarVinculo`/`aplicarVinculoEmLista`/`aplicarVinculoEmRelacao`, `salvarVinculo`,
     `definirPerfil`). NUNCA leia nome/telefone/endereço/documento de `users` numa tela de
@@ -2597,6 +2904,42 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
       (userId, empresaId)` e `getNivelPermissaoProprietario(userId, slug, empresaId)`, idem
       `minhasPermissoes`. Ou seja: se a empresa A liberou a fatura e a B não, ele vê a fatura só
       enquanto estiver com a empresa A selecionada (antes era união entre TODAS as equipes).
+
+39. **`space-y-*` só separa FILHOS DIRETOS — cuidado ao agrupar itens de menu (2026-07-31).**
+    O `<nav>` da Sidebar usava `space-y-4`, mas os itens não são todos filhos diretos: Mapa
+    e Cadastro são, enquanto Agendamento, Atendimento, Nutricional etc. moram DENTRO do
+    bloco de módulos, que usa `space-y-0.5`. Resultado visível: 16px entre Mapa↔Cadastro e
+    Cadastro↔Agendamento, 2px entre Agendamento↔Atendimento. Corrigido com `space-y-0.5`
+    no `<nav>` + separação PONTUAL onde ela é intencional (`pt-4` antes de Administração,
+    que é cabeçalho de seção; `my-4` no aviso de bloqueio). Ao agrupar itens de mesmo
+    nível em wrappers diferentes, o espaçamento tem de vir do item, não do wrapper.
+
+40. **Marca do produto: `backend/uploads/empresas/s2vet-logo.png` (2026-07-31).**
+    Mora no MESMO diretório das logomarcas das clínicas (decisão do produto), servido em
+    `/uploads/empresas/s2vet-logo.png` — o Vite proxia `/uploads` em dev e o backend serve
+    o estático em produção. `backend/uploads/` NÃO é gitignorado: o arquivo é versionado.
+    Diferenças propositais em relação às logos de cliente:
+    - **Nome FIXO** (o `LocalStorageProvider` gera nome aleatório — capability URL — porque
+      logo de cliente é conteúdo de tenant; esta é asset do produto e precisa ser
+      referenciável estaticamente por `BrandS2Vet.tsx`).
+    - **Não tem linha em `EmpresaConfiguracao.logoUrl`** — não é logo de tenant nenhum.
+    - Referenciada por caminho e não por `import` de asset: import quebra o BUILD se o
+      arquivo faltar; daqui a ausência é só um 404, tratado pelo `onError` do componente.
+    ⚠️ **A arte precisa de margem ZERO.** O PNG entregue vinha com 62% da tela em vazio
+    (arte de 1131x529 numa tela de 1536x1024) e SEM canal alfa (colorType 2), com o xadrez
+    de transparência RASTERIZADO como pixels (`254,254,254` e `242,242,242` alternados) —
+    por isso `sharp().trim()` não cortava nada. Foi reprocessada para RGBA recortada
+    (640x299, 1206 kB → 183 kB). Logo com margem embutida parece minúsculo: a altura CSS
+    passa a ser a da moldura, não a do desenho.
+
+41. **`tb_empresa_configuracoes` NÃO tem `@map` nas FKs — SQL cru ali precisa de aspas
+    (2026-08-01).** Quase toda tabela do schema mapeia `empresaId → empresa_id`; esta não:
+    `EmpresaConfiguracao.empresaId`/`equipeId` estão sem `@map`, então as colunas reais
+    chamam-se `"empresaId"`/`"equipeId"` em camelCase. No Postgres, identificador sem aspas
+    é dobrado para minúsculas, e a query morre com `column "empresa_id" does not exist`
+    (foi exatamente o erro ao escrever `lib/validadeOrcamento.js`). Query nova nessa tabela:
+    `WHERE "empresaId" = $1 AND "equipeId" IS NULL`. Pelo client tipado o problema não
+    aparece — só quem usa `$queryRawUnsafe` esbarra nisso.
 
 37. **Item de fatura tem DESCONTO (2026-07-23) — nunca somar `valor * quantidade`.**
     O total de um FaturaItem é o LÍQUIDO: `valorLiquidoItem(item)` (= valor×qtd − desconto) de

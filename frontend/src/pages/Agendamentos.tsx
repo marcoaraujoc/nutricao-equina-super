@@ -1431,9 +1431,21 @@ export default function Agendamentos() {
     } catch { setErroLista('Erro ao atualizar'); }
   }
 
-  function handleIniciarAtendimento(ag: AgendamentoGlobal) {
+  async function handleIniciarAtendimento(ag: AgendamentoGlobal) {
     if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
     // ADIANTAR é permitido — o paciente chegou antes, o profissional vagou.
+    // Marca EM_ANDAMENTO ANTES de navegar: o status tem de refletir o início na
+    // agenda imediatamente. Antes, ele só mudava quando a evolução era criada lá
+    // adiante — quem voltasse para a agenda via o atendimento ainda como AGENDADO.
+    if (ag.status === 'AGENDADO' || ag.status === 'ATRASADA') {
+      try {
+        await api.patch(`/clinica/agendamentos/${ag.id}/status`, { status: 'EM_ANDAMENTO' });
+        setAgendamentos(prev => prev.map(a =>
+          a.id === ag.id ? { ...a, status: 'EM_ANDAMENTO' as StatusAgendamento } : a));
+      } catch {
+        // Não bloqueia o atendimento: a criação da evolução também marca EM_ANDAMENTO.
+      }
+    }
     navigate(`/clinica/evolucao/${ag.animal.id}?agendamentoId=${ag.id}`);
   }
 

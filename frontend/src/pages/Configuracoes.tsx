@@ -9,6 +9,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import InlineError from '../components/InlineError';
+import ErroAcao, { classeErro, temErro, type ErroAcaoDados } from '../components/ErroAcao';
 import { HoraInput, TEMPOS_CONSULTA, TEMPO_CONSULTA_PADRAO_SISTEMA } from '../components/UsuarioFormModal';
 
 // ─── Utilitário de compressão (mesmo padrão de Animal.tsx) ───────────────────
@@ -55,6 +56,18 @@ type TipoSelecao = 'DIA_ESPECIFICO' | 'PRIMEIRO_DIA_MES' | 'ULTIMO_DIA_MES' | 'D
 
 const ORDINAIS = ['1º', '2º', '3º', '4º', '5º', '6º', '7º', '8º', '9º', '10º'];
 
+// Espécies que a empresa pode declarar como atendidas. O catálogo de especialidades
+// tem mais espécies (Canino/Felino/Réptil), mas esta tela só oferece as que o produto
+// atende hoje — a lista fica presa a nomes, não a IDs, porque o id de Especie varia
+// por base. Comparação sem acento/caixa.
+// Validade do orçamento (dias) — mesmos limites de lib/validadeOrcamento.js no backend
+const VALIDADE_ORC_MIN = 1;
+const VALIDADE_ORC_MAX = 365;
+
+const ESPECIES_PERMITIDAS = ['EQUINO', 'BOVINO'];
+const normalizarNome = (s: string) =>
+  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
 const DIAS_SEMANA = [
   { v: 0, l: 'Dom' }, { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' },
@@ -82,6 +95,9 @@ export default function Configuracoes() {
   const [completandoPrimeiroAcesso] = useState(() => !empresaConfigurada);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do SALVAR. O botão fica no fim de um formulário longo: no topo da página a
+  // mensagem some da tela do usuário, que clica e acha que nada aconteceu.
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
 
   const [loading,      setLoading]      = useState(true);
   const [salvando,     setSalvando]     = useState(false);
@@ -163,6 +179,8 @@ export default function Configuracoes() {
   const [horaFim,    setHoraFim]    = useState('');
   // Tempo de consulta padrão da empresa ('' = padrão do sistema)
   const [tempoConsultaPadrao, setTempoConsultaPadrao] = useState('');
+  // Validade do orçamento em dias ('' = sem validade, não expira)
+  const [validadeOrcamento, setValidadeOrcamento] = useState('');
 
   const [especies,          setEspecies]          = useState<{ id: number; nome: string }[]>([]);
   const [especiesAtendidas, setEspeciesAtendidas] = useState<number[]>([]);
@@ -183,6 +201,7 @@ export default function Configuracoes() {
         setHoraFim(dados.horaFimAtendimento ?? '');
         setEspeciesAtendidas(Array.isArray(dados.especiesAtendidas) ? dados.especiesAtendidas : []);
         setTempoConsultaPadrao(dados.tempoConsultaPadraoMin ? String(dados.tempoConsultaPadraoMin) : '');
+        setValidadeOrcamento(dados.validadeOrcamentoDias ? String(dados.validadeOrcamentoDias) : '');
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -213,7 +232,14 @@ export default function Configuracoes() {
     api.get('/especialidades/especies')
       .then(res => {
         const lista = res.data?.dados ?? res.data ?? [];
-        setEspecies(Array.isArray(lista) ? lista : []);
+        const permitidas: { id: number; nome: string }[] = Array.isArray(lista)
+          ? lista.filter((e: { nome: string }) => ESPECIES_PERMITIDAS.includes(normalizarNome(e.nome)))
+          : [];
+        setEspecies(permitidas);
+        // Config antiga podia ter espécie que esta tela não oferece mais: sem o corte
+        // ela continuaria marcada de forma invisível e voltaria a ser salva.
+        const ids = new Set(permitidas.map(e => e.id));
+        setEspeciesAtendidas(prev => prev.filter(i => ids.has(i)));
       })
       .catch(() => setEspecies([]));
   }, [loadingPerms, isGestor]);
@@ -245,9 +271,10 @@ export default function Configuracoes() {
   };
 
   const handleSalvar = async (e: React.FormEvent) => {
+    setErroAcao(null);
     e.preventDefault();
     if (!isGestor) {
-      setErroInline('Sem permissão para salvar configurações. Verifique com o responsável da equipe.');
+      setErroAcao({ mensagem: 'Sem permissão para salvar configurações. Verifique com o responsável da equipe.' });
       return;
     }
 
@@ -263,7 +290,7 @@ export default function Configuracoes() {
     } else if (tipoSelecao === 'DIA_UTIL') {
       const n = Number(nDiaUtil);
       if (!Number.isInteger(n) || n < 1 || n > 10) {
-        setErroInline('O dia útil deve estar entre 1 e 10.');
+        setErroAcao({ mensagem: 'O dia útil deve estar entre 1 e 10.', campos: ['diaUtil'] });
         return;
       }
       tipoFechamento = 'DIA_UTIL';
@@ -281,13 +308,47 @@ export default function Configuracoes() {
 
     const whatsappDigitos = whatsapp.replace(/\D/g, '');
     if (whatsappDigitos !== '' && whatsappDigitos.length < 10) {
-      setErroInline('WhatsApp incompleto — informe DDD + número.');
+      setErroAcao({ mensagem: 'WhatsApp incompleto — informe DDD + número.', campos: ['whatsapp'] });
       return;
     }
 
-    if (horaInicio && horaFim && horaInicio >= horaFim) {
-      setErroInline('O horário de abertura deve ser menor que o de fechamento.');
+    // Espécie atendida é obrigatória — sem ela o cadastro de profissionais não sabe
+    // quais especialidades oferecer. Só valem as espécies que esta tela lista.
+    const especiesValidas = especiesAtendidas.filter(id => especies.some(e => e.id === id));
+    if (especiesValidas.length === 0) {
+      setErroAcao({ mensagem: 'Selecione ao menos uma espécie atendida.', campos: ['especies'] });
       return;
+    }
+
+    // Expediente é obrigatório — a agenda gera a grade a partir dele.
+    if (diasAtend.length === 0) {
+      setErroAcao({ mensagem: 'Selecione ao menos um dia de atendimento.', campos: ['dias'] });
+      return;
+    }
+    if (!horaInicio || !horaFim) {
+      setErroAcao({
+        mensagem: 'Informe o horário de abertura e de fechamento.',
+        campos: [!horaInicio ? 'horaInicio' : '', !horaFim ? 'horaFim' : ''].filter(Boolean),
+      });
+      return;
+    }
+    if (horaInicio >= horaFim) {
+      setErroAcao({ mensagem: 'O horário de abertura deve ser menor que o de fechamento.', campos: ['horaInicio','horaFim'] });
+      return;
+    }
+
+    // Validade do orçamento é OPCIONAL (em branco = não expira), mas se informada
+    // precisa ser um prazo real.
+    const validadeTrim = validadeOrcamento.trim();
+    if (validadeTrim !== '') {
+      const n = Number(validadeTrim);
+      if (!Number.isInteger(n) || n < VALIDADE_ORC_MIN || n > VALIDADE_ORC_MAX) {
+        setErroAcao({
+          mensagem: `A validade do orçamento deve ser de ${VALIDADE_ORC_MIN} a ${VALIDADE_ORC_MAX} dias.`,
+          campos: ['validadeOrcamento'],
+        });
+        return;
+      }
     }
 
     setSalvando(true);
@@ -299,8 +360,9 @@ export default function Configuracoes() {
       fd.append('diasAtendimento', diasAtend.join(','));       // vazio = todos os dias
       fd.append('horaInicioAtendimento', horaInicio);          // vazio = sem restrição
       fd.append('horaFimAtendimento', horaFim);
-      fd.append('especiesAtendidas', especiesAtendidas.join(',')); // vazio = todas as espécies
+      fd.append('especiesAtendidas', especiesValidas.join(','));
       fd.append('tempoConsultaPadraoMin', tempoConsultaPadrao);    // vazio = padrão do sistema
+      fd.append('validadeOrcamentoDias', validadeTrim);            // vazio = sem validade
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -325,7 +387,7 @@ export default function Configuracoes() {
       }
     } catch {
       // interceptor já trata isPermissionError silenciosamente
-      setErroInline('Erro ao salvar configurações.');
+      setErroAcao({ mensagem: 'Erro ao salvar configurações.' });
     } finally {
       setSalvando(false);
     }
@@ -517,17 +579,15 @@ export default function Configuracoes() {
 
           {/* Espécies atendidas pela empresa */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Espécies atendidas
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Espécies atendidas <span className="text-red-500">*</span>
             </label>
-            <p className="text-xs text-gray-400 mb-2">
-              Define quais especialidades aparecem no cadastro de profissionais e fornecedores.
-              Deixe tudo desmarcado para permitir todas as espécies.
-            </p>
             {especies.length === 0 ? (
               <p className="text-xs text-amber-600">Nenhuma espécie cadastrada.</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className={`grid grid-cols-2 sm:grid-cols-3 gap-2 ${
+                temErro(erroAcao, 'especies') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''
+              }`}>
                 {especies.map(esp => {
                   const on = especiesAtendidas.includes(esp.id);
                   return (
@@ -550,39 +610,46 @@ export default function Configuracoes() {
 
           {/* Expediente de atendimento */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Dias e horário de atendimento
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Dias e horário de atendimento <span className="text-red-500">*</span>
             </label>
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {DIAS_SEMANA.map(d => {
-                const on = diasAtend.includes(d.v);
-                return (
-                  <button key={d.v} type="button"
-                    onClick={() => setDiasAtend(prev => on ? prev.filter(x => x !== d.v) : [...prev, d.v].sort((a, b) => a - b))}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
-                      on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}>
-                    {d.l}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Abre às</label>
-                <HoraInput value={horaInicio} onChange={setHoraInicio}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            {/* Desktop: dias e horários lado a lado (o expediente é lido como uma coisa só).
+                Mobile: empilhado, senão os botões de dia não cabem na linha. */}
+            <div className="flex flex-col md:flex-row md:items-end gap-3">
+              {/* Os 7 dias cabem numa linha só no desktop (flex-nowrap): quem espremia a
+                  linha eram os campos de hora largos — daí a caixa da hora ser do
+                  tamanho do conteúdo (HH:MM), não do container. */}
+              <div className={`flex flex-wrap md:flex-nowrap gap-1.5 md:flex-1 ${
+                temErro(erroAcao, 'dias') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''
+              }`}>
+                {DIAS_SEMANA.map(d => {
+                  const on = diasAtend.includes(d.v);
+                  return (
+                    <button key={d.v} type="button"
+                      onClick={() => setDiasAtend(prev => on ? prev.filter(x => x !== d.v) : [...prev, d.v].sort((a, b) => a - b))}
+                      className={`h-9 px-2.5 rounded-xl text-xs font-bold border transition-colors ${
+                        on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}>
+                      {d.l}
+                    </button>
+                  );
+                })}
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Fecha às</label>
-                <HoraInput value={horaFim} onChange={setHoraFim}
-                  className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              <div className="flex items-end gap-2 md:flex-shrink-0">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Abre às</label>
+                  <HoraInput value={horaInicio} onChange={setHoraInicio}
+                    className={classeErro(erroAcao, 'horaInicio',
+                      'h-9 w-20 border border-gray-300 rounded-xl px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-500')} />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Fecha às</label>
+                  <HoraInput value={horaFim} onChange={setHoraFim}
+                    className={classeErro(erroAcao, 'horaFim',
+                      'h-9 w-20 border border-gray-300 rounded-xl px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-500')} />
+                </div>
               </div>
             </div>
-            <p className="text-xs text-gray-400 mt-1">
-              O Agendamento libera horários apenas nos dias e na faixa selecionados. Deixe os dias sem seleção
-              ou os horários em branco para não restringir.
-            </p>
           </div>
 
           {/* Tempo de consulta padrão — vale para toda especialidade que o profissional
@@ -601,25 +668,51 @@ export default function Configuracoes() {
                 <option key={m} value={m}>{m} min</option>
               ))}
             </select>
+          </div>
+
+          {/* Validade do orçamento — passado o prazo, o cron cancela o que não foi
+              aprovado (nem parcialmente). Em branco = o orçamento não expira. */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Validade do orçamento
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={VALIDADE_ORC_MIN}
+                max={VALIDADE_ORC_MAX}
+                value={validadeOrcamento}
+                onChange={e => setValidadeOrcamento(e.target.value)}
+                placeholder="Sem validade"
+                className={classeErro(erroAcao, 'validadeOrcamento',
+                  'w-32 border border-gray-300 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500')}
+              />
+              <span className="text-sm text-gray-500">dias</span>
+            </div>
             <p className="text-xs text-gray-400 mt-1">
-              Passo da agenda para a especialidade em que o profissional não informar um
-              tempo próprio nos locais de trabalho dele.
+              Orçamento sem aprovação é cancelado automaticamente depois desse prazo.
+              Em branco, o orçamento não expira.
             </p>
           </div>
 
-          <div className="flex gap-3">
+          {/* Erro do SALVAR fica JUNTO do botão — ver components/ErroAcao.tsx */}
+          <ErroAcao erro={erroAcao} />
+
+          {/* Botões no tamanho padrão da aplicação (mesmas classes da tela de
+              prescrição), alinhados à direita. */}
+          <div className="flex justify-end gap-2">
             <button
               type="button"
               disabled={salvando}
               onClick={() => navigate(-1)}
-              className="flex-1 border border-gray-300 hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold rounded-2xl py-3 transition-colors"
+              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={salvando}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-2xl py-3 transition-colors"
+              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
             >
               {salvando ? 'Salvando...' : 'Salvar'}
             </button>

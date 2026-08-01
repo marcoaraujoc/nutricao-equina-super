@@ -10,6 +10,7 @@ import { Pencil, Trash2, Clock, MapPin, Search, XCircle, CheckCircle2 } from 'lu
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 interface Solicitacao {
@@ -123,6 +124,8 @@ const MeusAnimais = () => {
   const [cancelSolicitacaoAnimal, setCancelSolicitacaoAnimal] = useState<Animal | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO (confirmar/excluir/desvincular): vai para o modal que disparou
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [cancelando,             setCancelando]             = useState(false);
   const [respondendo,            setRespondendo]            = useState(false);
 
@@ -170,7 +173,7 @@ const MeusAnimais = () => {
       toast.success('Animal excluído.');
     } catch (error) {
       console.error(error);
-      setErroInline('Erro ao excluir animal.');
+      setErroAcao({ mensagem: 'Erro ao excluir animal.' });
     }
   };
 
@@ -195,7 +198,7 @@ const MeusAnimais = () => {
       toast.success(res.data?.mensagem ?? (status === 'ACEITO' ? 'Vínculo autorizado!' : 'Vínculo recusado.'));
       loadAnimais();
     } catch (err: any) {
-      setErroInline(err?.response?.data?.mensagem ?? 'Erro ao responder solicitação');
+      setErroAcao({ mensagem: err?.response?.data?.mensagem ?? 'Erro ao responder solicitação' });
     } finally {
       setRespondendo(false);
     }
@@ -437,6 +440,7 @@ const MeusAnimais = () => {
 
       {/* Modal — Excluir (justificativa obrigatória → Auditoria) */}
       <ModalJustificativa
+        erro={erroAcao}
         aberto={!!animalToDelete}
         titulo="Excluir animal?"
         descricao={animalToDelete

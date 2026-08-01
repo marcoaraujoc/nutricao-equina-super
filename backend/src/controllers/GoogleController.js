@@ -4,6 +4,7 @@ const https  = require('https');
 
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
+const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
@@ -86,6 +87,13 @@ const GoogleController = {
 
       if (user.ativo === false) {
         return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      }
+
+      // Mesmo gate do login por senha: sem acesso concedido por nenhuma empresa, não entra.
+      // (O Google autentica QUEM é a pessoa; quem autoriza o uso do sistema é a clínica.)
+      const ehAdminPlataforma = user.role === 'ADMIN' || user.userType === 'ADMIN';
+      if (!ehAdminPlataforma && !(await podeAcessarSistema(user.id))) {
+        return res.status(403).json({ error: 'Seu acesso ao sistema está desativado. Fale com o gestor da clínica.' });
       }
 
       console.log(`✅ Usuário Google processado: ${user.email} (ID: ${user.id})`);

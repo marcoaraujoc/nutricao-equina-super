@@ -32,6 +32,12 @@ export interface ContextoOpcao {
   cargo?: string;
 }
 
+/** Identidade visual da empresa do contexto ativo (logo + nome), de /equipes/logo */
+export interface EmpresaMarca {
+  logoUrl: string | null;
+  empresaNome: string | null;
+}
+
 interface EmpresaContextType {
   /** Opções de contexto (empresas CNPJ + equipes de empresas pessoais). Vazio para demais perfis */
   opcoes: ContextoOpcao[];
@@ -39,6 +45,8 @@ interface EmpresaContextType {
   /** Persiste a seleção e recarrega a aplicação para refazer todos os fetches */
   trocarContexto: (opcao: ContextoOpcao) => void;
   loading: boolean;
+  /** Logo/nome da empresa ativa — buscado UMA vez aqui e consumido por Sidebar e rodapé */
+  marca: EmpresaMarca;
 }
 
 const EmpresaContext = createContext<EmpresaContextType>({
@@ -46,6 +54,7 @@ const EmpresaContext = createContext<EmpresaContextType>({
   contextoAtivo: null,
   trocarContexto: () => undefined,
   loading: true,
+  marca: { logoUrl: null, empresaNome: null },
 });
 
 export function EmpresaProvider({ children }: { children: ReactNode }) {
@@ -111,6 +120,34 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
     return () => { cancelado = true; };
   }, [user]);
 
+  // Logomarca da empresa ativa. Vive aqui (e não no Sidebar) porque header, sidebar e
+  // rodapé exibem a mesma marca — três cópias do fetch dariam três requisições e três
+  // estados que podem divergir na troca de contexto.
+  const [marca, setMarca] = useState<EmpresaMarca>({ logoUrl: null, empresaNome: null });
+  useEffect(() => {
+    if (!user) { setMarca({ logoUrl: null, empresaNome: null }); return; }
+
+    let ativo = true;
+    const carregar = () => {
+      api.get('/equipes/logo')
+        .then((r) => {
+          if (!ativo || !r.data) return;  // GET 403 → data null (armadilha #23)
+          setMarca({
+            logoUrl:     r.data?.dados?.logoUrl ?? null,
+            empresaNome: r.data?.dados?.empresaNome ?? null,
+          });
+        })
+        .catch(() => { /* silencioso — a marca tem fallback textual */ });
+    };
+    carregar();
+    // Configurações dispara este evento ao salvar — atualiza a marca sem reload
+    window.addEventListener('s2vet:config-atualizada', carregar);
+    return () => {
+      ativo = false;
+      window.removeEventListener('s2vet:config-atualizada', carregar);
+    };
+  }, [user, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
+
   const trocarContexto = (opcao: ContextoOpcao) => {
     if (opcao.empresaId === contextoAtivo?.empresaId && opcao.equipeId === contextoAtivo?.equipeId) return;
     localStorage.setItem(EMPRESA_ATIVA_KEY, String(opcao.empresaId));
@@ -132,7 +169,7 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <EmpresaContext.Provider value={{ opcoes, contextoAtivo, trocarContexto, loading }}>
+    <EmpresaContext.Provider value={{ opcoes, contextoAtivo, trocarContexto, loading, marca }}>
       {children}
     </EmpresaContext.Provider>
   );

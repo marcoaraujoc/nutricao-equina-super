@@ -10,10 +10,11 @@ import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import EspecialidadeSelector from '../components/EspecialidadeSelector';
+import FotoEditorModal from '../components/FotoEditorModal';
 import {
   conflitoEntreLocais, resumoLocal,
   RASCUNHO_LOCAL_VAZIO, uniaoEspecialidadesLocais, PERFIS_COM_ESPECIALIDADE,
-  TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields,
+  TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
 import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2 } from 'lucide-react';
@@ -37,6 +38,40 @@ const mascaraCEP = (v: string): string => {
   const d = v.replace(/\D/g, '').slice(0, 8);
   return d.length <= 5 ? d : `${d.slice(0,5)}-${d.slice(5)}`;
 };
+
+// Compressão da foto antes do envio — MESMA função de Animal.tsx/Configuracoes.tsx.
+// 600px basta: a foto é exibida como avatar (48px) e no modal de detalhes.
+const comprimirImagem = (file: File, maxWidth = 600, qualidade = 0.82): Promise<File> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width  = maxWidth;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type: 'image/jpeg', lastModified: Date.now(),
+          }));
+        },
+        'image/jpeg', qualidade,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+
+// Iniciais para o avatar sem foto (mesmo fallback da tela de Equipe)
+const iniciaisDe = (nome: string): string =>
+  nome.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('') || '?';
 
 // Dias da semana (0=Dom … 6=Sáb) — convenção de Date.getDay()
 const DIAS_SEMANA_ATEND = [
@@ -102,6 +137,14 @@ export default function CadastroPessoal() {
   const [especiesErro,    setEspeciesErro]    = useState(false);
   // Verdadeiro quando o usuário entrou via convite — espécies são herdadas e ficam bloqueadas
   const [isConvidadoFlag, setIsConvidadoFlag] = useState(false);
+  // Foto do cadastro NESTA empresa. `fotoFile`/`fotoRemovida` só valem no submit —
+  // a foto é enviada junto com o Salvar, não ao escolher o arquivo (sair da tela sem
+  // salvar não pode trocar a foto que a clínica já tem).
+  const [fotoPreview,  setFotoPreview]  = useState<string | null>(null);
+  const [fotoFile,     setFotoFile]     = useState<File | null>(null);
+  const [fotoRemovida, setFotoRemovida] = useState(false);
+  // Arquivo (recém-escolhido) ou URL (foto já salva) em edição no FotoEditorModal
+  const [editandoFoto, setEditandoFoto] = useState<File | string | null>(null);
   // Erro de ação (salvar/conexão) exibido inline junto ao botão Salvar
   const [erroInline, setErroInline] = useState<string | null>(null);
   // Erros por campo — validados conforme o usuário passa pelos campos (onBlur) e no submit
@@ -118,6 +161,13 @@ export default function CadastroPessoal() {
   const [locaisBase,       setLocaisBase]       = useState<LocalTrabalhoForm[]>([]);
   // Cargo na equipe (ex: GESTOR) — definido quando foi incluído como membro
   const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
+  // Vínculo com a empresa ativa — SOMENTE LEITURA aqui: quem define remuneração e
+  // acesso é o gestor, no cadastro do membro. O PUT deste formulário nem os envia,
+  // e o backend descartaria (salvarVinculo só grava CAMPOS_CADASTRO).
+  const [vinculoEmpresa, setVinculoEmpresa] = useState<{
+    tipoPagamento: string | null; formaPagamento: string | null;
+    valorPagamento: number | null; acessoSistema: boolean | null;
+  } | null>(null);
   // Membro de alguma equipe → habilita o expediente de atendimento
   const [temEquipe,       setTemEquipe]       = useState(false);
 
@@ -307,8 +357,17 @@ export default function CadastroPessoal() {
             // Locais de trabalho já cadastrados — abrem preenchidos e editáveis
             locaisTrabalho: locaisCarregados,
           });
+          setFotoPreview(data.fotoUrl ?? null);
+          setFotoFile(null);
+          setFotoRemovida(false);
           if (data.isConvidado) setIsConvidadoFlag(true);
           setCargoEquipe(data.cargoEquipe ?? null);
+          setVinculoEmpresa({
+            tipoPagamento:  data.tipoPagamento  ?? null,
+            formaPagamento: data.formaPagamento ?? null,
+            valorPagamento: data.valorPagamento ?? null,
+            acessoSistema:  data.acessoSistema  ?? null,
+          });
           setTemEquipe(!!data.temEquipe);
         }
       } catch (err) {
@@ -322,6 +381,55 @@ export default function CadastroPessoal() {
     // chamada sai sem `x-empresa-id` e volta o cadastro da empresa errada. E recarrega
     // quando a empresa do seletor muda.
   }, [user?.email, loadingPerms, empresaLoading, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
+
+  // Escolher o arquivo NÃO grava nada: abre o editor (zoom + reposicionamento). O
+  // avatar é `object-cover`, então sem enquadramento a foto em pé vira "queixo e testa".
+  const handleFotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEditandoFoto(file);
+    e.target.value = ''; // permite reescolher o MESMO arquivo depois de remover
+  };
+
+  // O editor já devolve recortado no tamanho final; a compressão é só a garantia de
+  // que um arquivo enorme não sobe caso o recorte volte maior que o limite.
+  const handleFotoAjustada = async (arquivo: File) => {
+    setEditandoFoto(null);
+    const comprimido = await comprimirImagem(arquivo);
+    setFotoFile(comprimido);
+    setFotoRemovida(false);
+    const reader = new FileReader();
+    reader.onloadend = () => setFotoPreview(reader.result as string);
+    reader.readAsDataURL(comprimido);
+  };
+
+  const handleRemoverFoto = () => {
+    setFotoPreview(null);
+    setFotoFile(null);
+    setFotoRemovida(true);
+  };
+
+  /**
+   * Envia a foto DEPOIS do PUT /users/me. Rota separada porque o cadastro é JSON e a
+   * foto é multipart. Falha aqui não invalida o cadastro que já foi salvo — só avisa.
+   */
+  const enviarFoto = async () => {
+    if (!fotoFile && !fotoRemovida) return;
+    try {
+      if (fotoRemovida) {
+        await api.delete('/users/me/foto');
+      } else if (fotoFile) {
+        const fd = new FormData();
+        fd.append('foto', fotoFile);
+        await api.put('/users/me/foto', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }
+      setFotoFile(null);
+      setFotoRemovida(false);
+    } catch (err) {
+      const resposta = (err as { response?: { data?: { error?: string } } })?.response;
+      toast.error(resposta?.data?.error ?? 'Cadastro salvo, mas a foto não pôde ser enviada.');
+    }
+  };
 
   const buscarCep = async (cep: string) => {
     const cepLimpo = cep.replace(/\D/g, '');
@@ -591,6 +699,8 @@ export default function CadastroPessoal() {
       const res     = { ok: put.status >= 200 && put.status < 300 };
 
       if (res.ok) {
+        // A foto vai numa chamada à parte (multipart) — ver enviarFoto.
+        await enviarFoto();
         // O backend renovou o cookie de acesso com o userType atualizado.
         // Recarrega o perfil (identidade vem de /me).
         await refreshUser();
@@ -667,6 +777,41 @@ export default function CadastroPessoal() {
       </p>
 
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
+
+        {/* Foto do cadastro NESTA empresa (tb_usuario_empresa.foto_url) — é ela que a
+            tela de Equipe exibe. Só é enviada ao salvar o formulário. */}
+        <div className="flex flex-col items-center gap-2 mb-6">
+          <label className="cursor-pointer group">
+            <div className="w-28 h-28 rounded-full border-4 border-emerald-600 overflow-hidden bg-emerald-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
+              {fotoPreview
+                ? <img src={fotoPreview} alt="Sua foto" className="w-full h-full object-cover" />
+                : <span className="text-2xl font-bold text-emerald-600">{iniciaisDe(form.nomeCompleto)}</span>}
+            </div>
+            <input type="file" accept="image/*" className="hidden" onChange={handleFotoChange} />
+          </label>
+          <p className="text-xs text-gray-400">Sua foto</p>
+          {fotoPreview && (
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setEditandoFoto(fotoPreview)}
+                className="text-xs text-emerald-700 hover:text-emerald-800 underline transition-colors">
+                Ajustar foto
+              </button>
+              <button type="button" onClick={handleRemoverFoto}
+                className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                Remover foto
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Zoom + reposicionamento. Devolve o arquivo já recortado. */}
+        {editandoFoto && (
+          <FotoEditorModal
+            origem={editandoFoto}
+            onConfirmar={handleFotoAjustada}
+            onCancelar={() => setEditandoFoto(null)}
+          />
+        )}
 
         {/* noValidate desativa o popup do browser — usamos toast no lugar */}
         <form onSubmit={handleSubmit} noValidate className="space-y-5">
@@ -798,6 +943,39 @@ export default function CadastroPessoal() {
               </select>
             )}
           </div>
+
+          {/* Remuneração e acesso — o que a clínica acordou com esta pessoa.
+              Aparecem para CONFERÊNCIA, nunca para edição: mudar o próprio salário
+              ou se autoconceder acesso é decisão do gestor, não de quem preenche
+              o cadastro. Só há o que mostrar quando existe vínculo com a empresa. */}
+          {(rotuloPagamento(vinculoEmpresa?.tipoPagamento, vinculoEmpresa?.formaPagamento, vinculoEmpresa?.valorPagamento)
+            || vinculoEmpresa?.acessoSistema != null) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label text="Pagamento" />
+                <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
+                  <span className="text-gray-800 font-medium">
+                    {rotuloPagamento(vinculoEmpresa?.tipoPagamento, vinculoEmpresa?.formaPagamento, vinculoEmpresa?.valorPagamento)
+                      ?? 'Não informado'}
+                  </span>
+                  <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
+                    <Info size={11} /> Definido pela equipe
+                  </span>
+                </div>
+              </div>
+              <div>
+                <Label text="Acesso ao sistema" />
+                <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
+                  <span className={`font-medium ${vinculoEmpresa?.acessoSistema === false ? 'text-red-600' : 'text-gray-800'}`}>
+                    {vinculoEmpresa?.acessoSistema === false ? 'Sem acesso' : 'Liberado'}
+                  </span>
+                  <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
+                    <Info size={11} /> Definido pela equipe
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Dados profissionais — só para veterinários (gestor não preenche) ── */}
           {atuaComoVet && (
@@ -995,18 +1173,11 @@ export default function CadastroPessoal() {
 
               {/* Botão que revela o formulário do novo local */}
               {!mostrarFormLocal && (
-                <>
-                  <button type="button"
-                    onClick={() => { setErroLocal(null); setEditIndex(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
-                    className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
-                    <Plus size={13} /> Adicionar local e horário de trabalho
-                  </button>
-                  <p className="text-[11px] text-gray-400 mt-1.5">
-                    O mesmo local pode entrar mais de uma vez, com outros dias, horário e
-                    especialidade — ex.: clínico seg/qua/sex e dermatologista ter/qui na
-                    mesma hípica.
-                  </p>
-                </>
+                <button type="button"
+                  onClick={() => { setErroLocal(null); setEditIndex(null); setRascunhoLocal(RASCUNHO_LOCAL_VAZIO); setMostrarFormLocal(true); }}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                  <Plus size={13} /> Adicionar local e horário de trabalho
+                </button>
               )}
 
               {/* Formulário do novo local: local + dias + horas em UMA linha;
@@ -1021,7 +1192,6 @@ export default function CadastroPessoal() {
                     onDirty={() => setErroLocal(null)}
                     comEspecialidades={perfilComEspecialidade}
                     especieIds={especiesFiltroEspecialidade}
-                    espNomeById={espNomeById}
                     tempoPadraoEmpresa={tempoPadraoEmpresa}
                     diasEmpresaLabel={diasEmpresaLabel}
                     horarioEmpresaLabel={horarioEmpresaLabel}

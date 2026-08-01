@@ -1026,10 +1026,21 @@ const AgendamentoController = {
         return res.status(409).json({ error: 'Horário fora do seu expediente.', code: 'FORA_EXPEDIENTE' });
       }
 
-      const atualizado = await prisma.agendamentoClinico.update({
-        where:   { id: item.id },
-        data:    { veterinarioId: Number(req.user.id) },
-        include: INCLUDE_GLOBAL,
+      // Assumir a AGENDA arrasta o ATENDIMENTO junto: se o agendamento já foi
+      // iniciado, existe evolução vinculada com o vet anterior. Mover só o
+      // agendamento deixaria o atendimento na mão de quem não o conduz mais —
+      // a evolução sumiria da tela de quem assumiu e continuaria na do outro.
+      const atualizado = await prisma.$transaction(async (tx) => {
+        const ag = await tx.agendamentoClinico.update({
+          where:   { id: item.id },
+          data:    { veterinarioId: Number(req.user.id) },
+          include: INCLUDE_GLOBAL,
+        });
+        await tx.evolucaoClinica.updateMany({
+          where: { agendamentoId: item.id, ativo: true, status: 'EM_ANDAMENTO' },
+          data:  { veterinarioId: Number(req.user.id), modificadoPorId: Number(req.user.id), dataModificacao: new Date() },
+        });
+        return ag;
       });
 
       // O profissional que estava com o atendimento é avisado de que ele saiu da agenda

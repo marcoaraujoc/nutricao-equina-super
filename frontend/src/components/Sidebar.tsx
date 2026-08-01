@@ -5,16 +5,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { useMobileMenu } from '../contexts/MobileMenuContext';
-import { useState, useEffect, useRef } from 'react';
-import api from '../services/api';
+import { useState } from 'react';
 import {
   LayoutDashboard, User, Zap, ClipboardList,
   Wheat, TestTube, ChartBar, Carrot, Stethoscope,
-  DollarSign, ChevronDown, LogOut, X,
+  DollarSign, ChevronDown, X,
   Users, Users2, ShieldCheck, FlaskConical, Pill,
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Share2, Microscope, Scan,
-  FolderOpen, UserCog, Truck, MapPin, Building2, CalendarClock,
+  FolderOpen, UserCog, Truck, MapPin, CalendarClock,
   Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
   Bell, Gauge, ListChecks, Receipt,
 } from 'lucide-react';
@@ -62,7 +61,7 @@ function detectSection(pathname: string): ActiveSection {
 }
 
 export default function Sidebar() {
-  const { user, logout }              = useAuth();
+  const { user }                      = useAuth();
   // Redirecionamento para /cadastro-pessoal quando incompleto é responsabilidade
   // do ProtectedRoute (fonte única — evita competir com o gate de troca de senha
   // obrigatória e causar loop de mount/unmount do Sidebar, que gerava tempestade
@@ -71,33 +70,13 @@ export default function Sidebar() {
   const location                      = useLocation();
   const navigate                      = useNavigate();
   const pendentesCount                = useVetPendentes();
-  const { opcoes: opcoesContexto, contextoAtivo, trocarContexto } = useEmpresa();
+  const { opcoes: opcoesContexto, contextoAtivo, trocarContexto, marca } = useEmpresa();
   useVetSolicitacaoMonitor();
   useProprietarioNotificacoes();
 
-  // Logomarca da empresa do contexto ativo (substitui o texto padrão no header)
-  const [logoUrl,     setLogoUrl]     = useState<string | null>(null);
-  const [empresaNome, setEmpresaNome] = useState<string | null>(null);
-  useEffect(() => {
-    let ativo = true;
-    const carregarLogo = () => {
-      api.get('/equipes/logo')
-        .then(r => {
-          if (!ativo || !r.data) return;
-          setLogoUrl(r.data?.dados?.logoUrl ?? null);
-          setEmpresaNome(r.data?.dados?.empresaNome ?? null);
-        })
-        .catch(() => {});
-    };
-    carregarLogo();
-    // Configurações dispara este evento ao salvar — atualiza a logomarca sem reload
-    window.addEventListener('s2vet:config-atualizada', carregarLogo);
-    return () => {
-      ativo = false;
-      window.removeEventListener('s2vet:config-atualizada', carregarLogo);
-    };
-    // Recarrega ao trocar de empresa/equipe ativa
-  }, [contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
+  // Logomarca/nome da empresa ativa vêm do EmpresaContext (fonte única — header,
+  // sidebar e rodapé mostram a mesma marca sem repetir o fetch).
+  const { logoUrl, empresaNome } = marca;
 
   const role          = (user?.role      ?? user?.userType ?? '').toUpperCase();
   const userTypeUpper = (user?.userType  ?? '').toUpperCase();
@@ -311,42 +290,36 @@ export default function Sidebar() {
         md:translate-x-0 md:static md:flex
       `}>
 
-        {/* Header — logomarca da empresa (Configurações) com fallback ao padrão.
-            Com logo: centralizada na largura do sidebar; botão de fechar (mobile)
-            fica absoluto para não desalinhar. */}
-        <div className={`relative px-6 py-6 border-b border-gray-200 flex items-center gap-3 flex-shrink-0 ${logoUrl ? 'justify-center' : ''}`}>
+        {/* Card da empresa do contexto ativo — SÓ a logomarca (Configurações),
+            centralizada no eixo do sidebar, espelhando o logo do produto no header.
+            O nome da empresa foi retirado: a própria arte já identifica a clínica.
+            EXCEÇÃO: empresa sem logo cadastrada cai no nome — senão o card viraria um
+            quadrado com uma letra, sem dizer em qual clínica o usuário está. */}
+        <div className="relative px-4 py-5 border-b border-gray-200 flex flex-col items-center justify-center text-center flex-shrink-0 min-h-[6.5rem]">
           {logoUrl ? (
+            // Só os limites da caixa são fixados — a logo do cliente pode ser deitada
+            // (1200x551) ou em pé (750x1334), então a proporção precisa ser preservada
+            // em vez de forçada num quadrado.
             <img src={logoUrl} alt={empresaNome ?? 'Logomarca da empresa'}
-              className="h-16 max-w-full object-contain" />
-          ) : empresaNome ? (
-            <>
-              <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
-                {empresaNome.charAt(0).toUpperCase()}
-              </div>
-              <h1 className="text-lg font-bold text-emerald-700 leading-tight line-clamp-2">{empresaNome}</h1>
-            </>
+              className="max-h-20 max-w-[13rem] w-auto object-contain" />
           ) : (
-            <>
-              <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-2xl">🥕</div>
-              <div>
-                <h1 className="text-xl font-bold text-emerald-700">Nutrição Equina</h1>
-                <p className="text-emerald-500 text-sm -mt-0.5">Super</p>
-              </div>
-            </>
+            <h1 className="text-sm font-bold text-gray-900 leading-tight line-clamp-2">
+              {empresaNome ?? 'Minha clínica'}
+            </h1>
           )}
+          {/* Absoluto para não desalinhar a coluna centralizada */}
           <button onClick={closeMobile}
-            className={`md:hidden p-2 text-gray-500 hover:text-gray-700 ${logoUrl ? 'absolute right-4 top-1/2 -translate-y-1/2' : 'ml-auto'}`}>
-            <X size={28} />
+            className="md:hidden absolute right-2 top-2 p-2 text-gray-500 hover:text-gray-700">
+            <X size={24} />
           </button>
         </div>
 
         {/* Seletor de contexto ativo — só para gestor com mais de uma empresa/equipe.
-            CNPJ = opção por empresa; CPF = opção por equipe da empresa pessoal */}
+            CNPJ = opção por empresa; CPF = opção por equipe da empresa pessoal.
+            Sem rótulo acima ("Equipe ativa"/"Empresa ativa"): o próprio valor
+            selecionado já diz em qual contexto o usuário está. */}
         {opcoesContexto.length > 1 && (
           <div className="px-4 py-3 border-b border-gray-200 flex-shrink-0">
-            <span className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-bold text-gray-400 uppercase tracking-widest">
-              <Building2 className="w-3.5 h-3.5" /> {contextoAtivo?.equipeId ? 'Equipe ativa' : 'Empresa ativa'}
-            </span>
             <select
               value={contextoAtivo ? `${contextoAtivo.empresaId}:${contextoAtivo.equipeId ?? ''}` : ''}
               onChange={(e) => {
@@ -367,8 +340,15 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Nav */}
-        <nav className="flex-1 min-h-0 px-3 py-4 space-y-4 overflow-y-auto">
+        {/* Nav
+            space-y-0.5 (e não space-y-4): Mapa, Cadastro, Agendamento, Atendimento…
+            são itens do MESMO nível e precisam do mesmo respiro entre si. O antigo
+            space-y-4 valia só entre os blocos filhos diretos do <nav>, então Mapa↔
+            Cadastro e Cadastro↔Agendamento ficavam com 16px enquanto Agendamento↔
+            Atendimento — que moram dentro do bloco de módulos — ficavam com 2px.
+            Separação maior agora é aplicada pontualmente, onde é intencional
+            (aviso de bloqueio e a seção Administração). */}
+        <nav className="flex-1 min-h-0 px-3 py-4 space-y-0.5 overflow-y-auto">
 
           {/* Menu PLANO: sem os cabeçalhos "Geral"/"Módulos" — os itens ficam todos
               no mesmo nível, na ordem de uso do dia a dia (2026-07-30). */}
@@ -430,7 +410,7 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={() => navigate(destinoBloqueio)}
-              className="block w-[calc(100%-1.5rem)] mx-3 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm text-left hover:bg-amber-100 transition-colors cursor-pointer"
+              className="block w-[calc(100%-1.5rem)] mx-3 my-4 px-5 py-5 bg-amber-50 border border-amber-200 rounded-3xl text-amber-700 text-sm text-left hover:bg-amber-100 transition-colors cursor-pointer"
             >
               <strong>Funcionalidades bloqueadas</strong><br />
               <span className="underline underline-offset-2">{mensagemBloqueio}</span>
@@ -602,8 +582,9 @@ export default function Sidebar() {
           ) : null}
 
           {/* ═══ ADMINISTRAÇÃO ═══════════════════════════════════════════════ */}
+          {/* pt-4: separação DELIBERADA — é um cabeçalho de seção, não um item do menu */}
           {podeVerAdministracao && (
-            <div>
+            <div className="pt-4">
               <button onClick={() => toggle(setOpenAdministracao)}
                 className="flex items-center justify-between w-full px-5 py-2.5 text-xs font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 rounded-3xl">
                 <span className="flex items-center gap-2"><ShieldCheck size={14} /> Administração</span>
@@ -635,36 +616,8 @@ export default function Sidebar() {
 
         </nav>
 
-        {/* Footer */}
-        {user && (
-          <div className="border-t border-gray-200 p-3 flex-shrink-0">
-            <div className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 rounded-2xl">
-              <div className="w-8 h-8 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0">
-                {user.fullName?.[0]?.toUpperCase() ?? 'U'}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">{user.fullName}</p>
-                <p className="text-xs text-gray-500 truncate">{user.email}</p>
-              </div>
-              {isAdmin && (
-                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex-shrink-0">ADMIN</span>
-              )}
-              {isGestor && !isAdmin && (
-                <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full flex-shrink-0">GESTOR</span>
-              )}
-              {(role === 'VETERINARIO' || userTypeUpper === 'VETERINARIO') && !isAdmin && !isGestor && (
-                <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex-shrink-0">VET</span>
-              )}
-              {role === 'ESTAGIARIO' && (
-                <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full flex-shrink-0">EST</span>
-              )}
-            </div>
-            <button onClick={logout}
-              className="mt-2 flex items-center justify-center gap-2 w-full py-2.5 text-red-600 hover:bg-red-50 rounded-2xl text-sm font-medium transition-colors">
-              <LogOut size={16} /> Sair
-            </button>
-          </div>
-        )}
+        {/* Sem rodapé de usuário: identidade, perfil e "Sair" vivem no menu do
+            AppHeader (fonte única — evita dois lugares para a mesma ação). */}
       </div>
 
       {/* Backdrop mobile */}

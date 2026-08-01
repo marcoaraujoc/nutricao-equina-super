@@ -17,6 +17,7 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import InlineError from '../components/InlineError';
+import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 
 
 
@@ -60,6 +61,8 @@ interface ItemGrupo {
   observacao:        string | null;
   veterinario:       { id: number; fullName: string };
   medicamentoCliente: boolean;
+  /** Aplicado pelo PROPRIETÁRIO em casa: fora do plantão, da fatura e do estoque. */
+  aplicadaPeloProprietario?: boolean;
   executadoEm:       string | null;
   medicamentoCat?:   { controlado: boolean } | null;
 }
@@ -74,8 +77,6 @@ interface PrescricaoGrupo {
   status: StatusGrupo;
   createdAt: string;
   itens: ItemGrupo[];
-  /** Aplicada pelo PROPRIETÁRIO: não entra no plantão nem na fatura. */
-  executadaPeloProprietario?: boolean;
 }
 
 interface FormItem {
@@ -91,6 +92,9 @@ interface FormItem {
   dataInicio:         string;
   observacao:         string;
   medicamentoCliente: boolean;
+  /** "Será aplicada pelo Proprietário" — por ITEM, irmã de `medicamentoCliente`.
+   *  A clínica não executa, não cobra e não movimenta estoque deste item. */
+  aplicadaPeloProprietario: boolean;
   /** Item de orçamento de origem — marcado como importado APÓS salvar; vai no payload
    *  para o backend guardar a origem e o valor negociado. */
   orcamentoItemId?:   number | null;
@@ -184,7 +188,7 @@ const FORM_VAZIO = (): FormItem => ({
   tipo: 'MEDICAMENTO', medicamento: '', medicamentoCatId: null,
   dosagem: '', unidade: '', via: '', frequencia: '',
   horaInicio: '', duracaoDias: '', dataInicio: hojeLocalStr(),
-  observacao: '', medicamentoCliente: false,
+  observacao: '', medicamentoCliente: false, aplicadaPeloProprietario: false,
 });
 
 const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? v;
@@ -395,8 +399,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     return FORM_VAZIO();
   });
 
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO: mora no rodapé, junto do botão que disparou a ação (mesmo padrão
+  // do Cadastro de Proprietário). No topo do formulário ele ficava fora da vista de
+  // quem acabou de clicar em Salvar — e, no modal, atrás do overlay.
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
+  const setErroInline = (mensagem: string | null, campos?: string[]) =>
+    setErroAcao(mensagem ? { mensagem, campos } : null);
 
   const [localItens, setLocalItens] = useState<FormItem[]>(() => {
     if (!draftKey) return [];
@@ -410,11 +418,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     return [];
   });
   const [editingLocalIdx,  setEditingLocalIdx]  = useState<number | null>(null);
-  // Prescrição que o PROPRIETÁRIO aplica em casa: fica fora do plantão (Execução de
-  // Prescrição) e, por consequência, nunca gera cobrança nem baixa de estoque —
-  // FaturaItem e movimento só nascem na execução.
-  const [executadaPeloProprietario, setExecutadaPeloProprietario] =
-    useState<boolean>(grupo?.executadaPeloProprietario ?? false);
   const [serverItens,      setServerItens]      = useState<ItemGrupo[]>(grupo?.itens ?? []);
   const [editingServerId,  setEditingServerId]  = useState<number | null>(null);
   const [removendoItemId,  setRemovendoItemId]  = useState<number | null>(null);
@@ -481,8 +484,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const marcarOrcamentoSalvo = (itens: FormItem[]) =>
     marcarOrcamentoImportado(itens.map(i => i.orcamentoItemId).filter((n): n is number => !!n));
 
-  const set = <K extends keyof FormItem>(k: K, v: FormItem[K]) =>
+  const set = <K extends keyof FormItem>(k: K, v: FormItem[K]) => {
+    // Mexeu no formulário, o erro anterior perdeu a validade
+    setErroAcao(null);
     setForm(prev => ({ ...prev, [k]: v }));
+  };
 
   const switchTipo = (newTipo: TipoItem) => {
     if (newTipo === form.tipo) return;
@@ -494,6 +500,29 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const resetForm = () => {
     formBackupsRef.current = {};
     setForm(FORM_VAZIO());
+  };
+
+  /** Trocar (ou limpar) o MEDICAMENTO zera o formulário inteiro. Dosagem, unidade,
+   *  via, posologia, duração, observação, valor orçado e as marcas de quem fornece /
+   *  quem aplica pertencem ao medicamento ANTERIOR — mantê-los prescreve a posologia
+   *  de um remédio para outro. Só sobrevivem o tipo e o que vem do catálogo do
+   *  medicamento novo. */
+  const selecionarMedicamento = (m: MedicamentoCat) => {
+    const conv = getConversaoUnidade(m.unidade);
+    setErroAcao(null);
+    setForm({
+      ...FORM_VAZIO(),
+      tipo:             form.tipo,
+      medicamento:      m.nome,
+      medicamentoCatId: m.id,
+      unidade:          conv ? conv.subunidade : m.unidade,
+      via:              m.vias[0]?.via ?? '',
+    });
+  };
+
+  const limparMedicamento = () => {
+    setErroAcao(null);
+    setForm({ ...FORM_VAZIO(), tipo: form.tipo });
   };
 
   // Limpa apenas o tipo que acabou de ser inserido; preserva o backup do outro tipo
@@ -645,27 +674,27 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const validarForm = () => {
     const isMed = form.tipo === 'MEDICAMENTO';
     if (!form.medicamento.trim()) {
-      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} é obrigatório`);
+      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} é obrigatório`, ['medicamento']);
       return false;
     }
     if (isMed && !form.dosagem.toString().trim()) {
-      setErroInline('Dosagem é obrigatória'); return false;
+      setErroInline('Dosagem é obrigatória', ['dosagem']); return false;
     }
     if (isMed && !form.unidade.trim()) {
-      setErroInline('Unidade é obrigatória'); return false;
+      setErroInline('Unidade é obrigatória', ['unidade']); return false;
     }
     if (isMed && !form.via.trim()) {
-      setErroInline('Via de administração é obrigatória'); return false;
+      setErroInline('Via de administração é obrigatória', ['via']); return false;
     }
     if (!form.frequencia.trim()) {
-      setErroInline('Frequência é obrigatória'); return false;
+      setErroInline('Frequência é obrigatória', ['frequencia']); return false;
     }
     // Dose única ("Agora") não exige duração em dias
     if (form.frequencia !== 'agora' && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
-      setErroInline('Duração (dias) é obrigatória'); return false;
+      setErroInline('Duração (dias) é obrigatória', ['duracaoDias']); return false;
     }
     if (!form.dataInicio.trim()) {
-      setErroInline('Data de início é obrigatória'); return false;
+      setErroInline('Data de início é obrigatória', ['dataInicio']); return false;
     }
     // Duplicata — mesmo nome e mesmo tipo já existe na prescrição
     const nomeNorm = form.medicamento.trim().toLowerCase();
@@ -676,7 +705,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       return it.medicamento.toLowerCase() === nomeNorm && it.tipo === form.tipo;
     });
     if (duplicado) {
-      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} já adicionado nesta prescrição`);
+      setErroInline(`${isMed ? 'Medicamento' : 'Procedimento'} já adicionado nesta prescrição`, ['medicamento']);
       return false;
     }
     return true;
@@ -776,6 +805,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       dataInicio:         emAndamento ? hojeLocalStr() : (item.dataInicio?.split('T')[0] ?? ''),
       observacao:         item.observacao ?? '',
       medicamentoCliente: item.medicamentoCliente,
+      aplicadaPeloProprietario: item.aplicadaPeloProprietario === true,
     });
     setEditingServerId(item.id);
   };
@@ -840,7 +870,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (bloqueadoPorDosagem(itens)) return;
     setSaving(true);
     try {
-      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens), executadaPeloProprietario });
+      const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
       const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
       // Salvou → só agora marca os itens de orçamento como importados
       await marcarOrcamentoSalvo(itens);
@@ -872,7 +902,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
         if (bloqueadoPorDosagem(itens)) return;
-        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens), executadaPeloProprietario });
+        const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
         const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
         // Grupos criados (persistidos) → marca os itens de orçamento como importados
         await marcarOrcamentoSalvo(itens);
@@ -971,8 +1001,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (medicamentos.length === 0 && !backgroundSearching)
       return <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>;
     const onSelect = (m: MedicamentoCat) => {
-      const conv = getConversaoUnidade(m.unidade);
-      setForm(prev => ({ ...prev, medicamento: m.nome, medicamentoCatId: m.id, unidade: conv ? conv.subunidade : m.unidade, via: m.vias[0]?.via ?? prev.via }));
+      selecionarMedicamento(m);
       setShowMedDropdown(false);
       setMedBusca('');
     };
@@ -1014,14 +1043,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const unidadeCatalogo  = conversaoUnidade ? null : catalogoUnidade;
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
+
   // Em modo edição: formulário aparece ao editar item existente ou ao clicar "Inserir item"
   const showItemForm  = canEdit && !isReadOnly && !savedGrupos && (isCreate || editandoItem || showAddForm);
 
   return (
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
       <div className={isInline ? 'w-full' : 'bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-3xl max-h-[95vh] flex flex-col border border-gray-100'}>
-
-        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
 
         {/* Header — modal only */}
         {!isInline && (
@@ -1045,7 +1073,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
           </div>
         )}
 
-        <div className={isInline ? '' : 'flex-1 overflow-y-auto'}>
+        {/* Rede de segurança: React normaliza `change` para BORBULHAR, então o
+            handler aqui cobre todo campo de dentro — inclusive o que não passa
+            pelo `set` (combobox de medicamento, seletor de procedimento) e o que
+            for adicionado depois, sem precisar tocar em cada um. */}
+        <div className={isInline ? '' : 'flex-1 overflow-y-auto'}
+          onChange={() => setErroAcao(null)}
+          onInput={() => setErroAcao(null)}>
           <div className="px-5 py-3 space-y-3">
 
             {/* Importar orçamento (opcional) — só na criação */}
@@ -1119,13 +1153,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           /* Botão — aparece quando NÃO está buscando */
                           <button type="button"
                             onClick={() => { setShowMedDropdown(true); setMedBusca(''); }}
-                            className="w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white">
+                            className={classeErro(erroAcao, 'medicamento', 'w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white')}>
                             <span className={form.medicamento ? 'text-gray-900 truncate' : 'text-gray-400'}>
                               {form.medicamento || 'Selecionar medicamento...'}
                             </span>
                             {form.medicamento ? (
                               <X size={13} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
-                                onClick={e => { e.stopPropagation(); set('medicamento', ''); set('medicamentoCatId', null); }} />
+                                onClick={e => { e.stopPropagation(); limparMedicamento(); }} />
                             ) : (
                               <ChevronDown size={13} className="text-gray-400 flex-shrink-0 ml-2" />
                             )}
@@ -1151,7 +1185,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     {/* DOSAGEM (span 2) */}
                     <div className="sm:col-span-2">
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DOSAGEM *</label>
-                      <div className="flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                      <div className={classeErro(erroAcao, 'dosagem', classeErro(erroAcao, 'unidade', 'flex items-center h-[38px] border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500'))}>
                         <input type="number" min="0" step="0.001" value={form.dosagem}
                           onChange={e => set('dosagem', e.target.value)}
                           className="flex-1 min-w-[40px] px-3 py-2 text-sm focus:outline-none bg-transparent" />
@@ -1174,7 +1208,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     <div className="sm:col-span-2">
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">VIA ADMINISTRAÇÃO *</label>
                       <select value={form.via} onChange={e => set('via', e.target.value)}
-                        className={`w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                        className={classeErro(erroAcao, 'via', `w-full h-[38px] border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`)}>
                         <option value="">— Selecionar —</option>
                         {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
                       </select>
@@ -1191,7 +1225,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         ESPECIALIDADE
                       </label>
                       <select value={procEspecialidade}
-                        onChange={e => setProcEspecialidade(e.target.value)}
+                        onChange={e => {
+                          setProcEspecialidade(e.target.value);
+                          // Trocar a especialidade invalida o procedimento escolhido e
+                          // TUDO que veio junto dele (valor orçado, posologia, via,
+                          // observação): o formulário recomeça limpo. `clearCurrentType`
+                          // também descarta o backup do tipo — senão alternar
+                          // Medicamento↔Procedimento ressuscitaria o procedimento da
+                          // especialidade anterior.
+                          clearCurrentType();
+                        }}
                         className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-sm bg-white focus:outline-none focus:border-emerald-500 ${!procEspecialidade ? 'text-gray-400' : 'text-gray-900'}`}>
                         <option value="">Todas</option>
                         {especialidadesProc.map(e => <option key={e} value={e} className="text-gray-900">{e}</option>)}
@@ -1208,13 +1251,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         /* Botão — aparece quando NÃO está buscando */
                         <button type="button"
                           onClick={() => { setShowMedDropdown(true); setMedBusca(''); }}
-                          className="w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white">
+                          className={classeErro(erroAcao, 'medicamento', 'w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-emerald-500 bg-white')}>
                           <span className={form.medicamento ? 'text-gray-900 truncate' : 'text-gray-400'}>
                             {form.medicamento || 'Selecionar medicamento...'}
                           </span>
                           {form.medicamento ? (
                             <X size={13} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
-                              onClick={e => { e.stopPropagation(); set('medicamento', ''); set('medicamentoCatId', null); }} />
+                              onClick={e => { e.stopPropagation(); limparMedicamento(); }} />
                           ) : (
                             <ChevronDown size={13} className="text-gray-400 flex-shrink-0 ml-2" />
                           )}
@@ -1245,7 +1288,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         onFocus={() => setShowProcDropdown(true)}
                         onBlur={() => setTimeout(() => setShowProcDropdown(false), 150)}
                         placeholder="Buscar procedimento..."
-                        className="w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
+                        className={classeErro(erroAcao, 'medicamento', 'w-full pl-8 pr-3 border border-gray-200 rounded-xl py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500')}
                       />
                       {showProcDropdown && (
                         <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-44 overflow-y-auto">
@@ -1285,7 +1328,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DOSAGEM *</label>
-                      <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                      <div className={classeErro(erroAcao, 'dosagem', classeErro(erroAcao, 'unidade', 'flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500'))}>
                         <input type="number" min="0" step="0.001" value={form.dosagem}
                           onChange={e => set('dosagem', e.target.value)}
                           className="flex-1 min-w-0 px-3 py-2 text-sm focus:outline-none bg-transparent" />
@@ -1308,7 +1351,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     <div>
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">VIA ADMINISTRAÇÃO *</label>
                       <select value={form.via} onChange={e => set('via', e.target.value)}
-                        className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`}>
+                        className={classeErro(erroAcao, 'via', `w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 ${!form.via ? 'text-gray-400' : 'text-gray-900'}`)}>
                         <option value="">— Selecionar —</option>
                         {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
                       </select>
@@ -1329,7 +1372,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         // Dose única: força duração = 1 (o back ignora dias em "agora")
                         if (v === 'agora') set('duracaoDias', 1);
                       }}
-                      className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`}>
+                      className={classeErro(erroAcao, 'frequencia', `w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${!form.frequencia ? 'text-gray-400' : 'text-gray-900'}`)}>
                       <option value="">— Selecionar —</option>
                       {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
                     </select>
@@ -1346,14 +1389,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       disabled={isDoseUnica}
                       onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
                       placeholder={isDoseUnica ? 'Dose única' : 'Ex: 7'}
-                      className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${isDoseUnica ? 'bg-gray-50 text-gray-400 cursor-not-allowed placeholder:text-gray-400' : ''}`} />
+                      className={classeErro(erroAcao, 'duracaoDias', `w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${isDoseUnica ? 'bg-gray-50 text-gray-400 cursor-not-allowed placeholder:text-gray-400' : ''}`)} />
                   </div>
                   <div className="col-span-2 sm:col-span-2">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA INÍCIO</label>
                     <DateInput
                       value={form.dataInicio}
                       onChange={v => set('dataInicio', v)}
-                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus-within:border-emerald-500"
+                      className={classeErro(erroAcao, 'dataInicio', 'w-full border border-gray-200 rounded-xl px-2 py-2 text-xs text-gray-900 focus-within:border-emerald-500')}
                     />
                   </div>
                 </div>
@@ -1366,49 +1409,48 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 resize-none" />
                 </div>
 
-                {/* Quem fornece × quem aplica — lado a lado, são decisões irmãs.
-                    "Fornecido pelo Cliente" é do ITEM (não baixa estoque);
-                    "Aplicada pelo proprietário" é da PRESCRIÇÃO inteira (não vai ao
-                    plantão nem à fatura). */}
-                {(isMed || (isCreate && canEdit && !isReadOnly && !savedGrupos)) && (
-                  <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                    {isMed && (
-                      <div>
-                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={form.medicamentoCliente}
-                            onChange={e => set('medicamentoCliente', e.target.checked)}
-                            className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                          />
-                          <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
-                        </label>
-                        {form.medicamentoCliente && (
-                          <p className="text-xs text-amber-600 mt-1.5 ml-6">Sem baixa no estoque</p>
-                        )}
-                      </div>
-                    )}
+                {/* Quem FORNECE × quem APLICA — lado a lado, são decisões irmãs e
+                    ambas do ITEM: a mesma prescrição pode ter o injetável que a
+                    clínica aplica na baia e a pomada que o tratador passa em casa.
+                    "Fornecido pelo Cliente" → não baixa estoque (só medicamento);
+                    "Aplicada pelo Proprietário" → fora do plantão, da fatura e do
+                    estoque (vale também para PROCEDIMENTO). */}
+                <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                  {isMed && (
+                    <div>
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={form.medicamentoCliente}
+                          onChange={e => set('medicamentoCliente', e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                        />
+                        <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
+                      </label>
+                    </div>
+                  )}
 
-                    {isCreate && canEdit && !isReadOnly && !savedGrupos && (
-                      <div>
-                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={executadaPeloProprietario}
-                            onChange={e => setExecutadaPeloProprietario(e.target.checked)}
-                            className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                          />
-                          <span className="text-sm text-red-600 font-medium">Será aplicada pelo Proprietário</span>
-                        </label>
-                        {executadaPeloProprietario && (
-                          <p className="text-xs text-amber-600 mt-1.5 ml-6">
-                            Fora da Execução de Prescrição e da fatura
-                          </p>
-                        )}
-                      </div>
-                    )}
+                  <div>
+                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={form.aplicadaPeloProprietario}
+                        onChange={e => set('aplicadaPeloProprietario', e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span className="text-sm text-red-600 font-medium">
+                        {isMed ? 'Será aplicado pelo Proprietário' : 'Será executado pelo Proprietário'}
+                      </span>
+                    </label>
                   </div>
-                )}
+
+                  {/* Uma linha só, sempre visível: com duas dicas separadas as
+                      combinações se contradiziam (marcar "proprietário" dizia
+                      "fora da fatura", mas ele É cobrado ao salvar). */}
+                  <p className="w-full text-xs text-amber-600 -mt-0.5">
+                    {destinoDoItem(isMed && form.medicamentoCliente, form.aplicadaPeloProprietario, isMed)}
+                  </p>
+                </div>
               </div>
             )}
 
@@ -1452,6 +1494,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           dataInicio={item.dataInicio}
                           observacao={item.observacao}
                           medicamentoCliente={item.medicamentoCliente}
+                          aplicadaPeloProprietario={item.aplicadaPeloProprietario}
                           isEditing={editingLocalIdx === idx}
                           canEdit={canEdit}
                           onEdit={() => handleEditarLocal(idx)}
@@ -1481,6 +1524,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           dataInicio={item.dataInicio}
                           observacao={item.observacao}
                           medicamentoCliente={item.medicamentoCliente}
+                          aplicadaPeloProprietario={item.aplicadaPeloProprietario}
                           executado={completo}
                           emAndamento={emAndamentoItem ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
                           isEditing={editingServerId === item.id}
@@ -1505,7 +1549,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         </div>
 
         {/* Footer */}
-        <div className={`flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 flex-wrap ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
+        <div className={`px-5 py-4 border-t border-gray-100 ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
+          {/* Erro pertence à superfície da ação: aqui, colado no botão que foi clicado */}
+          <ErroAcao erro={erroAcao} className="mb-3" />
+          <div className="flex items-center justify-end gap-2 flex-wrap">
           <div className="flex items-center gap-2 ml-auto flex-wrap">
 
             {/* Estado "recém-salvo": prescrição(ões) salva(s) aguardando finalização */}
@@ -1580,6 +1627,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               </>
             )}
           </div>
+          </div>
         </div>
       </div>
 
@@ -1607,6 +1655,26 @@ function calcDataFim(dataInicio: string, dias: number | ''): string {
   return `${dy}/${m}/${y}`;
 }
 
+/**
+ * Destino do item conforme a matriz "quem FORNECE × quem APLICA" (espelha
+ * `PrescricaoGrupoController.finalizar`/`executar`, que são a autoridade).
+ *
+ *  fornecido p/ Cliente | aplicado p/ Proprietário | execução | fatura
+ *          não         |           não            |  ENTRA   | na execução
+ *          SIM         |           não            |  ENTRA   | nunca
+ *          não         |           SIM            | não vai  | ao salvar
+ *          SIM         |           SIM            | não vai  | nunca
+ */
+function destinoDoItem(cliente: boolean, proprietario: boolean, isMed: boolean): string {
+  // PROCEDIMENTO executado pelo proprietário não vai ao plantão E não é cobrado: a
+  // clínica não faz nada, e procedimento é serviço, não bem entregue. O medicamento é
+  // o único caso cobrado ao salvar — nele a clínica entrega o produto mesmo sem aplicar.
+  if (proprietario && (cliente || !isMed)) return 'Não vai à Execução de Prescrição e não é cobrado.';
+  if (proprietario)            return 'Não vai à Execução de Prescrição — cobrado na fatura ao salvar.';
+  if (cliente)                 return 'Vai à Execução de Prescrição — sem baixa no estoque e sem cobrança.';
+  return 'Vai à Execução de Prescrição — cobrado na fatura ao ser executado.';
+}
+
 function InfoChip({ label, value }: { label: string; value: string | null | undefined }) {
   if (!value) return null;
   return (
@@ -1618,14 +1686,14 @@ function InfoChip({ label, value }: { label: string; value: string | null | unde
 
 function ItemRow({
   label, tipo, dosagem, unidade, via, frequencia,
-  horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente, executado, emAndamento,
+  horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente, aplicadaPeloProprietario, executado, emAndamento,
   isEditing, canEdit, canRemove, onEdit, onRemove,
   isDragging, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   label: string; tipo: TipoItem;
   dosagem: string | null; unidade: string | null; via: string; frequencia: string;
   horaInicio?: string | null; duracaoDias?: number | ''; dataInicio?: string; observacao?: string | null;
-  medicamentoCliente?: boolean; executado?: boolean;
+  medicamentoCliente?: boolean; aplicadaPeloProprietario?: boolean; executado?: boolean;
   /** Item já teve dose(s) dada(s) mas ainda tem dias restantes — editável, não excluível */
   emAndamento?: { diaAtual: number; totalDias: number } | null;
   isEditing: boolean; canEdit: boolean; canRemove?: boolean;
@@ -1665,6 +1733,12 @@ function ItemRow({
         {medicamentoCliente && (
           <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
             Cliente
+          </span>
+        )}
+        {aplicadaPeloProprietario && (
+          <span title="Aplicado pelo proprietário — fora da Execução de Prescrição"
+            className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+            Proprietário
           </span>
         )}
         {executado && (
@@ -1814,6 +1888,7 @@ function ViewPrescricaoModal({ grupo, onClose, onImprimir }: {
               dataInicio={item.dataInicio}
               observacao={item.observacao}
               medicamentoCliente={item.medicamentoCliente}
+              aplicadaPeloProprietario={item.aplicadaPeloProprietario}
               executado={completo}
               emAndamento={!!item.executadoEm && !completo ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
               isEditing={false}
@@ -1855,8 +1930,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const canFinalizarCancelar = podeFinalizar;
   // FORNECEDOR só edita/finaliza/cancela itens que ele próprio criou (mesmo que a MatrizPerfil conceda EQUIPE/FULL)
 
-  const semPermissao = (acao: string) =>
-    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+  // Erro de ação da LISTA: pertence à linha cujo botão foi clicado, não ao topo da
+  // página — de onde o usuário não vê o retorno do que acabou de acionar.
+  const [erroLinha, setErroLinha] = useState<{ id: number; mensagem: string } | null>(null);
+  const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.mensagem : null);
+  const semPermissao = (acao: string, grupoId?: number) => {
+    const msg = `Sem permissão para ${acao}. Verifique com o responsável da equipe.`;
+    if (grupoId != null) setErroLinha({ id: grupoId, mensagem: msg });
+    else                 setErroInline(msg);
+  };
 
   const [grupos,             setGrupos]             = useState<PrescricaoGrupo[]>([]);
   const [loading,            setLoading]            = useState(false);
@@ -1911,17 +1993,25 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // (volta para rascunho e libera reservas) antes de editar.
   const [reabrindo,        setReabrindo]        = useState<PrescricaoGrupo | null>(null);
   const [reabrindoLoading, setReabrindoLoading] = useState(false);
-  // Erro de ação exibido inline (substitui o toast de erro)
+  // Erro de CARGA da página (falha ao listar) — este sim pertence ao topo.
+  // Erro de AÇÃO vive em `erroLinha` (na linha) ou `erroReabrir` (no modal).
   const [erroInline, setErroInline] = useState<string | null>(null);
 
+  // Erro do reabrir: o modal continua aberto, então a mensagem tem de aparecer
+  // DENTRO dele — no topo da página ela ficaria atrás do overlay.
+  const [erroReabrir, setErroReabrir] = useState<string | null>(null);
+
   const handleAlterar = (g: PrescricaoGrupo) => {
+    setErroLinha(null);
     if (g.status === 'SALVO') { abrirEdicao(g); return; }
+    setErroReabrir(null);
     setReabrindo(g);
   };
 
   const confirmarReabrir = async () => {
     if (!reabrindo) return;
     setReabrindoLoading(true);
+    setErroReabrir(null);
     try {
       const res = await api.post(`/clinica/prescricoes/grupos/${reabrindo.id}/reabrir`);
       const g = (res.data?.dados as PrescricaoGrupo) ?? { ...reabrindo, status: 'SALVO' as StatusGrupo };
@@ -1930,7 +2020,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       carregar();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      setErroInline(e?.response?.data?.error ?? 'Erro ao reabrir prescrição');
+      setErroReabrir(e?.response?.data?.error ?? 'Erro ao reabrir prescrição');
     } finally {
       setReabrindoLoading(false);
     }
@@ -1969,7 +2059,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   }, [editItemId]);
 
   const handleFinalizarDireto = async (grupoId: number) => {
-    if (!podeFinalizar) { semPermissao('finalizar prescrição'); return; }
+    if (!podeFinalizar) { semPermissao('finalizar prescrição', grupoId); return; }
+    setErroLinha(null);
     try {
       await api.post(`/clinica/prescricoes/grupos/${grupoId}/finalizar`);
       toast.success('Prescrição finalizada com sucesso');
@@ -1981,7 +2072,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       if (resp?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
         setAlertaDireto({ grupoId, alertas: resp.data.alertas ?? [] });
       } else {
-        setErroInline(resp?.data?.error ?? 'Erro ao finalizar prescrição');
+        setErroLinha({ id: grupoId, mensagem: resp?.data?.error ?? 'Erro ao finalizar prescrição' });
       }
     }
   };
@@ -1998,7 +2089,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao finalizar prescrição');
+      setErroLinha({ id: alertaDireto.grupoId, mensagem: msg ?? 'Erro ao finalizar prescrição' });
     } finally {
       setLoadingForceDireto(false);
     }
@@ -2007,19 +2098,22 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const onSaved = () => { carregar(); onFaturaAtualizada(); onSalvo?.(); };
 
   const handleExcluirCancelar = async (motivo: string) => {
-    if (!podeFinalizar) { semPermissao('cancelar prescrição'); return; }
     if (deletingId === null) return;
+    if (!podeFinalizar) { semPermissao('cancelar prescrição', deletingId); setDeletingId(null); return; }
+    const grupoId = deletingId;
+    setErroLinha(null);
     try {
-      await api.post(`/clinica/prescricoes/grupos/${deletingId}/cancelar`, { motivo });
+      await api.post(`/clinica/prescricoes/grupos/${grupoId}/cancelar`, { motivo });
       toast.success('Prescrição cancelada');
       carregar();
     } catch (err: unknown) {
       const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
-      if (data?.code === 'EXECUTADO') {
-        setErroInline('Esta prescrição já foi executada e não pode ser alterada ou cancelada.');
-      } else {
-        setErroInline(data?.error ?? 'Erro ao cancelar prescrição');
-      }
+      setErroLinha({
+        id: grupoId,
+        mensagem: data?.code === 'EXECUTADO'
+          ? 'Esta prescrição já foi executada e não pode ser alterada ou cancelada.'
+          : (data?.error ?? 'Erro ao cancelar prescrição'),
+      });
     } finally { setDeletingId(null); }
   };
 
@@ -2200,10 +2294,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${CATEGORIA_BADGE[categoriaGrupo(g)]}`}>
                       {categoriaGrupo(g)}
                     </span>
-                    {g.executadaPeloProprietario && (
+                    {g.itens.some(i => i.aplicadaPeloProprietario) && (
                       <span className="ml-1 inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700"
-                        title="Aplicada pelo proprietário — fora do plantão e da fatura">
-                        Proprietário
+                        title={g.itens.every(i => i.aplicadaPeloProprietario)
+                          ? 'Todos os itens são aplicados pelo proprietário — fora do plantão e da fatura'
+                          : 'Contém item(ns) aplicado(s) pelo proprietário — fora do plantão e da fatura'}>
+                        Proprietário{g.itens.every(i => i.aplicadaPeloProprietario) ? '' : ' (parcial)'}
                       </span>
                     )}
                     <div className="mt-0.5">
@@ -2245,12 +2341,17 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                         </button>
                       )}
                       {cancelavel && (
-                        <button onClick={() => setDeletingId(g.id)} title="Cancelar prescrição"
+                        <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }} title="Cancelar prescrição"
                           className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                           <Trash2 size={13} />
                         </button>
                       )}
                     </div>
+                    {/* Erro na superfície da ação: embaixo dos botões desta linha */}
+                    <ErroAcao
+                      erro={erroDaLinha(g.id) ? { mensagem: erroDaLinha(g.id)! } : null}
+                      className="mt-2 max-w-xs mx-auto text-left whitespace-normal"
+                    />
                   </td>
                 </tr>
               );
@@ -2313,12 +2414,17 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                 </button>
               )}
               {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutorMobile) && (
-                <button onClick={() => setDeletingId(g.id)}
+                <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                   <Trash2 size={11} /> Cancelar
                 </button>
               )}
             </div>
+            {/* Erro na superfície da ação: embaixo dos botões deste card */}
+            <ErroAcao
+              erro={erroDaLinha(g.id) ? { mensagem: erroDaLinha(g.id)! } : null}
+              className="mt-2"
+            />
           </div>
           );
         })}
@@ -2381,10 +2487,16 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         open={reabrindo !== null}
         variante="aviso"
         titulo={`Reabrir prescrição #${reabrindo?.numeroFormatado ?? ''} para edição?`}
-        mensagem="Esta prescrição está finalizada. Para editá-la ela voltará a rascunho e as reservas de estoque serão liberadas. Ao terminar, finalize-a novamente para reenviá-la à execução."
+        mensagem={
+          <>
+            Esta prescrição está finalizada. Para editá-la ela voltará a rascunho e as reservas de
+            estoque serão liberadas. Ao terminar, finalize-a novamente para reenviá-la à execução.
+            <ErroAcao erro={erroReabrir ? { mensagem: erroReabrir } : null} className="mt-3" />
+          </>
+        }
         labelConfirmar={reabrindoLoading ? 'Reabrindo…' : 'Reabrir e editar'}
         onConfirmar={confirmarReabrir}
-        onCancelar={() => { if (!reabrindoLoading) setReabrindo(null); }}
+        onCancelar={() => { if (!reabrindoLoading) { setErroReabrir(null); setReabrindo(null); } }}
       />
     </>
   );

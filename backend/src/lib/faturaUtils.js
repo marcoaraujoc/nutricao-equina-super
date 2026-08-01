@@ -11,19 +11,31 @@ function formatAtendimentoNum(tipo, numero) {
 }
 
 /**
- * Busca ou cria a fatura ABERTA do proprietário do animal.
+ * Busca ou cria a fatura ABERTA do proprietário DENTRO DE UMA EMPRESA.
  * Deve ser chamado dentro de uma transaction (tx).
+ *
+ * ⚠️ O escopo por empresa NÃO é opcional. O mesmo cliente é atendido por várias
+ * clínicas; sem `empresaId` no filtro, o lançamento da clínica B caía na fatura
+ * ABERTA da clínica A e cada uma passava a ver os itens da outra. Modelo correto:
+ * EmpresaA-Cliente-Fatura e EmpresaB-Cliente-Fatura, independentes.
+ *
+ * `empresaId` null casa SÓ com faturas legadas sem tenancy (anteriores à migration
+ * 20260812000000) — nunca com a fatura de uma empresa identificada.
  *
  * @param {object}  tx             - prisma transaction client
  * @param {number}  proprietarioId - userId do proprietário (pode ser null)
+ * @param {number}  empresaId      - empresa do contexto (`req.empresaId`)
  * @returns {object} fatura Prisma record
  */
-async function getOrCreateFatura(tx, proprietarioId) {
+async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
   const mesAtual = new Date().toISOString().slice(0, 7); // '2026-06'
-  let fatura = await tx.fatura.findFirst({ where: { proprietarioId, status: 'ABERTA' } });
+  const empresa  = empresaId ? Number(empresaId) : null;
+  let fatura = await tx.fatura.findFirst({
+    where: { proprietarioId, status: 'ABERTA', empresaId: empresa },
+  });
   if (!fatura) {
     fatura = await tx.fatura.create({
-      data: { proprietarioId, mesReferencia: mesAtual, status: 'ABERTA', total: 0 },
+      data: { proprietarioId, empresaId: empresa, mesReferencia: mesAtual, status: 'ABERTA', total: 0 },
     });
   }
   return fatura;

@@ -178,6 +178,8 @@ async function buscarEstoquesFEFO(client, medicamentoCatId, empresaId, grupoIdEx
 async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId, grupoId);
     if (estoques.length === 0) continue;
 
@@ -212,6 +214,8 @@ async function consumirReservas(tx, grupoId, itens, empresaId) {
   const unidades = new Map();
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoque = await tx.estoqueClinica.findFirst({
       where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
       include: { medicamento: { select: { unidade: true } } },
@@ -274,6 +278,8 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
   const unidades = new Map();
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue;
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
@@ -390,6 +396,8 @@ async function verificarEstoqueParaDia(itens, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
@@ -417,6 +425,8 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoque = await prisma.estoqueClinica.findFirst({
       where:   { medicamentoId: item.medicamentoCatId, ...(empresaId != null ? { empresaId } : {}), ativo: true },
       include: { medicamento: { select: { nome: true, unidade: true } } },
@@ -450,6 +460,8 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
+    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
+    if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId, grupoId);
     if (estoques.length === 0) continue;
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
@@ -533,7 +545,8 @@ const listarPorAnimal = async (req, res) => {
     const salvos = contagens.SALVO ?? 0;
 
     return res.json({
-      dados:   await anexarFlagProprietario(
+      dados:   await anexarFlagEmGrupos(
+        prisma,
         grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
       ),
       total,
@@ -556,7 +569,7 @@ const obterPorId = async (req, res) => {
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
     return res.json({
-      dados: await anexarFlagProprietario({ ...grupo, numeroFormatado: formatNumero(grupo.numero) }),
+      dados: await anexarFlagEmGrupos(prisma, { ...grupo, numeroFormatado: formatNumero(grupo.numero) }),
     });
   } catch (err) {
     console.error('PrescricaoGrupoController.obterPorId:', err);
@@ -581,27 +594,95 @@ const obterPorId = async (req, res) => {
 const ORDEM_CATEGORIAS = ['CONTROLADO', 'GERAL'];
 
 /**
- * Anexa `executadaPeloProprietario` a grupos já carregados.
+ * A coluna `aplicada_pelo_proprietario` já existe no banco?
+ *
+ * ⚠️ ESTE GUARD NÃO É OPCIONAL. SQL cru para uma coluna inexistente DENTRO de uma
+ * transaction aborta a TRANSACTION INTEIRA no Postgres — os comandos seguintes
+ * morrem com 25P02 ("current transaction is aborted"), e o `try/catch` em JS não
+ * desfaz isso: quem estoura é o comando SEGUINTE, longe do culpado. Foi assim que
+ * o Salvar da prescrição quebrou em `catalogoManual.js`, que não tem nada a ver.
+ *
+ * Consultado uma vez por processo. O `false` expira em 60s para que rodar a
+ * migration com o backend no ar volte a funcionar sem restart.
+ */
+let _temColunaProp = null;
+let _temColunaPropEm = 0;
+async function temColunaProprietario() {
+  if (_temColunaProp === true) return true;
+  if (_temColunaProp === false && Date.now() - _temColunaPropEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_prescricoes'
+          AND column_name = 'aplicada_pelo_proprietario' LIMIT 1`,
+    );
+    _temColunaProp = rows.length > 0;
+  } catch { _temColunaProp = false; }
+  _temColunaPropEm = Date.now();
+  return _temColunaProp;
+}
+
+/**
+ * Anexa `aplicadaPeloProprietario` a ITENS já carregados (aceita item, lista de
+ * itens, ou lista de GRUPOS — neste caso percorre `grupo.itens`).
+ *
  * Lido por SQL cru porque o client Prisma pode não conhecer a coluna ainda (no
  * Windows o `prisma generate` falha com o backend rodando) — mesmo padrão do
  * `isConvidado`/`cadastroConfirmadoEm`. Sem a coluna, devolve false.
+ *
+ * Toda leitura que decida EXECUÇÃO, FATURA ou ESTOQUE precisa passar por aqui:
+ * sem a flag, o item aplicado em casa volta a ser cobrado e a debitar estoque.
+ *
+ * `client` é sempre o cliente FORA da transaction (ver `temColunaProprietario`):
+ * a flag não é alterada pelas transactions que a leem, então ler por fora é seguro
+ * e não arrisca abortá-las.
  */
-async function anexarFlagProprietario(grupos) {
-  const lista = Array.isArray(grupos) ? grupos : [grupos];
-  const ids = lista.map(g => g?.id).filter(Number.isInteger);
-  if (ids.length === 0) return grupos;
+async function anexarAplicadaProprietario(client, itens) {
+  const lista = Array.isArray(itens) ? itens : [itens];
+  const ids = lista.map(i => i?.id).filter(Number.isInteger);
+  if (ids.length === 0) return itens;
   let marcados = new Set();
+  if (!(await temColunaProprietario())) {
+    const semFlag = (i) => ({ ...i, aplicadaPeloProprietario: false });
+    return Array.isArray(itens) ? itens.map(semFlag) : semFlag(itens);
+  }
   try {
     const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT id FROM schs2vet.tb_prescricao_grupos
-        WHERE executada_pelo_proprietario = true AND id IN (${ph})`,
+    const rows = await client.$queryRawUnsafe(
+      `SELECT id FROM schs2vet.tb_prescricoes
+        WHERE aplicada_pelo_proprietario = true AND id IN (${ph})`,
       ...ids,
     );
     marcados = new Set(rows.map(r => r.id));
   } catch { /* coluna ainda não migrada */ }
-  const aplicar = (g) => ({ ...g, executadaPeloProprietario: marcados.has(g.id) });
-  return Array.isArray(grupos) ? grupos.map(aplicar) : aplicar(grupos);
+  const aplicar = (i) => ({ ...i, aplicadaPeloProprietario: marcados.has(i.id) });
+  return Array.isArray(itens) ? itens.map(aplicar) : aplicar(itens);
+}
+
+/** Mesma coisa, para grupos já carregados com `itens`. */
+async function anexarFlagEmGrupos(client, grupos) {
+  const lista = Array.isArray(grupos) ? grupos : [grupos];
+  const todos = lista.flatMap(g => g?.itens ?? []);
+  const comFlag = await anexarAplicadaProprietario(client, todos);
+  const porId = new Map(comFlag.map(i => [i.id, i]));
+  const aplicar = (g) => ({ ...g, itens: (g.itens ?? []).map(i => porId.get(i.id) ?? i) });
+  return Array.isArray(grupos) ? lista.map(aplicar) : aplicar(grupos);
+}
+
+/**
+ * Grava a coluna do item por SQL cru (o client pode não conhecê-la). `undefined`
+ * não toca no valor — mantém a semântica de PATCH parcial do `atualizarItem`.
+ */
+async function gravarAplicadaProprietario(client, itemId, valor) {
+  if (valor === undefined) return;
+  if (!(await temColunaProprietario())) return;
+  try {
+    await client.$executeRawUnsafe(
+      'UPDATE schs2vet.tb_prescricoes SET aplicada_pelo_proprietario = $1 WHERE id = $2',
+      valor === true,
+      itemId,
+    );
+  } catch { /* coluna ainda não migrada */ }
 }
 
 // Categoria de um item cru (do body). `controladoDe` resolve o flag do catálogo.
@@ -613,7 +694,7 @@ function categoriaPara({ tipo, medicamentoCatId }, controladoDe) {
 
 const criar = async (req, res) => {
   try {
-    const { animalId, empresaId, evolucaoId, itens = [], executadaPeloProprietario = false } = req.body;
+    const { animalId, empresaId, evolucaoId, itens = [] } = req.body;
     const veterinarioId = req.user.id;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
@@ -687,16 +768,6 @@ const criar = async (req, res) => {
             status:       'SALVO',
           },
         });
-        // Coluna nova gravada por SQL cru — o client Prisma pode não tê-la ainda
-        // (no Windows o `generate` falha com o backend rodando). Mesmo padrão do
-        // `isConvidado`/`cadastroConfirmadoEm`.
-        if (executadaPeloProprietario) {
-          await tx.$executeRawUnsafe(
-            'UPDATE schs2vet.tb_prescricao_grupos SET executada_pelo_proprietario = true WHERE id = $1',
-            grp.id,
-          );
-        }
-
         for (const item of buckets[categoria]) {
           // Item fora do catálogo (digitado à mão) → cadastra para a EMPRESA e, no
           // caso de medicamento, já vincula a prescrição ao registro criado.
@@ -721,7 +792,7 @@ const criar = async (req, res) => {
             if (tipoItem !== 'PROCEDIMENTO') medicamentoCatId = cacheCatalogo.get(chaveCatalogo);
           }
 
-          await tx.prescricao.create({
+          const criado = await tx.prescricao.create({
             data: {
               animalId:           Number(animalId),
               veterinarioId,
@@ -747,6 +818,9 @@ const criar = async (req, res) => {
                 : null,
             },
           });
+          // Coluna nova gravada por SQL cru — o client Prisma pode não tê-la ainda
+          // (no Windows o `generate` falha com o backend rodando).
+          await gravarAplicadaProprietario(tx, criado.id, item.aplicadaPeloProprietario === true);
         }
 
         idsCriados.push(grp.id);
@@ -761,7 +835,10 @@ const criar = async (req, res) => {
     });
 
     return res.status(201).json({
-      dados: gruposCriados.map(g => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
+      dados: await anexarFlagEmGrupos(
+        prisma,
+        gruposCriados.map(g => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
+      ),
     });
   } catch (err) {
     console.error('PrescricaoGrupoController.criar:', err);
@@ -828,7 +905,7 @@ const adicionarItem = async (req, res) => {
     if (!grupo)               return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível adicionar itens em prescrições com status SALVO.' });
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
 
@@ -877,13 +954,15 @@ const adicionarItem = async (req, res) => {
         },
       });
 
+      await gravarAplicadaProprietario(tx, novoItem.id, aplicadaPeloProprietario === true);
+
       // Responsável passa a ser quem adicionou (no grupo de destino)
       await tx.prescricaoGrupo.update({ where: { id: destinoId }, data: { veterinarioId } });
       return { item: novoItem, destinoInfo };
     });
 
     return res.status(201).json({
-      dados:        resultado.item,
+      dados:        await anexarAplicadaProprietario(prisma, resultado.item),
       grupoDestino: resultado.destinoInfo
         ? { id: resultado.destinoInfo.id, numeroFormatado: formatNumero(resultado.destinoInfo.numero), novo: resultado.destinoInfo.novo }
         : null,
@@ -913,7 +992,7 @@ const atualizarItem = async (req, res) => {
       return res.status(400).json({ error: 'Prescrição já executada não pode ser alterada.', code: 'EXECUTADO' });
     }
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
 
     const data = {};
     if (tipo               !== undefined) data.tipo              = tipo;
@@ -969,13 +1048,15 @@ const atualizarItem = async (req, res) => {
         },
       });
 
+      await gravarAplicadaProprietario(tx, itemId, aplicadaPeloProprietario);
+
       // Responsável passa a ser quem editou (grupo de origem)
       await tx.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId } });
       return { updated, destinoInfo };
     });
 
     return res.json({
-      dados:        resultado.updated,
+      dados:        await anexarAplicadaProprietario(prisma, resultado.updated),
       grupoDestino: resultado.destinoInfo
         ? { id: resultado.destinoInfo.id, numeroFormatado: formatNumero(resultado.destinoInfo.numero), novo: resultado.destinoInfo.novo }
         : null,
@@ -1035,9 +1116,9 @@ const removerItem = async (req, res) => {
           // Recalcula as reservas do grupo com os itens restantes (multi-lote) —
           // sem isso, a reserva do item removido ficaria órfã, bloqueando o
           // estoque para outras prescrições.
-          const itensRestantes = await tx.prescricao.findMany({
+          const itensRestantes = await anexarAplicadaProprietario(prisma, await tx.prescricao.findMany({
             where: { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
-          });
+          }));
           const empresaIdEfetivo = item.grupo?.empresaId ?? null;
           if (item.medicamentoCatId && !itensRestantes.some(i => i.medicamentoCatId === item.medicamentoCatId)) {
             // Nenhum item restante usa o medicamento do item removido → limpa as reservas dele
@@ -1107,6 +1188,10 @@ const finalizar = async (req, res) => {
     }
     if (grupo.itens.length === 0) return res.status(400).json({ error: 'A prescrição não possui itens ativos.' });
 
+    // Sem a flag no item, o que o cliente aplica em casa voltaria a reservar estoque
+    // e a ser cobrado logo aqui, na finalização.
+    grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
+
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
     // Disponibilidade MULTI-LOTE (soma das entradas − reservas de outras prescrições).
@@ -1148,16 +1233,38 @@ const finalizar = async (req, res) => {
       // cancelar e abatido conforme a execução diária debita o estoque.
       await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
 
-      // Lança na fatura JÁ na finalização (mesma premissa do exame): o que foi
-      // prescrito aparece para o financeiro sem depender da execução da enfermagem.
-      // PROCEDIMENTO já entra com o valor do catálogo/combo (não depende de dose);
-      // MEDICAMENTO entra ZERADO e a 1ª execução preenche o valor da dose debitada
-      // (ver `executar`) — assim o total cobrado continua sendo o efetivamente aplicado.
-      if (proprietarioId) {
-        const fatura = await getOrCreateFatura(tx, proprietarioId);
-        for (const item of grupo.itens) {
-          // Medicamento do cliente não é cobrado — segue sem item de fatura
-          if (item.medicamentoCliente) continue;
+      // ── MATRIZ "quem FORNECE × quem APLICA" (2026-08-01) ────────────────────
+      // MEDICAMENTO:
+      // fornecido pelo Cliente | aplicado pelo Proprietário | execução | fatura
+      //          não          |            não             |   ENTRA  | na EXECUÇÃO
+      //          SIM          |            não             |   ENTRA  | nunca
+      //          não          |            SIM             |  não vai | AQUI (finalização)
+      //          SIM          |            SIM             |  não vai | nunca
+      //
+      // Ou seja: aqui só entra o item que a clínica FORNECE e o proprietário APLICA —
+      // ele nunca chega ao plantão, então a finalização é a única oportunidade de
+      // cobrá-lo. Todo o resto que é cobrável espera a execução (`executar`), que é
+      // quando o serviço de fato acontece.
+      //
+      // PROCEDIMENTO marcado "Será executado pelo Proprietário" NUNCA é cobrado.
+      // Procedimento não é bem entregue, é SERVIÇO: se quem executa é o proprietário,
+      // a clínica não faz nada e não há o que faturar — diferente do medicamento, em
+      // que a clínica ainda entrega o frasco mesmo sem aplicar. Por isso o filtro é
+      // pelo tipo MEDICAMENTO, e não "não é procedimento": só o que a clínica de fato
+      // ENTREGA pode ser cobrado sem execução.
+      // ⚠️ Mudança de premissa: até 2026-08-01 a finalização lançava TUDO (com o
+      // medicamento zerado até a 1ª execução preencher o valor). Agora o que vai ser
+      // executado só vira linha de fatura ao ser executado.
+      const itensParaFaturarAgora = grupo.itens.filter(
+        i => i.tipo === 'MEDICAMENTO' && !i.medicamentoCliente && i.aplicadaPeloProprietario,
+      );
+      // Sem nada a cobrar agora, nem abre fatura: senão a finalização criaria uma
+      // fatura vazia para o cliente todo mês.
+      if (proprietarioId && itensParaFaturarAgora.length > 0) {
+        // A fatura segue a tenancy do GRUPO (clínica que prescreveu), não o contexto
+        // de quem executa — cada empresa tem a sua fatura para o mesmo cliente.
+        const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
+        for (const item of itensParaFaturarAgora) {
           const jaLancado = await tx.faturaItem.findFirst({ where: { prescricaoId: item.id } });
           if (jaLancado) continue;
           await adicionarFaturaItem(tx, {
@@ -1166,7 +1273,11 @@ const finalizar = async (req, res) => {
             tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
             descricao:    descricaoItemFatura(item, atendNum),
             // Valor aceito no orçamento manda; sem orçamento, procedimento sai pelo
-            // catálogo/combo e medicamento fica zerado até a execução debitar a dose.
+            // catálogo/combo.
+            // ⚠️ MEDICAMENTO cai em 0 aqui: o preço nasce do LOTE debitado, e este item
+            // nunca é executado (quem aplica é o proprietário) — logo não há lote. Se a
+            // clínica entrega o medicamento, hoje é preciso ajustar o valor na fatura à
+            // mão, ou orçar o item antes (o `valorOrcado` tem precedência).
             valor:        item.valorOrcado != null
               ? item.valorOrcado
               : (item.tipo === 'PROCEDIMENTO'
@@ -1338,7 +1449,10 @@ const reabrirParaEdicao = async (req, res) => {
     }
     if (grupo.status === 'SALVO') {
       const g = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
-      return res.json({ dados: { ...g, numeroFormatado: formatNumero(g.numero) } });
+      // Anexar a flag aqui não é detalhe: o objeto devolvido vai direto para o
+      // formulário de edição. Sem ela, a caixa "aplicada pelo Proprietário" reabre
+      // desmarcada em cada item e o Salvar seguinte apagaria a marcação.
+      return res.json({ dados: await anexarFlagEmGrupos(prisma, { ...g, numeroFormatado: formatNumero(g.numero) }) });
     }
     if (grupo.status === 'EXECUTADO' || grupo.itens.some(i => i.executadoEm)) {
       return res.status(400).json({ error: 'Prescrição já executada não pode ser editada.', code: 'EXECUTADO' });
@@ -1358,7 +1472,9 @@ const reabrirParaEdicao = async (req, res) => {
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
-    return res.json({ dados: { ...grupoAtualizado, numeroFormatado: formatNumero(grupoAtualizado.numero) } });
+    return res.json({
+      dados: await anexarFlagEmGrupos(prisma, { ...grupoAtualizado, numeroFormatado: formatNumero(grupoAtualizado.numero) }),
+    });
   } catch (err) {
     if (err.code === 'FATURA_PAGA') {
       return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
@@ -1452,7 +1568,13 @@ const executar = async (req, res) => {
     // não são re-debitados/re-faturados, e itens que ainda não começaram são ignorados.
     // Itens processáveis hoje: dentro da janela, ainda não executados HOJE, e — se
     // itemIds foi enviado — restritos a esses (execução item a item).
+    grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
+
+    // Item aplicado pelo proprietário nunca é executado pela clínica — a lista do
+    // plantão já não o mostra, e o filtro aqui fecha a porta de um POST com itemIds
+    // (execução item a item) que o alcançasse mesmo assim.
     const itensHoje = grupo.itens.filter(item =>
+      !item.aplicadaPeloProprietario &&
       janelaDoItem(item, hojeStr).dentro &&
       !executadoHojeItem(item, hojeStr) &&
       (!itemIdsFiltro || itemIdsFiltro.includes(item.id))
@@ -1482,8 +1604,8 @@ const executar = async (req, res) => {
       // Passa o grupoId para abater as reservas deste grupo junto com a baixa.
       const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId);
 
-      // Lança na fatura ABERTA do proprietário (quantidade do dia)
-      const fatura = await getOrCreateFatura(tx, proprietarioId);
+      // Lança na fatura ABERTA do proprietário NESTA empresa (quantidade do dia)
+      const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
 
       for (const item of itensHoje) {
         // precos já contém o valor proporcional da dose (regra de 3)
@@ -1498,13 +1620,17 @@ const executar = async (req, res) => {
               : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0));
         const descricao = descricaoItemFatura(item, atendNum);
 
-        // Medicamento fornecido pelo cliente NÃO é cobrado — não gera item na fatura,
-        // mesmo após executado. (A seringa/agulha da aplicação, insumos da clínica,
-        // continuam sendo lançados abaixo quando a via for injetável.)
+        // Fornecido pelo cliente NÃO é cobrado — não gera item na fatura, mesmo após
+        // executado. (A seringa/agulha da aplicação, insumos da clínica, continuam
+        // sendo lançados abaixo quando a via for injetável.)
+        // É AQUI que nasce a cobrança do item sem flag nenhuma — a finalização deixou
+        // de lançá-lo em 2026-08-01 (ver a matriz em `finalizar`). O item aplicado pelo
+        // proprietário nem chega neste laço: `itensHoje` já o excluiu.
         if (!item.medicamentoCliente) {
-          // A finalização já lançou este item na fatura. Na PRIMEIRA execução, essa
-          // linha é aproveitada (só confirma o valor); nos dias seguintes, cada dose
-          // entra como uma nova linha — o total continua sendo o efetivamente aplicado.
+          // Prescrição finalizada ANTES da mudança já tem uma linha zerada criada na
+          // finalização: na PRIMEIRA execução ela é aproveitada (só confirma o valor)
+          // em vez de duplicar. Nas finalizadas depois, não há linha e cada dose entra
+          // como uma linha nova — o total continua sendo o efetivamente aplicado.
           // `item.executadoEm` ainda reflete o estado ANTES desta execução (a marcação
           // acontece adiante no laço) e `itensHoje` já excluiu quem executou hoje.
           const primeiraExecucao = !item.executadoEm;
@@ -1564,10 +1690,13 @@ const executar = async (req, res) => {
       // Transita para EXECUTADO só quando TODOS os itens ativos já foram executados
       // e cada um alcançou o último dia da sua janela (respeita execução item a item
       // e durações diferentes). Backend-autoritativo — relê o estado já atualizado.
-      const itensAtuais = await tx.prescricao.findMany({
+      // Item aplicado pelo proprietário está FORA da conta: ele nunca será executado,
+      // e exigi-lo aqui deixaria o documento eternamente FINALIZADO — preso na tela
+      // de execução mesmo com tudo o que é da clínica já aplicado.
+      const itensAtuais = (await anexarAplicadaProprietario(prisma, await tx.prescricao.findMany({
         where:  { grupoId, ativo: true },
-        select: { executadoEm: true, dataInicio: true, duracaoDias: true },
-      });
+        select: { id: true, executadoEm: true, dataInicio: true, duracaoDias: true },
+      }))).filter(i => !i.aplicadaPeloProprietario);
       const tudoConcluido = itensAtuais.length > 0 &&
         itensAtuais.every(item => item.executadoEm && janelaDoItem(item, hojeStr).ultimoDia);
       if (tudoConcluido) {
@@ -1616,25 +1745,13 @@ const listarParaExecucao = async (req, res) => {
     if (empresaId) whereGrupo.empresaId = Number(empresaId);
     if (animalId)  whereGrupo.animalId  = Number(animalId);
 
-    // Prescrição que o PROPRIETÁRIO aplica em casa não é serviço da clínica: fica fora
-    // do plantão. Como o FaturaItem e a baixa de estoque só nascem na EXECUÇÃO, não
-    // aparecer aqui é o que garante que ela nunca chegue à fatura.
-    // Coluna nova lida por SQL cru (client pode estar desatualizado) — os ids marcados
-    // saem do resultado via `notIn`.
-    try {
-      const marcados = await prisma.$queryRawUnsafe(
-        'SELECT id FROM schs2vet.tb_prescricao_grupos WHERE executada_pelo_proprietario = true',
-      );
-      if (marcados.length > 0) whereGrupo.id = { notIn: marcados.map(r => r.id) };
-    } catch { /* coluna ainda não migrada — não filtra */ }
-
     // Escopo base × convidado por ANIMAL (mesma regra da listagem/agendamento): o vet
     // vinculado (convidado) só vê os grupos dos SEUS animais + os liberados por outros
     // vets (designação) na empresa ativa; dono/gestor vê os pacientes que trata.
     const { where: animalScopeWhere } = await buildAnimalScopeWhere(req);
     whereGrupo.animal = { ...animalScopeWhere, ativo: true };
 
-    const grupos = await prisma.prescricaoGrupo.findMany({
+    const gruposCrus = await prisma.prescricaoGrupo.findMany({
       where:   whereGrupo,
       include: {
         veterinario:  { select: { id: true, fullName: true } },
@@ -1656,6 +1773,15 @@ const listarParaExecucao = async (req, res) => {
       },
       orderBy: [{ animalId: 'asc' }, { numero: 'asc' }],
     });
+
+    // O que o PROPRIETÁRIO aplica em casa não é serviço da clínica: sai do plantão.
+    // O corte é por ITEM — o mesmo documento pode ter o injetável da baia (fica) e a
+    // pomada que o tratador passa (sai). Grupo que ficou sem nenhum item some da tela;
+    // como FaturaItem e baixa de estoque só nascem na EXECUÇÃO, não aparecer aqui é o
+    // que garante que esse item nunca seja cobrado nem debitado.
+    const grupos = (await anexarFlagEmGrupos(prisma, gruposCrus))
+      .map(g => ({ ...g, itens: g.itens.filter(i => !i.aplicadaPeloProprietario) }))
+      .filter(g => g.itens.length > 0);
 
     // Data de referência — usa param ?data=YYYY-MM-DD ou hoje
     const hojeStr = (data && /^\d{4}-\d{2}-\d{2}$/.test(data))

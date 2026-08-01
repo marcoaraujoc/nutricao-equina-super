@@ -99,29 +99,10 @@ import Faturamento from './pages/Faturamento';
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
 import { PeriodoProvider } from './contexts/PeriodoContext';
-import { MobileMenuProvider, useMobileMenu } from './contexts/MobileMenuContext';
+import { MobileMenuProvider } from './contexts/MobileMenuContext';
 import { useDraggableModals } from './hooks/useDraggableModals';
-import { Menu } from 'lucide-react';
-
-// Barra superior do mobile: gatilho do menu numa barra `sticky` DENTRO do <main>
-// (o container que rola). Evita `position: fixed`, que no iOS Safari se desloca/atola
-// na barra do navegador dentro do shell com scroll interno. Respeita a safe-area.
-function MobileTopBar() {
-  const { setOpen } = useMobileMenu();
-  return (
-    <div
-      className="md:hidden sticky top-0 z-30 bg-gray-50/95 backdrop-blur-sm border-b border-gray-100 px-4 pb-2"
-      style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.5rem)' }}>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Abrir menu"
-        className="p-2.5 bg-white rounded-2xl shadow-sm border border-gray-200 text-gray-700 active:bg-gray-100">
-        <Menu size={24} />
-      </button>
-    </div>
-  );
-}
+import AppHeader from './components/AppHeader';
+import AppFooter from './components/AppFooter';
 
 function App() {
   // Modais arrastáveis no desktop (delegação global — vale para toda a aplicação)
@@ -155,13 +136,21 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ErrorBoundary>
-                    {/*
-                      Shell principal:
-                      - h-full overflow-hidden → trava na viewport, sem scroll externo
-                      - bg-gray-50            → fundo padrão da aplicação
-                    */}
                     <MobileMenuProvider>
-                    <div className="flex h-full overflow-hidden bg-gray-50">
+                    {/*
+                      Shell principal, em COLUNA: header global no topo, corpo
+                      (sidebar + conteúdo) no meio e rodapé global embaixo.
+                      - h-full overflow-hidden → trava na viewport, sem scroll externo
+                      - bg-gray-50             → fundo padrão da aplicação
+                      Header e rodapé são irmãos flex de altura fixa — nada de
+                      `position: fixed`, que se desloca no iOS Safari; só o <main> rola.
+                    */}
+                    <div className="flex flex-col h-full overflow-hidden bg-gray-50">
+
+                      <AppHeader />
+
+                      {/* Corpo: min-h-0 é o que permite o <main> rolar dentro do flex */}
+                      <div className="flex flex-1 min-h-0">
 
                       <Sidebar />
 
@@ -176,11 +165,11 @@ function App() {
                           usa barra overlay e por isso o problema lá é overflow horizontal, não a
                           barra vertical). Conteúdos largos (tabelas) rolam no próprio card
                           (overflow-x-auto interno), então nada é cortado.
-                        - pt-16 md:pt-0      → espaço para o botão hamburguer fixo no mobile
+                        O gatilho do menu mobile mora no AppHeader — por isso não há mais
+                        padding superior reservado aqui.
                         As páginas usam <PageContainer> para centralizar e adicionar padding interno.
                       */}
                       <main className="flex-1 min-w-0 overflow-y-scroll overflow-x-hidden [scrollbar-gutter:stable] bg-gray-50">
-                        <MobileTopBar />
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/mapa-atendimento" element={<MapaAtendimento />} />
@@ -303,6 +292,10 @@ function App() {
                           <Route path="/veterinarios/solicitacoes/aprovar" element={<AprovarVinculo />} />
                         </Routes>
                       </main>
+
+                      </div>
+
+                      <AppFooter />
 
                     </div>
                     </MobileMenuProvider>

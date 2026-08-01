@@ -739,7 +739,12 @@ function NovaEvolucaoModal({
   const todasMidias   = [...midias];
 
   return (
-    <div className="border-b border-gray-100">
+    // Mexeu no formulário, o erro anterior perdeu a validade: some. React normaliza
+    // `change` para BORBULHAR, então um handler no container cobre todo
+    // input/select/textarea de dentro — inclusive os que vierem depois.
+    <div className="border-b border-gray-100"
+      onChange={() => setErroInline(null)}
+      onInput={() => setErroInline(null)}>
       {somenteLeitura && (
         <div className="flex items-center gap-1.5 px-5 pt-4 -mb-2">
           <Eye size={12} className="text-gray-400" />

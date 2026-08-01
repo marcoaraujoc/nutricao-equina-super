@@ -387,7 +387,9 @@ interface OrcOutrosItem {
   animalId: number | null; animal?: { id: number; nome: string } | null;
 }
 interface OrcOutros {
-  id: number; numeroFormatado: string; liberado: boolean;
+  id: number; numeroFormatado: string;
+  /** Itens clínicos do MESMO orçamento ainda não importados numa evolução.
+   *  É AVISO, não bloqueio: o item "Outros" pode ser lançado assim mesmo. */
   pendentesClinicos: number; itens: OrcOutrosItem[];
 }
 
@@ -450,21 +452,23 @@ function ModalImportarOrcamento({ proprietarioId, faturaId, onFechar, onLancado 
               Nenhum item “Outros” aprovado e pendente de lançamento para este cliente.
             </div>
           ) : orcamentos.map(o => (
-            <div key={o.id} className={`border-b border-gray-100 ${o.liberado ? '' : 'opacity-60'}`}>
+            <div key={o.id} className="border-b border-gray-100">
               <div className="px-5 py-2 bg-gray-50 flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-gray-600">Orçamento #{o.numeroFormatado}</span>
-                {!o.liberado && (
+                {/* AVISO, não bloqueio: importar item clínico numa evolução é opcional
+                    (o orçamento inteiro é), então travar a cobrança do "Outros" nisso
+                    deixava taxa/transporte impossível de faturar, sem saída na tela. */}
+                {o.pendentesClinicos > 0 && (
                   <span className="text-[11px] text-amber-600">
-                    {o.pendentesClinicos} item(ns) ainda não importado(s) em uma evolução
+                    {o.pendentesClinicos} item(ns) clínico(s) ainda não importado(s) em uma evolução
                   </span>
                 )}
               </div>
               {o.itens.map(i => {
                 const checked = sel.has(i.id);
                 return (
-                  <button key={i.id} onClick={() => toggle(i.id)} disabled={!o.liberado}
-                    title={o.liberado ? undefined : 'Importe primeiro os demais itens do orçamento em uma evolução'}
-                    className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'} ${o.liberado ? '' : 'cursor-not-allowed hover:bg-transparent'}`}>
+                  <button key={i.id} onClick={() => toggle(i.id)}
+                    className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}>
                     <span className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300'}`}>
                       {checked && <Check size={13} className="text-white" />}
                     </span>

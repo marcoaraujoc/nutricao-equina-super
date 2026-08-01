@@ -10,6 +10,7 @@ import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircl
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
@@ -266,6 +267,8 @@ const Animal = () => {
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   // Erros por campo — preenchidos durante a digitação (onBlur) e no submit
   const [erros, setErros] = useState<Record<string, string>>({});
   const [vets,           setVets]           = useState<Vet[]>([]);
@@ -716,8 +719,8 @@ const Animal = () => {
   };
 
   const handleCriarTratador = async () => {
-    if (!novoTratNome.trim()) { setErroInline('Nome é obrigatório'); return; }
-    if (!novoTratLocId)       { setErroInline('Local de trabalho é obrigatório'); return; }
+    if (!novoTratNome.trim()) { setErroAcao({ mensagem: 'Nome é obrigatório', campos: ['novoTratNome'] }); return; }
+    if (!novoTratLocId)       { setErroAcao({ mensagem: 'Local de trabalho é obrigatório', campos: ['novoTratLocId'] }); return; }
     setCriandoTratador(true);
     try {
       const res = await api.post('/cadastro/tratadores', {
@@ -735,7 +738,7 @@ const Animal = () => {
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar tratador';
-      setErroInline(msg);
+      setErroAcao({ mensagem: msg });
     } finally {
       setCriandoTratador(false);
     }
@@ -1794,6 +1797,7 @@ const Animal = () => {
             >
               Cancelar
             </button>
+            <ErroAcao erro={erroAcao} className="mb-3" />
             <button
               type="button"
               onClick={handleCriarTratador}

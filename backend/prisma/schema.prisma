@@ -556,6 +556,11 @@ model Prescricao {
   ativo               Boolean   @default(true)
   aprovado            Boolean   @default(true)
   medicamentoCliente  Boolean   @default(false)
+  // Quem aplica ESTE item é o proprietário, em casa: orientação clínica, não serviço
+  // da clínica. Não entra na Execução de Prescrição (plantão) e, por consequência,
+  // não gera FaturaItem nem reserva/debita estoque. Irmão do `medicamentoCliente`
+  // (que trata de quem FORNECE) — os dois são por ITEM, nunca por documento.
+  aplicadaPeloProprietario Boolean @default(false) @map("aplicada_pelo_proprietario")
   executadoEm         DateTime? // setado na 1ª execução do item; presente = item travado (imutável)
   // Origem no orçamento: `valorOrcado` é o valor UNITÁRIO aceito pelo cliente e tem
   // precedência sobre o preço do catálogo/estoque no lançamento da fatura.
@@ -586,10 +591,8 @@ model PrescricaoGrupo {
   empresaId       Int?
   evolucaoId      Int?      @map("evolucao_id")   // evolução que originou este grupo
   status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
-  // Quem aplica é o PROPRIETÁRIO, em casa. A prescrição é orientação clínica, não
-  // serviço da clínica: não entra na lista de Execução de Prescrição (plantão) e,
-  // por consequência, nunca gera FaturaItem nem movimenta estoque.
-  executadaPeloProprietario Boolean @default(false) @map("executada_pelo_proprietario")
+  // "Aplicada pelo proprietário" mora no ITEM (Prescricao.aplicadaPeloProprietario) —
+  // o mesmo documento mistura o que a clínica aplica e o que o cliente aplica em casa.
   motivoCancelamento String? @db.Text
   finalizadoPorId Int?
   finalizadoEm    DateTime?
@@ -860,12 +863,20 @@ model Fatura {
   criadoEm        DateTime     @default(now())
   qtdCorrecoes    Int          @default(0) @map("qtd_correcoes")      // nº de edições/remoções de itens existentes
   ultimaCorrecaoEm DateTime?   @map("ultima_correcao_em")
+  // Tenancy: a fatura é POR EMPRESA. O mesmo cliente atendido por duas clínicas tem
+  // DUAS faturas independentes — sem isto, o lançamento da clínica B caía na fatura
+  // aberta da clínica A e cada uma via os itens da outra. Sem FK (mesmo critério de
+  // EvolucaoClinica/AgendamentoClinico: o registro sobrevive à exclusão da empresa).
+  // null = legado anterior à migration 20260812000000, sem tenancy dedutível.
+  empresaId       Int?         @map("empresa_id")
   itens           FaturaItem[]
 
   animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])
   proprietario User?   @relation("FaturaProprietario", fields: [proprietarioId], references: [id], onDelete: SetNull)
 
   @@index([proprietarioId, status])
+  @@index([empresaId])
+  @@index([proprietarioId, empresaId, status])
   @@map("tb_faturas")
   @@schema("schs2vet")
 }
@@ -1427,12 +1438,28 @@ model UsuarioEmpresa {
   // CRMV por empresa (VetPerfil.crmv é @unique global e não comporta o mesmo
   // profissional cadastrado por duas clínicas)
   crmv        String? @db.VarChar(20)
+  // Foto da pessoa NESTA empresa (migration 20260814000000) — URL do StorageProvider.
+  // null = sem foto (a tela cai nas iniciais). Lida/gravada por SQL cru, ver
+  // lib/usuarioEmpresa.js.
+  fotoUrl     String? @map("foto_url")
 
   // Condição comercial do CLIENTE nesta empresa
   mensalista          Boolean @default(false)
   valorAssistencia    Float?  @map("valor_assistencia")
   frequenciaVisitas   Int?    @map("frequencia_visitas")
   diaVencimentoFatura Int?    @map("dia_vencimento_fatura")
+
+  // Remuneração do PROFISSIONAL nesta empresa (o acordo é com cada clínica:
+  // salário aqui, comissão ali). NULL = vínculo legado, anterior à migration
+  // 20260812000002 — a obrigatoriedade é da aplicação, na inclusão/edição do membro.
+  tipoPagamento  String? @map("tipo_pagamento")  @db.VarChar(10) // SALARIO | COMISSAO
+  formaPagamento String? @map("forma_pagamento") @db.VarChar(10) // VALOR | PERCENTUAL
+  valorPagamento Float?  @map("valor_pagamento")
+
+  // Sem acesso, a pessoa NÃO loga — fica só como cadastro da clínica. Concedido por
+  // EMPRESA: quem tem acesso pela clínica A e está bloqueado na B só enxerga a A no
+  // seletor de contexto. Base do futuro controle de usuários por plano.
+  acessoSistema Boolean @default(true) @map("acesso_sistema")
 
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
   ativo     Boolean  @default(true)
@@ -1599,6 +1626,10 @@ model EmpresaConfiguracao {
   // que o profissional não configurou no card "Locais de trabalho" — herança dinâmica,
   // não snapshot. null = padrão do sistema (60 min).
   tempoConsultaPadraoMin Int?    @map("tempo_consulta_padrao_min")
+  // Validade do ORÇAMENTO em dias (migration 20260813000000). Passado o prazo contado
+  // de Orcamento.createdAt, o cron cancela o que não foi aprovado (nem parcialmente).
+  // null = sem validade — o orçamento não expira.
+  validadeOrcamentoDias  Int?    @map("validade_orcamento_dias")
   // Evolution API — instância exclusiva de WhatsApp da clínica (migration 20260718170000).
   // waInstance: identificador da instância (nunca exposto ao frontend);
   // waStatus: DESCONECTADO | AGUARDANDO_QR | CONECTADO | ERRO.
@@ -1740,6 +1771,14 @@ model ConviteEquipe {
   status    String   @default("PENDENTE")
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  // Acordo definido pelo gestor AO CONVIDAR — aplicado ao vínculo quando o convite
+  // é aceito (ver UsuarioEmpresa). Sem isto, quem entra por convite nasceria sem
+  // remuneração e o campo só seria obrigatório na inclusão direta.
+  tipoPagamento  String? @map("tipo_pagamento")  @db.VarChar(10)
+  formaPagamento String? @map("forma_pagamento") @db.VarChar(10)
+  valorPagamento Float?  @map("valor_pagamento")
+  acessoSistema  Boolean @default(true) @map("acesso_sistema")
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
 

@@ -45,8 +45,16 @@ interface Membro {
     bairro?:      string | null;
     cidade?:      string | null;
     estado?:      string | null;
+    // Foto do cadastro NESTA empresa (tb_usuario_empresa.foto_url), enviada pelo
+    // próprio profissional no Cadastro Pessoal. null = sem foto → iniciais.
+    fotoUrl?:     string | null;
     fornecedorPerfil?: { tipoServico?: string | null } | null;
     especialidades?: Array<{ especialidadeId: number; especialidade?: { id: number; nome: string } }>;
+    // Vínculo com ESTA empresa (tb_usuario_empresa): remuneração e acesso ao sistema
+    tipoPagamento?:  string | null;
+    formaPagamento?: string | null;
+    valorPagamento?: number | null;
+    acessoSistema?:  boolean;
   };
   equipe?: { nome: string };
 }
@@ -114,6 +122,124 @@ function expedientePorLocal(
   return agregado ? [{ especialidades: [], local: null, quando: agregado }] : [];
 }
 
+// Iniciais para quem ainda não enviou foto (mesmo fallback do Cadastro Pessoal)
+const iniciaisDe = (nome: string): string =>
+  nome.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('') || '?';
+
+/**
+ * Avatar do membro — quadrado de 3 LINHAS (h-12 = 48px ≈ 3 linhas de texto da lista),
+ * clicável: abre a ficha com especialidade, local, horário, telefone e e-mail.
+ * É `button` de propósito (e não `div` com onClick): dá foco por teclado e Enter/Espaço
+ * de graça, que é o mínimo para um elemento que abre um diálogo.
+ */
+function AvatarMembro({ membro, onClick, className = '' }: {
+  membro: Membro; onClick: () => void; className?: string;
+}) {
+  const foto = membro.user.fotoUrl;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Ver dados de ${membro.user.fullName}`}
+      aria-label={`Ver dados de ${membro.user.fullName}`}
+      className={`w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 border border-gray-200 bg-emerald-50 flex items-center justify-center transition-all hover:ring-2 hover:ring-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${className}`}
+    >
+      {foto
+        ? <img src={foto} alt="" className="w-full h-full object-cover" />
+        : <span className="text-sm font-bold text-emerald-700">{iniciaisDe(membro.user.fullName)}</span>}
+    </button>
+  );
+}
+
+/**
+ * Ficha do membro — abre ao clicar na foto. Mostra o que a equipe precisa para
+ * acionar a pessoa: especialidade, local, horário, telefone e e-mail. É só LEITURA;
+ * quem edita é o gestor, pelo botão Editar da linha.
+ */
+function FichaMembro({ membro, linhas, especialidades, onFechar }: {
+  membro: Membro;
+  linhas: { especialidades: string[]; local: string | null; quando: string | null }[];
+  especialidades: string[];
+  onFechar: () => void;
+}) {
+  const u = membro.user;
+  // Sem linha por local, a especialidade ainda aparece (vem do cadastro do membro).
+  const listaEspecialidades = linhas.length > 0
+    ? [...new Set(linhas.flatMap(l => (l.especialidades.length > 0 ? l.especialidades : especialidades)))]
+    : especialidades;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onFechar}>
+      <div
+        className="bg-white rounded-3xl w-full max-w-md shadow-xl overflow-hidden max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100 rounded-t-2xl">
+          <div className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 border border-gray-200 bg-emerald-50 flex items-center justify-center">
+            {u.fotoUrl
+              ? <img src={u.fotoUrl} alt="" className="w-full h-full object-cover" />
+              : <span className="text-base font-bold text-emerald-700">{iniciaisDe(u.fullName)}</span>}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-gray-900 truncate">{u.fullName}</p>
+            <p className="text-xs text-gray-400 truncate">{labelCargo(membro.cargo)}</p>
+          </div>
+          <button type="button" onClick={onFechar}
+            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4 overflow-y-auto">
+          <div>
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Especialidade</p>
+            {listaEspecialidades.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {listaEspecialidades.map(t => (
+                  <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">{t}</span>
+                ))}
+              </div>
+            ) : <p className="text-sm text-gray-400">Não informada</p>}
+          </div>
+
+          <div>
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+              Local e horário de atendimento
+            </p>
+            {linhas.length === 0 ? (
+              <p className="text-sm text-gray-400">Expediente padrão da empresa</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {linhas.map((l, i) => (
+                  <li key={i} className="text-sm text-gray-700">
+                    <span className="font-medium">{l.local ?? 'Sem local definido'}</span>
+                    <span className="block text-xs text-gray-500">
+                      {l.quando ?? 'expediente da empresa'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 pt-1 border-t border-gray-50">
+            <div>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Telefone</p>
+              {u.phone
+                ? <a href={`tel:${u.phone.replace(/\D/g, '')}`} className="text-sm text-emerald-700 hover:underline">{u.phone}</a>
+                : <p className="text-sm text-gray-400">Não informado</p>}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">E-mail</p>
+              <a href={`mailto:${u.email}`} className="text-sm text-emerald-700 hover:underline break-all">{u.email}</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Perfis de acesso atribuíveis a membros da equipe
 const CARGO_OPTIONS: { value: string; label: string }[] = [
   { value: 'VETERINARIO', label: 'Veterinário' },
@@ -172,6 +298,8 @@ export default function Equipe() {
   const [filtroAtivo,   setFiltroAtivo]                   = useState<'all' | 'ativo' | 'inativo'>('ativo');
   const [busca,         setBusca]                         = useState('');
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
+  // Ficha aberta ao clicar na foto (somente leitura)
+  const [membroFicha,      setMembroFicha]                = useState<Membro | null>(null);
   const [salvandoEdicao,    setSalvandoEdicao]             = useState(false);
   const [erroSenhaEdicao,   setErroSenhaEdicao]            = useState('');
   // Catálogo de especialidades (id → nome) — nomeia a especialidade de cada linha
@@ -244,6 +372,11 @@ export default function Equipe() {
         tipoServico:  values.tipoServico  ?? null,
         especialidadeIds:   values.especialidadeIds ?? [],
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
+        // Vínculo com a empresa: remuneração (obrigatória) e acesso ao sistema
+        tipoPagamento:  values.tipoPagamento,
+        formaPagamento: values.formaPagamento ?? 'VALOR',
+        valorPagamento: Number(values.valorPagamento),
+        acessoSistema:  values.acessoSistema !== false,
         equipeId,  // inclui na equipe gerenciada nesta tela (não na do contexto ativo)
       });
       toast.success('Membro incluído com sucesso!');
@@ -288,6 +421,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         estado:      values.estado.trim()      || null,
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
         ...(values.especialidadeIds !== undefined && { especialidadeIds: values.especialidadeIds }),
+        tipoPagamento:  values.tipoPagamento,
+        formaPagamento: values.formaPagamento ?? 'VALOR',
+        valorPagamento: Number(values.valorPagamento),
+        acessoSistema:  values.acessoSistema !== false,
       });
       if (equipeId) {
         await api.patch(`/equipes/${equipeId}/membros/${membroEditando.user.id}/cargos`, { cargos });
@@ -454,6 +591,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               return (
                 <div key={m.id} className={`bg-white rounded-2xl border p-4 shadow-sm ${!ativo ? 'opacity-60' : 'border-gray-100'}`}>
                   <div className="flex items-start justify-between gap-2">
+                    <AvatarMembro membro={m} onClick={() => setMembroFicha(m)} className="mr-1" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                         <p className="text-sm font-semibold text-gray-900 truncate">{m.user.fullName}</p>
@@ -552,13 +690,18 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                   return (
                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${!ativo ? 'opacity-60' : ''}`}>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium text-gray-900">{m.user.fullName}</p>
-                          {m.user.id === user?.id && (
-                            <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>
-                          )}
+                        <div className="flex items-center gap-3">
+                          <AvatarMembro membro={m} onClick={() => setMembroFicha(m)} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-gray-900">{m.user.fullName}</p>
+                              {m.user.id === user?.id && (
+                                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Você</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
+                          </div>
                         </div>
-                        <p className="text-xs text-gray-400 truncate">{m.user.email}</p>
                       </td>
                       {/* Especialidade + local + dias/horário na MESMA linha: cada turno
                           se lê inteiro, sem cruzar duas colunas. Um mesmo local aparece
@@ -642,6 +785,16 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         </>
       )}
 
+      {/* Ficha do membro — abre ao clicar na foto (somente leitura) */}
+      {membroFicha && (
+        <FichaMembro
+          membro={membroFicha}
+          linhas={linhasExpediente(membroFicha)}
+          especialidades={especialidadesDoMembro(membroFicha)}
+          onFechar={() => setMembroFicha(null)}
+        />
+      )}
+
       {/* Modal Incluir Membro */}
       {showConvite && (
         <UsuarioFormModal
@@ -651,6 +804,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           textoBotao="Incluir"
           comFornecedor
           comExpediente
+          comVinculoEmpresa
           salvando={enviando}
           erroServidor={erroModal}
           onClose={() => { setShowConvite(false); setErroModal(null); }}
@@ -670,6 +824,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           erroSenhaServidor={erroSenhaEdicao}
           ocultarPerfil
           comExpediente
+          comVinculoEmpresa
           textoBotao="Salvar"
           salvando={salvandoEdicao}
           erroServidor={erroModal}
@@ -700,6 +855,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               temposConsulta:     l.temposConsulta     ?? {},
             })),
             especialidadeIds:   (membroEditando.user.especialidades ?? []).map(e => e.especialidadeId),
+            tipoPagamento:  (membroEditando.user.tipoPagamento as 'SALARIO' | 'COMISSAO' | null) ?? '',
+            formaPagamento: (membroEditando.user.formaPagamento as 'VALOR' | 'PERCENTUAL' | null) ?? 'VALOR',
+            valorPagamento: membroEditando.user.valorPagamento != null ? String(membroEditando.user.valorPagamento) : '',
+            acessoSistema:  membroEditando.user.acessoSistema !== false,
           }}
         />
       )}

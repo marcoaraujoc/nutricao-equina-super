@@ -27,7 +27,7 @@ export interface PrintOrcamento {
   createdAt:       string;
   valorTotal:      number;
   valorAceito:     number;
-  proprietario:    { fullName: string };
+  proprietario:    { fullName: string; phone?: string | null; email?: string | null };
   criadoPor?:      { fullName: string } | null;
   itens:           PrintOrcamentoItem[];
 }
@@ -37,7 +37,7 @@ export interface PrintOrcamento {
 const STATUS_LABEL: Record<string, string> = {
   RASCUNHO:              'Rascunho',
   APROVADO:              'Aprovado',
-  APROVADO_PARCIALMENTE: 'Aprovado parcialmente',
+  APROVADO_PARCIALMENTE: 'Aprovado Parcialmente',
   REJEITADO:             'Rejeitado',
 };
 
@@ -62,6 +62,14 @@ const data = (iso: string): string => {
 };
 
 // Escapa o conteúdo vindo do banco — descrição/observação são texto livre do usuário.
+/** (11) 98765-4321 — o telefone é persistido só com dígitos */
+const fmtTelefonePrint = (v?: string | null): string => {
+  const d = (v ?? '').replace(/\D/g, '');
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return v ?? '';
+};
+
 const esc = (s: string | null | undefined): string =>
   String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -303,6 +311,8 @@ export function gerarHtmlOrcamento(orc: PrintOrcamento, opcoes: OpcoesImpressao 
 
   <div class="info">
     <div><b>Proprietário:</b> ${esc(orc.proprietario.fullName)}</div>
+    ${orc.proprietario.phone  ? `<div><b>Telefone:</b> ${esc(fmtTelefonePrint(orc.proprietario.phone))}</div>` : ''}
+    ${orc.proprietario.email  ? `<div><b>E-mail:</b> ${esc(orc.proprietario.email)}</div>` : ''}
     <div><b>Emitido por:</b> ${esc(orc.criadoPor?.fullName ?? '—')}</div>
   </div>
 

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -109,6 +110,8 @@ export default function EstoqueVacina() {
   const [dropdownAjusteAberto, setDropdownAjusteAberto] = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do SALVAR do painel de formulário — no topo da página fica fora da vista
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [ajusteQtd,            setAjusteQtd]            = useState<number | ''>('');
   const [ajusteMotivo,         setAjusteMotivo]         = useState('');
   const [ajustando,            setAjustando]            = useState(false);
@@ -327,14 +330,15 @@ export default function EstoqueVacina() {
   };
 
   const salvar = async () => {
+    setErroAcao(null);
     if (editandoId && !podeEditar)  { semPermissao('editar lote'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de vacina'); return; }
 
-    if (!form.medicamentoCatId) return setErroInline('Selecione a vacina.');
-    if (!editandoId && !form.validade) return setErroInline('Informe a validade do lote.');
-    if (form.validade && !editandoId && form.validade < hoje) return setErroInline('Validade não pode ser anterior à data de hoje.');
-    if (form.dataRecebimento && form.dataRecebimento > hoje) return setErroInline('Data de recebimento não pode ser futura.');
-    if (Number(form.qtdFrascos) <= 0 && !editandoId) return setErroInline('Quantidade de frascos deve ser maior que zero.');
+    if (!form.medicamentoCatId) return setErroAcao({ mensagem: 'Selecione a vacina.', campos: ['medicamentoCatId'] });
+    if (!editandoId && !form.validade) return setErroAcao({ mensagem: 'Informe a validade do lote.', campos: ['validade'] });
+    if (form.validade && !editandoId && form.validade < hoje) return setErroAcao({ mensagem: 'Validade não pode ser anterior à data de hoje.', campos: ['validade'] });
+    if (form.dataRecebimento && form.dataRecebimento > hoje) return setErroAcao({ mensagem: 'Data de recebimento não pode ser futura.', campos: ['dataRecebimento'] });
+    if (Number(form.qtdFrascos) <= 0 && !editandoId) return setErroAcao({ mensagem: 'Quantidade de frascos deve ser maior que zero.', campos: ['qtdFrascos'] });
 
     setSalvando(true);
     try {
@@ -363,7 +367,7 @@ export default function EstoqueVacina() {
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao salvar.');
+      setErroAcao({ mensagem: msg ?? 'Erro ao salvar.' });
     } finally { setSalvando(false); }
   };
 
@@ -907,6 +911,7 @@ export default function EstoqueVacina() {
                 </div>
               )}
 
+              <ErroAcao erro={erroAcao} className="mb-2" />
               <div className="flex gap-2">
                 <button onClick={salvar} disabled={salvando}
                   className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">

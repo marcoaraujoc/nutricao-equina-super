@@ -94,6 +94,7 @@ const PERMISSOES_PADRAO = {
 
     'enfermagem.prescricao.ler':      'FULL',
     'enfermagem.prescricao.executar': 'FULL',
+    'enfermagem.prescricao.deletar':  'FULL',
     'enfermagem.prescricao.imprimir': 'FULL',
 
     'exames.laboratorial.ler':    'FULL',
@@ -263,6 +264,7 @@ const PERMISSOES_PADRAO = {
     // Enfermagem — Execução de Prescrição
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'PROPRIO',
+    'enfermagem.prescricao.deletar':  'PROPRIO',
     'enfermagem.prescricao.imprimir': 'EQUIPE',
 
     // Exames — Laboratorial
@@ -473,6 +475,7 @@ const PERMISSOES_PADRAO = {
 
     'enfermagem.prescricao.ler':      'NENHUM',
     'enfermagem.prescricao.executar': 'NENHUM',
+    'enfermagem.prescricao.deletar':  'NENHUM',
     'enfermagem.prescricao.imprimir': 'NENHUM',
 
     // Espelha atendimento.exames.* do FORNECEDOR — o controle por tipo de exame
@@ -629,9 +632,12 @@ const PERMISSOES_PADRAO = {
 
     // Agendamento (portal standalone)
 
-    // Enfermagem — execução permitida para estagiários (técnicos)
+    // Enfermagem — execução permitida para estagiários (técnicos). CANCELAR não:
+    // é ação destrutiva sobre o documento de outro profissional, igual ao
+    // atendimento.prescricoes.deletar que o estagiário também não tem.
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'EQUIPE',
+    'enfermagem.prescricao.deletar':  'NENHUM',
     'enfermagem.prescricao.imprimir': 'EQUIPE',
 
     // Exames — Laboratorial
@@ -794,6 +800,7 @@ const PERMISSOES_PADRAO = {
 
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'NENHUM',
+    'enfermagem.prescricao.deletar':  'NENHUM',
     'enfermagem.prescricao.imprimir': 'EQUIPE',
 
     'exames.laboratorial.ler':     'EQUIPE',
@@ -946,6 +953,7 @@ const PERMISSOES_PADRAO = {
 
     'enfermagem.prescricao.ler':      'NENHUM',
     'enfermagem.prescricao.executar': 'NENHUM',
+    'enfermagem.prescricao.deletar':  'NENHUM',
     'enfermagem.prescricao.imprimir': 'NENHUM',
 
     'exames.laboratorial.ler':     'NENHUM',
@@ -1090,8 +1098,12 @@ const PERMISSOES_PADRAO = {
     'atendimento.agendamentos.deletar':           'NENHUM',
 
 
+    // Enfermagem é a casa do ENFERMEIRO: sem CANCELAR aqui a ação nasceria morta
+    // para o perfil que vive na tela de plantão. PROPRIO já opera qualquer
+    // registro (podeOperarRegistro ignora autoria — ver armadilha 28-c).
     'enfermagem.prescricao.ler':      'EQUIPE',
     'enfermagem.prescricao.executar': 'EQUIPE',
+    'enfermagem.prescricao.deletar':  'PROPRIO',
     'enfermagem.prescricao.imprimir': 'EQUIPE',
 
     'exames.laboratorial.ler':     'EQUIPE',
@@ -1264,7 +1276,8 @@ const MODULOS_SISTEMA = [
   // ── Enfermagem — Execução de Prescrição ─────────────────────────────────────
   { slug: 'enfermagem.prescricao.ler',      modulo: 'enfermagem', submodulo: 'prescricao', acao: 'ler',      label: 'Enfermagem — Visualizar', ordemExib: 45 },
   { slug: 'enfermagem.prescricao.executar', modulo: 'enfermagem', submodulo: 'prescricao', acao: 'executar', label: 'Enfermagem — Executar',   ordemExib: 46 },
-  { slug: 'enfermagem.prescricao.imprimir', modulo: 'enfermagem', submodulo: 'prescricao', acao: 'imprimir', label: 'Enfermagem — Imprimir',   ordemExib: 47 },
+  { slug: 'enfermagem.prescricao.deletar',  modulo: 'enfermagem', submodulo: 'prescricao', acao: 'deletar',  label: 'Enfermagem — Cancelar',   ordemExib: 47 },
+  { slug: 'enfermagem.prescricao.imprimir', modulo: 'enfermagem', submodulo: 'prescricao', acao: 'imprimir', label: 'Enfermagem — Imprimir',   ordemExib: 48 },
 
   // ── Exames — Laboratorial ───────────────────────────────────────────────────
   { slug: 'exames.laboratorial.ler',     modulo: 'exames', submodulo: 'laboratorial', acao: 'ler',     label: 'Laboratorial — Visualizar', ordemExib: 48 },

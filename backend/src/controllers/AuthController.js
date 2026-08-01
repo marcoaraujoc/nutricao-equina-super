@@ -7,6 +7,7 @@ const prisma = require('../lib/prisma').default;
 const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require('../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
+const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
 const REFRESH_EXPIRES = '30d';
@@ -197,6 +198,13 @@ const AuthController = {
 
       if (!user) {
         return res.status(401).json({ error: 'Refresh token inválido ou expirado' });
+      }
+
+      // Acesso revogado depois do login: a sessão morre no próximo refresh em vez de
+      // sobreviver até o access token expirar.
+      const ehAdminPlataforma = user.role === 'ADMIN' || user.userType === 'ADMIN';
+      if (!ehAdminPlataforma && !(await podeAcessarSistema(user.id))) {
+        return res.status(403).json({ error: 'Seu acesso ao sistema está desativado. Fale com o gestor da clínica.' });
       }
 
       const newAccessToken = jwt.sign(

@@ -56,10 +56,116 @@ function proximoMesRef(mesRef) {
   return d.toISOString().slice(0, 7);
 }
 
-// Adiciona item de assistência veterinária mensal se o proprietário for mensalista
-// e ainda não existir o item nesta fatura (idempotente)
-async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null) {
-  if (!proprietario?.mensalista || !proprietario?.valorAssistencia || proprietario.valorAssistencia <= 0) return false;
+/**
+ * Resolve o valor da assistência veterinária do proprietário.
+ *
+ * ⚠️ NUNCA ler `mensalista`/`valorAssistencia` do `users` aqui. Desde a migration
+ * `20260724000000` a tela do proprietário grava esses campos em `ProprietarioPerfil`
+ * (por empresa) e NUNCA MAIS no User — o User ficou só como identidade. Ler do User
+ * fazia a assistência sumir da fatura de todo cliente cadastrado após a migration, e
+ * (pior, silenciosamente) faturar o VALOR ANTIGO dos cadastros anteriores, cujo valor
+ * duplicado ficou congelado no User.
+ *
+ * A empresa vem da PRÓPRIA FATURA (`Fatura.empresaId`, migration 20260812000000).
+ * A dedução pelos perfis do proprietário virou fallback exclusivo das faturas legadas
+ * anteriores a essa migration, que não têm tenancy gravada.
+ */
+async function resolverAssistencia(proprietarioId, empresaId = null) {
+  const userId = Number(proprietarioId);
+  if (!userId) return null;
+
+  // Legado: cliente anterior à migration, que não tem perfil em empresa nenhuma —
+  // o valor ficou no User. É o ÚNICO caso em que o User ainda vale.
+  const doUsuarioLegado = async () => {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { valorAssistencia: true } });
+    return user?.valorAssistencia ?? null;
+  };
+
+  // 1) COM empresa no contexto: o perfil dela é a autoridade e o escopo é FECHADO.
+  //    Não varrer outras empresas aqui — o mesmo cliente pode ser mensalista na
+  //    clínica A e não ser na B; cair no perfil de A faria a B cobrar o valor de A.
+  if (empresaId) {
+    const perfil = await prisma.proprietarioPerfil.findUnique({
+      where:  { userId_empresaId: { userId, empresaId: Number(empresaId) } },
+      select: { valorAssistencia: true },
+    });
+    // Perfil existente manda mesmo com valor null ("não é mensalista NESTA empresa")
+    return perfil ? perfil.valorAssistencia : doUsuarioLegado();
+  }
+
+  // 2) SEM empresa no contexto (cron de fechamento, ADMIN global): a fatura não
+  //    carrega empresa, então deduz-se pelos perfis do próprio proprietário.
+  const perfis = await prisma.proprietarioPerfil.findMany({
+    where:   { userId, valorAssistencia: { gt: 0 } },
+    select:  { empresaId: true, valorAssistencia: true },
+    orderBy: { empresaId: 'asc' },
+  });
+  if (perfis.length === 0) return doUsuarioLegado();
+  if (perfis.length > 1) {
+    // Cliente mensalista em mais de uma clínica com UMA fatura só: ambiguidade real,
+    // que só some quando `Fatura` ganhar `empresaId` (pendência do multi-tenant).
+    console.warn(
+      `[Assistencia] Proprietário ${userId} tem assistência em ${perfis.length} empresas ` +
+      `(${perfis.map(p => p.empresaId).join(', ')}) e a fatura não tem empresaId. ` +
+      `Usando a empresa ${perfis[0].empresaId}.`,
+    );
+  }
+  return perfis[0].valorAssistencia;
+}
+
+/**
+ * Dia de vencimento da fatura — `ProprietarioPerfil.diaVencimentoFatura` da EMPRESA
+ * da fatura (campo "Dia de vencimento da fatura" da tela de Proprietários).
+ *
+ * ⚠️ Mesma armadilha do valor da assistência: NÃO ler de `users`. O cadastro é por
+ * empresa desde a migration 20260724000000 — o mesmo cliente pode vencer dia 5 numa
+ * clínica e dia 20 na outra. Fallback ao User só para cadastro legado sem perfil.
+ *
+ * Não confundir com o FECHAMENTO da fatura, que é outra data e outra fonte:
+ * `EmpresaConfiguracao.tipoFechamento`/`diaFechamentoFatura` (tela de Configurações
+ * da empresa), aplicada por `deveFecharHoje` em `lib/faturaUtils.js`.
+ */
+async function diaVencimentoDoProprietario(proprietarioId, empresaId = null) {
+  const userId = Number(proprietarioId);
+  if (!userId) return null;
+
+  if (empresaId) {
+    const perfil = await prisma.proprietarioPerfil.findUnique({
+      where:  { userId_empresaId: { userId, empresaId: Number(empresaId) } },
+      select: { diaVencimentoFatura: true },
+    });
+    if (perfil) return perfil.diaVencimentoFatura;
+  }
+
+  // Fatura legada sem empresa: aceita o perfil quando ele é único e não ambíguo
+  const perfis = await prisma.proprietarioPerfil.findMany({
+    where:    { userId, diaVencimentoFatura: { not: null } },
+    select:   { diaVencimentoFatura: true },
+    distinct: ['diaVencimentoFatura'],
+  });
+  if (perfis.length === 1) return perfis[0].diaVencimentoFatura;
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { diaVencimentoFatura: true } });
+  return user?.diaVencimentoFatura ?? null;
+}
+
+/**
+ * Adiciona o item de assistência veterinária mensal à fatura. Idempotente DENTRO da
+ * fatura — como há uma fatura por `mesReferencia`, o efeito é a cobrança recorrente:
+ * exatamente um item por mês.
+ *
+ * O gatilho é o VALOR (> 0), não o flag `mensalista`: na tela, desmarcar "mensalista"
+ * limpa o campo e envia `valorAssistencia: null`, então valor > 0 já implica mensalista.
+ * Depender do flag só acrescentaria uma segunda fonte de verdade capaz de divergir.
+ *
+ * @param proprietario id do proprietário (aceita também o objeto, por compatibilidade)
+ * @param empresaId    empresa do contexto (`req.empresaId`); null no cron
+ */
+async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null, empresaId = null) {
+  const proprietarioId = typeof proprietario === 'object' ? proprietario?.id : proprietario;
+  const valor = await resolverAssistencia(proprietarioId, empresaId);
+  if (!valor || valor <= 0) return false;
+
   const existeAssistencia = await prisma.faturaItem.findFirst({
     where: { faturaId, tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária Mensal' },
   });
@@ -69,7 +175,7 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
       faturaId,
       tipo:         'ASSISTENCIA',
       descricao:    'Assistência Veterinária Mensal',
-      valor:        proprietario.valorAssistencia,
+      valor,
       quantidade:   1,
       veterinarioId: veterinarioId ?? null,
     },
@@ -190,7 +296,8 @@ const FaturaController = {
       // Busca a fatura PAGA mais recente por proprietário
       const faturasPagas = proprietarioIds.length > 0
         ? await prisma.fatura.findMany({
-            where: { proprietarioId: { in: proprietarioIds }, status: 'PAGA' },
+            // Escopo por empresa: a clínica não vê a fatura paga na outra clínica
+            where: { proprietarioId: { in: proprietarioIds }, status: 'PAGA', empresaId: req.empresaId ? Number(req.empresaId) : null },
             orderBy: { criadoEm: 'desc' },
             select: { id: true, total: true, status: true, mesReferencia: true, proprietarioId: true },
           })
@@ -231,16 +338,22 @@ const FaturaController = {
     const mesRef = mesReferenciaAtual();
 
     try {
-      // Meses/faturas existentes do proprietário — alimenta o seletor de mês/ano.
+      // ESCOPO POR EMPRESA em todas as buscas: a clínica só enxerga as faturas que ela
+      // mesma emitiu para este cliente. `empresaId` entra em TODO `where` daqui —
+      // omiti-lo em qualquer um deles reabre o vazamento entre clínicas.
+      const empresaId = req.empresaId ? Number(req.empresaId) : null;
+      const doProprietario = { proprietarioId: Number(proprietarioId), empresaId };
+
+      // Meses/faturas existentes do proprietário NESTA empresa — alimenta o seletor.
       const meses = await prisma.fatura.findMany({
-        where:   { proprietarioId: Number(proprietarioId) },
+        where:   doProprietario,
         select:  { id: true, mesReferencia: true, status: true },
         orderBy: { mesReferencia: 'desc' },
       });
 
       if (mes) {
         const fatura = await prisma.fatura.findFirst({
-          where:   { proprietarioId: Number(proprietarioId), mesReferencia: String(mes) },
+          where:   { ...doProprietario, mesReferencia: String(mes) },
           include: FATURA_INCLUDE,
           orderBy: { criadoEm: 'desc' },
         });
@@ -249,7 +362,7 @@ const FaturaController = {
 
       if (faturaId) {
         const fatura = await prisma.fatura.findFirst({
-          where:   { id: Number(faturaId), proprietarioId: Number(proprietarioId) },
+          where:   { ...doProprietario, id: Number(faturaId) },
           include: FATURA_INCLUDE,
         });
         if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
@@ -257,20 +370,21 @@ const FaturaController = {
       }
 
       let fatura = await prisma.fatura.findFirst({
-        where:   { proprietarioId: Number(proprietarioId), status: 'ABERTA' },
+        where:   { ...doProprietario, status: 'ABERTA' },
         include: FATURA_INCLUDE,
         orderBy: { criadoEm: 'desc' },
       });
 
       if (!fatura) {
         fatura = await prisma.fatura.create({
-          data:    { proprietarioId: Number(proprietarioId), mesReferencia: mesRef, total: 0, status: 'ABERTA' },
+          data:    { ...doProprietario, mesReferencia: mesRef, total: 0, status: 'ABERTA' },
           include: FATURA_INCLUDE,
         });
       }
 
-      // Adiciona assistência mensal automaticamente ao abrir (idempotente — não duplica)
-      const adicionou = await adicionarAssistenciaMensal(fatura.id, fatura.proprietario);
+      // Adiciona assistência mensal automaticamente ao abrir (idempotente — não duplica).
+      // `req.empresaId` é obrigatório aqui: o valor vem do ProprietarioPerfil da empresa.
+      const adicionou = await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, req.empresaId);
       if (adicionou) {
         fatura = await prisma.fatura.findUnique({ where: { id: fatura.id }, include: FATURA_INCLUDE });
       }
@@ -469,11 +583,16 @@ const FaturaController = {
       });
 
       if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
+      // Isolamento entre clínicas: não se fecha fatura emitida por outra empresa
+      if (req.empresaId && fatura.empresaId && fatura.empresaId !== Number(req.empresaId)) {
+        return res.status(404).json({ error: 'Fatura não encontrada' });
+      }
       if (fatura.status !== 'ABERTA') {
         return res.status(400).json({ error: 'Apenas faturas com status ABERTA podem ser fechadas' });
       }
 
-      await adicionarAssistenciaMensal(Number(faturaId), fatura.proprietario, req.user.id);
+      // A assistência é a da EMPRESA DA FATURA (não a do contexto de quem fecha)
+      await adicionarAssistenciaMensal(Number(faturaId), fatura.proprietarioId, req.user.id, fatura.empresaId ?? req.empresaId);
 
       const faturaFechada = await prisma.fatura.update({
         where:   { id: Number(faturaId) },
@@ -507,10 +626,12 @@ const FaturaController = {
           include: { proprietario: { select: { id: true, fullName: true, phone: true, email: true, empresaId: true, valorAssistencia: true, mensalista: true } } },
         });
         if (!fatura || fatura.status !== 'ABERTA') continue;
-        // Guarda de escopo: não fecha fatura de proprietário de outra empresa
-        if (req.empresaId && fatura.proprietario?.empresaId && fatura.proprietario.empresaId !== req.empresaId) continue;
+        // Guarda de escopo: a fatura precisa ser DESTA empresa. Antes o teste era pelo
+        // `empresaId` do PROPRIETÁRIO (que é global e não diz de quem é a fatura) —
+        // agora é pelo da própria fatura, que é a tenancy real do documento.
+        if (req.empresaId && fatura.empresaId && fatura.empresaId !== Number(req.empresaId)) continue;
 
-        await adicionarAssistenciaMensal(id, fatura.proprietario, req.user.id);
+        await adicionarAssistenciaMensal(id, fatura.proprietarioId, req.user.id, fatura.empresaId ?? req.empresaId);
         const atualizada = await prisma.fatura.update({
           where:  { id },
           data:   { status: 'FECHADA' },
@@ -617,5 +738,6 @@ const FaturaController = {
 };
 
 module.exports = FaturaController;
-module.exports.adicionarAssistenciaMensal = adicionarAssistenciaMensal;
+module.exports.adicionarAssistenciaMensal      = adicionarAssistenciaMensal;
+module.exports.diaVencimentoDoProprietario     = diaVencimentoDoProprietario;
 module.exports.recalcularTotal            = recalcularTotal;

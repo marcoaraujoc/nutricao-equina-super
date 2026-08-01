@@ -363,7 +363,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
 
-      <div className="p-5 space-y-4">
+      {/* Alterou qualquer campo → o erro anterior some (change borbulha) */}
+      <div className="p-5 space-y-4"
+        onChange={() => setErroInline(null)}
+        onInput={() => setErroInline(null)}>
 
       <InlineError message={erroInline} />
 

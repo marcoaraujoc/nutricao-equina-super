@@ -9,6 +9,7 @@ import { Pencil, Trash2, Unlink, Search, LayoutDashboard, ArrowLeft } from 'luci
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 interface Animal {
   id:               number;
@@ -128,6 +129,8 @@ const AnimaisVet = () => {
   const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO (confirmar/excluir/desvincular): vai para o modal que disparou
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   const [unlinking,      setUnlinking]      = useState(false);
 
@@ -192,7 +195,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success('Paciente excluído');
     } catch {
-      setErroInline('Erro ao excluir paciente');
+      setErroAcao({ mensagem: 'Erro ao excluir paciente' });
     }
   };
 
@@ -206,7 +209,7 @@ const AnimaisVet = () => {
       loadAnimais();
       toast.success(`${animalToUnlink.nome} removido da sua lista`);
     } catch {
-      setErroInline('Erro ao desvincular');
+      setErroAcao({ mensagem: 'Erro ao desvincular' });
     } finally {
       setUnlinking(false);
     }
@@ -402,6 +405,7 @@ const AnimaisVet = () => {
 
       {/* Modal — Excluir (justificativa obrigatória → Auditoria) */}
       <ModalJustificativa
+        erro={erroAcao}
         aberto={!!animalToDelete}
         titulo="Excluir paciente?"
         descricao={animalToDelete

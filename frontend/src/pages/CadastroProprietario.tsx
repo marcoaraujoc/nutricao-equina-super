@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -181,12 +182,14 @@ const validarDiaVencimento = (valor: string): string => {
 // ─── Modal Formulário ─────────────────────────────────────────────────────────
 
 function ModalProprietario({
-  editando, form, saving,
+  editando, form, saving, erroAcao,
   onFormChange, onSalvar, onClose,
 }: {
   editando:    Proprietario | null;
   form:        FormProp;
   saving:      boolean;
+  /** Erro do SALVAR — exibido no rodapé, junto ao botão, e marca os campos culpados */
+  erroAcao:    ErroAcaoDados | null;
   onFormChange: (updates: Partial<FormProp>) => void;
   onSalvar:    () => void;
   onClose:     () => void;
@@ -305,8 +308,9 @@ function ModalProprietario({
   };
 
   const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
-  const inputReqCls = (v: string) =>
-    `${inputCls} ${!v.trim() ? 'border-red-200 focus:border-red-400' : ''}`;
+  // Vazio => aviso suave (rosa claro). Apontado pelo erro do Salvar => destaque forte.
+  const inputReqCls = (v: string, campo?: string) =>
+    classeErro(erroAcao, campo ?? '', `${inputCls} ${!v.trim() ? 'border-red-200 focus:border-red-400' : ''}`);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
@@ -390,18 +394,18 @@ function ModalProprietario({
               <div className="sm:col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Nome completo *</label>
                 <input value={form.fullName} onChange={e => onFormChange({ fullName: e.target.value })}
-                  placeholder="Nome do proprietário" className={inputReqCls(form.fullName)} />
+                  placeholder="Nome do proprietário" className={inputReqCls(form.fullName, 'fullName')} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">E-mail *</label>
                 <input type="email" value={form.email} onChange={e => onFormChange({ email: e.target.value })}
-                  placeholder="email@exemplo.com" className={inputReqCls(form.email)} />
+                  placeholder="email@exemplo.com" className={inputReqCls(form.email, 'email')} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Telefone *</label>
                 <input value={form.phone}
                   onChange={e => onFormChange({ phone: mascaraTelefone(e.target.value) })}
-                  placeholder="(00) 00000-0000" className={inputReqCls(form.phone)} />
+                  placeholder="(00) 00000-0000" className={inputReqCls(form.phone, 'phone')} />
               </div>
               {!editando && (
                 <div className="sm:col-span-2">
@@ -621,7 +625,10 @@ function ModalProprietario({
 
         </div>
 
-        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+        <div className="px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          {/* Erro pertence à superfície da ação: aqui, colado no botão que foi clicado */}
+          <ErroAcao erro={erroAcao} className="mb-3" />
+          <div className="flex gap-3">
           <button onClick={onClose} disabled={saving}
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancelar
@@ -631,6 +638,7 @@ function ModalProprietario({
             {saving && <Loader2 size={13} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
+          </div>
         </div>
       </div>
     </div>
@@ -654,6 +662,9 @@ export default function CadastroProprietario() {
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro do SALVAR do modal — vive separado do erroInline (que é erro de CARGA da
+  // página e continua no topo). Sem essa separação a mensagem cai atrás do overlay.
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [busca,         setBusca]         = useState('');
   const [showModal,     setShowModal]     = useState(false);
@@ -718,23 +729,24 @@ export default function CadastroProprietario() {
     setForm(prev => ({ ...prev, ...updates }));
 
   const handleSalvar = async () => {
+    setErroAcao(null);
     if (editando && !podeEditar) { semPermissao('alterar proprietário'); return; }
     if (!editando && !podeCriar) { semPermissao('criar proprietário'); return; }
-    if (!form.fullName.trim())      { setErroInline('Nome é obrigatório'); return; }
-    if (!form.email.trim())         { setErroInline('E-mail é obrigatório'); return; }
-    if (!form.phone.trim())         { setErroInline('Telefone é obrigatório'); return; }
+    if (!form.fullName.trim())      { setErroAcao({ mensagem: 'Nome é obrigatório', campos: ['fullName'] }); return; }
+    if (!form.email.trim())         { setErroAcao({ mensagem: 'E-mail é obrigatório', campos: ['email'] }); return; }
+    if (!form.phone.trim())         { setErroAcao({ mensagem: 'Telefone é obrigatório', campos: ['phone'] }); return; }
     // Pelo menos uma localidade com frequência — é o que o campo único exigia antes,
     // agora por lugar (o cliente pode ser visitado 2x na Hípica e 3x no Haras).
     if (form.localidades.length === 0) {
-      setErroInline('Informe ao menos uma localidade com a frequência de visitas'); return;
+      setErroAcao({ mensagem: 'Informe ao menos uma localidade com a frequência de visitas', campos: ['localidades'] }); return;
     }
     if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro já exibido inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
-    if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { setErroInline('CPF inválido'); return; }
-    if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { setErroInline('CNPJ inválido'); return; }
+    if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { setErroAcao({ mensagem: 'CPF inválido', campos: ['cpf'] }); return; }
+    if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { setErroAcao({ mensagem: 'CNPJ inválido', campos: ['cnpj'] }); return; }
     if (form.mensalista && !form.valorAssistencia) {
-      setErroInline('Informe o valor da assistência veterinária'); return;
+      setErroAcao({ mensagem: 'Informe o valor da assistência veterinária', campos: ['valorAssistencia'] }); return;
     }
 
     setSaving(true);
@@ -775,7 +787,7 @@ export default function CadastroProprietario() {
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
-      setErroInline(msg ?? 'Erro ao salvar');
+      setErroAcao({ mensagem: msg ?? 'Erro ao salvar' });
     } finally { setSaving(false); }
   };
 
@@ -1056,6 +1068,7 @@ export default function CadastroProprietario() {
           form={form}
           saving={saving}
           onFormChange={handleFormChange}
+          erroAcao={erroAcao}
           onSalvar={handleSalvar}
           onClose={fecharModal}
         />

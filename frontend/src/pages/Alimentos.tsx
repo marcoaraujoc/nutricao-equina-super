@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { Pencil, Trash2 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ const Alimentos = () => {
   const [categoriaFiltro, setCategoriaFiltro] = useState('');
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
+  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [loading,         setLoading]         = useState(true);
   const [itemToDelete,    setItemToDelete]     = useState<Alimento | null>(null);
 
@@ -73,7 +76,7 @@ const Alimentos = () => {
       loadAlimentos();
     } catch (error) {
       console.error(error);
-      setErroInline('Erro ao excluir alimento');
+      setErroAcao({ mensagem: 'Erro ao excluir alimento' });
     }
   };
 
@@ -190,7 +193,9 @@ const Alimentos = () => {
                   O alimento não aparecerá mais nas listagens, mas o histórico de dietas é preservado.
                 </p>
               </div>
-              <div className="p-6 flex gap-3">
+              <div className="p-6">
+                <ErroAcao erro={erroAcao} className="mb-3" />
+                <div className="flex gap-3">
                 <button
                   onClick={() => setItemToDelete(null)}
                   className="flex-1 py-3 text-gray-700 font-semibold border border-gray-300 rounded-2xl hover:bg-gray-50 transition-colors">
@@ -201,6 +206,7 @@ const Alimentos = () => {
                   className="flex-1 py-3 bg-red-600 text-white font-semibold rounded-2xl hover:bg-red-700 transition-colors">
                   Sim, Excluir
                 </button>
+                </div>
               </div>
             </div>
           </div>

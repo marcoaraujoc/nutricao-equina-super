@@ -473,7 +473,7 @@ const orcamentos = async (req, res) => {
       },
       porStatus: [
         { status: 'Aprovado',              quantidade: contagem.APROVADO },
-        { status: 'Aprovado parcialmente', quantidade: contagem.APROVADO_PARCIALMENTE },
+        { status: 'Aprovado Parcialmente', quantidade: contagem.APROVADO_PARCIALMENTE },
         { status: 'Rejeitado',             quantidade: contagem.REJEITADO },
         { status: 'Rascunho',              quantidade: contagem.RASCUNHO },
       ],
