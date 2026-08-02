@@ -29,6 +29,31 @@ const INCLUDE = {
   imagens:        { where: { ativo: true }, orderBy: { id: 'asc' }, select: { id: true, nome: true, arquivoUrl: true } },
 };
 
+/**
+ * Tabela do resultado DIGITADA à mão (tela Resultado de Exame > "Preencher manualmente").
+ *
+ * Chega como string JSON quando o request é multipart — o mesmo endpoint atende o
+ * upload de laudo e o preenchimento manual, e ali todo campo é texto. Linha sem
+ * `parametro` é descartada: é a linha em branco que o editor sempre deixa no fim.
+ */
+function parseItensManuais(bruto) {
+  if (!bruto) return [];
+  let lista = bruto;
+  if (typeof lista === 'string') {
+    try { lista = JSON.parse(lista); } catch { return []; }
+  }
+  if (!Array.isArray(lista)) return [];
+  return lista
+    .map((i, idx) => ({
+      parametro:  String(i?.parametro ?? '').trim(),
+      valor:      i?.valor != null && i.valor !== '' ? String(i.valor).trim() : null,
+      unidade:    i?.unidade    ? String(i.unidade).trim()    : null,
+      referencia: i?.referencia ? String(i.referencia).trim() : null,
+      ordem:      idx,
+    }))
+    .filter(i => i.parametro);
+}
+
 const ExameClinicoController = {
 
   // GET /clinica/exames/animal/:animalId?page=1&limit=10
@@ -298,7 +323,17 @@ const ExameClinicoController = {
       let arquivoUrl = exame.arquivoUrl;
       let itens = [];
       const file = arquivos[0];
-      if (file) {
+
+      // PREENCHIMENTO MANUAL: a tela de Resultado de Exame também deixa DIGITAR a
+      // tabela, sem laudo nenhum (nem todo laboratório entrega arquivo). Vindo por
+      // multipart, `itens` chega como string JSON. Havendo itens digitados, eles
+      // MANDAM — não faz sentido pedir a leitura do arquivo à IA e depois descartar
+      // o que a pessoa digitou.
+      const itensManuais = parseItensManuais(req.body?.itens);
+      if (itensManuais.length > 0) {
+        itens = itensManuais;
+        if (file) arquivoUrl = await storage.upload(file, 'exames');
+      } else if (file) {
         arquivoUrl = await storage.upload(file, 'exames');
         try {
           const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null);
@@ -325,8 +360,13 @@ const ExameClinicoController = {
       }
 
       await prisma.$transaction(async (tx) => {
-        // Recarga do resultado substitui a tabela anterior deste exame
-        await tx.exameClinicoResultadoItem.deleteMany({ where: { exameClinicoId: exame.id } });
+        // Recarga do resultado substitui a tabela anterior deste exame.
+        // Só quando há tabela NOVA: sem isso, reenviar o formulário apenas com uma
+        // observação apagaria o resultado já carregado (a IA falhou / o usuário só
+        // quis corrigir o texto) e não haveria como recuperá-lo.
+        if (itens.length > 0) {
+          await tx.exameClinicoResultadoItem.deleteMany({ where: { exameClinicoId: exame.id } });
+        }
         for (const it of itens) {
           await tx.exameClinicoResultadoItem.create({
             data: {

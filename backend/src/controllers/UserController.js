@@ -2,9 +2,10 @@
 'use strict';
 
 const bcrypt = require('bcryptjs');
-const jwt    = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
+// Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
+const { assinarAccessToken } = require('../lib/sessionTokens');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { whereProprietarioNoEscopo } = require('./ProprietarioController');
@@ -585,17 +586,7 @@ const UserController = {
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
 
-      const novoToken = jwt.sign(
-        {
-          id:       updatedUser.id,
-          email:    updatedUser.email,
-          fullName: updatedUser.fullName,
-          role:     updatedUser.role,
-          userType: updatedUser.userType, // ← agora correto
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
+      const novoToken = assinarAccessToken(updatedUser); // ← userType já corrigido
 
       // Atualiza o cookie HttpOnly de acesso com o token que reflete o novo userType
       setAuthCookies(res, { accessToken: novoToken });

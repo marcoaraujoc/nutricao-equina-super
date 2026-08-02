@@ -5,15 +5,16 @@
 // do Express (não requer cookie-parser); a leitura parseia o header Cookie à mão.
 'use strict';
 
-const AT_COOKIE = 's2vet_at'; // access token  (JWT 24h)
-const RT_COOKIE = 's2vet_rt'; // refresh token (JWT 30d)
+const { ACCESS_MAX_AGE_MS, REFRESH_MAX_AGE_MS } = require('./sessionTokens');
+
+const AT_COOKIE = 's2vet_at'; // access token  (vida em sessionTokens.js)
+const RT_COOKIE = 's2vet_rt'; // refresh token (janela de inatividade)
 // Dica de sessão legível por JS (NÃO-HttpOnly, sem segredo): apenas sinaliza ao
 // front que existe uma sessão, para ele NÃO sondar /me e /refresh (evitando 401
-// no console) quando o usuário nunca logou / fez logout. Vida = refresh (30d).
+// no console) quando o usuário nunca logou / fez logout.
+// Vida = a MESMA do refresh: com a dica sobrevivendo ao token, o front sondaria
+// /me e /refresh de uma sessão já morta — 401 no console, justo o que ela evita.
 const HINT_COOKIE = 's2vet_auth';
-
-const UM_DIA   = 24 * 60 * 60 * 1000;
-const TRINTA_D = 30 * UM_DIA;
 
 // secure em produção (HTTPS). Em dev pelo proxy do Vite/localhost, secure=false
 // permite o cookie via http. COOKIE_SECURE força o valor quando necessário.
@@ -33,10 +34,10 @@ function baseOpts() {
 }
 
 function setAuthCookies(res, { accessToken, refreshToken }) {
-  if (accessToken)  res.cookie(AT_COOKIE, accessToken,  { ...baseOpts(), maxAge: UM_DIA });
-  if (refreshToken) res.cookie(RT_COOKIE, refreshToken, { ...baseOpts(), maxAge: TRINTA_D });
+  if (accessToken)  res.cookie(AT_COOKIE, accessToken,  { ...baseOpts(), maxAge: ACCESS_MAX_AGE_MS });
+  if (refreshToken) res.cookie(RT_COOKIE, refreshToken, { ...baseOpts(), maxAge: REFRESH_MAX_AGE_MS });
   // Dica legível por JS (httpOnly:false), sem token — front usa para decidir sondar a sessão
-  res.cookie(HINT_COOKIE, '1', { ...baseOpts(), httpOnly: false, maxAge: TRINTA_D });
+  res.cookie(HINT_COOKIE, '1', { ...baseOpts(), httpOnly: false, maxAge: REFRESH_MAX_AGE_MS });
 }
 
 function clearAuthCookies(res) {

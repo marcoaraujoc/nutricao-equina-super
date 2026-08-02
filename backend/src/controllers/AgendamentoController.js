@@ -14,6 +14,8 @@ const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendam
 const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
 // Autoria por NÍVEL da matriz (Controle de Acesso), não por cargo — ver CLAUDE.md #28
 const { NIVEL_ORDINAL }                           = require('../middlewares/permissao.middleware');
+// Rastro de "assumido de quem" (colunas novas lidas por SQL cru)
+const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../lib/agendamentoAssumido');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -329,6 +331,10 @@ const AgendamentoController = {
         take:    500,
       });
 
+      // Rastro de "assumido de quem" — a agenda pinta o selo na linha que trocou de
+      // responsável. Colunas lidas por SQL cru (lib/agendamentoAssumido.js).
+      await anexarAssumidoEmLista(itens);
+
       res.json({ dados: itens });
     } catch (err) {
       console.error('Erro ao listar agendamentos globais:', err);
@@ -402,6 +408,7 @@ const AgendamentoController = {
         include: INCLUDE,
         orderBy: { dataHora: 'asc' },
       });
+      await anexarAssumidoEmLista(itens);
 
       res.json({ dados: itens });
     } catch (err) {
@@ -1040,8 +1047,11 @@ const AgendamentoController = {
           where: { agendamentoId: item.id, ativo: true, status: 'EM_ANDAMENTO' },
           data:  { veterinarioId: Number(req.user.id), modificadoPorId: Number(req.user.id), dataModificacao: new Date() },
         });
+        // Guarda DE QUEM veio: sem isso a troca de responsável fica invisível na tela
+        await marcarAssumido(tx, item.id, item.veterinarioId);
         return ag;
       });
+      await anexarAssumido(atualizado);
 
       // O profissional que estava com o atendimento é avisado de que ele saiu da agenda
       // dele — mesma notificação da transferência, na direção contrária.

@@ -1,6 +1,5 @@
 ﻿const jwt      = require('jsonwebtoken');
 const bcrypt   = require('bcryptjs');
-const crypto   = require('crypto');
 const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
@@ -8,20 +7,11 @@ const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require(
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
-const SECRET = process.env.JWT_SECRET;
-const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
-const REFRESH_EXPIRES = '30d';
-
-// Refresh token assinado (JWT) com expiração. Continua salvo no banco para permitir
-// rotação e revogação (logout / troca de senha). O jti aleatório garante unicidade
-// mesmo para o mesmo usuário em momentos diferentes.
-function generateRefreshToken(userId) {
-  return jwt.sign(
-    { id: userId, type: 'refresh', jti: crypto.randomBytes(16).toString('hex') },
-    REFRESH_SECRET,
-    { expiresIn: REFRESH_EXPIRES }
-  );
-}
+// Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
+const {
+  SECRET, REFRESH_SECRET,
+  assinarAccessToken, gerarRefreshToken: generateRefreshToken,
+} = require('../lib/sessionTokens');
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -207,11 +197,7 @@ const AuthController = {
         return res.status(403).json({ error: 'Seu acesso ao sistema está desativado. Fale com o gestor da clínica.' });
       }
 
-      const newAccessToken = jwt.sign(
-        { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType, mustChangePassword: user.mustChangePassword },
-        SECRET,
-        { expiresIn: '24h' }
-      );
+      const newAccessToken = assinarAccessToken(user);
 
       // Rotação: gera novo refresh token a cada uso
       const newRefreshToken = generateRefreshToken(user.id);

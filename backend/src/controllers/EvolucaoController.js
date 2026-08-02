@@ -6,6 +6,8 @@ const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
+// Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
+const { marcarAssumido }        = require('../lib/agendamentoAssumido');
 const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const emailService              = require('../services/emailService');
@@ -831,10 +833,13 @@ const EvolucaoController = {
           include: INCLUDE_PADRAO,
         });
         if (existente.agendamentoId) {
-          await tx.agendamentoClinico.updateMany({
+          const movidos = await tx.agendamentoClinico.updateMany({
             where: { id: existente.agendamentoId, ativo: true, status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] } },
             data:  { veterinarioId: userId },
           });
+          // Mesmo rastro do "assumir" da agenda: a Agenda pinta o selo "assumida de
+          // <Fulano>". Só marca se o agendamento realmente mudou de mãos.
+          if (movidos.count > 0) await marcarAssumido(tx, existente.agendamentoId, anteriorId);
         }
         return evo;
       });

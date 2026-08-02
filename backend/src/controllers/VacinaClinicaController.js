@@ -28,6 +28,7 @@ async function listarPorAnimal(req, res) {
       const extras = await prisma.$queryRawUnsafe(
         `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
                 quantidade, valor::float AS valor, cliente, status,
+                aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
                 motivo_inativacao AS "motivoInativacao"
          FROM schs2vet.tb_vacinas_clinicas
          WHERE id = ANY($1::int[])`,
@@ -97,10 +98,15 @@ async function registrar(req, res) {
       evolucaoId,
       quantidade, valor,
       cliente: clienteRaw,
+      aplicadaPeloProprietario: aplicadaPropRaw,
     } = req.body;
 
     // cliente = vacina fornecida pelo próprio cliente → sem débito de estoque, sem lançamento na fatura
     const isCliente = clienteRaw === true || clienteRaw === 'true';
+    // aplicadaPeloProprietario = quem APLICA a dose. Decisão IRMÃ de `cliente` (quem
+    // FORNECE) — é o cruzamento das duas que decide execução e fatura. Ver a matriz em
+    // `finalizar` e na migration 20260815000001.
+    const isAplicadaProp = aplicadaPropRaw === true || aplicadaPropRaw === 'true';
 
     if (!animalId)    return res.status(400).json({ error: 'animalId é obrigatório' });
 
@@ -233,13 +239,15 @@ async function registrar(req, res) {
            tipo_atendimento    = 'VC',
            quantidade          = $3,
            valor               = $4,
-           cliente             = $5
-       WHERE id = $6`,
+           cliente             = $5,
+           aplicada_pelo_proprietario = $6
+       WHERE id = $7`,
       medCatIdFinal ?? null,
       numero,
       qtdFinal,
       valorFinal,
       isCliente,
+      isAplicadaProp,
       criada.id
     );
 
@@ -267,6 +275,7 @@ async function obterPorId(req, res) {
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
               quantidade, valor::float AS valor, cliente, status,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
               motivo_inativacao AS "motivoInativacao"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
@@ -279,14 +288,28 @@ async function obterPorId(req, res) {
 }
 
 // PATCH /clinica/vacinas/:id/finalizar — transita SALVA -> FINALIZADA.
-// Mesmo padrão de Exames (SOLICITADO->CONCLUIDO) e Encaminhamento (PENDENTE->CONCLUIDO):
-// a finalização é apenas a transição de status; débito de estoque e lançamento na
-// fatura já acontecem no `registrar`.
+//
+// MATRIZ "quem FORNECE × quem APLICA" (a mesma da prescrição — CLAUDE.md):
+//
+//   fornecida p/ Cliente | aplicada p/ Proprietário | Execução de Prescrição | Fatura
+//           não          |           não            |         ENTRA          | na EXECUÇÃO
+//           SIM          |           não            |         ENTRA          | nunca
+//           não          |           SIM            |        não vai         | AQUI
+//           SIM          |           SIM            |        não vai         | nunca
+//
+// Ou seja: só entra aqui a dose que a clínica FORNECE e o proprietário APLICA. Ela
+// nunca chega ao plantão, então esta é a única oportunidade de cobrá-la — e o frasco
+// saiu do estoque de verdade, então o lote é debitado junto (é por isso que a vacina
+// NÃO tem o buraco de "valor 0" que a prescrição tem no mesmo quadrante: lá o item
+// aplicado pelo proprietário não debita lote, e sem lote não há preço).
 async function finalizar(req, res) {
   try {
     const { id } = req.params;
+    const veterinarioId = req.user.id;
 
-    const vacina = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) } });
+    const vacina = await prisma.vacinaClinica.findUnique({
+      where: { id: Number(id) }, include: INCLUDE_VACINA,
+    });
     if (!vacina || !vacina.ativo) return res.status(404).json({ error: 'Registro não encontrado' });
 
     // Autoria via RBAC (nível efetivo em atendimento.vacinas.finalizar):
@@ -295,17 +318,64 @@ async function finalizar(req, res) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar vacinas que você registrou.' });
     }
 
-    // status vive fora do client gerado (raw SQL, mesmo padrão dos demais campos)
-    const statusRows = await prisma.$queryRawUnsafe(
-      `SELECT status FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`, Number(id)
+    // status e as duas flags vivem fora do client gerado (raw SQL, mesmo padrão)
+    const infoRows = await prisma.$queryRawUnsafe(
+      `SELECT status, quantidade, valor::float AS valor, cliente, numero,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
+              tipo_atendimento AS "tipoAtendimento", medicamento_cat_id AS "medicamentoCatId"
+       FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
+      Number(id)
     );
-    if (statusRows[0]?.status === 'FINALIZADA') {
+    const info = infoRows[0] ?? {};
+    if (info.status === 'FINALIZADA') {
       return res.status(400).json({ error: 'Vacina já está finalizada.' });
     }
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'FINALIZADA' WHERE id = $1`, Number(id)
-    );
+    const isCliente    = info.cliente === true;
+    const aplicaDono   = info.aplicadaPeloProprietario === true;
+    // Cobra na finalização SÓ o quadrante "clínica fornece × proprietário aplica".
+    const cobrarAgora  = aplicaDono && !isCliente;
+    const jaFaturada   = cobrarAgora
+      ? await prisma.faturaItem.findFirst({ where: { vacinaClinicaId: vacina.id }, select: { id: true } })
+      : null;
+
+    const empresaIdEfetivo = req.empresaId ?? null;
+    const agora = new Date();
+    let evolucao = null;
+    let animal   = null;
+    if (cobrarAgora && !jaFaturada) {
+      if (vacina.evolucaoId) {
+        evolucao = await prisma.evolucaoClinica.findUnique({
+          where: { id: vacina.evolucaoId }, select: { numero: true, tipoAtendimento: true },
+        });
+      }
+      animal = await prisma.animal.findUnique({ where: { id: vacina.animalId }, select: { userId: true } });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (cobrarAgora && !jaFaturada) {
+        await darBaixaEFaturar(tx, {
+          vacina, info,
+          qtd: Math.max(1, Number(info.quantidade) || 1),
+          veterinarioId, empresaIdEfetivo, agora, evolucao, animal,
+        });
+        // A dose foi entregue ao dono e não passará pelo plantão: os reforços do
+        // esquema periódico precisam ser agendados aqui, senão nunca seriam.
+        await agendarReforcos(tx, {
+          vacina,
+          dose:          vacina.dose,
+          quantidade:    Math.max(1, Number(info.quantidade) || 1),
+          veterinarioId,
+          empresaId:     empresaIdEfetivo,
+          equipeId:      req.equipeId ?? null,
+          aplicadaEm:    vacina.dataAplicacao ?? agora,
+        });
+      }
+
+      await tx.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'FINALIZADA' WHERE id = $1`, Number(id)
+      );
+    });
 
     const atualizada = await prisma.vacinaClinica.findUnique({
       where: { id: Number(id) }, include: INCLUDE_VACINA,
@@ -313,6 +383,7 @@ async function finalizar(req, res) {
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
               quantidade, valor::float AS valor, cliente, status,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
               motivo_inativacao AS "motivoInativacao"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
@@ -357,7 +428,8 @@ async function listarParaExecucao(req, res) {
     const ids = vacinas.map((v) => v.id);
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
-              valor::float AS valor, cliente, status
+              valor::float AS valor, cliente, status,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
       ids
     );
@@ -365,7 +437,9 @@ async function listarParaExecucao(req, res) {
 
     const dados = vacinas
       .map((v) => ({ ...v, ...extrasMap[v.id] }))
-      .filter((v) => v.status === 'FINALIZADA');
+      // Aplicada pelo PROPRIETÁRIO não vai ao plantão: quem aplica é o dono, em casa.
+      // Ela já foi cobrada (e o lote debitado) na finalização — ver a matriz em `finalizar`.
+      .filter((v) => v.status === 'FINALIZADA' && v.aplicadaPeloProprietario !== true);
 
     res.json({ dados });
   } catch (err) {
@@ -447,6 +521,7 @@ async function executar(req, res) {
 
     const extras = await prisma.$queryRawUnsafe(
       `SELECT status, quantidade, valor::float AS valor, cliente, numero,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
               tipo_atendimento AS "tipoAtendimento", medicamento_cat_id AS "medicamentoCatId"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
@@ -476,65 +551,9 @@ async function executar(req, res) {
     await prisma.$transaction(async (tx) => {
       // Débito de estoque + fatura só quando NÃO for do cliente e ainda não faturada (legado).
       if (!isCliente && !jaFaturada) {
-        let loteIdFinal = vacina.loteId ?? null;
-        let loteValor   = 0;
-
-        let loteData = loteIdFinal ? await tx.loteVacina.findUnique({ where: { id: loteIdFinal } }) : null;
-        const loteInvalido = !loteData
-          || loteData.qtdDisponivel < qtd
-          || (loteData.validade && new Date(loteData.validade) < agora);
-
-        // Lote vinculado inválido/insuficiente → tenta FEFO pelo medicamento
-        if (loteInvalido && info.medicamentoCatId) {
-          const params = empresaIdEfetivo
-            ? [Number(info.medicamentoCatId), qtd, agora, empresaIdEfetivo]
-            : [Number(info.medicamentoCatId), qtd, agora];
-          const empresaFilter = empresaIdEfetivo ? 'AND (empresa_id = $4 OR empresa_id IS NULL)' : '';
-          const loteRows = await tx.$queryRawUnsafe(
-            `SELECT id, lote, doses_por_frasco AS "dosesPorFrasco",
-                    COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
-             FROM schs2vet.tb_lotes_vacina
-             WHERE medicamento_cat_id = $1 AND ativo = true AND qtd_disponivel >= $2
-               AND (validade IS NULL OR validade >= $3) ${empresaFilter}
-             ORDER BY validade ASC NULLS LAST LIMIT 1`,
-            ...params
-          );
-          loteData = loteRows.length > 0
-            ? { id: Number(loteRows[0].id), lote: loteRows[0].lote, dosesPorFrasco: loteRows[0].dosesPorFrasco, valorUnitario: loteRows[0].valorBruto, valorUnitarioRepassado: null }
-            : null;
-        } else if (loteInvalido) {
-          loteData = null; // sem medicamentoCat p/ FEFO e lote vinculado inválido
-        }
-
-        if (loteData) {
-          loteIdFinal = loteData.id;
-          const valorFrasco = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
-          const dosesFrasco = Number(loteData.dosesPorFrasco) || 1;
-          loteValor = valorFrasco / dosesFrasco;
-          await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtd } } });
-          if (loteIdFinal !== vacina.loteId) {
-            await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: loteData.lote ?? vacina.lote } });
-          }
-        }
-
-        if (animal?.userId) {
-          const vcNum     = `VC-${String(info.numero ?? vacina.id).padStart(4, '0')}`;
-          const evNum     = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
-          const descricao = `[${vcNum}] ${evNum}${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`;
-          // Sem lote debitado (sem estoque) → valor 0, financeiro ajusta depois.
-          const valorItem = info.valor != null ? info.valor : (loteIdFinal ? Number(loteValor) : 0);
-          const fatura = await getOrCreateFatura(tx, animal.userId);
-          await adicionarFaturaItem(tx, {
-            faturaId:        fatura.id,
-            animalId:        vacina.animalId,
-            tipo:            'VACINA',
-            descricao,
-            valor:           valorItem,
-            quantidade:      qtd,
-            veterinarioId,
-            vacinaClinicaId: vacina.id,
-          });
-        }
+        await darBaixaEFaturar(tx, {
+          vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, evolucao, animal,
+        });
       }
 
       await tx.$executeRawUnsafe(
@@ -557,7 +576,8 @@ async function executar(req, res) {
     const atualizada = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) }, include: INCLUDE_VACINA });
     const extras2 = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
-              valor::float AS valor, cliente, status, motivo_inativacao AS "motivoInativacao"
+              valor::float AS valor, cliente, status, motivo_inativacao AS "motivoInativacao",
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
     );
@@ -565,6 +585,76 @@ async function executar(req, res) {
   } catch (err) {
     console.error('executar vacina:', err);
     res.status(500).json({ error: 'Erro ao executar vacina' });
+  }
+}
+
+/**
+ * Debita o lote (FEFO quando o vinculado não serve) e lança o FaturaItem da vacina.
+ *
+ * Extraído de `executar` porque a EXECUÇÃO deixou de ser o único momento em que isso
+ * acontece: a vacina que o PROPRIETÁRIO aplica em casa nunca chega ao plantão, e a
+ * clínica ainda assim entregou a dose — para ela, quem chama é o `finalizar`.
+ * Chamar sempre dentro de uma transaction (recebe o `tx`).
+ */
+async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, evolucao, animal }) {
+  let loteIdFinal = vacina.loteId ?? null;
+  let loteValor   = 0;
+
+  let loteData = loteIdFinal ? await tx.loteVacina.findUnique({ where: { id: loteIdFinal } }) : null;
+  const loteInvalido = !loteData
+    || loteData.qtdDisponivel < qtd
+    || (loteData.validade && new Date(loteData.validade) < agora);
+
+  // Lote vinculado inválido/insuficiente → tenta FEFO pelo medicamento
+  if (loteInvalido && info.medicamentoCatId) {
+    const params = empresaIdEfetivo
+      ? [Number(info.medicamentoCatId), qtd, agora, empresaIdEfetivo]
+      : [Number(info.medicamentoCatId), qtd, agora];
+    const empresaFilter = empresaIdEfetivo ? 'AND (empresa_id = $4 OR empresa_id IS NULL)' : '';
+    const loteRows = await tx.$queryRawUnsafe(
+      `SELECT id, lote, doses_por_frasco AS "dosesPorFrasco",
+              COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
+       FROM schs2vet.tb_lotes_vacina
+       WHERE medicamento_cat_id = $1 AND ativo = true AND qtd_disponivel >= $2
+         AND (validade IS NULL OR validade >= $3) ${empresaFilter}
+       ORDER BY validade ASC NULLS LAST LIMIT 1`,
+      ...params
+    );
+    loteData = loteRows.length > 0
+      ? { id: Number(loteRows[0].id), lote: loteRows[0].lote, dosesPorFrasco: loteRows[0].dosesPorFrasco, valorUnitario: loteRows[0].valorBruto, valorUnitarioRepassado: null }
+      : null;
+  } else if (loteInvalido) {
+    loteData = null; // sem medicamentoCat p/ FEFO e lote vinculado inválido
+  }
+
+  if (loteData) {
+    loteIdFinal = loteData.id;
+    const valorFrasco = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
+    const dosesFrasco = Number(loteData.dosesPorFrasco) || 1;
+    loteValor = valorFrasco / dosesFrasco;
+    await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtd } } });
+    if (loteIdFinal !== vacina.loteId) {
+      await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: loteData.lote ?? vacina.lote } });
+    }
+  }
+
+  if (animal?.userId) {
+    const vcNum     = `VC-${String(info.numero ?? vacina.id).padStart(4, '0')}`;
+    const evNum     = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
+    const descricao = `[${vcNum}] ${evNum}${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`;
+    // Sem lote debitado (sem estoque) → valor 0, financeiro ajusta depois.
+    const valorItem = info.valor != null ? info.valor : (loteIdFinal ? Number(loteValor) : 0);
+    const fatura = await getOrCreateFatura(tx, animal.userId);
+    await adicionarFaturaItem(tx, {
+      faturaId:        fatura.id,
+      animalId:        vacina.animalId,
+      tipo:            'VACINA',
+      descricao,
+      valor:           valorItem,
+      quantidade:      qtd,
+      veterinarioId,
+      vacinaClinicaId: vacina.id,
+    });
   }
 }
 

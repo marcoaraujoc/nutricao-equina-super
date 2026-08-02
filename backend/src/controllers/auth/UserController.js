@@ -1,26 +1,14 @@
 'use strict';
 
 const bcrypt  = require('bcryptjs');
-const jwt     = require('jsonwebtoken');
-const crypto  = require('crypto');
 
 const prisma = require('../../lib/prisma').default;
 const { setAuthCookies } = require('../../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const mfa = require('../../services/mfaService');
 const { podeAcessarSistema } = require('../../lib/usuarioEmpresa');
-const SECRET          = process.env.JWT_SECRET;
-const REFRESH_SECRET  = process.env.JWT_REFRESH_SECRET || (SECRET + '_refresh');
-const REFRESH_EXPIRES = '30d';
-
-// Refresh token assinado (JWT) com expiração — validado em AuthController.refreshToken.
-function generateRefreshToken(userId) {
-  return jwt.sign(
-    { id: userId, type: 'refresh', jti: crypto.randomBytes(16).toString('hex') },
-    REFRESH_SECRET,
-    { expiresIn: REFRESH_EXPIRES }
-  );
-}
+// Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
+const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../../lib/sessionTokens');
 
 // Acesso ao sistema é concedido pela EMPRESA, no cadastro do membro (checkbox
 // "Terá acesso ao sistema"). Quem não tem esse acesso em NENHUMA empresa fica só
@@ -40,11 +28,7 @@ async function acessoBloqueado(user) {
  * verificação do segundo fator. Não duplicar esta lógica.
  */
 async function emitirSessao(res, user) {
-  const token = jwt.sign(
-    { id: user.id, email: user.email, role: user.role, fullName: user.fullName, userType: user.userType },
-    SECRET,
-    { expiresIn: '24h' }
-  );
+  const token = assinarAccessToken(user);
 
   const refreshToken = generateRefreshToken(user.id);
   await prisma.user.update({ where: { id: user.id }, data: { refreshToken } });

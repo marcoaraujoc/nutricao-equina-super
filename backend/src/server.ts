@@ -4,10 +4,13 @@ import cors from 'cors';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import path from 'path';
 import logger from './lib/logger';
 import prisma from './lib/prisma';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { getAccessTokenFromCookie } = require('./lib/authCookies');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const requestIdMiddleware = require('./middlewares/requestId');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -88,10 +91,48 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-// Rate limiting geral: 200 req/min por IP
+// ===================== RATE LIMIT GERAL =====================
+// Chave = USUÁRIO autenticado; sem sessão válida, cai no IP.
+//
+// POR QUÊ (2026-08-02): keyando só por IP, a cota era COLETIVA. Uma clínica atrás de
+// um NAT — ou de um túnel/proxy que não repassa o IP real — somava o tráfego de todo
+// mundo num balde só, e a equipe inteira levava 429 em uso normal. Com a chave por
+// usuário, cada pessoa tem o seu balde e o limite volta a significar "esta conta está
+// abusando", que é o que ele deveria dizer.
+//
+// O token é VERIFICADO (jwt.verify, não decode): token forjado não vira chave nova —
+// falha a verificação e a requisição cai no balde do IP. Sem isso, bastaria inventar
+// um `id` diferente a cada requisição para ter cota infinita.
+// Custo: um HMAC-SHA256 sobre um payload pequeno por requisição — irrelevante perto do
+// I/O de banco que vem depois.
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX ?? 300);
+
+function chaveDeLimite(req: Request): string {
+  try {
+    const token = getAccessTokenFromCookie(req)
+      ?? (req.headers.authorization?.startsWith('Bearer ')
+            ? req.headers.authorization.slice(7)
+            : null);
+    if (token && process.env.JWT_SECRET) {
+      const payload = jwt.verify(token, process.env.JWT_SECRET) as { id?: number };
+      if (payload?.id) return `u:${payload.id}`;
+    }
+  } catch {
+    // token ausente/expirado/inválido → identifica pelo IP, como antes
+  }
+  // ⚠️ `ipKeyGenerator` e NÃO `req.ip` cru: em IPv6 cada usuário costuma receber um
+  // /64 inteiro, então usar o endereço completo daria um balde novo a cada requisição
+  // — bastava trocar o último bloco para ter cota infinita. O helper reduz o IPv6 à
+  // sub-rede antes de virar chave (IPv4 passa igual). O express-rate-limit valida
+  // isso no boot e é o que emitia o ERR_ERL_KEY_GEN_IPV6.
+  if (!req.ip) return 'ip:desconhecido';
+  return `ip:${ipKeyGenerator(req.ip)}`;
+}
+
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 200,
+  max: RATE_LIMIT_MAX,
+  keyGenerator: chaveDeLimite,
   standardHeaders: true,
   legacyHeaders: false,
   message: { sucesso: false, mensagem: 'Muitas requisições. Tente novamente em instantes.' },

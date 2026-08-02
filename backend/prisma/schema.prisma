@@ -93,6 +93,7 @@ model User {
   designacoesCriadas       DesignacaoPrestador[]   @relation("DesignacaoCriadoPor")
   agendamentosComoVet      AgendamentoClinico[]    @relation("AgendamentoVeterinario")
   agendamentosCriados      AgendamentoClinico[]    @relation("AgendamentoCriadoPor")
+  agendamentosPerdidos     AgendamentoClinico[]    @relation("AgendamentoAssumidoDe")
   resenhasCriadas          ResenhaEquino[]         @relation("ResenhasCriadas")
   resenhasGraficasCriadas  ResenhaGrafica[]        @relation("ResenhaGraficaCriadaPor")
   passwordHistory          PasswordHistory[]
@@ -718,8 +719,13 @@ model VacinaClinica {
   tipoAtendimento  String?   @default("VC") @db.VarChar(2) @map("tipo_atendimento")
   quantidade       Int?      @default(1)
   valor            Decimal?  @db.Decimal(10, 2)
+  // Quem FORNECE a dose (a clínica, ou o próprio cliente traz)
   cliente          Boolean   @default(false)
-  status           String    @default("SALVA") @db.VarChar(20) // SALVA (rascunho) | FINALIZADA
+  // Quem APLICA a dose — irmã de `cliente`, nunca a mesma decisão. É o CRUZAMENTO das
+  // duas que decide execução e fatura (matriz do CLAUDE.md). Ver migration
+  // 20260815000001 e `VacinaClinicaController.finalizar`.
+  aplicadaPeloProprietario Boolean @default(false) @map("aplicada_pelo_proprietario")
+  status           String    @default("SALVA") @db.VarChar(20) // SALVA | FINALIZADA | EXECUTADA
   dataAplicacao      DateTime  @default(now())
   dataReforco        DateTime?
   observacao         String?   @db.Text
@@ -770,6 +776,12 @@ model AgendamentoClinico {
   // o tempo da especialidade depois, os agendamentos já marcados mantêm o seu.
   // null = anterior à migration 20260804000000 (a agenda trata como 60min).
   duracaoMin    Int?     @map("duracao_min")
+  // Quem PERDEU o atendimento na última vez em que alguém o assumiu (agenda ou
+  // evolução). Sem isso a troca de responsável é invisível na tela: o atendimento
+  // some da agenda de um e aparece na do outro sem explicação. Ver migration
+  // 20260815000000 e lib/agendamentoAssumido.js (leitura/escrita por SQL cru).
+  assumidoDeId  Int?      @map("assumido_de_id")
+  assumidoEm    DateTime? @map("assumido_em")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt      @map("updated_at")
 
@@ -777,6 +789,7 @@ model AgendamentoClinico {
   especialidade Especialidade? @relation("AgendamentoEspecialidade", fields: [especialidadeId], references: [id], onDelete: SetNull)
   veterinario User?                @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
   criadoPor   User?                @relation("AgendamentoCriadoPor",   fields: [criadoPorId],   references: [id], onDelete: SetNull)
+  assumidoDe  User?                @relation("AgendamentoAssumidoDe",  fields: [assumidoDeId],  references: [id], onDelete: SetNull)
   evolucoes   EvolucaoClinica[]    @relation("AgendamentoEvolucoes")
 
   @@unique([animalId, numero])
@@ -784,6 +797,7 @@ model AgendamentoClinico {
   @@index([empresaId, dataHora])
   @@index([equipeId, dataHora])
   @@index([especialidadeId])
+  @@index([assumidoDeId])
   @@map("tb_agendamentos_clinicos")
   @@schema("schs2vet")
 }
