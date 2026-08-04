@@ -262,16 +262,23 @@ function validarComboBody(body) {
   return { nome, valor, ids, especialidade, descricao: body?.descricao?.trim() || null };
 }
 
-// Verifica que todos os procedimentos existem, estão ativos e são da especialidade do combo.
-async function validarProcedimentosDoCombo(ids, especialidade) {
+/**
+ * Verifica que todos os procedimentos existem e estão ativos.
+ *
+ * ⚠️ O combo ACEITA procedimentos de especialidades DIFERENTES (2026-08-04). A trava
+ * "todos têm de ser da especialidade X" foi removida: pacote real mistura áreas — uma
+ * castração leva itens de Clínica Médica e de Anestesiologia —, e com a regra antiga a
+ * clínica precisava criar dois combos e somá-los à mão no orçamento.
+ * `Combo.especialidade` CONTINUA existindo e obrigatório: é a CLASSIFICAÇÃO do pacote
+ * (badge do card e filtro do Orçamento, `combosDaEsp` em Orcamento.tsx), não mais um
+ * critério de composição.
+ */
+async function validarProcedimentosDoCombo(ids) {
   const procs = await prisma.procedimentoVeterinario.findMany({
     where:  { id: { in: ids }, ativo: true },
-    select: { id: true, especialidade: true },
+    select: { id: true },
   });
   if (procs.length !== ids.length) return 'Procedimento inválido no combo.';
-  const alvo = especialidade.trim().toLowerCase();
-  const foraDaEspecialidade = procs.some(p => (p.especialidade ?? '').trim().toLowerCase() !== alvo);
-  if (foraDaEspecialidade) return `Todos os procedimentos do combo devem ser da especialidade "${especialidade}".`;
   return null;
 }
 
@@ -286,7 +293,7 @@ const criarCombo = async (req, res) => {
     const v = validarComboBody(req.body);
     if (v.erro) return res.status(400).json({ error: v.erro });
 
-    const erroProcs = await validarProcedimentosDoCombo(v.ids, v.especialidade);
+    const erroProcs = await validarProcedimentosDoCombo(v.ids);
     if (erroProcs) return res.status(400).json({ error: erroProcs });
 
     const combo = await prisma.procedimentoCombo.create({
@@ -321,7 +328,7 @@ const atualizarCombo = async (req, res) => {
     const v = validarComboBody(req.body);
     if (v.erro) return res.status(400).json({ error: v.erro });
 
-    const erroProcs = await validarProcedimentosDoCombo(v.ids, v.especialidade);
+    const erroProcs = await validarProcedimentosDoCombo(v.ids);
     if (erroProcs) return res.status(400).json({ error: erroProcs });
 
     const atualizado = await prisma.$transaction(async (tx) => {

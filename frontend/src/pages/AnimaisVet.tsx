@@ -12,6 +12,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import FotoAnimal from '../components/FotoAnimal';
 
 
 interface Solicitacao {
@@ -93,10 +94,7 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEd
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-        {animal.photoUrl
-          ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-          : <div className="w-full h-full flex items-center justify-center text-2xl">🐴</div>
-        }
+        <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
       </div>
 
       <div className="flex-1 min-w-0" onClick={onDashboard}>
@@ -174,10 +172,7 @@ function SolicitacaoCard({ sol, onResponder }: {
       </div>
       <div className="flex items-start gap-3">
         <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-          {sol.animal.photoUrl
-            ? <img src={sol.animal.photoUrl} alt={sol.animal.nome} className="w-full h-full object-cover" />
-            : <div className="w-full h-full flex items-center justify-center text-xl">🐾</div>
-          }
+          <FotoAnimal url={sol.animal.photoUrl} nome={sol.animal.nome} />
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
@@ -553,10 +548,7 @@ const AnimaisVet = () => {
             {solicitacoesEnviadas.map(sol => (
               <div key={sol.id} className="bg-white rounded-2xl border border-blue-200 shadow-sm p-4 flex items-center gap-3">
                 <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                  {sol.animal.photoUrl
-                    ? <img src={sol.animal.photoUrl} alt={sol.animal.nome} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-xl">🐾</div>
-                  }
+                  <FotoAnimal url={sol.animal.photoUrl} nome={sol.animal.nome} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
@@ -625,10 +617,7 @@ const AnimaisVet = () => {
                       >
                         <td className="pl-5 py-3.5">
                           <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                            {animal.photoUrl
-                              ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                              : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
-                            }
+                            <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
                           </div>
                         </td>
                         <td className="px-3 py-3.5 max-w-0">

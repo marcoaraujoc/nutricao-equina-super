@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  Pencil, Trash2, CheckCircle2, X, Loader2,
+  Pencil, Ban, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
   Clock, Calendar, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt,
 } from 'lucide-react';
@@ -192,6 +192,26 @@ const FORM_VAZIO = (): FormItem => ({
 });
 
 const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? v;
+
+/**
+ * Horizonte gravado quando o vet escolhe USO CONTÍNUO e não informa a duração.
+ *
+ * POR QUE NÃO É "sem fim": `Prescricao.duracaoDias` é `Int NOT NULL` e TODA a execução
+ * (janela do item, dias restantes, o que aparece no plantão) é contada a partir dele.
+ * Deixar vazio chegaria ao backend como 0 → `Math.max(… || 1, 1)` = 1 dia, e o
+ * tratamento contínuo sumiria da Execução de Prescrição no dia seguinte — silenciosamente.
+ * Com um ano, o item segue aparecendo até alguém CANCELAR a prescrição, que é o jeito
+ * de encerrar um uso contínuo. O vet continua livre para digitar uma duração.
+ */
+const DIAS_USO_CONTINUO = 365;
+
+/** Duração efetiva a enviar ao backend (ver DIAS_USO_CONTINUO). */
+const duracaoParaEnvio = (item: { frequencia: string; duracaoDias: number | '' }): number => {
+  if (item.frequencia === 'agora') return 1;
+  const informada = Number(item.duracaoDias);
+  if (informada >= 1) return informada;
+  return item.frequencia === 'continuo' ? DIAS_USO_CONTINUO : 1;
+};
 
 const formatarData = (d: string | null) => {
   if (!d) return '—';
@@ -478,7 +498,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // Remove o que só existe no front antes de enviar. `orcamentoItemId` e `valorOrcado`
   // AGORA vão no payload: é assim que o valor aceito pelo cliente chega à fatura.
   const semRastreio = (itens: FormItem[]) =>
-    itens.map(i => { const c = { ...i }; delete c.especialidade; return c; });
+    itens.map(i => {
+      const c = { ...i, duracaoDias: duracaoParaEnvio(i) };
+      delete c.especialidade;
+      return c;
+    });
+
+  // Item ÚNICO indo para o servidor (incluir/editar em prescrição já salva) — mesma
+  // normalização de duração do `semRastreio`.
+  const itemParaEnvio = (i: FormItem) => ({ ...i, duracaoDias: duracaoParaEnvio(i) });
 
   // Marca no orçamento os itens que foram efetivamente salvos (chamar após o POST).
   const marcarOrcamentoSalvo = (itens: FormItem[]) =>
@@ -689,8 +717,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (!form.frequencia.trim()) {
       setErroInline('Frequência é obrigatória', ['frequencia']); return false;
     }
-    // Dose única ("Agora") não exige duração em dias
-    if (form.frequencia !== 'agora' && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
+    // Dose única ("Agora") e USO CONTÍNUO não exigem duração em dias — o contínuo não
+    // tem fim previsto (encerra-se cancelando a prescrição). Ver DIAS_USO_CONTINUO.
+    if (form.frequencia !== 'agora' && form.frequencia !== 'continuo'
+        && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
       setErroInline('Duração (dias) é obrigatória', ['duracaoDias']); return false;
     }
     if (!form.dataInicio.trim()) {
@@ -733,7 +763,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     let ok = false;
     try {
       if (editingServerId !== null) {
-        const res = await api.put(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${editingServerId}`, form);
+        const res = await api.put(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${editingServerId}`, itemParaEnvio(form));
         const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
         if (destino) {
           // Categoria mudou → o item foi movido para outra prescrição
@@ -748,7 +778,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         }
         setEditingServerId(null);
       } else {
-        const res = await api.post(`/clinica/prescricoes/grupos/${grupo!.id}/itens`, form);
+        const res = await api.post(`/clinica/prescricoes/grupos/${grupo!.id}/itens`, itemParaEnvio(form));
         const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
         if (destino) {
           // Categoria diferente do grupo → foi para uma prescrição separada
@@ -1033,6 +1063,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const isMed           = form.tipo === 'MEDICAMENTO';
   // Dose única ("Agora"): não faz sentido pedir duração em dias
   const isDoseUnica     = form.frequencia === 'agora';
+  // Uso contínuo não tem fim previsto — a duração vira OPCIONAL (mas segue editável,
+  // diferente da dose única, que é sempre 1 dia).
+  const isUsoContinuo   = form.frequencia === 'continuo';
   const medCatalogo     = form.medicamentoCatId
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
@@ -1046,6 +1079,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // Em modo edição: formulário aparece ao editar item existente ou ao clicar "Inserir item"
   const showItemForm  = canEdit && !isReadOnly && !savedGrupos && (isCreate || editandoItem || showAddForm);
+  // O rodapé só existe se algum botão dele for renderizar (ver o bloco Footer)
+  const mostraRodape  =
+    (isCreate && !!savedGrupos)                                                    // estado "recém-salvo"
+    || ((grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir)
+    || (!isCreate && canEdit && !isReadOnly && !showItemForm)                      // "Inserir" (abre o form)
+    || !isInline                                                                   // "Fechar/Cancelar" do modal
+    || (!showItemForm && (canEdit || canFinalizarCancelar) && !isReadOnly);         // "Finalizar"
 
   return (
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
@@ -1082,13 +1122,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
           onInput={() => setErroAcao(null)}>
           <div className="px-5 py-3 space-y-3">
 
-            {/* Importar orçamento (opcional) — só na criação */}
-            {isCreate && !savedGrupos && (
-              <button onClick={() => setShowImportOrc(true)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
-                <Receipt size={13} /> Importar orçamento
-              </button>
-            )}
+            {/* O botão "Importar orçamento" saiu daqui: passou para a MESMA LINHA das
+                abas Medicamento/Procedimento, encostado à direita (ver abaixo). Fica
+                aqui só o modal, que não tem posição na tela. */}
             {showImportOrc && (
               <ImportarOrcamentoModal
                 animalId={animalId}
@@ -1116,8 +1152,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                 )}
 
-                {/* Tabs tipo */}
-                <div className="flex items-center gap-2">
+                {/* Tipo do item à ESQUERDA, "Importar orçamento" à DIREITA (mesma linha).
+                    `justify-between` + `mr-auto` no grupo da esquerda: com o Importar
+                    escondido (edição / já salvo), as abas continuam à esquerda em vez de
+                    esticar pela linha. */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 mr-auto">
                   {editandoItem ? (
                     <>
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl ${
@@ -1138,6 +1178,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         {t === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'}
                       </button>
                     ))
+                  )}
+                  </div>
+
+                  {/* Importar orçamento (opcional) — só na criação */}
+                  {isCreate && !savedGrupos && (
+                    <button onClick={() => setShowImportOrc(true)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
+                      <Receipt size={13} /> Importar orçamento
+                    </button>
                   )}
                 </div>
 
@@ -1383,12 +1432,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS){!isDoseUnica && ' *'}</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS){!isDoseUnica && !isUsoContinuo && ' *'}</label>
                     <input type="number" min="1"
                       value={isDoseUnica ? '' : form.duracaoDias}
                       disabled={isDoseUnica}
                       onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
-                      placeholder={isDoseUnica ? 'Dose única' : 'Ex: 7'}
+                      placeholder={isDoseUnica ? 'Dose única' : isUsoContinuo ? 'Opcional' : 'Ex: 7'}
                       className={classeErro(erroAcao, 'duracaoDias', `w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${isDoseUnica ? 'bg-gray-50 text-gray-400 cursor-not-allowed placeholder:text-gray-400' : ''}`)} />
                   </div>
                   <div className="col-span-2 sm:col-span-2">
@@ -1414,8 +1463,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     clínica aplica na baia e a pomada que o tratador passa em casa.
                     "Fornecido pelo Cliente" → não baixa estoque (só medicamento);
                     "Aplicada pelo Proprietário" → fora do plantão, da fatura e do
-                    estoque (vale também para PROCEDIMENTO). */}
-                <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                    estoque (vale também para PROCEDIMENTO).
+                    `items-center`: os botões Inserir/Finalizar dividem esta linha e são
+                    bem mais altos que o texto do checkbox — com `items-start` tudo
+                    encostava no topo e os rótulos ficavam desalinhados dos botões. */}
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                   {isMed && (
                     <div>
                       <label className="flex items-center gap-2.5 cursor-pointer select-none">
@@ -1444,12 +1496,36 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     </label>
                   </div>
 
-                  {/* Uma linha só, sempre visível: com duas dicas separadas as
-                      combinações se contradiziam (marcar "proprietário" dizia
-                      "fora da fatura", mas ele É cobrado ao salvar). */}
-                  <p className="w-full text-xs text-amber-600 -mt-0.5">
-                    {destinoDoItem(isMed && form.medicamentoCliente, form.aplicadaPeloProprietario, isMed)}
-                  </p>
+                  {/* A linha que explicava o destino do item ("Vai à Execução de
+                      Prescrição — …") foi RETIRADA a pedido. A regra continua valendo
+                      no backend, documentada na matriz "quem FORNECE × quem APLICA"
+                      (CLAUDE.md, rotas de /clinica/prescricoes) — só não é mais escrita
+                      na tela. Não reintroduzir sem pedido. */}
+
+                  {/* Inserir + Finalizar na MESMA LINHA dos checkboxes, encostados à
+                      direita (`ml-auto`). Enquanto o formulário está aberto, é aqui que
+                      eles vivem — o rodapé mantém as versões de quando ele está fechado
+                      (abrir o form / finalizar uma prescrição já salva), senão não
+                      haveria como finalizar sem o formulário na tela. */}
+                  <div className="flex items-center gap-2 ml-auto">
+                    {canEdit && !isReadOnly && (
+                      <button
+                        onClick={handleAdicionarMais}
+                        disabled={saving || formEstaVazio()}
+                        className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+                        {saving && <Loader2 size={13} className="animate-spin" />}
+                        {editandoItem ? 'Atualizar item' : 'Inserir'}
+                      </button>
+                    )}
+                    {(canEdit || canFinalizarCancelar) && !isReadOnly && (
+                      <button onClick={handleSalvarUnificado}
+                        disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
+                        className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                        {(saving || finalizing) ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                        Finalizar
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1548,7 +1624,10 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
           </div>
         </div>
 
-        {/* Footer */}
+        {/* Footer — com Inserir/Finalizar movidos para a linha dos checkboxes, ele pode
+            ficar SEM nenhum botão (criação inline com o formulário aberto). Nesse caso
+            não renderiza: senão sobra uma faixa vazia com borda no fim do card. */}
+        {(mostraRodape || erroAcao) && (
         <div className={`px-5 py-4 border-t border-gray-100 ${!isInline ? 'flex-shrink-0' : 'mt-2'}`}>
           {/* Erro pertence à superfície da ação: aqui, colado no botão que foi clicado */}
           <ErroAcao erro={erroAcao} className="mb-3" />
@@ -1572,7 +1651,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     disabled={finalizing}
                     className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                     {finalizing ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    Salvar
+                    Finalizar
                   </button>
                 )}
               </>
@@ -1581,7 +1660,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 {/* Imprimir — FINALIZADO ou EXECUTADO */}
                 {(grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir && (
                   <button onClick={() => imprimirPrescricao(grupo!, animal)}
-                    className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm transition-colors">
+                    className="flex items-center gap-1.5 px-4 py-2 border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-xl text-sm transition-colors">
                     <Printer size={14} /> Imprimir
                   </button>
                 )}
@@ -1594,16 +1673,9 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </button>
                 )}
 
-                {/* Inserir / Atualizar item — quando o form está aberto */}
-                {showItemForm && canEdit && !isReadOnly && (
-                  <button
-                    onClick={handleAdicionarMais}
-                    disabled={saving || formEstaVazio()}
-                    className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
-                    {saving && <Loader2 size={13} className="animate-spin" />}
-                    {editandoItem ? 'Atualizar item' : 'Inserir'}
-                  </button>
-                )}
+                {/* NÃO há "Inserir/Atualizar item" aqui: com o formulário aberto ele
+                    mora na linha dos checkboxes, e com o formulário fechado quem abre
+                    a inclusão é o botão "Inserir" logo acima. */}
 
                 {/* Fechar / Cancelar — modal only */}
                 {!isInline && (
@@ -1613,15 +1685,17 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </button>
                 )}
 
-                {/* Salvar — absorveu o Finalizar: salva e finaliza quando o usuário
-                    tem permissão de finalizar (desacoplado de canEdit, como o
-                    Finalizar antigo — FORNECEDOR finaliza o próprio item) */}
-                {(canEdit || canFinalizarCancelar) && !isReadOnly && (
+                {/* Finalizar — é o antigo "Salvar", que já absorveu o Finalizar: grava
+                    e finaliza quando o usuário tem permissão de finalizar (desacoplado
+                    de canEdit, como o Finalizar antigo — FORNECEDOR finaliza o próprio
+                    item). Com o formulário ABERTO ele mora na linha dos checkboxes;
+                    aqui atende o form fechado (prescrição salva que ainda vai finalizar). */}
+                {!showItemForm && (canEdit || canFinalizarCancelar) && !isReadOnly && (
                   <button onClick={handleSalvarUnificado}
                     disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
                     className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                     {(saving || finalizing) ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    Salvar
+                    Finalizar
                   </button>
                 )}
               </>
@@ -1629,6 +1703,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
           </div>
           </div>
         </div>
+        )}
       </div>
 
       <ModalJustificativa
@@ -1655,25 +1730,10 @@ function calcDataFim(dataInicio: string, dias: number | ''): string {
   return `${dy}/${m}/${y}`;
 }
 
-/**
- * Destino do item conforme a matriz "quem FORNECE × quem APLICA" (espelha
- * `PrescricaoGrupoController.finalizar`/`executar`, que são a autoridade).
- *
- *  fornecido p/ Cliente | aplicado p/ Proprietário | execução | fatura
- *          não         |           não            |  ENTRA   | na execução
- *          SIM         |           não            |  ENTRA   | nunca
- *          não         |           SIM            | não vai  | ao salvar
- *          SIM         |           SIM            | não vai  | nunca
- */
-function destinoDoItem(cliente: boolean, proprietario: boolean, isMed: boolean): string {
-  // PROCEDIMENTO executado pelo proprietário não vai ao plantão E não é cobrado: a
-  // clínica não faz nada, e procedimento é serviço, não bem entregue. O medicamento é
-  // o único caso cobrado ao salvar — nele a clínica entrega o produto mesmo sem aplicar.
-  if (proprietario && (cliente || !isMed)) return 'Não vai à Execução de Prescrição e não é cobrado.';
-  if (proprietario)            return 'Não vai à Execução de Prescrição — cobrado na fatura ao salvar.';
-  if (cliente)                 return 'Vai à Execução de Prescrição — sem baixa no estoque e sem cobrança.';
-  return 'Vai à Execução de Prescrição — cobrado na fatura ao ser executado.';
-}
+// `destinoDoItem()` foi REMOVIDA junto com a linha de texto que ela alimentava sob os
+// checkboxes ("Vai à Execução de Prescrição — …"), a pedido. A matriz "quem FORNECE ×
+// quem APLICA" que ela espelhava continua sendo a regra e vive no backend
+// (`PrescricaoGrupoController.finalizar`/`executar`) e no CLAUDE.md.
 
 function InfoChip({ label, value }: { label: string; value: string | null | undefined }) {
   if (!value) return null;
@@ -1769,14 +1829,17 @@ function ItemRow({
         <div className="flex items-center gap-1 flex-shrink-0">
           {canEdit && (
             <button onClick={onEdit}
-              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
+              className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
               <Pencil size={12} />
             </button>
           )}
+          {/* Ícone de CANCELAR (Ban), o mesmo da tela de Pedido de Exames — e não a
+              lixeira: nada aqui é excluído de verdade, o registro clínico fica no
+              histórico como cancelado. */}
           {podeRemover && (
-            <button onClick={onRemove}
+            <button onClick={onRemove} title="Cancelar item"
               className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={12} />
+              <Ban size={12} />
             </button>
           )}
         </div>
@@ -1799,7 +1862,7 @@ function CancelarModal({
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border border-gray-100">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
-            <Trash2 size={18} className="text-red-600" />
+            <Ban size={18} className="text-red-600" />
           </div>
           <div>
             <h3 className="font-bold text-gray-900">Cancelar prescrição</h3>
@@ -1906,7 +1969,7 @@ function ViewPrescricaoModal({ grupo, onClose, onImprimir }: {
             Fechar
           </button>
           <button onClick={onImprimir}
-            className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+            className="flex items-center gap-1.5 px-4 py-2.5 border border-blue-200 rounded-xl text-sm text-blue-600 font-medium hover:bg-blue-50 transition-colors">
             <Printer size={14} /> Imprimir
           </button>
         </div>
@@ -2271,11 +2334,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
               const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
-              // Prescrição NÃO EXECUTADA é alterável por quem tem ALTERAR na matriz.
-              // Sem filtro de autoria nem de cargo (armadilha 28-c) e usando o slug de
-              // EDITAR — antes usava o de CRIAR (`canEdit`) e ainda exigia ser o autor.
-              const editavel   = grupoNaoExecutado(g) && podeEditar;
-              const podeFinalizarDireto = g.status === 'SALVO';
+              // AUTORIA (2026-08-04): a prescrição é do profissional que a criou ou
+              // assumiu — só o gestor mexe na de outro. O slug continua sendo o de
+              // EDITAR (não o de CRIAR), e a prescrição já executada segue travada.
+              const meuRegistro = isGestor || eProprioAutor;
+              const editavel   = grupoNaoExecutado(g) && podeEditar && meuRegistro;
+              const podeFinalizarDireto = g.status === 'SALVO' && meuRegistro;
               const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
@@ -2319,12 +2383,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1">
                       <button onClick={() => abrirVisualizacao(g)} title="Visualizar"
-                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+                        className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                         <Eye size={13} />
                       </button>
                       {editavel && (
                         <button onClick={() => handleAlterar(g)} title="Alterar"
-                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                          className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                           <Pencil size={13} />
                         </button>
                       )}
@@ -2336,14 +2400,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                       )}
                       {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                         <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
-                          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                          className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Printer size={13} />
                         </button>
                       )}
                       {cancelavel && (
                         <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }} title="Cancelar prescrição"
                           className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 size={13} />
+                          <Ban size={13} />
                         </button>
                       )}
                     </div>
@@ -2364,7 +2428,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       <div className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
           const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
-          const editavelMobile = grupoNaoExecutado(g) && podeEditar;
+          // Mesma autoria do desktop — ver comentário na tabela acima.
+          const meuRegistroMobile  = isGestor || eProprioAutorMobile;
+          const editavelMobile = grupoNaoExecutado(g) && podeEditar && meuRegistroMobile;
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -2385,12 +2451,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             <p className="text-[11px] text-gray-400 mt-0.5">{formatarData(g.createdAt)}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               <button onClick={() => abrirVisualizacao(g)}
-                className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                 <Eye size={11} /> Visualizar
               </button>
               {editavelMobile && (
                 <button onClick={() => handleAlterar(g)}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                  className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
                   <Pencil size={11} /> Alterar
                 </button>
               )}
@@ -2409,14 +2475,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
               )}
               {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
                 <button onClick={() => imprimirPrescricao(g, animal)}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                  className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                   <Printer size={11} /> Imprimir
                 </button>
               )}
               {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutorMobile) && (
                 <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                  <Trash2 size={11} /> Cancelar
+                  <Ban size={11} /> Cancelar
                 </button>
               )}
             </div>

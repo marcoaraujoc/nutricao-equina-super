@@ -314,7 +314,7 @@ async function finalizar(req, res) {
 
     // Autoria via RBAC (nível efetivo em atendimento.vacinas.finalizar):
     // PROPRIO → só finaliza o que registrou; EQUIPE/FULL → qualquer da equipe.
-    if (!podeOperarRegistro(req.permissaoNivel, vacina.veterinarioId, req.user.id)) {
+    if (!podeOperarRegistro(req, vacina.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar vacinas que você registrou.' });
     }
 
@@ -406,6 +406,25 @@ async function listarParaExecucao(req, res) {
       animal: { ativo: true },
       AND:    [escopoFilhoEvolucaoWhere(req)],
     };
+
+    // TENANCY DO PLANTÃO — a fila de aplicação é da EMPRESA ATIVA e de mais ninguém.
+    //
+    // ⚠️ `escopoFilhoEvolucaoWhere` NÃO basta aqui: para o GESTOR ele devolve `{}`
+    // (bypass de `semEscopoClinico`, CLAUDE.md §35), e sem filtro nenhum a tela lista
+    // vacinas de TODAS as clínicas. Aquele bypass existe para o gestor enxergar o que
+    // a equipe dele registrou sem depender da resolução de empresaId — o que não pode
+    // é atravessar a fronteira da empresa. Vacina não tem `empresaId` próprio: a
+    // tenancy vem da EVOLUÇÃO do atendimento e, no avulso, da empresa do autor
+    // (mesmo critério do escopo clínico, sem a saída "é minha, então vejo").
+    if (req.empresaId) {
+      const empresaId = Number(req.empresaId);
+      where.AND.push({
+        OR: [
+          { evolucao: { empresaId } },
+          { evolucaoId: null, veterinario: { membrosEquipe: { some: { equipe: { empresaId } } } } },
+        ],
+      });
+    }
     if (animalId) where.animalId = Number(animalId);
 
     const vacinas = await prisma.vacinaClinica.findMany({
@@ -672,7 +691,7 @@ async function excluir(req, res) {
     if (!vacina.ativo) return res.status(400).json({ error: 'Registro já está inativo' });
 
     // Autoria: só o gestor (FULL) exclui vacina de outro; os demais só as que registraram.
-    if (!podeOperarRegistro(req.permissaoNivel, vacina.veterinarioId, req.user.id)) {
+    if (!podeOperarRegistro(req, vacina.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite excluir vacinas que você registrou.' });
     }
 

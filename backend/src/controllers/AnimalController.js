@@ -16,6 +16,7 @@ const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const {
   garantirPerfil: garantirPerfilProprietario,
+  salvarPerfil: salvarPerfilProprietario,
   aplicarPerfil: aplicarPerfilProprietario,
   aplicarPerfilEmRelacao: aplicarPerfilProprietarioEmRelacao,
 } = require('../lib/proprietarioPerfil');
@@ -42,7 +43,9 @@ async function notificarGestoresDaEmpresa(empresaId, { animalNome, proprietarioN
 const ANIMAL_INCLUDE = {
   especie:     true,
   raca:        true,
-  user:        { select: { id: true, fullName: true, email: true, phone: true, cpf: true } },
+  // `phone2` entra aqui porque a tela do animal edita os DOIS telefones do cliente;
+  // sem ele o campo abriria vazio e o segundo número se perderia ao salvar.
+  user:        { select: { id: true, fullName: true, email: true, phone: true, phone2: true, cpf: true } },
   localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } },
   tratador:    { select: { id: true, nome: true, telefone: true } },
   solicitacoes: {
@@ -952,6 +955,21 @@ class AnimalController {
                     phone2:   propData.phone2 || null,
                     ativo:    true,
                   });
+
+                  // Cliente que JÁ tinha cadastro nesta empresa: `garantirPerfil`
+                  // preserva o perfil, então o telefone digitado aqui seria descartado
+                  // em silêncio. O contato é o único campo que esta tela atualiza —
+                  // nome e documento continuam sendo assunto do Cadastro de Cliente.
+                  // Só grava o que veio PREENCHIDO: campo vazio no formulário do animal
+                  // não pode APAGAR o telefone que a clínica já tem.
+                  const contato = {};
+                  const phoneNovo  = String(propData.phone  ?? '').trim();
+                  const phone2Novo = String(propData.phone2 ?? '').trim();
+                  if (phoneNovo)  contato.phone  = phoneNovo;
+                  if (phone2Novo) contato.phone2 = phone2Novo;
+                  if (Object.keys(contato).length) {
+                    await salvarPerfilProprietario(prisma, prop.id, vetEmpresaId, contato);
+                  }
                 }
 
                 targetUserId               = prop.id;
@@ -1167,6 +1185,34 @@ class AnimalController {
         if (ocupante) {
           const localLabel = localNorm ? ` (${localNorm})` : '';
           return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${ocupante.nome}` });
+        }
+      }
+
+      // Contato do proprietário editado na própria tela do animal. É o ÚNICO dado do
+      // cliente que ela grava — nome, documento e endereço seguem sendo do Cadastro de
+      // Cliente, e o dono do animal não se troca por aqui. Grava no cadastro DESTA
+      // empresa (CLAUDE.md §36), nunca no `users`. Campo vazio é IGNORADO: salvar o
+      // animal com o telefone em branco não pode apagar o número que a clínica tem.
+      if (req.empresaId && req.body.proprietario && animalAtual?.userId) {
+        const propData = typeof req.body.proprietario === 'string'
+          ? JSON.parse(req.body.proprietario)
+          : req.body.proprietario;
+        const contato = {};
+        const phoneNovo  = String(propData?.phone  ?? '').trim();
+        const phone2Novo = String(propData?.phone2 ?? '').trim();
+        if (phoneNovo)  contato.phone  = phoneNovo;
+        if (phone2Novo) contato.phone2 = phone2Novo;
+        if (Object.keys(contato).length) {
+          // ⚠️ `garantirPerfil` ANTES do `salvarPerfil`: cliente LEGADO pode não ter
+          // perfil nesta empresa, e um upsert só com o telefone criaria a linha com
+          // `fullName` nulo — que, pela regra do §36 (null = vazio NAQUELA empresa,
+          // não cai de volta no User), APAGARIA o nome do cliente na clínica.
+          await garantirPerfilProprietario(prisma, animalAtual.userId, req.empresaId, {
+            fullName: animalAtual.user?.fullName ?? null,
+            phone:    animalAtual.user?.phone    ?? null,
+            ativo:    true,
+          });
+          await salvarPerfilProprietario(prisma, animalAtual.userId, req.empresaId, contato);
         }
       }
 

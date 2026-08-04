@@ -11,6 +11,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
+  ArrowLeftRight, PencilLine, PlusCircle, Eye, X,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -25,6 +26,8 @@ interface LogAuditoria {
   entidade:   string | null;
   entidadeId: number | null;
   animalId:   number | null;
+  /** Nome do paciente resolvido pelo backend. null = animal excluído (cai no id). */
+  animalNome: string | null;
   motivo:     string | null;
   detalhes:   string | null;
   ip:         string | null;
@@ -32,7 +35,7 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO';
 
 const ENTIDADE_LABEL: Record<string, string> = {
   EVOLUCAO:          'Evolução',
@@ -50,6 +53,28 @@ const ENTIDADE_LABEL: Record<string, string> = {
   DIETA_ITEM:        'Item de dieta',
   CONFIGURACAO_SEGURANCA: 'Configuração de segurança',
 };
+
+/**
+ * Tira as referências numéricas do texto EXIBIDO (`#81`, `(#182)`, `item#41.dosagem`).
+ *
+ * Os geradores no backend pararam de gravá-las, mas o AuditLog é um LEDGER IMUTÁVEL:
+ * as linhas escritas antes disso continuam com o texto antigo, e reescrevê-las seria
+ * adulterar a auditoria. Então a limpeza é de APRESENTAÇÃO — vale para o histórico
+ * inteiro sem tocar em nada gravado.
+ *
+ * NÃO se aplica a `motivo`: ali é o texto que o usuário digitou, e mexer nas palavras
+ * dele numa tela de auditoria é pior do que exibir um "#".
+ */
+const semReferencias = (texto: string): string =>
+  texto
+    .replace(/\s*\(#\d+\)/g, '')    // "Paulete (#182)" → "Paulete"
+    .replace(/#\d+/g, '')           // "EVOLUCAO #81", "item#41.dosagem"
+    .replace(/[ \t]{2,}/g, ' ')     // espaço duplo deixado para trás
+    .replace(/\s+([,.])/g, '$1')    // pontuação que ficou solta
+    .trim();
+// ⚠️ `;` fora da regra de pontuação acima DE PROPÓSITO: " ; " é o separador entre as
+// mudanças de campo, e colar o ponto-e-vírgula na palavra anterior quebraria o split
+// de `DetalhesFormatados` — o modal voltaria a mostrar tudo numa linha só.
 
 const fmtDataHora = (iso: string) => {
   const d = new Date(iso);
@@ -72,10 +97,132 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
       <ShieldCheck size={9} /> CONFIGURAÇÃO
     </span>
   );
+  // Troca de responsável (assumir / transferir) — o `detalhes` traz de quem para quem
+  if (categoria === 'TRANSFERENCIA') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 text-violet-700">
+      <ArrowLeftRight size={9} /> TRANSFERÊNCIA
+    </span>
+  );
+  if (categoria === 'CRIACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-700">
+      <PlusCircle size={9} /> CRIAÇÃO
+    </span>
+  );
+  if (categoria === 'ALTERACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+      <PencilLine size={9} /> ALTERAÇÃO
+    </span>
+  );
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500">
       SISTEMA
     </span>
+  );
+}
+
+/**
+ * `detalhes` é uma linha só, mas com estrutura: `registrarAlteracao` e
+ * `registrarTransferencia` (lib/auditoria.js) separam os blocos por " | " e as
+ * mudanças de campo por " ; ". Na tabela isso vira um parágrafo cortado em duas
+ * linhas; aqui é quebrado de volta para que se leia mudança a mudança — que é o
+ * motivo de existir o "Visualizar".
+ */
+function DetalhesFormatados({ texto }: { texto: string }) {
+  const limpo  = semReferencias(texto);
+  const blocos = limpo.split(' | ').flatMap(b => b.split(' ; '));
+  if (blocos.length <= 1) {
+    return <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{limpo}</p>;
+  }
+  return (
+    <ul className="space-y-1">
+      {blocos.map((b, i) => (
+        <li key={i} className="text-sm text-gray-800 break-words flex gap-2">
+          <span className="text-gray-300 select-none">•</span>
+          <span className="whitespace-pre-wrap">{b.trim()}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">{rotulo}</p>
+      {children}
+    </div>
+  );
+}
+
+/** Entrada completa da auditoria — a tabela corta `detalhes`/`motivo` em 2 linhas. */
+function ModalLog({ log, onFechar }: { log: LogAuditoria; onFechar: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl flex flex-col max-h-[88vh] overflow-hidden">
+        <div className="bg-emerald-700 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <ScrollText size={15} className="text-white/90 flex-shrink-0" />
+            <p className="font-bold text-sm text-white truncate">Registro de auditoria</p>
+          </div>
+          <button onClick={onFechar} aria-label="Fechar" className="text-white/60 hover:text-white flex-shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <BadgeCategoria categoria={log.categoria} />
+            <span className="text-xs text-gray-500 font-mono">{fmtDataHora(log.timestamp)}</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Campo rotulo="Tipo de registro">
+              <p className="text-sm text-gray-800">
+                {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : '—'}
+              </p>
+            </Campo>
+            <Campo rotulo="Paciente">
+              {/* Nome vem do backend (`animalNome`). Animal já excluído fica sem nome —
+                  o id NÃO é exibido no lugar, por decisão: a tela não mostra referência
+                  numérica. O `animalId` continua na coluna do banco para rastreio. */}
+              <p className="text-sm text-gray-800">
+                {log.animalNome ?? (log.animalId != null ? 'Paciente excluído' : '—')}
+              </p>
+            </Campo>
+            <Campo rotulo="Usuário">
+              <p className="text-sm text-gray-800 break-words">{log.userName || '—'}</p>
+              {log.email && <p className="text-xs text-gray-500 break-words">{log.email}</p>}
+            </Campo>
+            <Campo rotulo="Endereço IP">
+              <p className="text-sm text-gray-800 font-mono">{log.ip ?? '—'}</p>
+            </Campo>
+          </div>
+
+          <Campo rotulo="Ação">
+            <p className="text-sm text-gray-800 break-words">{semReferencias(log.action) || '—'}</p>
+          </Campo>
+
+          <Campo rotulo="Detalhes">
+            {log.detalhes
+              ? <DetalhesFormatados texto={log.detalhes} />
+              : <p className="text-sm text-gray-400">Sem detalhes registrados.</p>}
+          </Campo>
+
+          <Campo rotulo="Justificativa">
+            {log.motivo
+              ? <p className="text-sm text-gray-800 whitespace-pre-wrap break-words bg-gray-50 rounded-xl px-3 py-2">{log.motivo}</p>
+              : <p className="text-sm text-gray-400">Sem justificativa registrada.</p>}
+          </Campo>
+        </div>
+
+        <div className="p-4 border-t border-gray-100 flex justify-end flex-shrink-0">
+          <button onClick={onFechar}
+            className="px-4 py-2 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -98,6 +245,8 @@ export default function AuditoriaGeral() {
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim,    setDataFim]    = useState('');
   const [page,       setPage]       = useState(1);
+  // Entrada aberta no modal — a tabela corta detalhes/justificativa em 2 linhas
+  const [logAberto,  setLogAberto]  = useState<LogAuditoria | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -166,7 +315,7 @@ export default function AuditoriaGeral() {
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key
@@ -181,7 +330,7 @@ export default function AuditoriaGeral() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="relative md:col-span-2">
               <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-              <input type="text" placeholder="Buscar por motivo, registro ou usuário..."
+              <input type="text" placeholder="Buscar por paciente, motivo, registro ou usuário..."
                 value={busca} onChange={(e) => setBusca(e.target.value)}
                 className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
@@ -226,10 +375,14 @@ export default function AuditoriaGeral() {
                       <th className="py-3 px-4 whitespace-nowrap">Data / Hora</th>
                       <th className="py-3 px-4">Ação</th>
                       <th className="py-3 px-4">Tipo</th>
-                      <th className="py-3 px-4">Registro</th>
-                      <th className="py-3 px-4">Justificativa</th>
+                      <th className="py-3 px-4">Paciente</th>
+                      {/* "Registro" (detalhes) e "Justificativa" saíram da grade: eram
+                          textos longos cortados em duas linhas, que não se liam nem na
+                          tabela nem no card. Continuam inteiros no modal Visualizar e
+                          continuam alcançáveis pela busca. */}
                       <th className="py-3 px-4">Usuário</th>
                       <th className="py-3 px-4 whitespace-nowrap">IP</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-center">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -239,16 +392,20 @@ export default function AuditoriaGeral() {
                         <td className="py-3 px-4"><BadgeCategoria categoria={log.categoria} /></td>
                         <td className="py-3 px-4 text-xs text-gray-700 whitespace-nowrap">
                           {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : '—'}
-                          {log.entidadeId != null && <span className="text-gray-400"> #{log.entidadeId}</span>}
                         </td>
-                        <td className="py-3 px-4 text-xs text-gray-600 max-w-[220px]">
-                          <span className="line-clamp-2">{log.detalhes ?? log.action}</span>
-                        </td>
-                        <td className="py-3 px-4 text-xs text-gray-800 max-w-[280px]">
-                          <span className="line-clamp-2">{log.motivo ?? '—'}</span>
+                        <td className="py-3 px-4 text-xs text-gray-700 whitespace-nowrap">
+                          {log.animalNome ?? (log.animalId != null
+                            ? <span className="text-gray-400 italic">Paciente excluído</span>
+                            : <span className="text-gray-300">—</span>)}
                         </td>
                         <td className="py-3 px-4 text-xs text-gray-500 whitespace-nowrap">{log.userName || log.email || '—'}</td>
                         <td className="py-3 px-4 text-xs text-gray-400 whitespace-nowrap font-mono">{log.ip ?? '—'}</td>
+                        <td className="py-3 px-4 text-center">
+                          <button onClick={() => setLogAberto(log)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors whitespace-nowrap">
+                            <Eye size={12} /> Visualizar
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -265,20 +422,23 @@ export default function AuditoriaGeral() {
                     </div>
                     <p className="text-sm font-medium text-gray-800">
                       {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : 'Sistema'}
-                      {log.entidadeId != null && <span className="text-gray-400 text-xs"> #{log.entidadeId}</span>}
                     </p>
-                    {(log.detalhes ?? log.action) && (
-                      <p className="text-xs text-gray-500 line-clamp-2">{log.detalhes ?? log.action}</p>
-                    )}
-                    {log.motivo && (
-                      <p className="text-xs text-gray-700 bg-gray-50 rounded-lg px-2 py-1.5">
-                        <span className="font-semibold text-gray-500">Motivo:</span> {log.motivo}
+                    {(log.animalNome || log.animalId != null) && (
+                      <p className="text-xs text-gray-600">
+                        <span className="text-gray-400">Paciente: </span>
+                        {log.animalNome ?? <span className="italic text-gray-400">excluído</span>}
                       </p>
                     )}
+                    {/* Detalhes e justificativa moram no modal Visualizar — ver a nota
+                        no cabeçalho da tabela. */}
                     <p className="text-[11px] text-gray-400">
                       por {log.userName || log.email || '—'}
                       {log.ip && <span className="font-mono"> · {log.ip}</span>}
                     </p>
+                    <button onClick={() => setLogAberto(log)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 text-emerald-700 rounded-xl text-xs font-semibold hover:bg-emerald-50 transition-colors">
+                      <Eye size={12} /> Visualizar
+                    </button>
                   </div>
                 ))}
               </div>
@@ -301,6 +461,8 @@ export default function AuditoriaGeral() {
           )}
         </div>
       </div>
+
+      {logAberto && <ModalLog log={logAberto} onFechar={() => setLogAberto(null)} />}
     </PageContainer>
   );
 }

@@ -11,6 +11,7 @@ import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import FotoAnimal from '../components/FotoAnimal';
 
 
 interface Solicitacao {
@@ -298,15 +299,8 @@ const MeusAnimais = () => {
                   <div className="flex items-center gap-3 p-3 sm:p-4">
                     {/* Foto */}
                     <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                      {animal.photoUrl ? (
-                        <img
-                          src={animal.photoUrl}
-                          alt={animal.nome}
-                          className={`w-full h-full object-cover ${pendente ? 'grayscale-[40%]' : ''}`}
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-3xl">🐴</div>
-                      )}
+                      <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={26}
+                        imgClassName={pendente ? 'grayscale-[40%]' : ''} />
                     </div>
 
                     {/* Info */}

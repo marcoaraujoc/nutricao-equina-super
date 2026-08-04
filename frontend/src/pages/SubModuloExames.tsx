@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   FlaskConical, Scan, Ban, Eye, Loader2, X,
   ChevronLeft, ChevronRight, FileText, Check, Plus,
-  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, Clock,
+  // CheckSquare = FINALIZAR (mesmo ícone da Evolução Clínica). CheckCircle2 fica
+  // reservado aos BADGES de status, para os dois não se confundirem na mesma tela.
+  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, CheckSquare, Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -15,6 +17,7 @@ import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import { temResultadoExame } from '../utils/exameClinico';
 import InlineError from '../components/InlineError';
 
 
@@ -215,6 +218,10 @@ function getStatusExame(ex: ExameClinico): StatusExameUI {
   return ex.status === 'CONCLUIDO' ? 'FINALIZADA' : 'SALVA';
 }
 
+// `temResultadoExame` vive em utils/exameClinico.ts — compartilhada com o painel da
+// tela de Resultado de Exame, que precisa do MESMO critério para o rótulo
+// "Finalizado sem Resultado".
+
 const FILTROS_EXAME: { key: FiltroStatusExame; label: string }[] = [
   { key: 'todos',      label: 'Todos'       },
   { key: 'SALVA',      label: 'Salvas'      },
@@ -223,7 +230,7 @@ const FILTROS_EXAME: { key: FiltroStatusExame; label: string }[] = [
   { key: 'CANCELADA',  label: 'Canceladas'  },
 ];
 
-function StatusExameBadge({ status }: { status: StatusExameUI }) {
+function StatusExameBadge({ status, semResultado = false }: { status: StatusExameUI; semResultado?: boolean }) {
   if (status === 'CANCELADA') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-600">
@@ -239,6 +246,15 @@ function StatusExameBadge({ status }: { status: StatusExameUI }) {
     );
   }
   if (status === 'FINALIZADA') {
+    // Encerrado sem que resultado nenhum tenha chegado — é informação clínica, não
+    // detalhe de tela: quem lê o histórico precisa saber que aquele pedido morreu vazio.
+    if (semResultado) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+          <CheckCircle2 size={9} /> FINALIZADO SEM RESULTADO
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
         <CheckCircle2 size={9} /> FINALIZADA
@@ -411,7 +427,7 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
               {ex.tipo}
             </span>
-            <StatusExameBadge status={getStatusExame(ex)} />
+            <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
             <span className="text-xs text-gray-400 ml-auto">{formatDate(ex.dataSolicitacao)}</span>
           </div>
 
@@ -609,7 +625,7 @@ function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemo
           <p className="text-[10px] text-gray-500 mt-0.5">Amostra: {group.tipoAmostra}</p>
         )}
       </div>
-      <button onClick={onRemove} className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0 transition-colors">
+      <button onClick={onRemove} className="text-red-500 hover:text-red-600 p-1 flex-shrink-0 transition-colors">
         <X size={14} />
       </button>
     </div>
@@ -713,7 +729,11 @@ export default function SubModuloExames({
   // conteúdo saindo do sistema. Quem só tem VER não faz nenhum dos três.
   const podeImprimir  = isGestor || podeExecutar('atendimento.exames.imprimir');
   // Só o gestor finaliza/exclui exame de outro; os demais só os que solicitaram.
-  const podeFinalizarEx = (ex: ExameClinico) => podeFinalizar && (isGestor || ex.veterinario?.id === user?.id);
+  const meuExame        = (ex: ExameClinico) => isGestor || ex.veterinario?.id === user?.id;
+  const podeFinalizarEx = (ex: ExameClinico) => podeFinalizar && meuExame(ex);
+  // Cancelar o PEDIDO seguia só o slug, sem autoria — o backend (`podeOperarRegistro`)
+  // recusa, então o botão aparecia para dar 403 no clique.
+  const podeCancelarEx  = (ex: ExameClinico) => podeDeletar && meuExame(ex);
   // O PEDIDO de exame (Laboratorial e Imagem) é controlado APENAS por
   // `atendimento.exames.*` — mesmo padrão de evolução/prescrição/vacina/encaminhamento.
   // Os slugs `exames.laboratorial.*` / `exames.imagem.*` pertencem a outro fluxo
@@ -1211,7 +1231,8 @@ export default function SubModuloExames({
   };
 
   const handleExcluirSolicitado = (id: number) => {
-    if (!podeDeletar) { semPermissao('cancelar exame'); return; }
+    const ex = historico.find(e => e.id === id);
+    if (!ex || !podeCancelarEx(ex)) { semPermissao('cancelar exame'); return; }
     setConfirmId(id);
   };
 
@@ -2006,7 +2027,7 @@ export default function SubModuloExames({
                       />
                     </div>
 
-                    {/* Botões Inserir / Salvar — mesmo padrão da Prescrição */}
+                    {/* Botões Inserir / Finalizar — mesmo padrão da Prescrição */}
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={handleInserir}
@@ -2021,7 +2042,7 @@ export default function SubModuloExames({
                         className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5"
                       >
                         {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                        Salvar
+                        Finalizar
                       </button>
                     </div>
                   </div>
@@ -2038,7 +2059,7 @@ export default function SubModuloExames({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
-                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} inserido{pendingGroups.length !== 1 ? 's' : ''} — clique em Salvar para concluir
+                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} inserido{pendingGroups.length !== 1 ? 's' : ''} — clique em Finalizar para concluir
               </span>
             </div>
             <button
@@ -2159,7 +2180,7 @@ export default function SubModuloExames({
                     <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0">
                       {fmtNumero(ex.numero)}
                     </span>
-                    <StatusExameBadge status={getStatusExame(ex)} />
+                    <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -2183,18 +2204,18 @@ export default function SubModuloExames({
 
                   <div className="flex flex-wrap gap-2 mt-2">
                     <button onClick={() => setViewingEx(ex)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
                     {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
                       <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id}
                         className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
-                        {finalizandoId === ex.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Finalizar
+                        {finalizandoId === ex.id ? <Loader2 size={11} className="animate-spin" /> : <CheckSquare size={11} />} Finalizar
                       </button>
                     )}
                     {podeImprimir && (
                       <button onClick={() => imprimirExame(ex)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                         <Printer size={11} /> Imprimir
                       </button>
                     )}
@@ -2210,7 +2231,7 @@ export default function SubModuloExames({
                         <Mail size={11} /> E-mail
                       </button>
                     )}
-                    {podeDeletar && ex.ativo && (
+                    {podeCancelarEx(ex) && ex.ativo && (
                       <button onClick={() => handleExcluirSolicitado(ex.id)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
                         <Ban size={11} /> Cancelar
@@ -2278,7 +2299,7 @@ export default function SubModuloExames({
                         {formatDate(ex.dataSolicitacao)}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusExameBadge status={getStatusExame(ex)} />
+                        <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {ex.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
@@ -2286,36 +2307,36 @@ export default function SubModuloExames({
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
                           {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
                             <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id} title="Finalizar"
-                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
-                              {finalizandoId === ex.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                              {finalizandoId === ex.id ? <Loader2 size={14} className="animate-spin" /> : <CheckSquare size={14} />}
                             </button>
                           )}
                           {podeImprimir && (
                             <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
-                              className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                              className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                               <Printer size={14} />
                             </button>
                           )}
                           {podeImprimir && (
                             <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
-                              className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
                               <MessageCircle size={14} />
                             </button>
                           )}
                           {podeImprimir && (
                             <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
-                              className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                              className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                               <Mail size={14} />
                             </button>
                           )}
-                          {podeDeletar && ex.ativo && (
+                          {podeCancelarEx(ex) && ex.ativo && (
                             <button onClick={() => handleExcluirSolicitado(ex.id)} title="Cancelar exame"
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                              className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                               <Ban size={14} />
                             </button>
                           )}

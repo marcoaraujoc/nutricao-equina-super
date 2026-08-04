@@ -12,9 +12,9 @@ import {
   DollarSign, ChevronDown, X,
   Users, Users2, ShieldCheck, FlaskConical, Pill,
   ClipboardCheck, Activity, Utensils, FileBarChart,
-  FileText, Syringe, Share2, Microscope, Scan,
+  FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
-  Sparkles, CalendarPlus, CalendarDays, Package, Settings, ScrollText,
+  Sparkles, CalendarPlus, Package, Settings, ScrollText,
   Bell, Gauge, ListChecks, Receipt,
 } from 'lucide-react';
 import { useVetPendentes } from '../hooks/useVetPendentes';
@@ -90,7 +90,6 @@ export default function Sidebar() {
   const { podeExecutar, isGestor } = usePermissoes();
 
   const isEstagiario           = role === 'ESTAGIARIO' || userTypeUpper === 'ESTAGIARIO';
-  const isVetOuSuperior        = isVet || isAdmin || isGestor;
 
   const podeVerAdministracao   = isAdmin || isGestor;
   // Mapa de Atendimento: visível para todos com permissão dashboard.geral.ler.
@@ -206,9 +205,8 @@ export default function Sidebar() {
   // Accordion de grupos: no máximo UM grupo expansível aberto por vez em todo o
   // sidebar. Abrir um fecha o anterior. Inicializa no grupo da rota ativa.
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
-    if (p.startsWith('/clinica'))                                    return 'atendimento';
-    // Execução de Prescrição mora dentro de Atendimento (o grupo "Enfermagem" saiu)
-    if (p.startsWith('/execucao-prescricao'))                        return 'atendimento';
+    // Atendimento, Vacina e Execução de Prescrição são módulos FOLHA (link direto,
+    // sem sub-itens) — não abrem grupo nenhum.
     if (p.startsWith('/faturamento') || p.startsWith('/orcamento'))  return 'financeiro';
     if (p.startsWith('/estoque-vacina') || p.startsWith('/farmacia')) return 'estoque';
     if (p.startsWith('/exames'))                                     return 'exames';
@@ -353,7 +351,19 @@ export default function Sidebar() {
           {/* Menu PLANO: sem os cabeçalhos "Geral"/"Módulos" — os itens ficam todos
               no mesmo nível, na ordem de uso do dia a dia (2026-07-30). */}
 
-          {/* ── 1. Mapa de Atendimento ─────────────────────────────────────── */}
+          {/* ── 1. Painel Principal ────────────────────────────────────────── */}
+          {/* Exclusivo do perfil VETERINÁRIO. `isVet` já resolve pelo tipo do
+              CONTEXTO ATIVO (o backend o deriva do cargo do vínculo), então quem é
+              veterinária nesta clínica vê o item, e quem é estagiária aqui não —
+              mesmo sendo vet na outra. Sem `isVetOuSuperior`: o item foi pedido para
+              o veterinário, e o gestor tem o Mapa de Atendimento logo abaixo. */}
+          {isVet && (
+            <div className="space-y-0.5">
+              {navLink('/painel-principal', <Stethoscope size={20} />, 'Painel Principal', p.startsWith('/painel-principal'))}
+            </div>
+          )}
+
+          {/* ── 2. Mapa de Atendimento ─────────────────────────────────────── */}
           {podeVerDashboard && (
             <div className="space-y-0.5">
               {navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
@@ -433,44 +443,73 @@ export default function Sidebar() {
                     </button>
                   )}
 
-                  {/* ── 4. Atendimento (Execução de Prescrição vive aqui) ──── */}
-                  {temAcessoClinico && (temAcessoAtendimento || podeVerEnfermagem) && (
-                    <div>
-                      {moduleButton('Atendimento', <Stethoscope size={20} />, 'clinica', openGroup === 'atendimento', () => toggleGroup('atendimento'))}
-                      {openGroup === 'atendimento' && (
-                        <div className="mt-1 pl-6 space-y-0.5">
-                          {isVetOuSuperior && podeVerAgendamentos && subLink('/clinica/agenda', <CalendarDays size={14} />, 'Agenda', p.startsWith('/clinica/agenda'))}
-                          {podeVerEvolucoes  && subLink(
-                            animalId ? `/clinica/evolucao/${animalId}` : '/clinica/evolucao',
-                            <FileText    size={14} />, 'Evolução',
-                            p.startsWith('/clinica/evolucao'),
-                          )}
-                          {podeVerPrescricoes && subLink(
-                            animalId ? `/clinica/prescricao/${animalId}` : '/clinica/prescricao',
-                            <Pill        size={14} />, 'Prescrição',
-                            p.startsWith('/clinica/prescricao'),
-                          )}
-                          {podeVerVacinas && subLink(
-                            animalId ? `/clinica/vacina/${animalId}` : '/clinica/vacina',
-                            <Syringe     size={14} />, 'Vacinas',
-                            p.startsWith('/clinica/vacina'),
-                          )}
-                          {podeVerExames && subLink(
-                            animalId ? `/clinica/exames/${animalId}` : '/clinica/exames',
-                            <FlaskConical size={14} />, 'Pedido Exames',
-                            p.startsWith('/clinica/exames'),
-                          )}
-                          {podeVerEncaminhamentos && subLink(
-                            animalId ? `/clinica/encaminhamento/${animalId}` : '/clinica/encaminhamento',
-                            <Share2      size={14} />, 'Encaminhamento',
-                            p.startsWith('/clinica/encaminhamento'),
-                          )}
-                          {/* Antes num grupo "Enfermagem" à parte — o plantão é a
-                              continuação do atendimento, não um módulo separado. */}
-                          {podeVerEnfermagem && subLink('/execucao-prescricao', <ClipboardCheck size={14} />, 'Execução de Prescrição', p.startsWith('/execucao-prescricao'))}
-                        </div>
-                      )}
-                    </div>
+                  {/* ── 4. Atendimento ─────────────────────────────────────
+                      Deixou de ser accordion: é um LINK DIRETO para a Agenda do
+                      profissional. Evolução, Prescrição, Pedido de Exames e
+                      Encaminhamento continuam alcançáveis — são as ABAS de dentro da
+                      própria tela (SubMenuClinico), então tê-los também aqui era o
+                      mesmo menu em dois lugares.
+                      O `!startsWith('/clinica/vacina')` no ativo não é detalhe: a rota
+                      da Vacina também começa com `/clinica` e, sem o recorte, os dois
+                      itens acendiam juntos. */}
+                  {temAcessoClinico && temAcessoAtendimento && (
+                    <button
+                      onClick={() => irParaModulo('/clinica/agenda')}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/clinica') && !p.startsWith('/clinica/vacina')
+                          ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <Stethoscope size={20} />
+                      Atendimento
+                    </button>
+                  )}
+
+                  {/* ── 4b. Vacina ─────────────────────────────────────────
+                      Tela apartada (não é mais aba do Atendimento), então precisa da
+                      própria entrada: sem ela não haveria como registrar vacina nova. */}
+                  {temAcessoClinico && podeVerVacinas && (
+                    <button
+                      onClick={() => irParaModulo(animalId ? `/clinica/vacina/${animalId}` : '/clinica/vacina')}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/clinica/vacina') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <Syringe size={20} />
+                      Vacina
+                    </button>
+                  )}
+
+                  {/* ── 4c. Execução de Prescrição (plantão) ───────────────
+                      Subiu para o primeiro nível junto com a Vacina: é a tela onde o
+                      ENFERMEIRO trabalha, e escondê-la dentro de outro módulo a
+                      deixava sem porta de entrada para o perfil que mais a usa. */}
+                  {temAcessoClinico && podeVerEnfermagem && (
+                    <button
+                      onClick={() => irParaModulo('/execucao-prescricao')}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/execucao-prescricao') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <ClipboardCheck size={20} />
+                      Execução de Prescrição
+                    </button>
+                  )}
+
+                  {/* ── 4d. Central de Documentos ─────────────────────────
+                      Módulo folha: a tela já tem a própria biblioteca de modelos
+                      (categorias, favoritos, recentes), então repetir isso aqui como
+                      accordion seria o mesmo menu duas vezes. */}
+                  {temAcessoClinico && (
+                    <button
+                      onClick={() => irParaModulo('/documentos')}
+                      className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
+                        p.startsWith('/documentos') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
+                      }`}
+                    >
+                      <FileText size={20} />
+                      Documentos
+                    </button>
                   )}
 
                   {/* ── 5. Resultado de Exame ──────────────────────────────── */}

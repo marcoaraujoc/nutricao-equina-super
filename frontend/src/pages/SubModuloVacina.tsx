@@ -51,6 +51,7 @@ interface VacImport {
   via:              string;
   loteId:           number | '';
   cliente:          boolean;
+  aplicadaPeloProprietario: boolean;
   observacao:       string;
   emEstoque:        boolean;
   vias:             string[];
@@ -70,6 +71,7 @@ interface VacinaClinica {
   quantidade:        number | null;
   valor:             number | null;
   cliente:           boolean;
+  aplicadaPeloProprietario: boolean;
   ativo:             boolean;
   status:            string | null;   // SALVA (rascunho) | FINALIZADA
   dataAplicacao:     string;
@@ -292,6 +294,12 @@ function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) 
         </div>
         <div className="p-5 space-y-3">
           <Row label="Vacina"         value={v.nome} />
+          {v.aplicadaPeloProprietario && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-28 flex-shrink-0">Aplicação</span>
+              <span className="text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-lg">Aplicada pelo proprietário</span>
+            </div>
+          )}
           {v.cliente && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400 w-28 flex-shrink-0">Cliente</span>
@@ -505,6 +513,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const [dose,             setDose]             = useState('');
   const [qtd,              setQtd]              = useState(1);
   const [cliente,          setCliente]          = useState(false);
+  // Quem APLICA a dose — decisão IRMÃ de `cliente` (quem FORNECE). Ver a matriz em
+  // VacinaClinicaController.finalizar: é o cruzamento das duas que decide plantão e fatura.
+  const [aplicadaPeloProprietario, setAplicadaPeloProprietario] = useState(false);
   const [dataAplicacao,    setDataAplicacao]    = useState(hoje());
   const [via,              setVia]              = useState('');
   const [observacao,       setObservacao]       = useState('');
@@ -582,6 +593,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
         via:              vias.length === 1 ? vias[0] : '',
         loteId:           '',
         cliente:          false,
+        aplicadaPeloProprietario: false,
         observacao:       'Importado do orçamento',
         emEstoque:        !!med?.emEstoque,
         vias,
@@ -637,6 +649,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
           dose:       item.dose || null,
           quantidade: item.quantidade,
           cliente:    item.cliente,
+          aplicadaPeloProprietario: item.aplicadaPeloProprietario,
           via:        item.via || null,
           dataAplicacao: item.dataAplicacao,
           observacao: item.observacao.trim() || null,
@@ -804,6 +817,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     setDose('');
     setQtd(1);
     setCliente(false);
+    setAplicadaPeloProprietario(false);
     setDataAplicacao(hoje());
     setVia('');
     setObservacao('');
@@ -821,6 +835,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     setDose(item.dose);
     setQtd(item.quantidade);
     setCliente(item.cliente);
+    setAplicadaPeloProprietario(item.aplicadaPeloProprietario);
     setDataAplicacao(item.dataAplicacao);
     setVia(item.via);
     setObservacao(item.observacao);
@@ -845,6 +860,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       via,
       loteId,
       cliente,
+      aplicadaPeloProprietario,
       observacao,
     });
     cancelarEdicaoForm();
@@ -866,6 +882,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     via,
     loteId,
     cliente,
+    aplicadaPeloProprietario,
     observacao,
     emEstoque:        !!medSelecionado?.emEstoque,
     vias:             viasDisponiveis,
@@ -937,7 +954,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   };
 
   const handleExcluirSolicitado = (id: number) => {
-    if (!podeDeletar) { semPermissao('cancelar vacina'); return; }
+    // Autoria também no handler (o botão já usa `podeExcluirVac`): entrada por outro
+    // caminho não pode escapar da regra que o backend aplica de qualquer jeito.
+    const v = historico.find(x => x.id === id);
+    if (!v || !podeExcluirVac(v)) { semPermissao('cancelar vacina'); return; }
     setExcluindoId(id);
   };
 
@@ -1184,8 +1204,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
             />
           </div>
 
-          {/* Checkbox cliente */}
-          <div className="mb-5">
+          {/* Quem FORNECE × quem APLICA — lado a lado, como na prescrição. São
+              decisões irmãs e ambas do ITEM; o cruzamento delas é que decide se a
+              dose vai ao plantão e quando é cobrada (matriz em
+              VacinaClinicaController.finalizar). */}
+          <div className="mb-5 flex flex-wrap items-start gap-x-6 gap-y-2">
             <label className="flex items-center gap-2.5 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -1193,11 +1216,18 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                 onChange={e => setCliente(e.target.checked)}
                 className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
               />
-              <span className="text-sm text-red-600 font-medium">Medicamento fornecido pelo Cliente</span>
+              <span className="text-sm text-red-600 font-medium">Vacina fornecida pelo Cliente</span>
             </label>
-            {cliente && (
-              <p className="text-xs text-amber-600 mt-1.5 ml-6">Sem débito de estoque · Sem lançamento na fatura</p>
-            )}
+
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={aplicadaPeloProprietario}
+                onChange={e => setAplicadaPeloProprietario(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+              />
+              <span className="text-sm text-red-600 font-medium">Será aplicada pelo Proprietário</span>
+            </label>
           </div>
 
           {/* ── Itens da vacina — abaixo do formulário e ACIMA do rodapé, igual à prescrição ── */}
@@ -1226,6 +1256,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                       {item.cliente && (
                         <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Cliente</span>
                       )}
+                      {item.aplicadaPeloProprietario && (
+                        <span className="text-[10px] font-semibold text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-full">Proprietário aplica</span>
+                      )}
                       <ChipVac label="Início:" value={formatDate(item.dataAplicacao)} />
                       <ChipVac label="Qtd:" value={String(item.quantidade)} />
                       {item.via  && <ChipVac label="Via:" value={item.via} />}
@@ -1236,7 +1269,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <button onClick={() => emEdicao ? cancelarEdicaoForm() : editarNoForm(item)}
                         title={emEdicao ? 'Em edição no formulário — cancelar' : 'Editar no formulário'}
-                        className="p-1.5 text-teal-500 hover:text-teal-700 hover:bg-teal-100 rounded-lg transition-colors">
+                        className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                         {emEdicao ? <Check size={13} /> : <Pencil size={12} />}
                       </button>
                       <button onClick={() => { setItensImport(prev => prev.filter(x => x.key !== item.key)); if (emEdicao) cancelarEdicaoForm(); }}
@@ -1251,7 +1284,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
             </div>
           )}
 
-          {/* ── Rodapé — mesma composição da prescrição: Inserir + Salvar ────── */}
+          {/* ── Rodapé — mesma composição da prescrição: Inserir + Finalizar ──── */}
           <div className="flex items-center justify-end gap-2 mt-5 pt-4 border-t border-gray-100 flex-wrap">
             {editandoKey ? (
               <>
@@ -1280,7 +1313,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                             (!!medicamentoId && lotesDisponiveis.length > 1 && !loteId)}
                   className="flex items-center gap-1.5 px-5 py-2 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
                   {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
-                  {saving ? 'Salvando…' : 'Salvar'}
+                  {saving ? 'Salvando…' : 'Finalizar'}
                 </button>
               </>
             )}
@@ -1370,6 +1403,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
                   <p className="text-xs text-gray-500">
                     {v.cliente && <span className="text-amber-700 font-medium">Cliente · </span>}
+                    {v.aplicadaPeloProprietario && <span className="text-violet-700 font-medium">Proprietário aplica · </span>}
                     {v.dose && <>{v.dose} · </>}
                     {v.quantidade != null && v.quantidade > 1 && <>{v.quantidade} doses · </>}
                     {formatDate(v.dataAplicacao)}
@@ -1384,7 +1418,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
                   <div className="flex flex-wrap gap-2 mt-2">
                     <button onClick={() => setViewingV(v)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
                     {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
@@ -1408,7 +1442,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                     )}
                     {podeImprimir && (
                       <button onClick={() => imprimirVacina(v, animal)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                         <Printer size={11} /> Imprimir
                       </button>
                     )}
@@ -1459,6 +1493,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                           {v.cliente && (
                             <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">CLIENTE</span>
                           )}
+                          {v.aplicadaPeloProprietario && (
+                            <span className="text-[10px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded">PROPRIETÁRIO APLICA</span>
+                          )}
                         </div>
                         {v.fabricante && <p className="text-xs text-gray-400">{v.fabricante}</p>}
                       </td>
@@ -1488,24 +1525,24 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button onClick={() => setViewingV(v)} title="Visualizar"
-                            className="p-1.5 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors">
+                            className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
                           {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
                             <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id} title="Finalizar"
-                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
                               {finalizandoId === v.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
                             </button>
                           )}
                           {podeImprimir && (
                             <button onClick={() => imprimirVacina(v, animal)} title="Imprimir"
-                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                              className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                               <Printer size={14} />
                             </button>
                           )}
                           {podeExcluirVac(v) && v.ativo && (
                             <button onClick={() => handleExcluirSolicitado(v.id)} title="Cancelar"
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                              className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                               <Ban size={14} />
                             </button>
                           )}

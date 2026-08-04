@@ -1,7 +1,7 @@
 // src/pages/Atendimento.tsx
 // Shell clínico — delega cada sub-aba ao seu módulo dedicado
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,13 +18,13 @@ import {
 import AnimalCard  from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import PageContainer from '../components/PageContainer';
+import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
 import ConfirmModal from '../components/ConfirmModal';
 import SubModuloEvolucao from './SubModuloEvolucao';
 import SubModuloPrescricao from './SubModuloPrescricao';
-import SubModuloVacina from './SubModuloVacina';
 import SubModuloExames from './SubModuloExames';
 import SubModuloEncaminhamento from './SubModuloEncaminhamento';
-import SubModuloMinhaAgenda from './SubModuloMinhaAgenda';
+import Agendamentos from './Agendamentos';
 import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem } from '../utils/AtendimentoPrint';
 import InlineError from '../components/InlineError';
 
@@ -47,6 +47,8 @@ interface EvolucaoAtiva {
   numero:           number | null;
   tipoAtendimento:  string | null;
   atendimentoNumero: string | null;
+  // Quem conduz — decide se o banner pode oferecer "Finalizar Atendimento".
+  veterinarioId:    number | null;
 }
 
 type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
@@ -121,11 +123,13 @@ function agruparHistoricoResumido(itens: ResumoHistoricoItem[]): GrupoResumoHist
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// A VACINA saiu daqui: virou tela apartada (`pages/Vacina.tsx`, rota /clinica/vacina).
+// 'vacina' continua existindo no tipo `SubModulo` porque ainda é um DESTINO de
+// navegação — o Histórico do Paciente leva para lá —, mas não é mais uma aba.
 const SUB_MODULOS: { key: SubModulo; label: string; icon: React.ReactNode }[] = [
   { key: 'agenda',         label: 'Agenda',          icon: <CalendarDays size={15} /> },
   { key: 'evolucao',       label: 'Evolução',       icon: <FileText     size={15} /> },
   { key: 'prescricao',     label: 'Prescrição',     icon: <Pill         size={15} /> },
-  { key: 'vacina',         label: 'Vacina',         icon: <Syringe      size={15} /> },
   { key: 'exames',         label: 'Exames',         icon: <FlaskConical size={15} /> },
   { key: 'encaminhamento', label: 'Encaminhamento', icon: <Share2       size={15} /> },
 ];
@@ -393,19 +397,19 @@ function HistoricoResumidoPanel({
                     </button>
                     {!emAndamento && podeImprimir && (
                       <button onClick={() => handleImprimir(grupo)} disabled={gerandoRelatorio} title="Imprimir atendimento"
-                        className="p-1 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40">
+                        className="p-1 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40">
                         {gerandoRelatorio ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
                       </button>
                     )}
                     {!emAndamento && ev.evolucaoId != null && (
                       <button onClick={() => handleVisualizar(grupo)} disabled={gerandoRelatorio} title="Visualizar atendimento"
-                        className="p-1 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40">
+                        className="p-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40">
                         {gerandoRelatorio ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
                       </button>
                     )}
                     {ev.evolucaoId != null && podeEditarEvolucao(ev) && (
                       <button onClick={() => onEditClick(grupo)} title={emAndamento ? 'Continuar atendimento' : 'Editar atendimento'}
-                        className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0">
+                        className="p-1 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors flex-shrink-0">
                         <Pencil size={12} />
                       </button>
                     )}
@@ -460,97 +464,6 @@ function HistoricoResumidoPanel({
   );
 }
 
-// ─── SeletorAnimalInteligente ─────────────────────────────────────────────────
-
-function SeletorAnimalInteligente({ animais, animalAtual, onSelecionar }: {
-  animais:      AnimalExtended[];
-  animalAtual:  AnimalExtended | null;
-  onSelecionar: (a: AnimalExtended) => void;
-}) {
-  const [filtroDono,     setFiltroDono]     = useState('');
-  const [dropdownAberto, setDropdownAberto] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownAberto(false); setFiltroDono('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  if (animais.length <= 1) return null;
-
-  const nomesCount = animais.reduce<Record<string, number>>((acc, a) => {
-    acc[a.nome] = (acc[a.nome] ?? 0) + 1; return acc;
-  }, {});
-
-  const animalTemDuplicata  = animalAtual ? (nomesCount[animalAtual.nome] ?? 0) > 1 : false;
-  const duplicatas          = animalAtual ? animais.filter(a => a.nome === animalAtual.nome) : [];
-  const duplicatasFiltradas = filtroDono.trim()
-    ? duplicatas.filter(a => (a.user?.fullName ?? '').toLowerCase().includes(filtroDono.toLowerCase()))
-    : duplicatas;
-
-  return (
-    <div className="space-y-2 mb-4">
-      <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Paciente</label>
-        <select value={animalAtual?.id ?? ''}
-          onChange={e => {
-            const sel = animais.find(a => a.id === Number(e.target.value));
-            if (sel) { onSelecionar(sel); setFiltroDono(''); }
-          }}
-          className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 shadow-sm">
-          {animais.map(a => (
-            <option key={a.id} value={a.id}>
-              {a.nome}{(nomesCount[a.nome] ?? 0) > 1 ? ` — ${a.user?.fullName ?? '?'}` : ''}
-            </option>
-          ))}
-        </select>
-      </div>
-      {animalTemDuplicata && (
-        <div className="relative" ref={dropdownRef}>
-          <label className="block text-xs font-medium text-amber-700 mb-1">
-            ⚠️ {duplicatas.length} animais com o nome "{animalAtual?.nome}" — filtre pelo proprietário:
-          </label>
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input type="text" value={filtroDono}
-              onChange={e => { setFiltroDono(e.target.value); setDropdownAberto(true); }}
-              onFocus={() => setDropdownAberto(true)}
-              placeholder="Nome do proprietário..."
-              className="w-full pl-9 pr-4 py-2.5 border border-amber-300 rounded-2xl text-sm text-gray-900 focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100 bg-amber-50" />
-          </div>
-          {dropdownAberto && duplicatasFiltradas.length > 0 && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl z-20 overflow-hidden max-h-56 overflow-y-auto">
-              {duplicatasFiltradas.map(a => (
-                <button key={a.id}
-                  onClick={() => { onSelecionar(a); setFiltroDono(''); setDropdownAberto(false); }}
-                  className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
-                    a.id === animalAtual?.id ? 'bg-emerald-50' : ''
-                  }`}>
-                  <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
-                    {a.photoUrl
-                      ? <img src={a.photoUrl as string} alt="" className="w-full h-full object-cover" />
-                      : <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">🐾</div>}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{a.nome}</p>
-                    <p className="text-xs text-gray-400 truncate">Proprietário: {a.user?.fullName ?? '—'}</p>
-                  </div>
-                  {a.id === animalAtual?.id && <span className="w-2 h-2 bg-emerald-500 rounded-full flex-shrink-0" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function tabFromPath(pathname: string): SubModulo {
@@ -577,6 +490,14 @@ const Atendimento = () => {
   const podeImprimirEvolucao  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
   // FORNECEDOR: regra de autoria — só finaliza a evolução que ele próprio criou
   const isFornecedor = user?.userType === 'FORNECEDOR';
+
+  // AUTORIA (CLAUDE.md 28-c): finalizar vale sobre o atendimento que a pessoa conduz —
+  // o que ela criou ou ASSUMIU. Ter a permissão não basta: enquanto a evolução for de
+  // outro profissional, o caminho é ASSUMIR (aba Evolução), e só então finalizar.
+  // Sem este recorte o banner oferecia o Finalizar do atendimento alheio, e o clique
+  // morria em 403 do backend — que já aplica a mesma regra.
+  const evolucaoAtivaEhMinha = (ev: EvolucaoAtiva | null) =>
+    !!ev && (isGestor || ev.veterinarioId === (user?.id ?? 0));
 
   // Botão "Editar" do Histórico do Paciente: MESMA regra do Histórico de Evolução
   // Clínica (SubModuloEvolucao) — antes o painel mostrava "Editar" sem checagem de
@@ -630,7 +551,6 @@ const Atendimento = () => {
   // Evolução Clínica e consumidos quando a aba correspondente é aberta.
   const [viewPrescricaoId,  setViewPrescricaoId]  = useState<number | null>(null);
   const [viewExameId,       setViewExameId]       = useState<number | null>(null);
-  const [viewVacinaId,      setViewVacinaId]      = useState<number | null>(null);
   // Finalizar Atendimento (banner) — mesma ação do Finalizar da aba Evolução
   const [confirmFinalizarAt, setConfirmFinalizarAt] = useState(false);
   const [finalizandoAt,      setFinalizandoAt]      = useState(false);
@@ -648,8 +568,11 @@ const Atendimento = () => {
       const res = await api.get(`/clinica/evolucoes/${evolucaoId}`);
       const ev = res.data?.dados as { especialidade: string; texto: string | null; veterinarioId: number } | undefined;
       if (!ev) { setErroInline('Não foi possível carregar a evolução do atendimento'); return; }
-      if (isFornecedor && ev.veterinarioId !== (user?.id ?? 0)) {
-        setErroInline('Sem permissão para finalizar evolução de outro profissional. Verifique com o responsável da equipe.');
+      // Autoria vale para TODO perfil, não só FORNECEDOR (o recorte por userType era
+      // resquício da regra antiga). Relido do servidor de propósito: entre carregar o
+      // banner e clicar, outra pessoa pode ter assumido o atendimento.
+      if (!isGestor && ev.veterinarioId !== (user?.id ?? 0)) {
+        setErroInline('Este atendimento é conduzido por outro profissional. Assuma a evolução antes de finalizá-la.');
         return;
       }
       if (!ev.texto?.trim()) {
@@ -684,26 +607,24 @@ const Atendimento = () => {
   // Visualizar/Editar do Histórico de Evolução Clínica: carrega cada registro
   // vinculado ao atendimento na sua página correspondente. A evolução em si é
   // aberta pelo próprio SubModuloEvolucao (populada em leitura ou edição); aqui
-  // resolvemos prescrição/exame/vacina buscando nas listas de cada módulo pelo
+  // resolvemos prescrição/exame buscando nas listas de cada módulo pelo
   // evolucaoId (o histórico unificado filtra por status e esconderia, p.ex.,
   // prescrição ainda em SALVO). Visualizar → tudo somente leitura; Editar →
   // prescrição abre no formulário de edição (o que já foi executado permanece
-  // somente leitura pelas regras de status existentes); exame e vacina não têm
-  // formulário de edição — abrem sempre em visualização.
+  // somente leitura pelas regras de status existentes); o exame não tem formulário
+  // de edição — abre sempre em visualização. A VACINA não entra: tem tela apartada.
   const carregarAtendimentoNasPaginas = useCallback(async (evolucaoId: number, modo: 'visualizar' | 'editar') => {
     if (!effectiveAnimalId) return;
     type ComEvolucao = { id: number; evolucaoId?: number | null };
-    const [prescRes, exameRes, vacinaRes] = await Promise.allSettled([
+    const [prescRes, exameRes] = await Promise.allSettled([
       api.get(`/clinica/prescricoes/grupos/animal/${effectiveAnimalId}?page=1&limit=50`),
       api.get(`/clinica/exames/animal/${effectiveAnimalId}?page=1&limit=50`),
-      api.get(`/clinica/vacinas/animal/${effectiveAnimalId}`),
     ]);
     const dadosDe = (r: PromiseSettledResult<{ data?: { dados?: unknown } }>): ComEvolucao[] =>
       r.status === 'fulfilled' ? ((r.value.data?.dados ?? []) as ComEvolucao[]) : [];
 
     const presc  = dadosDe(prescRes).find(g => g.evolucaoId === evolucaoId);
     const exame  = dadosDe(exameRes).find(e => e.evolucaoId === evolucaoId);
-    const vacina = dadosDe(vacinaRes).find(v => v.evolucaoId === evolucaoId);
 
     if (modo === 'editar') {
       setEditPrescricaoId(presc?.id ?? null);
@@ -713,7 +634,6 @@ const Atendimento = () => {
       setEditPrescricaoId(null);
     }
     setViewExameId(exame?.id ?? null);
-    setViewVacinaId(vacina?.id ?? null);
   }, [effectiveAnimalId]);
 
   // Botão "Editar" do Histórico do Paciente: carrega para edição TODOS os
@@ -769,15 +689,21 @@ const Atendimento = () => {
   const carregarEvolucaoAtiva = useCallback(async () => {
     if (!effectiveAnimalId) return;
     try {
-      const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=1&page=1`);
+      // limit=20 (era 1): com atendimento em PARALELO o animal pode ter mais de uma
+      // evolução aberta, e pegar "a primeira" fazia o shell adotar a de OUTRO
+      // profissional — vinculando a ela a prescrição/vacina/exame lançados aqui e
+      // oferecendo o Finalizar de um atendimento alheio. A MINHA vence, mesma regra
+      // de `carregarEvolucoes` em SubModuloEvolucao.
+      const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=20&page=1`);
       const dados = res.data?.dados ?? [];
       if (dados.length > 0) {
-        const ev = dados[0];
+        const ev = dados.find((e: { veterinarioId?: number | null }) => e.veterinarioId === (user?.id ?? 0)) ?? dados[0];
         setEvolucaoAtiva({
           id:               ev.id,
           numero:           ev.numero ?? null,
           tipoAtendimento:  ev.tipoAtendimento ?? null,
           atendimentoNumero: ev.atendimentoNumero ?? null,
+          veterinarioId:    ev.veterinarioId ?? null,
         });
       } else {
         setEvolucaoAtiva(null);
@@ -789,7 +715,6 @@ const Atendimento = () => {
     setEvolucaoAtiva(null);
     setViewPrescricaoId(null);
     setViewExameId(null);
-    setViewVacinaId(null);
     carregarAnimal();
     carregarEvolucaoAtiva();
   }, [effectiveAnimalId]);
@@ -861,11 +786,32 @@ const Atendimento = () => {
 
   const animalIdNum = effectiveAnimalId ? Number(effectiveAnimalId) : 0;
 
+  /**
+   * Vai para um submódulo abrindo um item do Histórico do Paciente.
+   *
+   * VACINA é tela APARTADA: sair daqui desmonta este shell e leva o `openItemId` de
+   * estado junto. Por isso o item viaja na URL (`?item=`) — é a única forma de a tela
+   * de destino saber o que abrir.
+   */
+  const irParaSubmodulo = (tab: SubModulo, itemId: number) => {
+    const base = effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`;
+    if (tab === 'vacina') { navigate(`${base}?item=${itemId}`); return; }
+    setOpenItemId(itemId);
+    setActiveTab(tab);
+    navigate(base);
+  };
+
   const renderSubModulo = () => {
     switch (activeTab) {
       case 'agenda':
+        // É a MESMA tela de `/agendamentos`, em modo aba: só o card "Agendamentos do
+        // Dia", com o mesmo layout, as mesmas ações e o mesmo reagendamento. A única
+        // diferença é o escopo — o profissional vê apenas a agenda dele.
+        // ⚠️ Não recriar uma agenda paralela aqui: foi o que gerou a divergência
+        // documentada na armadilha 28-g do CLAUDE.md.
         return (
-          <SubModuloMinhaAgenda
+          <Agendamentos
+            modoMinhaAgenda
             onSelecionarAnimal={handleSelecionarAnimalFromAgenda}
           />
         );
@@ -902,18 +848,8 @@ const Atendimento = () => {
             onEditConsumed={() => setEditPrescricaoId(null)}
           />
         );
-      case 'vacina':
-        return (
-          <SubModuloVacina
-            animalId={animalIdNum}
-            animal={animal}
-            evolucaoId={evolucaoAtiva?.id}
-            atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
-            onSalvo={refreshHistorico}
-            openItemId={openItemId ?? viewVacinaId ?? undefined}
-            onViewConsumed={() => { setOpenItemId(null); setViewVacinaId(null); }}
-          />
-        );
+      // 'vacina' NÃO tem case: a tela é apartada (pages/Vacina.tsx). Chegar aqui com
+      // essa aba só acontece no instante entre o clique e a navegação — ver `default`.
       case 'exames':
         return (
           <SubModuloExames
@@ -935,6 +871,8 @@ const Atendimento = () => {
             onSalvo={refreshHistorico}
           />
         );
+      default:
+        return null;   // 'vacina' — a navegação já está a caminho da tela apartada
     }
   };
 
@@ -972,7 +910,7 @@ const Atendimento = () => {
           <span className="flex-1 min-w-0">
             Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero}</span> em andamento
           </span>
-          {podeFinalizarEvolucao && (
+          {podeFinalizarEvolucao && evolucaoAtivaEhMinha(evolucaoAtiva) && (
             <button onClick={() => setConfirmFinalizarAt(true)} disabled={finalizandoAt}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex-shrink-0">
               {finalizandoAt ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
@@ -1002,11 +940,7 @@ const Atendimento = () => {
                   animalId={animalIdNum}
                   animal={animal}
                   refreshKey={historicoKey}
-                  onItemClick={(tab, itemId) => {
-                    setOpenItemId(itemId);
-                    setActiveTab(tab);
-                    navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
-                  }}
+                  onItemClick={(tab, itemId) => irParaSubmodulo(tab, itemId)}
                   onEditClick={abrirEdicaoAtendimento}
                   podeEditarEvolucao={podeEditarEvolucaoHist}
                   podeImprimir={podeImprimirEvolucao}
@@ -1046,10 +980,8 @@ const Atendimento = () => {
                       animal={animal}
                       refreshKey={historicoKey}
                       onItemClick={(tab, itemId) => {
-                        setOpenItemId(itemId);
                         setShowHistoricoM(false);
-                        setActiveTab(tab);
-                        navigate(effectiveAnimalId ? `/clinica/${tab}/${effectiveAnimalId}` : `/clinica/${tab}`);
+                        irParaSubmodulo(tab, itemId);
                       }}
                       onEditClick={(grupo) => {
                         setShowHistoricoM(false);

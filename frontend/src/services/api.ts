@@ -58,8 +58,18 @@ api.interceptors.response.use(
           headers: error.response?.headers ?? {}, config: error.config, request: error.request,
         });
       }
-      const permErr = new Error('Sem permissão para esta operação.');
-      Object.assign(permErr, { isPermissionError: true, status: 403 });
+      // A mensagem do backend PRECISA sobreviver: um 403 de regra de negócio
+      // ("Só o gestor agenda para outro profissional") explica o que fazer, e a
+      // genérica não. Antes o interceptor criava um Error nu, sem `response`, e todo
+      // handler que lê `err.response.data.error` caía no fallback — a tela mostrava
+      // "Erro ao reagendar" e o motivo real morria aqui.
+      const msgBackend = (error.response?.data as { error?: string } | undefined)?.error;
+      const permErr = new Error(msgBackend || 'Sem permissão para esta operação.');
+      Object.assign(permErr, {
+        isPermissionError: true,
+        status: 403,
+        response: error.response,   // handlers já existentes continuam funcionando
+      });
       return Promise.reject(permErr);
     }
 

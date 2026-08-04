@@ -65,11 +65,10 @@ interface Props {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STATUS_BADGE: Record<StatusEnc, { label: string; cls: string }> = {
-  PENDENTE:  { label: 'Pendente',  cls: 'bg-amber-100 text-amber-700' },
-  CONCLUIDO: { label: 'Concluído', cls: 'bg-emerald-100 text-emerald-700' },
-  CANCELADO: { label: 'Cancelado', cls: 'bg-gray-100 text-gray-500' },
-};
+// O STATUS deixou de ser EXIBIDO nesta tela (badge do card e coluna da tabela saíram
+// a pedido). O campo continua existindo e governando o comportamento — só encaminhamento
+// PENDENTE pode ser cancelado, e é ele que mantém a designação do prestador ativa.
+// Não reintroduzir a exibição sem pedido.
 
 const URGENCIA_BADGE: Record<Urgencia, { label: string; cls: string }> = {
   NORMAL:  { label: 'Normal',  cls: 'bg-gray-100 text-gray-500' },
@@ -113,7 +112,6 @@ function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
   podeCompartilhar: boolean;
   onStatus:         (id: number, status: StatusEnc) => void;
 }) {
-  const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
   const texto = montarTextoEncaminhamento(enc);
@@ -126,7 +124,6 @@ function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
           {enc.urgencia !== 'NORMAL' && (
             <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${urgencia.cls}`}>{urgencia.label}</span>
           )}
-          <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${status.cls}`}>{status.label}</span>
         </div>
       </div>
 
@@ -183,7 +180,6 @@ function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
   podeCompartilhar: boolean;
   onStatus:         (id: number, status: StatusEnc) => void;
 }) {
-  const status   = STATUS_BADGE[enc.status] ?? STATUS_BADGE.PENDENTE;
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
   const texto = montarTextoEncaminhamento(enc);
@@ -213,11 +209,6 @@ function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
         <p className="text-xs font-medium text-gray-800">{enc.veterinario?.fullName ?? '—'}</p>
-      </td>
-      <td className="px-4 py-3">
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.cls}`}>
-          {status.label}
-        </span>
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-start gap-1">
@@ -697,7 +688,6 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendime
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Destino</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>

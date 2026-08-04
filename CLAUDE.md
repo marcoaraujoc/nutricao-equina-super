@@ -1,5 +1,7 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-04 (PREMISSA DE AUTORIA: a ação vale sobre o que a pessoa criou ou assumiu, só o gestor opera o de outro; assumir/transferir ARRASTA o atendimento inteiro; auditoria de TRANSFERENCIA e ALTERACAO)
+# Atualizado em: 2026-08-02 (Sessão por INATIVIDADE de 2h (lib/sessionTokens.js), rastro de "assumido de quem" na agenda, vacina aplicada pelo proprietário, resultado de exame manual)
 # Atualizado em: 2026-07-31 (Shell: header e rodapé globais, busca global por empresa (/api/busca), marca no EmpresaContext, sidebar só com o logo da clínica)
 # Atualizado em: 2026-07-29 (Evolução: assumir SÓ a de outro profissional c/ e-mail+WhatsApp, própria aberta continua bloqueando, paralelo por decisão (409) e proibição de antecipar agendamento)
 # Atualizado em: 2026-07-25 (Vacina com a lógica da Prescrição: SALVA→FINALIZADA→EXECUTADA — fatura e estoque só na Execução de Prescrição/plantão)
@@ -616,6 +618,7 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
   ⚠️ Ações disponíveis nesta tela nascem PINTADAS, na paleta da tela de prescrição (emerald = ver/
   executar, azul = imprimir, vermelho = cancelar). Cinza é reservado ao indisponível — botão
   habilitado com cara de desabilitado foi reclamação real do usuário.
+  **A regra virou PADRÃO DO MÓDULO DE ATENDIMENTO INTEIRO em 2026-08-04** — ver seção 6.
 - `atendimento.agendamentos` não tem `finalizar`/`imprimir` — agendamentos são gerenciados por status (AGENDADO/CONCLUIDO/CANCELADO)
 - `vacina.estoque` não tem `finalizar` — estoque de vacinas segue o mesmo padrão de farmácia
 - Sidebar usa `podeExecutar('vacina.estoque.ler')` para exibir o módulo Vacina; agenda ainda usa role check (`isVetOuSuperior`) — ver TODO em seção 12
@@ -727,6 +730,45 @@ App.tsx: shell h-full overflow-hidden
 Páginas públicas: podem rolar livremente (sem overflow: hidden no body)
 ```
 
+#### Cor das ações — CINZA É "INDISPONÍVEL" (2026-08-04)
+```
+Ação PERMITIDA pelo Controle de Acesso nasce PINTADA, nunca cinza-esperando-hover.
+  ver / visualizar     → emerald   (Eye)
+  finalizar / executar → emerald   (CheckSquare)
+  alterar / editar     → LARANJA   (Pencil)          ← 2026-08-04
+  imprimir             → azul      (Printer)
+  e-mail               → azul      (Mail)
+  WhatsApp             → verde     (MessageCircle)   ← cor da própria marca
+  cancelar / excluir   → vermelho  (Ban)
+```
+⚠️ ALTERAR tem cor PRÓPRIA (laranja) e não divide o emerald com "ver": são as duas ações
+mais clicadas da linha, e com a mesma cor a pessoa erra qual está apertando. Encaminhamento
+e Exames não têm ação de alterar na lista — lá o `podeEditar` gateia só o Cancelar.
+O antipadrão era `text-gray-400 hover:text-blue-600`: o ícone só ganhava cor no hover, e
+a linha inteira parecia desabilitada. Se a ação NÃO pode ser executada, ela não é
+renderizada (28-d) — logo, cinza no botão nunca significa "disponível".
+⚠️ EXCEÇÃO: o `X` de fechar modal SEGUE cinza. É cromo, não ação do registro.
+Aplicado em Evolução, Prescrição, Exames, Vacina, Encaminhamento e no Histórico do
+Paciente (`Atendimento.tsx`), tanto nos ícones do desktop quanto nas pílulas do card
+mobile. Tela nova do módulo já nasce assim.
+
+#### Onde o ERRO aparece — ABAIXO DO BOTÃO QUE O DISPAROU
+```
+Erro de AÇÃO  → logo abaixo do botão/rodapé que a disparou
+Erro de CARGA → topo da tela (não veio de clique nenhum)
+```
+Uma tela pode ter VÁRIAS superfícies de erro, e deve ter: quem clica em "Salvar" no
+rodapé de um formulário longo não enxerga um `InlineError` no topo da página — clica e
+parece que nada aconteceu. Separe os estados (`erroInline` para carga, `erroSalvar` /
+`erroModal` / `erroLista` / `erroGrade` para as ações) em vez de reusar um só.
+⚠️ Só posicionar não basta quando o container ROLA: o erro nasce no fim do formulário e
+pode cair fora da dobra. Use um `ref` + `scrollIntoView({ block: 'nearest' })` —
+`nearest` não mexe na tela quando ele já está visível.
+⚠️ Erro de ação dentro de MODAL vai no modal (depois do rodapé), nunca na página atrás
+do overlay. `UsuarioFormModal.erroServidor` e `ModalJustificativa.erro` existem para isso.
+Aplicado em: Agenda (reagendar / trocar profissional / transferir dia), Exame de Compra,
+Configurações, Equipe e ControleAcesso.
+
 #### Padrão de controle de acesso por página
 ```tsx
 // OBRIGATÓRIO em páginas que têm controle granular de permissão:
@@ -777,6 +819,12 @@ const handleSalvar = async () => {
 // POST/PUT/DELETE/PATCH 403 → Promise.reject(permErr) com { isPermissionError: true, status: 403 }
 //            handler deve checar permissão ANTES da chamada (evita gerar o 403)
 //            catch silencioso: catch { /* silencioso */ } — não logar permErrs no console
+//            ⚠️ (2026-08-04) o permErr PRESERVA `response` e usa a mensagem do backend
+//            como `message`. Antes era um `new Error('Sem permissão para esta operação.')`
+//            NU — sem `response` —, então TODO handler que lê `err.response?.data?.error`
+//            caía no fallback genérico e o motivo real do 403 morria no interceptor.
+//            Sintoma clássico: "está dando erro" sem texto útil (foi assim que o 403 de
+//            regra de negócio do reagendamento apareceu como "Erro ao reagendar").
 ```
 
 #### i18n — OBRIGATÓRIO
@@ -1096,6 +1144,537 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-08-04 — Premissa de AUTORIA, arrasto do atendimento e auditoria da troca de dono
+> As três regras são uma só decisão de produto: **o atendimento pertence a quem o conduz.**
+> Detalhes técnicos e o "por quê" completo estão nas armadilhas **28, 28-b, 28-c, 28-e e 28-f-bis**.
+
+- [x] **A ação concedida vale sobre O QUE É DE QUEM A EXECUTA** — `podeOperarRegistro(req,
+      autorId)` (assinatura nova; os 19 call sites foram convertidos e nenhum ficou na
+      forma antiga). Registro criado OU ASSUMIDO pela pessoa: ela opera. Registro de
+      outro: **só o GESTOR** (e o ADMIN). Reverte a regra de 2026-07-30 — ver 28-c, que
+      guarda o motivo de NÃO voltar atrás.
+      Novo `ehGestorNoContexto(req)` é a checagem canônica de gestor; `req.permissaoNivel
+      === 'FULL'` deixou de valer como sinônimo (saiu de `podeAgendarParaOutro` e do
+      "editar evolução finalizada").
+- [x] **Fechados 3 endpoints de prescrição que não tinham guard NENHUM** —
+      `adicionarItem`, `atualizarItem` e `removerItem` do `PrescricaoGrupoController`:
+      qualquer um com "alterar prescrição" incluía, reescrevia e cancelava item na
+      prescrição de outro profissional. Pior: `atualizarItem` fazia
+      `data.veterinarioId = <quem editou>` e o documento MUDAVA DE DONO em silêncio.
+      Editar não transfere mais autoria — a troca de dono tem caminho próprio.
+- [x] **Assumir/transferir ARRASTA tudo que está embaixo** —
+      `lib/transferenciaAtendimento.js`: `AGENDAMENTO → EVOLUÇÃO (EM_ANDAMENTO) →
+      { PRESCRIÇÃO (grupo + itens), EXAME, ENCAMINHAMENTO, VACINA }`. Sem isso a premissa
+      de autoria TRANCA quem assumiu (conduz o atendimento, mas não pode operar os filhos
+      que ficaram com o outro). Aplicado no assumir da evolução, no assumir da agenda, na
+      troca de profissional (`atualizar`) e no `transferirDia`. **Vacina entrou junto** —
+      o pedido citava evolução/prescrição/exames/encaminhamento, mas ela é filha da mesma
+      evolução e ficaria órfã. `FaturaItem` NÃO é arrastado (atribuição financeira).
+- [x] **Auditoria de TRANSFERENCIA e ALTERACAO** — categorias e helpers novos em
+      `lib/auditoria.js` (`registrarTransferencia`, `registrarAlteracao`, `resumoTexto`),
+      sempre na MESMA transaction da operação. Transferência grava o dono anterior, o novo
+      e a origem da cascata; alteração grava o antes → depois por campo com o responsável
+      de cada lado. `AuditoriaGeral.tsx` ganhou os dois badges e os dois filtros, mais o
+      botão **Visualizar** por linha (`ModalLog`) — a tabela corta `detalhes` e `motivo`
+      em duas linhas, e é justamente ali que mora o antes → depois. No modal, `detalhes`
+      é quebrado pelos separadores que a lib grava (`" | "` entre blocos, `" ; "` entre
+      mudanças de campo), então cada alteração aparece em uma linha própria.
+- [x] **Auditoria mostra o NOME do paciente, e a busca acha por ele** —
+      `AuditController.listar` devolve `animalNome` (uma consulta pelos ids DA PÁGINA;
+      `AuditLog.animalId` é solto, sem FK, então não há include a fazer) e o filtro
+      `?busca=` resolve antes os ids dos animais cujo nome casa, escopados à empresa,
+      acrescentando `{ animalId: { in: [...] } }` ao OR. Coluna **Paciente** na tabela e
+      linha no card mobile. Animal já excluído aparece como "Paciente excluído".
+- [x] **Nenhuma referência NUMÉRICA na tela de auditoria** (decisão de 2026-08-04) —
+      saíram os `#65` do modal, da tabela e dos cards, e também dos TEXTOS gravados:
+      `action` virou `"CATEGORIA ENTIDADE"` (o id já é a coluna `entidadeId`), `origem`
+      virou `"evolução assumida"` / `"agendamento transferido"`, e as chaves de campo do
+      item de prescrição viraram `item.dosagem` em vez de `item#12.dosagem`.
+      ⚠️ `nomeDoUsuario` passou a devolver SÓ o nome. Efeito colateral aceito: dois
+      profissionais homônimos ficam indistinguíveis DENTRO de `detalhes` (quem executou
+      a ação segue identificado pelas colunas `userId`/`email` da linha; o que se perde é
+      o id do "de quem → para quem"). As colunas `entidadeId`/`animalId` continuam
+      gravadas — o que mudou é só o que a tela e o texto exibem.
+      Linhas ANTIGAS mantêm o texto com `#` NO BANCO — o AuditLog é imutável e reescrevê-lo
+      seria adulterar a auditoria. Quem resolve isso na tela é `semReferencias()`
+      (`AuditoriaGeral.tsx`), uma limpeza de APRESENTAÇÃO aplicada a `action` e `detalhes`,
+      que cobre o histórico inteiro. NÃO se aplica a `motivo`: ali é o texto que o usuário
+      digitou, e mexer nas palavras dele numa tela de auditoria é pior do que exibir um "#".
+      ⚠️ O `;` ficou FORA da regra de pontuação do saneador de propósito — `" ; "` é o
+      separador entre mudanças de campo, e colá-lo na palavra anterior quebraria o split
+      de `DetalhesFormatados` (o modal voltaria a mostrar tudo numa linha só).
+- [x] **Colunas "Registro" e "Justificativa" saíram da grade** (tabela e cards): eram
+      textos longos cortados em duas linhas, ilegíveis nos dois formatos. Continuam
+      INTEIROS no modal Visualizar e continuam alcançáveis pela busca — o `?busca=` do
+      backend não mudou, segue varrendo `motivo` e `detalhes`.
+- [x] **Erro do modal vai ABAIXO do botão que o disparou** (Agenda) — refina a regra de
+      2026-07-28 ("erro na superfície da ação"): não basta estar NO modal, tem de estar
+      onde o clique aconteceu. No **Reagendamento** o `InlineError` ficava no topo do
+      formulário, atrás do calendário e da grade de horários; como o modal ROLA, quem
+      clicava em "Confirmar" no rodapé não via nada acontecer. Passou para depois dos
+      botões, com `erroReagRef` + `scrollIntoView({ block: 'nearest' })` — só posicionar
+      não bastava, porque o erro nasce no fim do formulário e pode cair fora da dobra.
+      Mesmo tratamento em **Trocar profissional** e **Transferir agenda do dia**, que
+      compartilham o `erroModal`. Padrão para modal novo: erro depois do rodapé; se o
+      corpo rolar, traga-o para a vista.
+- [x] **Status `TRANSFERIDO` virou `REAGENDADO`** — é o que a ação faz: o atendimento foi
+      remarcado, não transferido para outro profissional (isso é a troca de vet, outra
+      coisa). `AgendamentoController`: `REAGENDADO` entrou em `STATUS_VALIDOS` e em
+      `STATUS_LIVRES`; `handleReagendar` grava o nome novo.
+      ⚠️ **`TRANSFERIDO` continua aceito e continua em `STATUS_LIVRES`** — é LEGADO puro.
+      Tirá-lo faria todo agendamento já reagendado voltar a OCUPAR a grade e a bloquear o
+      horário que ele mesmo liberou. Nada novo nasce com ele.
+      No front, `foiReagendado(status)` cobre os dois nomes e o rótulo do legado exibe
+      "REAGENDADO" — o usuário não deve ver dois nomes para o mesmo estado.
+      Propagado para as OUTRAS 3 telas que tratam esse status e que quebrariam calado
+      (`STATUS_CLS[status]` undefined → badge sem estilo): `SubModuloMinhaAgenda`,
+      `AnimalDetail` e `MapaAtendimento`.
+- [x] **Lista do dia mostra só o que está em aberto** — `STATUS_ABERTOS = ['AGENDADO',
+      'EM_ANDAMENTO', 'ATRASADA']` é o padrão, com o seletor de status no cabeçalho da
+      lista (não no bloco "Filtros" acima, que governa a grade do Expediente Ativo):
+      **Em aberto** · **Todos os status** · grupo "Somente" com `STATUS_FILTRAVEIS`
+      (Concluído, Finalizado, Cancelado, Reagendado). Quem decide é `statusCasaFiltro()`.
+      ⚠️ A opção **Reagendado casa TAMBÉM com o legado TRANSFERIDO** — é o mesmo estado,
+      e sem isso os registros antigos ficariam inalcançáveis por qualquer filtro.
+      `TRANSFERIDO` não aparece como opção própria: seriam dois nomes para uma coisa só.
+      ⚠️ **ATRASADA ENTRA em `STATUS_ABERTOS`** — tentei deixá-la fora (o pedido dizia
+      "somente AGENDADO e EM ANDAMENTO") e quebrou na hora: para esta tela ATRASADA **é**
+      um agendado — `isAgendado` (nas duas listagens) vale para `AGENDADO || ATRASADA`, e
+      é ele que libera Iniciar, Reagendar, **Transferir** e Cancelar. Escondê-la sumia com
+      a LINHA INTEIRA e com todos esses botões, no atendimento que passou da hora e é
+      justamente o que precisa de ação — bastava o cron rodar para o registro
+      desaparecer da agenda sem ninguém ter feito nada. Filtro novo nesta tela: confira
+      antes o que `isAgendado` inclui.
+      O vazio da lista distingue os dois casos: "nenhum agendamento para esta data" ×
+      "nenhum em aberto" + atalho "Ver todos os status (N)". Sem isso, um dia inteiro de
+      atendimentos concluídos apareceria como dia vazio, sem pista do filtro ativo.
+- [x] **Combo de animal do agendamento deixava trocar a escolha errada** — ao escolher, o
+      campo passa a conter o RÓTULO (`"Mel (Haras H.P.)"`), e `animaisCombo` filtrava
+      `a.nome.includes(comboQuery)`: `"mel".includes("mel (haras h.p.)")` é FALSE, então
+      reabrir o combo mostrava "Nenhum animal encontrado" e o paciente ficava travado na
+      primeira escolha. Agora o rótulo sai de `rotuloAnimalCombo()` (fonte única, usada
+      na escrita E no reconhecimento) e, enquanto o texto for o rótulo do já selecionado,
+      ele não conta como busca — a lista inteira segue disponível. `onFocus` também
+      seleciona o texto, para digitar por cima trocar direto.
+      Regra para combobox novo: se o campo exibe um RÓTULO diferente do que o filtro
+      compara, o filtro precisa saber disso — senão a seleção vira uma armadilha.
+      ⚠️ E o combo abre por **`onClick` ALÉM de `onFocus`**: a opção é escolhida num
+      `onMouseDown` com `preventDefault()`, então o foco NUNCA sai do input — e `focus`
+      não dispara de novo num campo já focado. Só com `onFocus`, clicar no campo depois
+      de escolher não reabria a lista. Combobox novo com seleção por mousedown precisa
+      dos dois.
+- [x] **"Transferir" sumia da linha enquanto as outras ações apareciam** — `podeTransferir`
+      exigia `ag.veterinario?.id === meuUserId`, mais estreito que o `ehMinhaAgenda` que
+      governa Iniciar/Reagendar/Cancelar (este cobre também o agendamento SEM profissional
+      e o que a pessoa criou). No agendamento "Não atribuído" a linha oferecia tudo, menos
+      justamente o Transferir. Agora as ações da linha compartilham a MESMA base.
+      No backend, `atualizar` recusava o mesmo caso porque `Number(null)` é `0` e nunca
+      bate com o id do usuário: atribuir profissional a um agendamento SEM responsável não
+      é transferir a agenda de ninguém, então `semResponsavel` sai do bloqueio.
+      Regra: ação da linha que use base de autoria diferente das vizinhas vira "botão que
+      falta" — confira `ehMinhaAgenda` antes de inventar outro predicado.
+- [x] **Assumir agendamento vale para EM_ANDAMENTO**, igual ao assumir da EVOLUÇÃO.
+      `AgendamentoController.assumir` aceitava só `['AGENDADO','ATRASADA']` e o front
+      prendia o botão a `isAgendado` — bastava o outro profissional clicar em "Iniciar"
+      para o atendimento ficar preso a ele na agenda, justamente o caso em que assumir
+      importa (o colega começou e precisou sair). Janela final: AGENDADO, ATRASADA,
+      EM_ANDAMENTO. O status entrou PARA DENTRO de `podeAssumir` para não haver duas
+      regras entre a listagem mobile e a desktop.
+      ⚠️ A linha EM_ANDAMENTO tem `onClick` próprio (continuar o atendimento): o wrapper
+      das ações ganhou `stopPropagation`, senão clicar em Assumir também navegaria para a
+      evolução e tiraria o usuário da agenda no meio da ação.
+      ⚠️ **Agendamento SEM profissional também se assume.** `podeAssumir` exigia
+      `!!ag.veterinario?.id` e escondia o botão no "Não atribuído" — justamente onde
+      assumir faz mais sentido (não há de quem tomar; a pessoa só passa a responder por
+      ele). O backend já aceitava: `Number(null)` nunca bate com o id de ninguém, então
+      não cai no "já é seu". A única exclusão é o que JÁ É MEU.
+- [x] **Ações da agenda: um gate só (`podeOperarLinha` = `podeGerenciar && ehMinhaAgenda`)**
+      — Iniciar, Reagendar, Transferir, Cancelar (+ "Transferir dia inteiro") e, sem a
+      parte de autoria, Assumir. Antes havia DUAS regras na mesma linha: Iniciar/
+      Reagendar/Cancelar só olhavam `podeGerenciar` (criar OU alterar OU excluir),
+      enquanto Assumir/Transferir exigiam `atendimento.agendamentos.editar` isolado — por
+      isso sumiam sozinhos e a linha oferecia tudo, menos esses dois.
+      ⚠️ **NÃO fechar o gate em `podeEditarAgendamento`.** Foi tentado em 2026-08-04 (a
+      justificativa era boa: as rotas `PATCH /:id`, `/:id/status` e `/:id/assumir` exigem
+      TODAS o slug `editar`) e o resultado foi sumir com TODAS as ações da tela em base
+      real — o mapa de permissões não entrega `editar` para o perfil em uso. Apertar o
+      front antes de a matriz estar coerente deixa o usuário sem saída E sem mensagem.
+      Quem barra é o BACKEND, e o 403 agora chega com o texto certo (o interceptor de
+      `api.ts` preserva a mensagem do servidor), dizendo qual permissão falta.
+      ⚠️ PENDENTE: descobrir por que `podeExecutar('atendimento.agendamentos.editar')` é
+      falso onde `criar`/`deletar` são verdadeiros — o seed dá PROPRIO para VET e
+      ESTAGIARIO. Suspeitos: o módulo virtual `agenda` do ControleAcesso (extrai
+      `agendamentos` de `atendimento`) e o que `minhas-permissoes` devolve para esses
+      slugs. Enquanto isso, o gate permissivo mantém a tela utilizável.
+- [x] **Auditoria em TODA mudança de status do agendamento** — `atualizarStatus` só
+      registrava quando o status caía em `STATUS_LIVRES` (como CANCELAMENTO): iniciar,
+      concluir e finalizar passavam sem rastro. Agora a escrita e o registro estão na
+      MESMA transaction, e a categoria segue o significado: `CANCELADO` → CANCELAMENTO
+      (com justificativa); qualquer outro → ALTERACAO com o antes → depois.
+      ⚠️ REAGENDADO **não** entra como CANCELAMENTO, embora esteja em `STATUS_LIVRES`:
+      libera o horário mas não é desistência, e contá-lo como cancelamento distorceria
+      o relatório gerencial.
+- [x] **Categoria `CRIACAO`** (`lib/auditoria.js`) + registro em
+      `AgendamentoController.criar`. Sem ela a trilha tinha buraco: dava para ver o
+      cancelamento de um agendamento que, para a auditoria, nunca existiu. Badge e filtro
+      próprios em `AuditoriaGeral.tsx`.
+      ⚠️ PENDENTE: só o AGENDAMENTO registra CRIACAO. Evolução, prescrição, exame,
+      encaminhamento e vacina continuam sem rastro de criação — aplicar o mesmo padrão
+      quando cada um for tocado.
+- [x] Caixa do modal de auditoria em **emerald-700** (era `gray-800`).
+- [x] **Front espelha a autoria** em Evolução (`ehMinhaEvolucao`, fonte única da tela),
+      Prescrição, Exames e Vacina — Encaminhamento já tinha. `abrirEdicao` da evolução
+      abre em SOMENTE LEITURA no registro de outro (o `editItemId` do Histórico era a
+      porta dos fundos). O botão **assumir** usa o nível cru, não a autoria.
+- [x] **"Finalizar Atendimento" do banner do shell** (`Atendimento.tsx`) — o gate era só
+      `podeFinalizarEvolucao`, sem autoria, e o botão aparecia no atendimento de outro.
+      Duas correções na mesma raiz:
+      1. `EvolucaoAtiva` passou a carregar **`veterinarioId`** (em `Atendimento.tsx` E em
+         `SubModuloEvolucao.tsx`, que alimenta o shell por `onEvolucaoChange`) — sem esse
+         campo o shell não tinha como decidir. Gate: `podeFinalizarEvolucao &&
+         evolucaoAtivaEhMinha(evolucaoAtiva)`.
+      2. ⚠️ `carregarEvolucaoAtiva` buscava `status=EM_ANDAMENTO&limit=1` e adotava
+         `dados[0]`. Com atendimento em PARALELO o animal tem mais de uma evolução
+         aberta, e "a primeira" podia ser a de OUTRO — o shell então vinculava a ela a
+         prescrição/vacina/exame lançados ali e oferecia o Finalizar alheio. Agora
+         `limit=20` + **a MINHA vence**, mesma regra que `carregarEvolucoes` já aplicava
+         no `onEvolucaoChange` (CLAUDE.md, sessão 2026-07-29).
+      O guard de `handleFinalizarAtendimento` deixou de ser `isFornecedor && …` (resquício
+      da regra por userType) e passou a valer para todo perfil não-gestor, relendo o dono
+      do servidor — entre abrir o banner e clicar, outra pessoa pode ter assumido.
+- [x] **Ações do AGENDAMENTO seguiam sem autoria** (`Agendamentos.tsx`): Iniciar,
+      Reagendar e Cancelar apareciam para qualquer um com `podeGerenciar` — só
+      "Transferir" checava. Novo `ehMinhaAgenda(ag)` (espelho do `podeOperarAgendamento`
+      do backend: responsável OU criador, mais o gestor) gateia os três, nos dois blocos
+      (cards mobile + tabela desktop), e `handleIniciarAtendimento` ganhou o mesmo guard —
+      iniciar o agendamento de outro abriria uma evolução na agenda dele.
+      Agendamento SEM profissional definido continua operável: não é de ninguém, e
+      travá-lo deixaria a linha sem nenhuma ação fora do gestor.
+      `MinhaAgenda` segue sem gate porque o não-gestor só enxerga os próprios (ver
+      pendência abaixo).
+- [x] **Seletor de "Status" REMOVIDO do formulário da evolução** — ele aparecia ao editar
+      (`{editingId && …}`) e deixava escolher FINALIZADA/CANCELADA na mão. Era um desvio
+      dos botões: marcar "Cancelada" + Salvar cancelava o atendimento **sem a
+      justificativa obrigatória** que o `ModalJustificativa` e a auditoria exigem, e sem
+      passar pelo gate de `*.deletar`/`*.finalizar`. O `PUT` do Salvar passou a enviar
+      `editingEv.status` (preserva o que a evolução já tem) em vez de `form.status`.
+      ⚠️ Não reintroduzir: o status é CONSEQUÊNCIA da ação (Salvar / Finalizar / Cancelar),
+      cada uma com o seu gate. `STATUS_OPTIONS` segue existindo — é o filtro da lista.
+- [x] **Assumir não abre mais o formulário de edição** — `handleAssumirEvolucao` chamava
+      `abrirEvolucaoPorId` (removida junto, era o único uso) e jogava o usuário direto no
+      editor. Assumir é passar a RESPONDER pelo atendimento, não necessariamente escrever
+      nele agora: a lista recarrega, a evolução já aparece como sua com as ações
+      liberadas, e quem quiser escrever clica em Alterar. O `assumir` da agenda
+      (`Agendamentos.handleAssumir`) nunca abriu nada — só recarrega a lista.
+- [x] Testes: `backend/src/__tests__/autoriaAtendimento.test.js` — 14 casos cobrindo a
+      matriz de autoria (incl. "FULL da matriz NÃO é gestor") e o arrasto (órfão arrastado,
+      inativo ignorado, evolução finalizada preservada). Suíte completa: 70 testes passando.
+- [ ] `MinhaAgenda` não precisou de gate por autoria porque o não-gestor só enxerga os
+      próprios agendamentos (`agendamentosFiltrados`). Se um dia essa lista passar a
+      mostrar a equipe inteira, os botões de ação precisam do `meuRegistro` junto.
+- [ ] `PrescricaoController` (itens LEGADOS, sem grupo) recebeu a assinatura nova mas não
+      foi revisado quanto ao arrasto — item legado não tem `evolucaoId`, então não é
+      alcançado por `transferirFilhosDasEvolucoes`. Avaliar se ainda há base com esses itens.
+- [ ] Rever se `Prescricao.veterinarioId` do ITEM deveria seguir o dono do GRUPO também no
+      `adicionarItem` (hoje o item novo nasce com quem o incluiu; o `finalizar` uniformiza
+      tudo depois, então não há efeito prático — mas é uma inconsistência latente).
+
+#### Exame de Compra: camada de VISUALIZAÇÃO (mesma sessão)
+- [x] **A tela abre em LEITURA, não em formulário** (`ExameCompra.tsx`). Ordem:
+      card do paciente → barra com as 4 abas (Clínico Geral · Fisiologia · Músculo
+      Esquelético · Imagem) **desabilitadas** e o botão **Novo Exame** à direita, na
+      MESMA linha → **Histórico de Exames de Compra**. Cancelar/Salvar só existem no
+      formulário, que entra por "Novo Exame" (cadastro) ou pelo lápis do histórico
+      (edição). **A lógica de gravação não mudou** — é camada de apresentação.
+      ⚠️ O botão fica FORA do container `overflow-x-auto` das abas (que rolam no
+      mobile), senão sairia da tela junto com elas. E há uma SEGUNDA cópia dele dentro
+      do card de estado vazio: sem laudo nenhum a barra de abas não é renderizada, e o
+      cadastro ficaria sem porta de entrada.
+- [x] **Em leitura a barra de abas é CINZA** (inativa `bg-gray-100`, ativa
+      `bg-gray-600`); em edição continua emerald. É exceção deliberada à regra "cinza =
+      indisponível" da §6: ali não há ação sobre o registro, é navegação entre seções de
+      um laudo fechado — e o cinza é o que diferencia, à primeira vista, a tela que só
+      lê da que edita. O "Novo Exame" segue emerald: ele É uma ação disponível.
+- [x] **O read-only é um `<fieldset disabled>` em volta do conteúdo das abas**, não uma
+      prop `somenteLeitura` em cada campo: são ~320 linhas de inputs/botões, e o
+      `disabled` do fieldset propaga pelo DOM para todo controle descendente — inclusive
+      para o TECLADO, que um `pointer-events-none` deixaria passar. Duas armadilhas:
+      as ABAS ficam FORA dele (trocar de aba é navegação, e em leitura elas seguem
+      clicáveis), e o fieldset leva `min-w-0` (o UA aplica `min-inline-size: min-content`
+      e o grid das abas estoura sem isso).
+      ⚠️ NÃO usar `className="contents"` no fieldset: `space-y-*` é um seletor de FILHO
+      DIRETO no DOM (`> * + *`), e `display: contents` some com a caixa no layout mas não
+      na árvore — o espaçamento interno sumiria (mesma raiz da armadilha 39).
+- [x] `editingId` continua sendo "qual laudo está carregado nos campos"; quem separa
+      EXIBIR de EDITAR é o `modoForm`. Sem ele, o `editingId` de um laudo apenas
+      visualizado faria o Salvar virar um PUT silencioso sobre ele.
+- [x] Cancelar **volta à visualização** do último laudo (antes só zerava os campos e
+      deixava o formulário aberto e vazio). Salvar volta ao laudo GRAVADO — `idSalvo` é
+      lido antes do `resetForm`, senão editar um laudo antigo cairia no mais recente da
+      lista e pareceria que a alteração não pegou.
+- [x] Histórico ganhou o **olho** (visualizar, emerald) ao lado do lápis, e os selos
+      "Em exibição" (emerald) / "Em edição" (âmbar) — com o viewer abrindo no laudo mais
+      recente, sem isso não havia como saber QUAL registro está nas abas nem alcançar um
+      antigo sem abrir o formulário.
+- [x] **Campo "Data do Exame" REMOVIDO da tela.** A data continua existindo (é a chave
+      da regra de duplicidade, armadilha 29-b): laudo novo nasce com HOJE e a edição
+      preserva a data de origem.
+      ⚠️ Consequência: não há mais como lançar laudo RETROATIVO pela tela (exame feito
+      ontem, digitado hoje). Se isso voltar a ser necessário, o caminho é um "ajustar
+      data" na edição — o backend já aceita `dataSolicitacao` no PUT.
+
+#### Tela do Animal: telefone do proprietário e rodapé (mesma sessão)
+- [x] **`GET /users/buscar-proprietario` lia nome e telefone do `users`** — violação
+      direta da regra do §36 ("NUNCA leia nome/telefone/endereço/documento de `users`
+      numa tela de empresa"). O `users` só recebe uma CÓPIA na criação do cliente:
+      editar o telefone depois grava no perfil, e cliente que já existia e foi cadastrado
+      por esta clínica nem toca o `users`. Resultado: ao digitar o e-mail de um cliente
+      já cadastrado, o formulário do animal trazia o telefone VAZIO — ou o número que
+      OUTRA clínica cadastrou. Agora passa por `aplicarPerfilProprietario(user,
+      req.empresaId)` e devolve `phone2` junto.
+- [x] **Telefone 1 e 2 passaram a ser EDITÁVEIS** no formulário do animal, inclusive com
+      proprietário já cadastrado e na edição (`/animais/:id`) — antes era
+      `disabled={isEditMode || proprietarioExistente === true}`. Nome e e-mail continuam
+      travados: identidade do cliente é assunto do Cadastro de Cliente; o contato muda o
+      tempo todo e é o que a clínica corrige na hora.
+      Persistência no **perfil DESTA empresa**, nunca no `users`: em `criar`,
+      `garantirPerfil` PRESERVA o perfil existente, então o telefone digitado era
+      descartado em silêncio — passou a haver um `salvarPerfil` só com o contato logo
+      depois; em `atualizar`, que nem lia `req.body.proprietario`, foi adicionado o mesmo
+      bloco (o front agora envia `proprietario: { phone, phone2 }` na edição).
+      ⚠️ Campo VAZIO é ignorado nos dois: salvar o animal com o telefone em branco não
+      pode apagar o número que a clínica já tem. Para limpar, o caminho é o Cadastro de
+      Cliente.
+      ⚠️ `garantirPerfil` ANTES do `salvarPerfil` em `atualizar`: cliente LEGADO pode não
+      ter perfil na empresa, e um upsert só com o telefone criaria a linha com
+      `fullName` nulo — que, pela regra do §36 (null = vazio NAQUELA empresa), APAGARIA
+      o nome do cliente na clínica.
+- [x] `ANIMAL_INCLUDE` passou a trazer `user.phone2` — sem ele o Telefone 2 abria vazio
+      na edição e o segundo número se perdia ao salvar. `propTelefone` entrou na
+      validação de submit também no modo edição, já que a tela agora grava o campo.
+- [x] **Rodapé no padrão da aplicação** (`Animal.tsx`): **Cancelar** + **Salvar** à
+      direita, tamanho padrão. Sai o botão de largura total (`w-full py-3.5`, texto
+      `md:text-lg`) que destoava das demais telas. O rótulo é **Salvar** no cadastro e na
+      edição — "Salvar e Continuar", "Atualizar Animal" e "Cadastrar Animal" diziam de
+      novo o que o cabeçalho já diz. O texto do estado BLOQUEADO ("Animal já com sua
+      equipe") FICA: ali o botão está desabilitado e a frase é a única explicação.
+
+#### Profissional que TAMBÉM é cliente da própria clínica (mesma sessão)
+- [x] **A tela de Proprietários filtrava por `users.userType === 'PROPRIETARIO'`** — o
+      tipo GLOBAL, que vale para todas as empresas (armadilha 36-e). Quem era cliente e
+      virou GESTORA da mesma empresa desaparecia da lista: `incluirMembroDireto` troca o
+      `userType` global para VETERINARIO, e o cadastro de cliente + o animal ativo na
+      empresa deixavam de contar. Novo `whereEhClienteDaEmpresa(empresaId)`
+      (`ProprietarioController`): é cliente aqui quem tem `userType` PROPRIETARIO **OU**
+      `ProprietarioPerfil` nesta empresa **OU** vínculo `UsuarioEmpresa` com perfil
+      PROPRIETARIO **OU** animal ATIVO aos cuidados da empresa. Sempre em AND com
+      `whereProprietarioNoEscopo` (um diz "é cliente", o outro "é cliente DAQUI").
+      Aplicado em `listar`, `obterPorId`, `atualizar`, `toggle` e `removerDaEmpresa` —
+      sem os quatro últimos a pessoa apareceria na lista e daria 404 ao abrir.
+      ⚠️ Sem empresa no contexto (ADMIN de plataforma) continua valendo o `userType`
+      global: não há empresa para resolver.
+- [x] **`criar` recusava com 409 "E-mail já cadastrado"** quem já existia com outro
+      `userType` — ou seja, não dava para cadastrar como cliente a pessoa que trabalha
+      na clínica. O bloqueio saiu.
+      ⚠️ `UsuarioEmpresa` é UMA linha por (usuário, empresa) e guarda UM `perfil`: gravar
+      `perfil: 'PROPRIETARIO'` ali REBAIXARIA a gestora a cliente na própria clínica.
+      Agora o perfil profissional VENCE (só se grava PROPRIETARIO quando não há vínculo
+      profissional); quem registra o lado cliente é o `ProprietarioPerfil`, tabela à
+      parte. Regra geral: **o vínculo carrega o papel PROFISSIONAL; ser cliente é um
+      cadastro paralelo, não um cargo.**
+- [ ] `FaturaController.listarProprietarios` e o `OrcamentoController` já derivam os
+      clientes dos ANIMAIS (não do `userType`), então a pessoa aparece lá sem mudança.
+      `VeterinarioController.listarProprietarios` e `DashboardController` ainda contam
+      por `userType` global — revisar quando forem tocados.
+
+#### `/execucao-prescricao` vazava paciente de OUTRA empresa (mesma sessão)
+- [x] **A prescrição do plantão nunca era filtrada por empresa.** `listarParaExecucao`
+      só aplicava `empresaId` quando ele vinha na QUERY — e o front nunca o manda. O
+      escopo por ANIMAL (`buildAnimalScopeWhere`) não cobre isso por DOIS motivos:
+      1. para dono/gestor ele inclui os vínculos do vet em **qualquer** empresa (regra
+         "base própria vê o co-tratado de outra empresa", §5) — correto na tela de
+         Pacientes, vazamento no plantão;
+      2. mesmo com o animal certo, o MESMO paciente pode ser tratado por duas clínicas:
+         sem filtro no DOCUMENTO, o plantão de uma exibia (e deixava executar) a
+         prescrição da outra.
+      Agora `whereGrupo.empresaId = req.empresaId`. `empresaId` da query só ESTREITA
+      dentro da empresa ativa — tenant vindo do cliente jamais define escopo (mesma
+      decisão da busca global, §16). Seguro para o legado: 100% dos `PrescricaoGrupo`
+      da base têm `empresaId` gravado.
+- [x] **A VACINA do mesmo plantão vazava pelo bypass do GESTOR.**
+      `escopoFilhoEvolucaoWhere` devolve `{}` quando `semEscopoClinico(req)` é true — e
+      `req.membroCargo === 'GESTOR'` é um dos casos (§35). Sem filtro NENHUM, a fila de
+      aplicação listava vacina de todas as clínicas. O bypass continua (ele existe para
+      o gestor ver o que a equipe registrou sem depender da resolução de `empresaId`),
+      mas agora com um limite de empresa por cima. `VacinaClinica` não tem `empresaId`
+      próprio: a tenancy vem da EVOLUÇÃO e, no avulso, da empresa do autor.
+      ⚠️ **Regra geral:** `semEscopoClinico` libera AUTORIA, não TENANT. Toda listagem
+      que ele atender precisa do seu próprio limite de empresa — vale reauditar os
+      outros consumidores (evoluções, exames, encaminhamentos) quando forem tocados.
+
+#### Ajustes de UI e mensagem (mesma sessão)
+- [x] **Máscara no valor de pagamento** (`UsuarioFormModal`): salário/valor fixo →
+      `000.000,00`, percentual → `00,00` (teto 100). Digitação da DIREITA para a esquerda,
+      como caixa/ERP. Trocar R$ ↔ % **remascara** o que já está digitado — senão
+      "3.500,00" sobrevivia como percentual. Helpers: `mascaraMoeda`,
+      `mascaraPercentual`, `mascaraValorPagamento`, `valorPagamentoNumero`,
+      `formatarValorSalvo`.
+      ⚠️ O submit já não podia usar `String(v).replace(',', '.')`: com separador de milhar
+      isso vira `"3.500.00"` → `NaN`. O modal agora emite número puro
+      (`String(valorPagamentoNumero(...))`), que é o que `Equipe`/`ControleAcesso`
+      consomem com `Number(...)`.
+      ⚠️ E a hidratação da EDIÇÃO passa pelo `formatarValorSalvo`: o valor salvo chega como
+      número cru ("3500") e a máscara o leria como 35,00 — o salário do membro cairia
+      sozinho no salvar seguinte.
+      Escolha registrada: o pedido escreveu o percentual como `00.00`, mas as duas
+      máscaras dividem o MESMO input (ele troca de formato conforme R$/%); com
+      separadores decimais diferentes o campo mudaria de idioma ao trocar o seletor ao
+      lado. Ficou vírgula nos dois.
+- [x] **Login: "Usuário ou Senha Inválidos"** — `auth/UserController.login`, nos DOIS
+      caminhos (e-mail inexistente e senha errada). Continuam com a MESMA mensagem de
+      propósito: separá-las transforma o login num verificador de cadastro (enumeração
+      de usuário). O front já tinha esse texto como fallback; o backend é que mandava
+      "Credenciais inválidas" e vencia.
+- [x] **Botão Sair FORA do dropdown** (`AppHeader`), ao lado do menu do usuário — ícone
+      só no mobile, ícone + rótulo no desktop, com `title`/`aria-label`. Continua também
+      dentro do menu? **Não**: ficaria duplicado. Sair é a ação mais frequente do header
+      e não deve custar dois cliques.
+
+### Sessão 2026-08-02 — Sessão de 2h, agenda assumida, vacina do proprietário, resultado de exame
+- [x] **Sessão expira por INATIVIDADE de 2h** — `lib/sessionTokens.js` virou a fonte ÚNICA da
+      duração e da assinatura dos tokens (o access era assinado em 4 lugares e o refresh em 3,
+      todos com literais `'24h'`/`'30d'`). O refresh de **30 DIAS** era o que deixava o usuário
+      entrar no dia seguinte: o access até expirava, mas o interceptor do axios renovava tudo em
+      silêncio pelo cookie que sobreviveu à noite. Agora **access 30 min** (`SESSION_ACCESS_MINUTES`)
+      dentro de uma **janela de inatividade de 120 min** (`SESSION_IDLE_MINUTES`), rotacionada a cada
+      refresh — quem está trabalhando nunca é interrompido; parado além da janela, precisa logar.
+      ⚠️ O access PRECISA ser menor que a janela: iguais, expirariam no mesmo instante e o refresh
+      nunca teria como renovar nada (logout duro a cada 2h, no meio do atendimento).
+      `setAuthCookies` usa os `maxAge` da lib, e o **cookie-dica passou a ter a vida do refresh**
+      (antes 30d: sobrevivia ao token e fazia o front sondar /me e /refresh de sessão morta — 401 no
+      console, justo o que ele evita). O timer de inatividade do `AuthContext` foi de 1h para 2h,
+      espelhando a janela do servidor.
+- [x] **Cadastro Pessoal: o profissional edita os próprios dias e horários** — a trava era o
+      `validarDentroDaBase` (front), que exigia que o dia/horário coubesse no snapshot do que o
+      GESTOR lançou na inclusão do membro. O backend nunca teve essa regra (só valida contra o
+      expediente da EMPRESA, em `validarLocaisContraExpedienteEmpresa`). O que o gestor lança na
+      inclusão é ponto de partida, não teto. NÃO reintroduzir.
+- [x] Rodapé do Cadastro Pessoal no padrão da aplicação (mesmas classes de Configurações/prescrição),
+      à direita, com **Fechar** ao lado do Salvar — o botão largo de página inteira saiu.
+- [x] **Rastro de "assumido de quem" na agenda** (migration `20260815000000`) —
+      `AgendamentoClinico.assumidoDeId` + `assumidoEm`, gravados por `marcarAssumido` tanto no
+      `AgendamentoController.assumir` quanto no `EvolucaoController.assumir` (que arrasta o
+      agendamento junto). POR QUÊ: assumir só trocava o `veterinarioId`, então o atendimento sumia
+      da agenda de um e aparecia na do outro **sem explicação** — o AuditLog registra o evento, mas
+      é texto livre e não serve para pintar a linha. Em **Atendimento > Agenda**
+      (`SubModuloMinhaAgenda`) sai o selo `Assumida de <Fulano>` (ou `Assumida por <Fulano>` para
+      quem perdeu). Leitura/escrita por SQL cru em `lib/agendamentoAssumido.js` (client Prisma pode
+      não conhecer as colunas — CLAUDE.md §11).
+- [x] **Vacina "Será aplicada pelo Proprietário"** (migration `20260815000001`) —
+      `VacinaClinica.aplicadaPeloProprietario`, irmã de `cliente` (quem FORNECE), com a MESMA matriz
+      da prescrição. A dose que o dono aplica em casa **não vai à Execução de Prescrição**
+      (`listarParaExecucao` a filtra) e é cobrada na **FINALIZAÇÃO** — única oportunidade, já que
+      nunca chega ao plantão. O bloco "debita lote (FEFO) + lança FaturaItem" saiu de `executar`
+      para o helper `darBaixaEFaturar`, reusado pelo `finalizar`; os reforços periódicos também são
+      agendados ali, senão nunca seriam. ⚠️ Diferença deliberada em relação à prescrição: aqui o
+      lote É debitado, então **a vacina não tem o buraco de "valor 0"** que a prescrição tem no
+      mesmo quadrante (lá o item aplicado pelo proprietário não debita lote, e sem lote não há preço).
+- [x] **Tela de Resultado de Exame lista o que foi PEDIDO** — `components/ExamesSolicitadosPanel.tsx`
+      em `/exames/:animalId?tipo=laboratorial|imagem`: os `ExameClinico` pedidos no Atendimento
+      aparecem com DOIS caminhos por linha — **Carregar resultado** (anexa o laudo, tabela lida por
+      IA) e **Preencher manualmente** (digita a tabela, ou o laudo no caso de Imagem). Os dois caem
+      no mesmo `PATCH /clinica/exames/:id/resultado`; `salvarResultado` passou a aceitar `itens`
+      (JSON no multipart) e, havendo itens digitados, eles MANDAM sobre a leitura do arquivo.
+      O `deleteMany` da tabela anterior agora só roda quando há tabela NOVA — reenviar o formulário
+      só com uma observação apagava o resultado já carregado. Abaixo dos pendentes há o bloco
+      **Resultados lançados** (leitura): o resultado pertence ao `ExameClinico`, que NÃO aparece na
+      lista de exames NUTRICIONAIS daquela página — sem ele, a linha sumia e nada surgia no lugar.
+      Gate pelos slugs de RESULTADO (`exames.laboratorial.editar` / `exames.imagem.editar`),
+      distintos do slug do PEDIDO — ver armadilha 29.
+      As três ações da linha (carregar / preencher / finalizar) são botões **só de ícone**, numa
+      linha só (`flex-nowrap`), com `title` + `aria-label` obrigatórios — sem rótulo visível é o
+      que dá nome ao botão no hover e para leitor de tela.
+      ⚠️ Os botões "Carregar Resultado" e "Preencher Manualmente" que ficavam FORA do card foram
+      REMOVIDOS (2026-08-02). Com eles saiu a ÚNICA entrada para `/exames/:animalId/novo`
+      (`CriaExameNutricional` — criação de EXAME NUTRICIONAL, outro módulo; armadilha 27). A rota
+      segue montada e funcional; se aquele fluxo voltar a ser necessário, precisa de entrada nova.
+- [x] **"Finalizado sem Resultado"** — botão **Finalizar** (com confirmação) na fila de espera do
+      painel, chamando o `PATCH /clinica/exames/:id/finalizar` que já existia. O exame sai da fila
+      e passa a constar como **FINALIZADO SEM RESULTADO** nas duas telas de resultado E no Pedido
+      de Exames. O status no banco continua sendo `CONCLUIDO`: quem separa "finalizado com
+      resultado" de "finalizado vazio" é o CONTEÚDO, via `utils/exameClinico.ts#temResultadoExame`
+      (laudo, tabela de parâmetros ou imagens) — fonte única consumida pelo `StatusExameBadge`
+      (prop `semResultado`) e pelo painel. NÃO virou status novo no banco justamente para não
+      duplicar estado: o mesmo pedido pode receber resultado depois e o rótulo se corrige sozinho.
+      O gate do Finalizar é `atendimento.exames.finalizar` (ação do PEDIDO), e não o slug de
+      resultado — por isso o painel também aparece para quem só tem essa permissão.
+- [x] **Prescrição: lixeira → ícone de CANCELAR** (`Ban`, o mesmo do Pedido de Exames), nos 4 pontos
+      da tela (item da prescrição, linha da tabela, card mobile e cabeçalho do modal). Nada ali é
+      excluído de verdade — o registro clínico fica no histórico como cancelado, e a lixeira
+      prometia o contrário.
+- [x] **VACINA saiu do shell de Atendimento e virou tela APARTADA** (`pages/Vacina.tsx`, rotas
+      `/clinica/vacina[/:animalId]` no App.tsx). A aba sumiu de `SUB_MODULOS`, e `Atendimento` não
+      importa mais o `SubModuloVacina` (com ele foram embora `viewVacinaId` e a busca de vacinas em
+      `carregarAtendimentoNasPaginas`, que só existiam para alimentar aquela aba).
+      `'vacina'` CONTINUA no tipo `SubModulo`: virou destino de NAVEGAÇÃO, não aba — o Histórico do
+      Paciente ainda leva para lá. Como sair do shell descarta o `openItemId` (que é estado), o item
+      viaja na URL: `irParaSubmodulo()` navega para `/clinica/vacina/:id?item=<id>` e a tela nova lê
+      o `?item=`. Sem isso, clicar numa vacina do histórico abriria a tela em branco.
+      A tela apartada mantém, porque não é decoração: o SELETOR DE PACIENTE, o card do animal e a
+      busca da EVOLUÇÃO EM ANDAMENTO — é o `evolucaoId` que amarra a vacina ao atendimento aberto;
+      sem ele toda vacina registrada por ali nasceria solta e sumiria do histórico do AG-XXXX.
+      `SeletorAnimalInteligente` foi extraído de `Atendimento.tsx` para `components/` (duas cópias
+      divergiriam na primeira correção).
+- [x] **Fim dos 429 (Too Many Requests)** — três causas, todas tratadas:
+      1. **Laço de requisições** na `Vacina.tsx` recém-criada. `setSelectedAnimal` e
+         `refreshSelectedAnimal` do `SelectedAnimalContext` NÃO são `useCallback` — mudam de
+         identidade a cada render do provider. Com o loader nas dependências do efeito, fechava o
+         ciclo `efeito → GET /animais/:id → setSelectedAnimal → provider re-renderiza → nova
+         identidade → efeito`, disparando sem parar. ⚠️ REGRA: efeito que chama
+         `setSelectedAnimal`/`refreshSelectedAnimal` depende de VALORES (ids, flags), nunca das
+         funções — é o motivo do `eslint-disable` equivalente em `Atendimento.tsx`.
+      2. **`usePermissoes` virou STORE ÚNICO de módulo.** São ~46 consumidores e vários ficam
+         montados juntos (Sidebar + AppHeader + página + submódulos): cada um disparava o SEU
+         `GET /equipes/minhas-permissoes`, 4-6 vezes o mesmo mapa por navegação — a maior fatia do
+         rate limit. Agora é uma requisição por chave `userId|empresaId|equipeId`, compartilhada
+         (inclusive a em VOO, para o carregamento inicial, quando todos montam no mesmo tick);
+         quem monta com o cache quente não toca na rede nem passa por `loading` falso. Troca de
+         contexto ZERA o mapa antes de buscar (manter o anterior exibiria as permissões da outra
+         empresa por um instante). Mesmo padrão de `useVetPendentes`.
+      3. **Rate limit era por IP — cota COLETIVA.** Clínica atrás de NAT (ou de túnel/proxy que não
+         repassa o IP real) somava o tráfego de todo mundo num balde só. `keyGenerator` passou a
+         usar o USUÁRIO do token, com fallback para o IP. O token é **verificado** (`jwt.verify`,
+         não `decode`): forjado não vira chave nova, cai no balde do IP — senão bastaria inventar
+         um `id` por requisição para ter cota infinita. Limite geral agora em `RATE_LIMIT_MAX`
+         (default 300/min). O limitador de LOGIN (20/15min, anti-força-bruta) não mudou.
+         ⚠️ O fallback de IP usa `ipKeyGenerator(req.ip)` do próprio express-rate-limit, NUNCA
+         `req.ip` cru: em IPv6 o usuário costuma receber um /64 inteiro, então o endereço
+         completo daria um balde novo a cada requisição (bastava trocar o último bloco). O
+         helper reduz o IPv6 à sub-rede /56 antes de virar chave e deixa o IPv4 intacto. A
+         biblioteca valida isso no boot — sem o helper, ela derruba um
+         `ValidationError ERR_ERL_KEY_GEN_IPV6` no startup.
+- [x] **Sidebar: Atendimento virou módulo FOLHA** — deixou de ser accordion e é um link direto
+      para `/clinica/agenda`. Evolução, Prescrição, Pedido de Exames e Encaminhamento saíram do
+      menu porque já são as ABAS de dentro daquela tela (`SubMenuClinico`): tê-los nos dois lugares
+      era o mesmo menu duplicado. **Vacina** e **Execução de Prescrição** subiram para o PRIMEIRO
+      NÍVEL, ao lado de Agendamento — a Vacina porque virou tela apartada (sem entrada própria não
+      haveria como registrar vacina nova), e a Execução porque é a tela onde o ENFERMEIRO trabalha
+      (escondê-la dentro de outro módulo a deixava sem porta de entrada para o perfil que mais a
+      usa). ⚠️ O ativo do Atendimento recorta `/clinica/vacina` (`p.startsWith('/clinica') &&
+      !p.startsWith('/clinica/vacina')`): a rota da Vacina também começa com `/clinica` e, sem
+      isso, os dois itens acendem juntos. `openGroup` não abre mais grupo para `/clinica` nem para
+      `/execucao-prescricao` — os três são folhas.
+- [x] Rótulo **Salvar → Finalizar** no botão principal de Prescrição, Vacina e Pedido de Exames
+      (é o que a ação faz: grava e finaliza). As mensagens de destino do item sob os checkboxes da
+      prescrição ("Vai à Execução de Prescrição — …") e a função `destinoDoItem()` foram REMOVIDAS
+      a pedido; a matriz que elas espelhavam continua valendo no backend.
+- [x] **Status saiu da tela de Encaminhamento** (badge do card + coluna da tabela). O campo continua
+      governando o comportamento — só PENDENTE pode ser cancelado, e é ele que mantém a designação
+      do prestador ativa.
+- [ ] O "Salvar" das linhas de `Exames.tsx` (edição inline de um valor) e o "Salvar exames" do
+      exame NUTRICIONAL (`CriaExameNutricional`) continuam como estão: são gravação de campo/registro
+      nutricional, não a finalização de um documento clínico. Confirmar se deviam entrar no rename.
 
 ### Sessão 2026-08-01 (parte 2) — Foto do profissional
 - [x] **Foto no Cadastro Pessoal, exibida na Equipe** (migration `20260814000000`) —
@@ -1625,7 +2204,7 @@ as MESMAS mudanças para a documentação funcional em `docs/`:
 - [x] `DietaAcoesBar.tsx` — props `podeImprimir`, `podeCompartilhar`, `podeExportar`; botões ocultam/bloqueiam com toast quando sem permissão
 - [x] Axios interceptor 403 — GET resolve com `{ data: null }` silencioso; mutations rejeitam com `isPermissionError: true` (sem log)
 - [x] Console suppression em produção — `main.tsx` sobrescreve `console.*` com noop quando `!import.meta.env.DEV` (escape hatch: `VITE_SUPPRESS_CONSOLE=true` em dev)
-- [x] `UsuarioFormModal.tsx` — formulário compartilhado de criação/edição de usuário (abas Dados/Endereço, busca CEP). Usado em `Usuarios.tsx` (Novo/Editar) e `Equipe.tsx` (Incluir/Editar Membro). Perfil de acesso: VETERINARIO/ESTAGIARIO/PRESTADOR(label Fornecedor)/GESTOR — sem "tipo de usuário" e sem campo senha na criação (padrão `Inicial_001` + `mustChangePassword`); telefone obrigatório. Edição: prop `permitirSenha` exibe "Nova senha" (ADMIN: todos via PUT /users/:id; GESTOR: membros da equipe via PUT /equipes/membros/:id) com regras de senha do sistema; prop `emailBloqueado` desabilita e-mail (usado na edição de membro). Backend: `POST /users` cria sem senha (default Inicial_001, `mustChangePassword: !senha`, phone obrigatório); `POST /equipes/incluir-membro` aceita fullName/phone/endereço (obrigatórios: nome e telefone) e `cargoToUserType` ganhou `GESTOR→VETERINARIO` (antes caía em ESTAGIARIO); `atualizarMembro` (PUT /equipes/membros/:id) ganhou autorização (ADMIN ou gestor da empresa da equipe; gestor não edita gestor — antes QUALQUER autenticado podia editar/trocar senha — bug crítico) + campos endereço/ativo + validação de senha. `listarMembros` retorna phone/endereço. Usuarios.tsx: tabela com `overflow-x-auto` (estourava à direita). Equipe.tsx: edição antiga chamava PATCH inexistente (404) — corrigido para PUT
+- [x] `UsuarioFormModal.tsx` — formulário compartilhado de criação/edição de usuário (abas Dados/Endereço, busca CEP). Usado em `Usuarios.tsx` (Novo/Editar) e `Equipe.tsx` (Incluir/Editar Membro). Perfil de acesso: VETERINARIO/ESTAGIARIO/PRESTADOR(label Fornecedor)/GESTOR — sem "tipo de usuário" e sem campo senha na criação (padrão `Inicial_001` + `mustChangePassword`); telefone obrigatório. Edição: prop `permitirSenha` exibe "Nova senha" — hoje SÓ na auto-edição em `Equipe.tsx`; `Usuarios.tsx` deixou de passar a prop em 2026-08-04 (ver §14); prop `emailBloqueado` desabilita e-mail (usado na edição de membro). Backend: `POST /users` cria sem senha (default Inicial_001, `mustChangePassword: !senha`, phone obrigatório); `POST /equipes/incluir-membro` aceita fullName/phone/endereço (obrigatórios: nome e telefone) e `cargoToUserType` ganhou `GESTOR→VETERINARIO` (antes caía em ESTAGIARIO); `atualizarMembro` (PUT /equipes/membros/:id) ganhou autorização (ADMIN ou gestor da empresa da equipe; gestor não edita gestor — antes QUALQUER autenticado podia editar/trocar senha — bug crítico) + campos endereço/ativo + validação de senha. `listarMembros` retorna phone/endereço. Usuarios.tsx: tabela com `overflow-x-auto` (estourava à direita). Equipe.tsx: edição antiga chamava PATCH inexistente (404) — corrigido para PUT
 - [x] CadastroProprietario.tsx sem campo senha — criação usa padrão `Inicial_001` (`ProprietarioController.criar`: senha opcional, telefone obrigatório no backend); e-mail `enviarBoasVindasProprietario` segue com a senha efetiva; botão "Novo Proprietário" do empty state removido (só header). `POST /users` também envia `enviarBoasVindasProprietario` quando criado sem senha (lógica de e-mail unificada entre Usuários e Proprietários)
 - [x] RBAC por contexto ativo — `minhasPermissoes` e `checkPermission`/`resolveEquipeId` resolvem cargo/permissões da equipe/empresa ATIVA (não mais o vínculo mais recente); bypass de dono restrito à empresa ativa; bypass de dono-da-equipe quando sem MembroEquipe; `PermissaoController` com guard `autorizarGestorDaEquipe` em todas as rotas `/:equipeId` (antes qualquer autenticado podia ler/editar matriz de qualquer equipe — gap crítico)
 - [x] Seletor de contexto ativo (gestor multi-empresa/multi-equipe) — `EmpresaContext.tsx` (localStorage `s2vet_empresa_id`/`s2vet_equipe_id`), headers `x-empresa-id`/`x-equipe-id` no axios, seletor no Sidebar (só com >1 opção; trocar = reload). Empresa CNPJ = opção por empresa; empresa pessoal CPF = opção por equipe. Backend: `auth.js` valida vínculo dos headers antes de setar `req.empresaId`/`req.equipeId`; `getEmpresaDoGestor(userId, req.empresaId)` prioriza a selecionada; `getEquipeAtiva(empresaId, req.equipeId)` em listarConvites/removerConvite; `garantirEquipePadrao`/`getMinhaEquipe`/`listarMembros` preferem a equipe ativa; `AnimalController` usa `req.empresaId` nos vínculos iniciados via request; `Fornecedor.empresaId` (migration `20260611130000`, null = SYSTEM/legado global, CLIENTE escopado à empresa ativa)
@@ -1848,15 +2427,23 @@ HERDAM o que estiver configurado na empresa (`EmpresaConfiguracao`):
 copiado para dentro do local; mudou em Configurações, mudou a agenda de todo mundo que
 não configurou. `parseLocaisTrabalho` grava a ausência como ausência (a especialidade
 some do JSON) e só valida o valor quando ele é informado.
-**Quem tem especialidade e tempo de consulta (2026-07-28, parte 4)**
+**Quem tem especialidade e tempo de consulta (2026-07-28, parte 4; GESTOR em 2026-08-04)**
 ```
 VETERINARIO → tem. Sem nenhuma informada, assume CLÍNICA MÉDICA.
 FORNECEDOR  → tem, mas aceita NULA (fica sem especialidade mesmo).
+GESTOR      → PODE informar, NUNCA é obrigado. Sem nenhuma, fica sem — o padrão
+              "assume Clínica Médica" vale só para VETERINARIO.
 demais      → NÃO têm especialidade nem tempo de consulta: informam APENAS local e
-              horário de trabalho. Cobre ESTAGIARIO, ENFERMEIRO, SECRETARIA, FINANCEIRO
-              e o GESTOR (userType VETERINARIO, mas cargo de gestão: não preenche dados
-              profissionais).
+              horário de trabalho. Cobre ESTAGIARIO, ENFERMEIRO, SECRETARIA e FINANCEIRO.
 ```
+⚠️ O GESTOR entra em `perfilComEspecialidade` nos TRÊS pontos que decidem isso —
+`UserController.updateMe`, `EquipeController.atualizarMembro` e `incluirMembroDireto` —
+e fora de `ehVet`/`especPadrao` (é isso que o mantém opcional). Deixar de fora qualquer
+um dos dois últimos faria a edição do membro pela tela de Equipe gravar os locais com
+`semEspecialidade` e APAGAR o que o gestor cadastrou no Cadastro Pessoal.
+No front, `CARGOS_COM_ESPECIALIDADE` (CadastroPessoal) ganhou GESTOR, e o texto de ajuda
+do seletor passou a seguir `atuaComoVet` — com `form.tipoUsuario` ele prometia ao gestor
+o padrão "Clínica Médica" que o backend não aplica (gestor tem userType VETERINARIO).
 Fonte única no front: `PERFIS_COM_ESPECIALIDADE` (`UsuarioFormModal`), usada pelo modal e
 pelo Cadastro Pessoal — não repetir o `perfil === 'VETERINARIO' || …` em tela nova.
 Perfil sem especialidade envia `especialidadeIds: []` e locais com `especialidadeIds`/
@@ -2532,19 +3119,43 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     AGIR sobre o agendamento de outro segue sendo outra história — ver 28-b (só GESTOR
     agenda/transfere para outro; o resto usa "assumir").
 
-28-c. **Sem filtro de autoria: quem decide é SÓ o Controle de Acesso (2026-07-30).**
-    A tela de Controle de Acesso é BINÁRIA — o `PermCheck` marca/desmarca a ação e nem
-    oferece escolha entre PROPRIO e EQUIPE. Diferenciar os dois no código criava restrição
-    que o gestor não via nem conseguia configurar (o estagiário com "criar" marcado não
-    agendava nada; o fornecedor não editava registro de outro mesmo com nível concedido).
-    Agora: **ação concedida ao perfil = pode operar o registro**, sem checar autoria nem
-    cargo. `podeOperarRegistro(nivel)` passou a receber só o nível e devolve true para
-    qualquer nível ≥ PROPRIO — os ~19 call sites (Evolução, Prescrição, PrescriçãoGrupo,
-    Exame, Encaminhamento, Vacina) seguem automaticamente, pois os argumentos extras são
-    ignorados. `AgendamentoController.podeAgendarParaOutro` idem, e o `assumir` deixou de
-    exigir `userType === 'VETERINARIO'`. No FRONT saíram os gates `eProprioAutor` /
-    `isFornecedor` de `SubModuloEvolucao` e os `souVeterinario` de `Agendamentos`.
-    Para restringir alguém, TIRE a ação do perfil na matriz — não há mais meio-termo.
+28-c. **A ação vale sobre O QUE É DE QUEM A EXECUTA (2026-08-04) — premissa de AUTORIA.**
+    ⚠️ REVERTE a regra de 2026-07-30 ("sem filtro de autoria; quem decide é só o Controle
+    de Acesso"), que está preservada abaixo só para explicar por que NÃO se volta a ela.
+    **REGRA VIGENTE:** ter a ação concedida = poder executá-la sobre o registro que a
+    pessoa CRIOU ou ASSUMIU. O ÚNICO perfil que opera registro de outro é o GESTOR
+    (e o ADMIN da plataforma). Assumir transfere a autoria (`veterinarioId` passa a ser
+    de quem assumiu), então "criado ou assumido" é uma comparação só.
+    ```js
+    podeOperarRegistro(req, autorId)   // ← assinatura NOVA: req, não o nível solto
+    // nível < PROPRIO        → false (o checkPermission da rota já teria barrado)
+    // ehGestorNoContexto(req) → true  (cargo GESTOR, dono da empresa ou ADMIN)
+    // senão                   → Number(autorId) === req.user.id
+    // autorId null (registro órfão) → só o gestor
+    ```
+    `ehGestorNoContexto(req)` é a checagem canônica de "sou gestor aqui" —
+    `checkPermission` seta `req.membroCargo = 'GESTOR'` em TODOS os caminhos de bypass.
+    ⚠️ **NUNCA usar `req.permissaoNivel === 'FULL'` como sinônimo de gestor**: FULL é um
+    NÍVEL da matriz e, concedido a um perfil comum, viraria passe livre para o prontuário
+    alheio. Foi por isso que `AgendamentoController.podeAgendarParaOutro` deixou de
+    aceitar FULL, e que "editar evolução FINALIZADA" trocou o teste de nível por
+    `ehGestorNoContexto`.
+    Cobertura: os 19 call sites de Evolução/Prescrição/PrescriçãoGrupo/Exame/
+    Encaminhamento/Vacina + os guards NOVOS de `adicionarItem`/`atualizarItem`/
+    `removerItem` do `PrescricaoGrupoController`, que **não tinham nenhum** — qualquer um
+    com "alterar prescrição" reescrevia a posologia prescrita por outro, e o
+    `data.veterinarioId = <quem editou>` ainda fazia o documento trocar de dono calado.
+    Editar NÃO transfere mais autoria: a troca de dono tem caminho próprio (assumir /
+    transferir), e um ajuste do gestor não pode tirar do veterinário o que ele conduz.
+    No FRONT o espelho é `meuRegistro = isGestor || eProprioAutor` (Evolução, Prescrição,
+    Exames, Vacina, Encaminhamento). ⚠️ O botão **assumir** usa o nível CRU
+    (`temNivelEditar`), nunca `podeEditarEsta` — que já exige autoria e, por definição, é
+    falso na evolução do outro, que é justamente a que se assume.
+    Regressão de 2026-07-30 que a regra nova NÃO pode reintroduzir: a tela de Controle de
+    Acesso é BINÁRIA (o `PermCheck` marca/desmarca; não escolhe entre PROPRIO e EQUIPE).
+    Por isso a autoria é REGRA BASAL e não um nível configurável — e por isso o gestor
+    segue com bypass. Para dar a alguém acesso ao registro alheio, o caminho é o cargo de
+    GESTOR, não um nível maior na matriz.
 
 28-d. **Só VER = NENHUM botão de ação no Atendimento (2026-07-30).** Perfil com apenas
     `*.ler` marcado não pode ter nada acionável na tela — nem escondido atrás de um
@@ -2564,10 +3175,42 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Ao criar tela nova: todo botão que não seja "ver" nasce dentro de `{podeX && …}`,
     e o handler mantém o guard `if (!podeX) { semPermissao(...); return; }`.
 
-28-b. **Agenda: "só o gestor agenda para OUTRO" é regra BASAL (2026-07-30).** Não é
-    permissão da matriz e não se configura: a agenda pertence a quem atende, então apenas
-    GESTOR (bypass FULL / cargo GESTOR) e ADMIN criam/transferem/trocam profissional na
-    agenda alheia. O Controle de Acesso decide SE a pessoa agenda; esta regra decide PARA
+28-b. **Agenda: "só o gestor agenda/transfere para OUTRO" é regra BASAL (2026-07-30,
+    endurecida em 2026-08-04).** Não é permissão da matriz e não se configura: escolher
+    quem atende o paciente é decisão de quem coordena a equipe. Apenas GESTOR (cargo
+    GESTOR / dono) e ADMIN criam, transferem e trocam profissional na agenda.
+    ⚠️ `podeAgendarParaOutro` é só `ehGestorNoContexto(req)` — o nível `FULL` saiu da
+    conta (ver 28-c).
+    ⚠️ **REVERTE a permissão de 2026-07-28** que deixava o profissional transferir a
+    agenda DELE (tanto o atendimento avulso quanto o dia inteiro em `transferirDia`).
+    Os dois caminhos são o MESMO ato e agora seguem a MESMA regra — mantê-los divergentes
+    só gerava dúvida sobre quem pode passar paciente para quem. Quem não é gestor tem o
+    **ASSUMIR** como caminho: puxa para si, nunca empurra para terceiro.
+    EXCEÇÃO: atribuir profissional a um agendamento SEM responsável continua liberado —
+    não há de quem tirar, então não é transferência.
+    Front: `podeTransferir` = `isGestor && podeOperarLinha`; o botão "Transferir dia
+    inteiro" e o "Trocar" da Minha Agenda (que no MOBILE não tinha o gate) idem.
+
+28-g. **`/clinica/agenda` É `Agendamentos.tsx` (2026-08-04) — não existe agenda paralela.**
+    A aba "Agenda" do Atendimento renderiza a MESMA tela de `/agendamentos` com a prop
+    `modoMinhaAgenda`, que:
+    - mostra SÓ o card "Agendamentos do Dia" (esconde cabeçalho de página, `BotaoVoltar`,
+      a barra Animal↔Proprietário, o calendário, os filtros e o Expediente Ativo);
+    - troca o `PageContainer` por um fragmento (o shell do Atendimento já dá o container);
+    - escopa a lista ao próprio profissional — `modoMinhaAgenda && !isGestor` filtra por
+      `veterinario.id === meuUserId`. **É a ÚNICA diferença de comportamento**; o gestor
+      continua vendo a equipe, com o filtro por profissional.
+    A prop `onSelecionarAnimal` (opcional) transforma o nome do paciente em botão, que era
+    o comportamento da aba antiga.
+    Com isso, layout, ações (Iniciar, Reagendar, Assumir, Transferir, Cancelar), filtro de
+    status, estado vazio e o **modal de reagendamento com calendário e grade de horários**
+    são literalmente os mesmos — não há o que sincronizar.
+    ⚠️ `SubModuloMinhaAgenda.tsx` foi **REMOVIDO**. Era uma segunda implementação da mesma
+    lista, e a divergência entre as duas gerou uma série de "sumiu o botão X" (a aba ficou
+    sem Assumir, com o Trocar liberado no mobile e sem filtro de status). **NUNCA recriar
+    uma agenda paralela**: para variar o comportamento, use uma prop nesta tela.
+    Se o modo aba crescer, o caminho é extrair o card do dia em um componente — nunca
+    copiar o arquivo de novo. O Controle de Acesso decide SE a pessoa agenda; esta regra decide PARA
     QUEM. Quem não é gestor tem o **assumir** como caminho para pegar atendimento de outro.
     ⚠️ O ESTAGIÁRIO não conseguia agendar NADA por causa da GRADE, não da regra: a lista de
     colunas filtrava `cargo VETERINARIO|GESTOR|FORNECEDOR`, então ele não tinha coluna
@@ -2575,28 +3218,90 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     equipe (exclui só cargo PROPRIETARIO e ADMIN) — cada um com a sua coluna. Corolário:
     quem precisa marcar precisa de coluna na grade, não de nível maior na matriz.
 
-28. **Autoria clínica é 100% RBAC (2026-07-10) — NÃO checar cargo/userType em controller.**
-    A ÚNICA regra fixa no backend é o bypass de ADMIN. "Só o gestor finaliza uma evolução" é
-    CONFIGURAÇÃO da matriz (seed dá VET/EST NENHUM em `*.finalizar`), não código. Padrão nos
-    controllers de editar/finalizar/excluir/cancelar (Evolucao, Prescricao, PrescricaoGrupo,
-    ExameClinico, Encaminhamento, Agendamento):
-      `if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) → 403`
-    `podeOperarRegistro` (permissao.middleware.js): EQUIPE/FULL = qualquer registro da equipe;
-    PROPRIO = só os próprios; NENHUM/LEITURA = nada. `req.permissaoNivel` já é setado pelo
-    `checkPermission` da rota (GESTOR/dono → FULL por bypass). NUNCA reintroduzir
-    `req.membroCargo === 'GESTOR'` nem `userType === 'FORNECEDOR'` para decidir autoria de AÇÃO —
-    isso foi removido em 2026-07-10. Editar registro FINALIZADO (evolução) exige nível FULL no
-    editar (regra derivada do nível, não de cargo). Exclusão de evolução FINALIZADA por não-ADMIN
-    segue bloqueada (regra de ADMIN, permitida). VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA
-    (fatura/estoque só na execução, no plantão via `enfermagem.prescricao.executar` — ver seção do fluxo da vacina).
+28. **Autoria clínica = RBAC (o SE) + AUTORIA (o SOBRE O QUÊ).** Padrão nos controllers de
+    editar/finalizar/excluir/cancelar (Evolucao, Prescricao, PrescricaoGrupo, ExameClinico,
+    Encaminhamento, Vacina, Agendamento):
+      `if (!podeOperarRegistro(req, item.veterinarioId)) → 403`
+    O Controle de Acesso decide SE a pessoa executa a ação; a autoria decide SOBRE QUAL
+    registro — ver 28-c para a regra completa e a assinatura. "Só o gestor finaliza uma
+    evolução" continua sendo CONFIGURAÇÃO da matriz (seed dá VET/EST NENHUM em
+    `*.finalizar`); "ninguém finaliza a evolução de outro" é código.
+    Reabrir evolução FINALIZADA é ato de GESTOR (`ehGestorNoContexto`), não nível de matriz.
+    Exclusão de evolução FINALIZADA por não-ADMIN segue bloqueada.
+    VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA (fatura/estoque só na execução,
+    no plantão via `enfermagem.prescricao.executar` — ver seção do fluxo da vacina).
     EXCEÇÃO deliberada — "assumir": `AgendamentoController.assumir` e
     `EvolucaoController.assumir` NÃO chamam `podeOperarRegistro`. Assumir é um PUXAR PARA SI
     (quem assume passa a ser o responsável), não a edição do registro alheio: o gate é o
     slug de `editar` da rota + acesso ao animal + escopo clínico. Quem perdeu o registro é
-    comunicado por e-mail e WhatsApp. Não "consertar" isso adicionando check de autoria.
+    comunicado por e-mail e WhatsApp. Não "consertar" isso adicionando check de autoria —
+    seria o único caminho para pegar o atendimento de outro, e ele ficaria fechado.
     Escopo de DADOS de prestador (quais animais o FORNECEDOR vê via DesignacaoPrestador) e a
-    resolução de contexto (MapaAtendimento isGestor) continuam usando membroCargo/userType — isso
-    é modelo de acesso/tenant, NÃO regra de autorização de ação.
+    resolução de contexto (MapaAtendimento isGestor) usam membroCargo/userType — isso é
+    modelo de acesso/tenant, NÃO regra de autorização de ação.
+
+28-e. **Assumir/transferir ARRASTA o atendimento inteiro (2026-08-04) —
+    `lib/transferenciaAtendimento.js`.** Hierarquia:
+    `AGENDAMENTO → EVOLUÇÃO (EM_ANDAMENTO) → { PRESCRIÇÃO (grupo + itens), EXAME,
+    ENCAMINHAMENTO, VACINA }`. Sem o arrasto, a premissa de autoria (28-c) TRANCA quem
+    assumiu: ele conduz o atendimento mas não pode editar nem finalizar a prescrição/exame
+    que ficaram com o profissional anterior — que, por sua vez, segue podendo mexer num
+    atendimento que não é mais dele.
+    Aplicado em `EvolucaoController.assumir`, `AgendamentoController.assumir`,
+    `AgendamentoController.atualizar` (troca de `veterinarioId`) e `transferirDia`.
+    Detalhes que não são acidentais:
+    - Só evolução **EM_ANDAMENTO** é arrastada — finalizada é histórico fechado e não muda
+      de responsável por troca de plantão.
+    - Os **ITENS** da prescrição vão junto do grupo: a autoria do item é avaliada por
+      `Prescricao.veterinarioId`, e mover só o grupo os deixaria presos ao dono antigo.
+    - Registro **órfão** (`veterinarioId` null) É arrastado — é justamente o que ninguém
+      consegue operar. Por isso o filtro "já é dele" roda em JS, e não como
+      `{ not: X }` no Prisma (semântica de NULL varia entre versões).
+    - **`FaturaItem.veterinarioId` NÃO é arrastado**: ali o campo é atribuição FINANCEIRA
+      (quem gerou a cobrança / a quem a comissão pertence), não condução clínica.
+      Reatribuir receita já lançada por causa de uma troca de plantão é decisão comercial
+      e não foi pedida.
+    - `PrescricaoGrupo` não tem `ativo` (o soft delete dele é o status CANCELADO) — por
+      isso o filtro é por modelo em `FILHOS_DA_EVOLUCAO`, e não uma constante única.
+    Testes: `src/__tests__/autoriaAtendimento.test.js` (autoria + arrasto, com tx falsa).
+
+28-f-bis. **Toda troca de responsável e toda edição do atendimento vão para a AUDITORIA
+    (2026-08-04).** Duas categorias novas em `lib/auditoria.js`
+    (`CATEGORIAS` += `TRANSFERENCIA`, `ALTERACAO`) e dois helpers:
+    - `registrarTransferencia(client, req, { entidade, entidadeId, animalId, deVetId,
+      paraVetId, motivo, origem })` → grava **quem era o dono anterior e quem passou a
+      ser**, com `origem` dizendo o que disparou a cascata (`EVOLUCAO #12 assumida`).
+      Uma linha por registro afetado — é o que faz a tela responder "esta prescrição
+      mudou de dono, e por quê".
+    - `registrarAlteracao(client, req, { entidade, entidadeId, campos, donoAnteriorId,
+      donoAtualId })` → **antes → depois** por campo, sempre amarrado ao responsável de
+      cada lado. Campo sem mudança real é descartado; lista vazia não grava nada.
+    ⚠️ As duas SEMPRE dentro da MESMA transaction da operação: ou a troca e o seu rastro
+    existem juntos, ou nenhum dos dois existe.
+    ⚠️ Campo longo (texto da evolução, observação) passa por `resumoTexto()` — o AuditLog
+    é um LEDGER, não um versionador de conteúdo.
+    ⚠️ `entidade` reusa os rótulos que a tela já traduz (`ENTIDADE_LABEL` em
+    `AuditoriaGeral.tsx`) — exame clínico é `EXAME_CLINICO`, nunca `EXAME`.
+    `finalizar` da prescrição grava `veterinarioId = quem finalizou`: quando isso muda o
+    dono (gestor finalizando a de outro), sai TRANSFERENCIA além da ALTERACAO.
+
+29-b. **Exame de COMPRA: um por paciente POR DATA (2026-08-04).** ⚠️ NÃO é "um por
+    animal" — o mesmo cavalo é vendido de novo e ganha outro laudo de compra, quantas
+    vezes for negociado. O que não pode existir é DOIS laudos na MESMA data: o laudo é a
+    fotografia do animal naquele dia, então dois ali são duplicidade (ou reenvio de
+    formulário), não dois exames. A checagem é por `(animalId, data)` — nunca por
+    `animalId` sozinho. Vale SÓ para
+    `tipo === 'Compra'` — os demais tipos são PEDIDOS e podem se repetir no dia à
+    vontade (dois hemogramas, dois raios-x). Backend: `compraNoMesmoDia()` em
+    `ExameClinicoController`, chamado por `criar` e por `atualizar` → **409
+    `COMPRA_DUPLICADA`**. No `atualizar` passa-se `ignorarId` com o próprio exame, senão
+    salvar sem mudar a data acusaria conflito consigo mesmo e travaria toda edição.
+    ⚠️ Compara pela DATA (`YYYY-MM-DD`), nunca pelo instante: `dataSolicitacao` é
+    DateTime e o front manda meia-noite UTC, mas registro criado por outro caminho pode
+    ter hora — igualdade exata deixaria a duplicata passar.
+    O front (`ExameCompra.tsx`) repete a checagem contra o histórico que já tem em
+    memória, só para avisar ANTES de o usuário perder o preenchimento de um formulário
+    de 4 abas. Quem manda é o backend.
 
 29. **PEDIDO de exame × RESULTADO de exame são módulos distintos (2026-07-25)** — apesar dos nomes
     parecidos, são fluxos diferentes:
@@ -3105,21 +3810,34 @@ SMTP cair). Por usuário: `UPDATE schs2vet.users SET mfa_ativo = false WHERE id 
 Front: `components/Verificacao2FA.tsx` (auto-submete aos 6 dígitos, reenvio com espera
 de 45s, `autoComplete="one-time-code"` para o preenchimento automático do SO).
 
-### Senha é da PESSOA — só ADMIN e o próprio dono alteram (2026-07-28)
+### Senha é da PESSOA — ninguém a troca POR ela (2026-08-04)
 ```
-ADMIN da plataforma → altera a senha de qualquer conta (rotas /users/:id, authorize('ADMIN'))
-Próprio usuário     → PATCH /users/me/senha (e o campo "Nova senha" ao editar a si mesmo)
-GESTOR / qualquer outro perfil → NÃO altera a senha de ninguém (403)
+Próprio usuário → PATCH /users/me/senha  +  "Nova senha" ao editar a SI MESMO (Equipe)
+                  + "esqueci minha senha"
+Conta nova      → padrão Inicial_001 + mustChangePassword no primeiro acesso
+ADMIN da plataforma / GESTOR / qualquer outro → NÃO trocam a senha de ninguém pela tela
 ```
+⚠️ **O campo de senha foi RETIRADO do módulo Usuários (`/usuarios`, tela ADMIN-only)** —
+`permitirSenha` não é mais passado ali, o `payload.senha` saiu do submit e o estado
+`erroSenha` foi removido junto (sem o campo na tela, o erro desviado para ele sumiria).
+Não reintroduzir. Em `Equipe.tsx` o campo permanece, mas SÓ na auto-edição
+(`membroEditando.user.id === user?.id`).
+A rota `PUT /users/:id` (authorize('ADMIN')) ainda ACEITA `senha` no corpo — o que mudou
+foi a interface, não o contrato. Se a intenção for fechar também o backend, é ali que se
+mexe; hoje nenhuma tela envia o campo.
+Regra que NÃO mudou: `EquipeController.atualizarMembro` e
+`ProprietarioController.atualizar` respondem **403** para troca de senha por terceiros, e
+`adicionarMembro` ignora `senha` do body.
 O gestor administra a EQUIPE, não a credencial de quem está nela: quem esqueceu usa
 "esqueci minha senha" e conta nova nasce com a padrão `Inicial_001` + troca obrigatória
 no primeiro acesso. Enforcement: `EquipeController.atualizarMembro` (PUT
 /equipes/membros/:id) e `ProprietarioController.atualizar` (PUT
 /cadastro/proprietarios/:id) respondem **403** se vier `senha` de quem não é ADMIN nem o
 dono da conta; `EquipeController.adicionarMembro` ignora `senha` do body.
-Frontend: `UsuarioFormModal.permitirSenha` só pode ser `true` para ADMIN ou para o próprio
-dono — `Equipe.tsx` passa `membroEditando.user.id === user?.id` (antes era `isGestor`, que
-deixava o gestor trocar a senha do membro) e `Usuarios.tsx` é tela ADMIN-only.
+Frontend: `UsuarioFormModal.permitirSenha` só pode ser `true` para o PRÓPRIO dono da conta
+— `Equipe.tsx` passa `membroEditando.user.id === user?.id` (antes era `isGestor`, que
+deixava o gestor trocar a senha do membro). `Usuarios.tsx` NÃO passa mais a prop
+(retirado em 2026-08-04 — ver o bloco acima).
 
 ### Pendências de segurança (futuro)
 - [x] Migrar tokens para HttpOnly Cookies (feito 2026-07-10)

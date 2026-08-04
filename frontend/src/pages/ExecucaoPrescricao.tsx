@@ -17,6 +17,7 @@ import { formatDate } from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
+import FotoAnimal from '../components/FotoAnimal';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -186,14 +187,11 @@ export function AnimalAvatar({ animal, size = 'md' }: {
   const cls = size === 'lg' ? 'w-14 h-14 text-xl rounded-xl'
             : size === 'sm' ? 'w-9 h-9 text-sm rounded-lg'
             :                 'w-11 h-11 text-base rounded-xl';
-  return animal.photoUrl ? (
-    <img src={animal.photoUrl} alt={animal.nome}
-      className={`${cls} object-cover flex-shrink-0`} />
-  ) : (
-    <div className={`${cls} bg-emerald-100 flex items-center justify-center flex-shrink-0`}>
-      <span className="text-emerald-700 font-bold">{animal.nome[0]?.toUpperCase()}</span>
-    </div>
-  );
+  // Sem foto → ícone de paciente (era a LETRA INICIAL; o vazio agora é o mesmo em
+  // todas as telas — ver components/FotoAnimal.tsx).
+  return <FotoAnimal url={animal.photoUrl} nome={animal.nome}
+    className={`${cls} flex-shrink-0`}
+    iconSize={size === 'lg' ? 24 : size === 'sm' ? 16 : 20} />;
 }
 
 // ─── VacinaExecViewModal — detalhes da vacina a aplicar (somente leitura) ──────

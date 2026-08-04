@@ -52,11 +52,18 @@ async function registrarAuditoria(userId, userName, email, action) {
   }
 }
 
-// Auditoria central estruturada (exclusões/cancelamentos) — lib/auditoria.js
-const { registrarAuditoria: auditoriaCentral } = require('../lib/auditoria');
-// Autoria via RBAC (req.permissaoNivel): PROPRIO = só registros próprios;
-// EQUIPE/FULL = qualquer registro da equipe. Nenhuma checagem de cargo/userType aqui.
-const { podeOperarRegistro, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
+// Auditoria central estruturada (exclusões/cancelamentos/transferências/alterações)
+const {
+  registrarAuditoria: auditoriaCentral,
+  registrarTransferencia,
+  registrarAlteracao,
+  resumoTexto,
+} = require('../lib/auditoria');
+// AUTORIA (2026-08-04): a ação concedida vale sobre o que é DE QUEM A EXECUTA — o
+// registro que ele criou ou assumiu. Só o GESTOR opera registro de outro profissional.
+const { podeOperarRegistro, ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+// Assumir a evolução arrasta prescrição, exame, encaminhamento e vacina do atendimento
+const { transferirFilhosDasEvolucoes } = require('../lib/transferenciaAtendimento');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMUNICAÇÃO ENTRE PROFISSIONAIS (e-mail + WhatsApp)
@@ -485,16 +492,17 @@ const EvolucaoController = {
 
       // Autoria dirigida pela matriz RBAC (nível efetivo em atendimento.evolucoes.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer registro da equipe.
-      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+      if (!podeOperarRegistro(req, existente.veterinarioId)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar evoluções criadas por você.' });
       }
 
-      // Editar registro FINALIZADO exige nível FULL no editar (gestor tem FULL por
-      // bypass; a matriz pode conceder FULL a outros perfis).
-      if (existente.status === 'FINALIZADA' && (NIVEL_ORDINAL[req.permissaoNivel] ?? 0) < NIVEL_ORDINAL.FULL) {
+      // Reabrir registro FINALIZADO é ato de GESTOR — não é nível de matriz. Antes a
+      // regra era "nível FULL no editar", que na prática só o gestor tem, mas deixava a
+      // porta aberta para a matriz conceder a reabertura de prontuário a um perfil comum.
+      if (existente.status === 'FINALIZADA' && !ehGestorNoContexto(req)) {
         return res.status(403).json({
           sucesso:  false,
-          mensagem: 'Editar evoluções finalizadas exige nível FULL na permissão de alterar evoluções.',
+          mensagem: 'Somente o gestor pode editar uma evolução já finalizada.',
         });
       }
 
@@ -589,6 +597,32 @@ const EvolucaoController = {
           );
         }
 
+        // Mudar o status faz de quem finaliza/cancela o novo responsável. Quando isso
+        // tira a evolução de outro profissional (gestor finalizando a dele), é uma
+        // TRANSFERÊNCIA e precisa do mesmo rastro do assumir.
+        if (existente.veterinarioId != null && Number(existente.veterinarioId) !== Number(novoVetId)) {
+          await registrarTransferencia(tx, req, {
+            entidade: 'EVOLUCAO', entidadeId: Number(id), animalId: existente.animalId,
+            deVetId: existente.veterinarioId, paraVetId: novoVetId,
+            motivo: `Evolução ${status === 'CANCELADA' ? 'cancelada' : 'finalizada'} por outro profissional`,
+          });
+        }
+
+        // Antes → depois da edição, sempre com o responsável de cada lado: quando o
+        // status muda, quem finaliza/cancela vira o dono, e a auditoria precisa
+        // mostrar que a alteração atravessou essa troca.
+        await registrarAlteracao(tx, req, {
+          entidade: 'EVOLUCAO', entidadeId: Number(id), animalId: existente.animalId,
+          donoAnteriorId: existente.veterinarioId,
+          donoAtualId:    novoVetId,
+          campos: {
+            status:        { de: existente.status,        para: upd.status },
+            especialidade: { de: existente.especialidade, para: upd.especialidade },
+            titulo:        { de: existente.titulo,        para: upd.titulo },
+            texto:         { de: resumoTexto(existente.texto), para: resumoTexto(upd.texto) },
+          },
+        });
+
         return upd;
       });
 
@@ -654,7 +688,7 @@ const EvolucaoController = {
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.evolucoes.deletar)
-      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+      if (!podeOperarRegistro(req, existente.veterinarioId)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite excluir evoluções criadas por você.' });
       }
 
@@ -822,7 +856,11 @@ const EvolucaoController = {
       // agendamento (AG-XXXX) tem o agendamento apontando para o vet anterior.
       // Mover só a evolução deixaria o atendimento na agenda de quem não o conduz
       // mais — e ele não apareceria na agenda de quem assumiu.
-      const assumida = await prisma.$transaction(async (tx) => {
+      //
+      // E arrasta também TUDO QUE ESTÁ EMBAIXO (prescrição, exame, encaminhamento,
+      // vacina): com a premissa de autoria, quem assume precisa poder operar o que
+      // passou a conduzir, e o antigo responsável não pode continuar mexendo nisso.
+      const { evolucao: assumida, movidos } = await prisma.$transaction(async (tx) => {
         const evo = await tx.evolucaoClinica.update({
           where: { id: existente.id },
           data:  {
@@ -832,23 +870,48 @@ const EvolucaoController = {
           },
           include: INCLUDE_PADRAO,
         });
+
+        const arrastados = await transferirFilhosDasEvolucoes(tx, [existente.id], userId);
+
         if (existente.agendamentoId) {
-          const movidos = await tx.agendamentoClinico.updateMany({
+          const movidosAg = await tx.agendamentoClinico.updateMany({
             where: { id: existente.agendamentoId, ativo: true, status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] } },
             data:  { veterinarioId: userId },
           });
           // Mesmo rastro do "assumir" da agenda: a Agenda pinta o selo "assumida de
           // <Fulano>". Só marca se o agendamento realmente mudou de mãos.
-          if (movidos.count > 0) await marcarAssumido(tx, existente.agendamentoId, anteriorId);
+          if (movidosAg.count > 0) {
+            await marcarAssumido(tx, existente.agendamentoId, anteriorId);
+            arrastados.push({
+              entidade: 'AGENDAMENTO', entidadeId: existente.agendamentoId,
+              animalId: existente.animalId, deVetId: anteriorId,
+            });
+          }
         }
-        return evo;
+
+        // A auditoria entra na MESMA transaction que a troca: ou a transferência e o
+        // seu rastro existem juntos, ou nenhum dos dois existe.
+        await registrarTransferencia(tx, req, {
+          entidade: 'EVOLUCAO', entidadeId: existente.id, animalId: existente.animalId,
+          deVetId: anteriorId, paraVetId: userId,
+          motivo: 'Evolução assumida por outro profissional',
+        });
+        for (const m of arrastados) {
+          await registrarTransferencia(tx, req, {
+            ...m, paraVetId: userId,
+            motivo: 'Arrasto do atendimento assumido',
+            origem: `evolução assumida`,
+          });
+        }
+
+        return { evolucao: evo, movidos: arrastados };
       });
 
       await registrarAuditoria(
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_ASSUMIDA | id=${existente.id} | animal=${existente.animalId} | de=${anteriorId ?? '-'} | para=${userId}`
+        `EVOLUCAO_ASSUMIDA | id=${existente.id} | animal=${existente.animalId} | de=${anteriorId ?? '-'} | para=${userId} | arrastados=${movidos.length}`
       );
 
       notificarEvolucao({
@@ -895,7 +958,7 @@ const EvolucaoController = {
 
       // Autoria via RBAC (nível efetivo em atendimento.evolucoes.finalizar):
       // PROPRIO → só finaliza o que criou; EQUIPE/FULL → qualquer da equipe.
-      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+      if (!podeOperarRegistro(req, existente.veterinarioId)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite finalizar evoluções criadas por você.' });
       }
 
@@ -1183,7 +1246,7 @@ const EvolucaoController = {
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
       // Mesma regra de autoria do atualizar — dirigida pela matriz RBAC
-      if (!podeOperarRegistro(req.permissaoNivel, existente.veterinarioId, userId)) {
+      if (!podeOperarRegistro(req, existente.veterinarioId)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar relatórios de evoluções criadas por você.' });
       }
 

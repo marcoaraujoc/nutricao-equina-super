@@ -9,6 +9,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { consumirLaudosPendentes } from '../utils/laudoPendente';
 import toast from 'react-hot-toast';
 import InlineError from '../components/InlineError';
+import FotoAnimal from '../components/FotoAnimal';
 
 
 const CriaExameNutricional = () => {
@@ -308,7 +309,7 @@ const CriaExameNutricional = () => {
         {selectedAnimal ? (
           <div className="bg-white rounded-3xl shadow p-4 flex gap-4 mb-6">
             <div className="w-20 h-20 bg-gray-200 rounded-2xl overflow-hidden flex-shrink-0">
-              <img src={selectedAnimal.photoUrl || 'https://picsum.photos/id/1015/400/400'} alt={selectedAnimal.nome} className="w-full h-full object-cover" />
+              <FotoAnimal url={selectedAnimal.photoUrl} nome={selectedAnimal.nome} iconSize={26} />
             </div>
             <div className="flex-1">
               <div className="flex justify-between items-start">

@@ -162,7 +162,7 @@ const PrescricaoController = {
 
       // Autoria via RBAC (nível efetivo em atendimento.prescricoes.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
-      if (!podeOperarRegistro(req.permissaoNivel, prescricaoParaCheck.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, prescricaoParaCheck.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite editar prescrições criadas por você.' });
       }
 
@@ -221,7 +221,7 @@ const PrescricaoController = {
       if (!acessoDel)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.prescricoes.deletar)
-      if (!podeOperarRegistro(req.permissaoNivel, prescricaoParaDel.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, prescricaoParaDel.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite excluir prescrições criadas por você.' });
       }
 
@@ -263,7 +263,7 @@ const PrescricaoController = {
       if (!acessoFin1)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.prescricoes.finalizar)
-      if (!podeOperarRegistro(req.permissaoNivel, prescricao.veterinarioId, vet.id)) {
+      if (!podeOperarRegistro(req, prescricao.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar prescrições criadas por você.' });
       }
 

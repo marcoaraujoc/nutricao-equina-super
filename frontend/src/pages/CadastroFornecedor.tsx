@@ -34,13 +34,17 @@ const TIPOS_SERVICO = [
 type TipoServico = typeof TIPOS_SERVICO[number];
 type TipoDoc     = 'cpf' | 'cnpj';
 
-// Tipo de fornecedor/profissional — especialidades só se aplicam a Veterinário
+// Tipo de fornecedor/profissional — especialidades só se aplicam a Veterinário.
+// Estagiário e Secretária SAÍRAM daqui (2026-08-04): são CARGOS na equipe, definidos
+// no Incluir Membro, não prestadores contratados pela clínica.
+// ⚠️ Cadastro ANTIGO gravado com um desses tipos continua existindo. Como o
+// `abrirEdicao` só reconhece o que está nesta lista, ele reabre como "Veterinário" —
+// e aí o formulário passa a exigir especialidade. Se aparecerem registros assim,
+// corrigir o tipo (ou reintroduzir o valor apenas para leitura) antes de salvar.
 const TIPOS_FORNECEDOR = [
   'Veterinário',
-  'Estagiário',
   'Farmácia',
   'Laboratório',
-  'Secretária',
 ] as const;
 type TipoFornecedor = typeof TIPOS_FORNECEDOR[number];
 
@@ -173,13 +177,15 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalFornecedor({
-  editando, form, saving, especiesEmpresa,
+  editando, form, saving, especiesEmpresa, erro,
   onFormChange, onSalvar, onClose,
 }: {
   editando:    Fornecedor | null;
   form:        FormForn;
   saving:      boolean;
   especiesEmpresa: number[];
+  /** Erro da ação do MODAL — exibido abaixo do rodapé, junto do botão clicado. */
+  erro:        string | null;
   onFormChange:(updates: Partial<FormForn>) => void;
   onSalvar:    () => void;
   onClose:     () => void;
@@ -412,17 +418,31 @@ function ModalFornecedor({
 
         </div>
 
-        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+        {/* Rodapé no padrão da aplicação: ações à DIREITA e no tamanho padrão
+            (`px-4/px-6 py-2.5`). Antes eram dois botões `flex-1`, ocupando a largura
+            inteira do modal — o Cancelar ficava do mesmo tamanho visual do Salvar. */}
+        <div className="flex items-center justify-end gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           <button onClick={onClose} disabled={saving}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-semibold hover:bg-gray-50 disabled:opacity-50 transition-colors">
             Cancelar
           </button>
           <button onClick={onSalvar} disabled={saving}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+            className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
             {saving && <Loader2 size={13} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
         </div>
+
+        {/* Erro ABAIXO do botão que o disparou — nunca na página atrás do overlay,
+            onde ficava até agora (o `InlineError` do topo era invisível com o modal
+            aberto: o usuário clicava em Salvar e nada parecia acontecer).
+            Fica FORA do corpo rolável e é `flex-shrink-0`, então nasce sempre à vista —
+            não precisa de `scrollIntoView` como nos formulários que rolam. */}
+        {erro && (
+          <div className="px-5 pb-5 flex-shrink-0">
+            <InlineError message={erro} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -441,11 +461,18 @@ export default function CadastroFornecedor() {
   const podeEditar = isAdmin || podeExecutar('cadastro.fornecedor.editar');
   const podeAtivar = isAdmin || podeExecutar('cadastro.fornecedor.ativar');
 
-  const semPermissao = (acao: string) =>
-    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+  const msgSemPermissao = (acao: string) =>
+    `Sem permissão para ${acao}. Verifique com o responsável da equipe.`;
 
-  // Erro de ação exibido inline (substitui o toast de erro)
+  // Erro fica na SUPERFÍCIE da ação que o disparou (CLAUDE.md §6). Três estados
+  // porque a tela tem três lugares de onde se clica:
+  //   erroInline → CARGA da tela (não veio de clique nenhum) → topo
+  //   erroModal  → validação e falha do Salvar → abaixo do rodapé DO MODAL
+  //   erroLista  → ações da linha (editar/ativar) → junto da lista
+  // Um estado só mandava tudo para o topo da página — atrás do overlay do modal.
   const [erroInline,      setErroInline]      = useState<string | null>(null);
+  const [erroModal,       setErroModal]       = useState<string | null>(null);
+  const [erroLista,       setErroLista]       = useState<string | null>(null);
   const [fornecedores,    setFornecedores]    = useState<Fornecedor[]>([]);
   const [loading,         setLoading]         = useState(true);
   const [busca,           setBusca]           = useState('');
@@ -483,7 +510,7 @@ export default function CadastroFornecedor() {
       .catch(() => setEspeciesEmpresa([]));
   }, [loadingPerms]);
 
-  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setShowModal(true); };
+  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
 
   // Veio de "Incluir Membro" (Equipe) via "+ Cadastrar Novo Fornecedor" — abre o modal direto
   useEffect(() => {
@@ -495,6 +522,7 @@ export default function CadastroFornecedor() {
   }, []);
 
   const abrirEdicao = async (f: Fornecedor) => {
+    setErroModal(null);
     setEditando(f);
     setForm({
       nome:        f.nome,
@@ -527,26 +555,27 @@ export default function CadastroFornecedor() {
     } catch { /* mantém vazio */ }
   };
 
-  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); };
+  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); };
   const handleFormChange = (updates: Partial<FormForn>) => setForm(prev => ({ ...prev, ...updates }));
 
   const handleSalvar = async (force = false) => {
-    if (editando && editando.tipoEntrada === 'SYSTEM' && !isAdmin) { semPermissao('alterar fornecedor do catálogo global'); return; }
-    if (editando && !podeEditar) { semPermissao('alterar fornecedor'); return; }
-    if (!editando && !podeCriar) { semPermissao('criar fornecedor'); return; }
-    if (!form.nome.trim())       { setErroInline('Nome é obrigatório'); return; }
+    setErroModal(null);
+    if (editando && editando.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroModal(msgSemPermissao('alterar fornecedor do catálogo global')); return; }
+    if (editando && !podeEditar) { setErroModal(msgSemPermissao('alterar fornecedor')); return; }
+    if (!editando && !podeCriar) { setErroModal(msgSemPermissao('criar fornecedor')); return; }
+    if (!form.nome.trim())       { setErroModal('Nome é obrigatório'); return; }
     if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
-      setErroInline('Selecione ao menos uma especialidade'); return;
+      setErroModal('Selecione ao menos uma especialidade'); return;
     }
-    if (form.email.trim() && !isValidEmail(form.email)) { setErroInline('Informe um e-mail válido'); return; }
-    if (!form.telefone.trim())   { setErroInline('Telefone é obrigatório'); return; }
+    if (form.email.trim() && !isValidEmail(form.email)) { setErroModal('Informe um e-mail válido'); return; }
+    if (!form.telefone.trim())   { setErroModal('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
     if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf)) {
-      setErroInline('CPF inválido'); return;
+      setErroModal('CPF inválido'); return;
     }
     if (form.tipoDoc === 'cnpj' && docCNPJ && !validarCNPJ(form.cnpj)) {
-      setErroInline('CNPJ inválido'); return;
+      setErroModal('CNPJ inválido'); return;
     }
 
     setSaving(true);
@@ -585,18 +614,19 @@ export default function CadastroFornecedor() {
         setDupInativoInfo({ mensagem: errData.mensagem ?? '' });
         return;
       }
-      setErroInline(errData?.mensagem ?? 'Erro ao salvar');
+      setErroModal(errData?.mensagem ?? 'Erro ao salvar');
     } finally { setSaving(false); }
   };
 
   const handleToggle = async (f: Fornecedor) => {
-    if (f.tipoEntrada === 'SYSTEM' && !isAdmin) { semPermissao('alternar status de fornecedor do catálogo global'); return; }
-    if (!podeAtivar) { semPermissao('alternar status do fornecedor'); return; }
+    setErroLista(null);
+    if (f.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroLista(msgSemPermissao('alternar status de fornecedor do catálogo global')); return; }
+    if (!podeAtivar) { setErroLista(msgSemPermissao('alternar status do fornecedor')); return; }
     try {
       await api.patch(`/cadastro/fornecedores/${f.id}/toggle`);
       toast.success(f.ativo ? 'Fornecedor inativado' : 'Fornecedor ativado');
       carregar();
-    } catch { setErroInline('Erro ao alternar status'); }
+    } catch { setErroLista('Erro ao alternar status'); }
   };
 
   if (loadingPerms) return (
@@ -626,7 +656,6 @@ export default function CadastroFornecedor() {
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Truck size={24} className="text-emerald-600" /> Fornecedores / Profissionais
           </h1>
-          <p className="text-sm text-gray-500 mt-0.5">Catálogo global de profissionais e prestadores</p>
         </div>
         {podeCriar && (
           <button onClick={abrirNovo}
@@ -655,6 +684,10 @@ export default function CadastroFornecedor() {
           ))}
         </div>
       </div>
+
+      {/* Erro das ações da LINHA (editar / ativar-inativar), colado na lista de onde
+          o botão foi clicado — o `erroInline` do topo é só para falha de CARGA. */}
+      <InlineError message={erroLista} className="mb-3" />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
@@ -806,6 +839,7 @@ export default function CadastroFornecedor() {
           form={form}
           saving={saving}
           especiesEmpresa={especiesEmpresa}
+          erro={erroModal}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}

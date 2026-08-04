@@ -7,7 +7,7 @@ const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 const INCLUDE = {
@@ -479,7 +479,7 @@ const EncaminhamentoController = {
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
-      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, enc.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite editar encaminhamentos criados por você.' });
       }
 
@@ -514,6 +514,19 @@ const EncaminhamentoController = {
           await atualizarFaturaItensDaOrigem(tx, 'encaminhamentoClinicoId', enc.id, { descricao });
         }
 
+        await registrarAlteracao(tx, req, {
+          entidade: 'ENCAMINHAMENTO', entidadeId: enc.id, animalId: enc.animalId,
+          donoAtualId: enc.veterinarioId,
+          campos: {
+            especialidade:      { de: enc.especialidade,      para: upd.especialidade },
+            motivo:             { de: resumoTexto(enc.motivo), para: resumoTexto(upd.motivo) },
+            urgencia:           { de: enc.urgencia,           para: upd.urgencia },
+            observacao:         { de: resumoTexto(enc.observacao), para: resumoTexto(upd.observacao) },
+            veterinarioDestino: { de: enc.veterinarioDestino, para: upd.veterinarioDestino },
+            clinicaDestino:     { de: enc.clinicaDestino,     para: upd.clinicaDestino },
+          },
+        });
+
         return upd;
       });
 
@@ -541,7 +554,7 @@ const EncaminhamentoController = {
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.finalizar)
-      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, enc.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar encaminhamentos criados por você.' });
       }
 
@@ -588,7 +601,7 @@ const EncaminhamentoController = {
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.deletar)
-      if (!podeOperarRegistro(req.permissaoNivel, enc.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, enc.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite excluir encaminhamentos criados por você.' });
       }
 

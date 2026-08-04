@@ -5,7 +5,7 @@ const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { processarExame } = require('../services/exameParserService');
 const { storage }        = require('../storage');
@@ -52,6 +52,40 @@ function parseItensManuais(bruto) {
       ordem:      idx,
     }))
     .filter(i => i.parametro);
+}
+
+/**
+ * Exame de COMPRA é ÚNICO por paciente e por dia.
+ *
+ * POR QUÊ: o laudo de compra é a fotografia do animal naquela data — dois laudos no
+ * mesmo dia para o mesmo paciente são duplicidade (ou reenvio de formulário), não dois
+ * exames. Vale SÓ para `tipo === 'Compra'`: os demais tipos são PEDIDOS e podem se
+ * repetir no dia à vontade (dois hemogramas, dois raios-x…).
+ *
+ * A comparação é pela DATA (YYYY-MM-DD), não pelo instante: `dataSolicitacao` é
+ * DateTime e o front manda "YYYY-MM-DD" (meia-noite UTC), mas registro criado por outro
+ * caminho pode ter hora — igualdade exata deixaria a duplicata passar. São poucos
+ * laudos de compra por animal, então carregar e comparar em JS evita depender de
+ * `date_trunc` e de fuso do servidor.
+ *
+ * @returns o exame conflitante, ou null
+ */
+async function compraNoMesmoDia(client, { animalId, dataSolicitacao, ignorarId = null }) {
+  const alvo = String(dataSolicitacao ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(alvo)) return null;
+
+  const existentes = await client.exameClinico.findMany({
+    where: {
+      animalId: Number(animalId),
+      tipo:     'Compra',
+      ativo:    true,
+      ...(ignorarId ? { id: { not: Number(ignorarId) } } : {}),
+    },
+    select: { id: true, numero: true, dataSolicitacao: true },
+  });
+
+  return existentes.find(e =>
+    e.dataSolicitacao && e.dataSolicitacao.toISOString().slice(0, 10) === alvo) ?? null;
 }
 
 const ExameClinicoController = {
@@ -117,6 +151,20 @@ const ExameClinicoController = {
 
       // Campos extras armazenados em observacao como JSON
       const { dataHoraColeta, dataSolicitacao } = req.body;
+
+      // Um laudo de compra por paciente/dia — ver `compraNoMesmoDia`
+      if (tipo === 'Compra') {
+        const jaExiste = await compraNoMesmoDia(prisma, {
+          animalId, dataSolicitacao: dataSolicitacao ?? new Date().toISOString(),
+        });
+        if (jaExiste) {
+          return res.status(409).json({
+            error: 'Este paciente já tem um Exame de Compra nesta data — Altere o exame existente.',
+            code:  'COMPRA_DUPLICADA',
+            exameId: jaExiste.id,
+          });
+        }
+      }
 
       // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
       // Preserva direto, sem encapsular na estrutura extra (que quebraria a leitura em handleEditar).
@@ -208,11 +256,27 @@ const ExameClinicoController = {
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
-      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, item.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite editar exames criados por você.' });
       }
 
       const { descricao, observacao, status, laboratorio, tipoAmostra, indicacaoClinica, dataSolicitacao, qtdAmostra } = req.body;
+
+      // Editar a DATA não pode colidir com outro laudo de compra do mesmo paciente.
+      // `ignorarId` é o próprio exame: sem ele, salvar sem mudar a data acusaria
+      // conflito consigo mesmo e travaria toda edição.
+      if (item.tipo === 'Compra' && dataSolicitacao) {
+        const jaExiste = await compraNoMesmoDia(prisma, {
+          animalId: item.animalId, dataSolicitacao, ignorarId: item.id,
+        });
+        if (jaExiste) {
+          return res.status(409).json({
+            error: 'Este paciente já tem outro Exame de Compra nesta data. Escolha outra data.',
+            code:  'COMPRA_DUPLICADA',
+            exameId: jaExiste.id,
+          });
+        }
+      }
 
       // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
       // Preserva direto; para outros tipos, encapsula na estrutura extra padrão.
@@ -243,7 +307,7 @@ const ExameClinicoController = {
           });
         }
 
-        return tx.exameClinico.update({
+        const upd = await tx.exameClinico.update({
           where: { id: item.id },
           data: {
             ...(descricaoTrim !== undefined && { descricao: descricaoTrim }),
@@ -254,6 +318,19 @@ const ExameClinicoController = {
           },
           include: INCLUDE,
         });
+
+        await registrarAlteracao(tx, req, {
+          entidade: 'EXAME_CLINICO', entidadeId: item.id, animalId: item.animalId,
+          donoAtualId: item.veterinarioId,
+          campos: {
+            descricao:  { de: item.descricao, para: upd.descricao },
+            status:     { de: item.status,    para: upd.status },
+            observacao: { de: resumoTexto(item.observacao), para: resumoTexto(upd.observacao) },
+            qtdAmostra: { de: item.qtdAmostra, para: upd.qtdAmostra },
+          },
+        });
+
+        return upd;
       });
 
       res.json({ dados: atualizado });
@@ -406,7 +483,7 @@ const ExameClinicoController = {
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.finalizar)
-      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, item.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar exames criados por você.' });
       }
 
@@ -458,7 +535,7 @@ const ExameClinicoController = {
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.deletar)
-      if (!podeOperarRegistro(req.permissaoNivel, item.veterinarioId, req.user.id)) {
+      if (!podeOperarRegistro(req, item.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite excluir exames criados por você.' });
       }
 

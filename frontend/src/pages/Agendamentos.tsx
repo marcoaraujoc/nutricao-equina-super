@@ -15,17 +15,26 @@ import {
   X, Clock, User as UserIcon, RefreshCw, Search,
   ChevronDown, ChevronUp, AlertTriangle, Loader2, Calendar,
   Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
-  CheckCircle2, AlertCircle, UserCheck, CalendarDays, MapPin,
+  CheckCircle2, AlertCircle, UserCheck, CalendarDays, MapPin, Ban,
 } from 'lucide-react';
 import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
-// TRANSFERIDO = foi REAGENDADO: o horário some da grade e a observação guarda para
-// quando o atendimento foi movido (diferente de CANCELADO, que é desistência).
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA' | 'TRANSFERIDO';
+// REAGENDADO: o horário some da grade e a observação guarda para quando o atendimento
+// foi movido (diferente de CANCELADO, que é desistência).
+// TRANSFERIDO é o nome ANTIGO do mesmo estado — mantido só para os registros já
+// gravados; nada novo nasce com ele.
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA' | 'REAGENDADO' | 'TRANSFERIDO';
 type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
+/**
+ * Recorte da lista do dia:
+ *  'ABERTOS' (padrão) → AGENDADO + EM_ANDAMENTO + ATRASADA
+ *  'TODOS'            → tudo
+ *  StatusAgendamento  → um status específico (concluído, cancelado, reagendado…)
+ */
+type FiltroStatus      = 'ABERTOS' | 'TODOS' | StatusAgendamento;
 type ViewMode          = 'MES' | 'SEMANA';
 
 interface AgendamentoGlobal {
@@ -157,7 +166,34 @@ const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
 ];
 
 // Espelha STATUS_LIVRES do AgendamentoController: não ocupam mais a grade.
-const STATUS_LIVRES: StatusAgendamento[] = ['CANCELADO', 'TRANSFERIDO'];
+const STATUS_LIVRES: StatusAgendamento[] = ['CANCELADO', 'REAGENDADO', 'TRANSFERIDO'];
+// "Foi remarcado" cobre o nome NOVO e o LEGADO. Importa para a observação: no
+// reagendamento ela diz "Reagendado para dd/mm às HH:MM"; no cancelamento é o motivo.
+const foiReagendado = (s: StatusAgendamento) => s === 'REAGENDADO' || s === 'TRANSFERIDO';
+// Padrão da lista do dia: só o atendimento que ainda vai acontecer.
+// ⚠️ ATRASADA ENTRA aqui, e não é exceção arbitrária: para esta tela ela É um agendado
+// — `isAgendado` (nas duas listagens) vale para AGENDADO **e** ATRASADA, e é ele que
+// libera Iniciar, Reagendar, Transferir e Cancelar. Escondê-la sumia com a linha
+// INTEIRA e com todos esses botões, justamente no atendimento que passou da hora e é o
+// que mais precisa de ação. Só a chegada do cron mudaria o status e o registro
+// desapareceria da agenda sem ninguém ter feito nada.
+const STATUS_ABERTOS: StatusAgendamento[] = ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'];
+
+// Opções do seletor além de "Em aberto" e "Todos": os status que JÁ SAÍRAM da agenda
+// operacional e só são consultados quando alguém procura por eles.
+// TRANSFERIDO não entra na lista — é o nome legado de REAGENDADO, e a opção
+// "Reagendado" já casa com os dois (ver `statusCasaFiltro`).
+const STATUS_FILTRAVEIS: StatusAgendamento[] = ['CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'REAGENDADO'];
+
+/** O agendamento entra na lista com o filtro escolhido? */
+function statusCasaFiltro(status: StatusAgendamento, filtro: FiltroStatus): boolean {
+  if (filtro === 'TODOS')   return true;
+  if (filtro === 'ABERTOS') return STATUS_ABERTOS.includes(status);
+  // "Reagendado" precisa trazer também o legado TRANSFERIDO: é o MESMO estado, e quem
+  // filtra por ele espera ver os dois — senão os registros antigos ficam inalcançáveis.
+  if (filtro === 'REAGENDADO') return foiReagendado(status);
+  return status === filtro;
+}
 
 const HORARIOS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
 
@@ -238,7 +274,8 @@ const STATUS_COR: Record<StatusAgendamento, string> = {
   FINALIZADO:   'bg-green-100 text-green-700',
   CANCELADO:    'bg-red-100 text-red-700',
   ATRASADA:     'bg-orange-100 text-orange-700',
-  TRANSFERIDO:  'bg-violet-100 text-violet-700',
+  REAGENDADO:   'bg-violet-100 text-violet-700',
+  TRANSFERIDO:  'bg-violet-100 text-violet-700',   // legado
 };
 const STATUS_LABEL: Record<StatusAgendamento, string> = {
   AGENDADO:     'AGENDADO',
@@ -247,7 +284,8 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
   ATRASADA:     'ATRASADA',
-  TRANSFERIDO:  'TRANSFERIDO',
+  REAGENDADO:   'REAGENDADO',
+  TRANSFERIDO:  'REAGENDADO',   // legado: mesmo estado, nome antigo
 };
 function formatarDataPT(dateStr: string) {
   const [a, m, d] = dateStr.split('-').map(Number);
@@ -275,9 +313,12 @@ interface CalendarioProps {
   /** Data mínima selecionável (YYYY-MM-DD). Dias anteriores ficam desabilitados —
    *  usado no reagendamento, que não pode cair num dia que já passou. */
   minDate?:     string;
+  /** Esconde o atalho "Ir para Hoje". No reagendamento ele não faz sentido: o alvo é
+   *  uma data FUTURA, e o atalho só devolve o usuário ao dia em que ele já está. */
+  semAtalhoHoje?: boolean;
 }
 
-function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate }: CalendarioProps) {
+function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate, semAtalhoHoje = false }: CalendarioProps) {
   const [ano, mes] = selectedDate.split('-').map(Number);
   const [viewAno, setViewAno]   = useState(ano);
   const [viewMes, setViewMes]   = useState(mes - 1);
@@ -457,12 +498,14 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate }:
           ))}
         </div>
 
-        <button
-          onClick={() => onChange(dataHoje)}
-          className="mt-2 w-full text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 rounded-xl transition-colors"
-        >
-          Ir para Hoje
-        </button>
+        {!semAtalhoHoje && (
+          <button
+            onClick={() => onChange(dataHoje)}
+            className="mt-2 w-full text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 rounded-xl transition-colors"
+          >
+            Ir para Hoje
+          </button>
+        )}
       </div>
     </div>
   );
@@ -470,7 +513,24 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate }:
 
 // ─── Componente Principal ─────────────────────────────────────────────────────
 
-export default function Agendamentos() {
+interface AgendamentosProps {
+  /**
+   * Aba "Minha Agenda" do Atendimento (`/clinica/agenda`). É ESTA MESMA TELA: renderiza
+   * só o card "Agendamentos do Dia" (sem cabeçalho de página, sem a barra
+   * Animal↔Proprietário, sem calendário e sem o Expediente Ativo), com os MESMOS
+   * layout, ações e modais — inclusive o reagendamento com calendário e grade.
+   *
+   * ⚠️ Existe para NÃO duplicar a agenda em dois arquivos. A divergência entre as duas
+   * telas foi a origem de uma série de "sumiu o botão X" — ver CLAUDE.md 28-g.
+   * A única diferença de comportamento é o ESCOPO: o profissional vê apenas a agenda
+   * dele; o gestor continua vendo a equipe, com o filtro por profissional.
+   */
+  modoMinhaAgenda?: boolean;
+  /** Clique no nome do paciente (só faz sentido dentro do shell de Atendimento). */
+  onSelecionarAnimal?: (animalId: number) => void;
+}
+
+export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnimal }: AgendamentosProps = {}) {
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
   const { user }                                    = useAuth();
   const { contextoAtivo }                           = useEmpresa();
@@ -491,13 +551,59 @@ export default function Agendamentos() {
   const podeEditarAgendamento                       = podeExecutar('atendimento.agendamentos.editar');
   const podeDeletarAgendamento                      = podeExecutar('atendimento.agendamentos.deletar');
   const podeGerenciar                               = podeCriarAgendamento || podeEditarAgendamento || podeDeletarAgendamento;
-  // Transferir: o gestor move a agenda de qualquer um; o profissional move a DELE.
-  const podeTransferir = (ag: AgendamentoGlobal) =>
-    podeEditarAgendamento && (isGestor || ag.veterinario?.id === meuUserId);
+  /**
+   * AUTORIA na agenda (CLAUDE.md 28-c) — espelho de `podeOperarAgendamento` do backend.
+   * O atendimento é de quem o conduz: iniciar, reagendar, concluir e cancelar valem
+   * sobre a PRÓPRIA agenda (ou a que a pessoa criou). Para pegar o de outro existe o
+   * botão ASSUMIR ao lado — e só depois disso as demais ações aparecem.
+   * Agendamento sem profissional definido entra aqui: não é de ninguém, e travá-lo
+   * deixaria a linha sem nenhuma ação possível fora do gestor.
+   */
+  const ehMinhaAgenda = (ag: AgendamentoGlobal) =>
+    isGestor
+    || !ag.veterinario?.id
+    || ag.veterinario.id === meuUserId
+    || ag.criadoPor?.id === meuUserId;
+
+  /**
+   * Ação da linha (iniciar / reagendar / transferir / assumir / cancelar).
+   *
+   * Gate = `podeGerenciar` (criar OU alterar OU excluir) + autoria. É o MESMO que já
+   * governava Iniciar/Reagendar/Cancelar desde sempre; Assumir e Transferir é que
+   * destoavam exigindo `alterar` isolado — por isso sumiam sozinhos.
+   *
+   * ⚠️ NÃO trocar por `podeEditarAgendamento`: foi tentado em 2026-08-04 e sumiu com
+   * TODAS as ações da tela. As rotas de fato exigem `atendimento.agendamentos.editar`,
+   * mas fechar o gate no front antes de a matriz estar coerente só deixa o usuário sem
+   * saída — e sem mensagem. Quem barra é o backend, e o 403 agora chega com o texto
+   * certo (o interceptor de `api.ts` preserva a mensagem), dizendo qual permissão falta.
+   */
+  const podeOperarLinha = (ag: AgendamentoGlobal) =>
+    podeGerenciar && ehMinhaAgenda(ag);
+
+  // Transferir o atendimento para OUTRO profissional é ação EXCLUSIVA DO GESTOR
+  // (2026-08-04). Não é permissão da matriz e não se configura: passar o paciente para
+  // a agenda de terceiro é decisão de quem coordena a equipe. Quem não é gestor tem o
+  // ASSUMIR como caminho — puxa para si, em vez de empurrar para outro.
+  const podeTransferir = (ag: AgendamentoGlobal) => isGestor && podeOperarLinha(ag);
   // Assumir (puxar para si) é o caminho de quem NÃO é gestor para pegar um
   // atendimento de outro — segue o Controle de Acesso, sem filtro de cargo.
+  //
+  // A janela inclui EM_ANDAMENTO, igual ao assumir da EVOLUÇÃO: antes o botão vivia
+  // atrás de `isAgendado` (só AGENDADO/ATRASADA), então bastava o outro profissional
+  // clicar em "Iniciar" para o atendimento ficar preso a ele — justamente o caso em que
+  // assumir importa (o colega começou e precisou sair). O status entrou PARA DENTRO do
+  // predicado para não haver duas regras: a listagem mobile e a desktop usam esta.
+  // ⚠️ Agendamento SEM profissional entra: `!!ag.veterinario?.id` excluía o "Não
+  // atribuído", que é justamente onde assumir faz mais sentido — não há de quem tomar,
+  // a pessoa só passa a responder por ele. O backend já aceitava (`Number(null)` nunca
+  // bate com o id de ninguém, então não cai no "já é seu").
+  // A única exclusão é o que JÁ É MEU: para esse o caminho é editar/iniciar, não assumir.
+  const STATUS_ASSUMIVEIS: StatusAgendamento[] = ['AGENDADO', 'ATRASADA', 'EM_ANDAMENTO'];
   const podeAssumir = (ag: AgendamentoGlobal) =>
-    podeEditarAgendamento && !!ag.veterinario?.id && ag.veterinario.id !== meuUserId;
+    podeGerenciar
+    && STATUS_ASSUMIVEIS.includes(ag.status)
+    && ag.veterinario?.id !== meuUserId;
 
   // Erro de ação exibido inline (substitui o toast de erro)
   // Erro fica NA SUPERFÍCIE onde a ação foi disparada — no topo da página (colado no
@@ -540,6 +646,9 @@ export default function Agendamentos() {
   const [filtroEspId, setFiltroEspId] = useState('');
   const [filtroLocalId, setFiltroLocalId] = useState('');
   const [filtroTurno, setFiltroTurno] = useState<'' | 'MANHA' | 'TARDE' | 'NOITE'>('');
+  // Lista do dia: nasce mostrando só o que ainda vai acontecer (STATUS_ABERTOS).
+  // "Todos os status" traz de volta cancelado, reagendado, concluído e finalizado.
+  const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('ABERTOS');
 
   // Chave da linha com o menu de horários aberto. É por LINHA (vet+local+especialidade),
   // não por profissional: o mesmo vet aparece em várias linhas.
@@ -615,6 +724,10 @@ export default function Agendamentos() {
   const [reagOcupados, setReagOcupados]   = useState<Array<{ iniMin: number; fimMin: number }>>([]);
   const [reagLoading, setReagLoading]     = useState(false);
   const [salvandoReag, setSalvandoReag]   = useState(false);
+  // O modal do reagendamento ROLA (calendário + grade de horários). Só posicionar o
+  // erro depois do botão não basta: ele nasce no fim do formulário, que pode estar
+  // logo abaixo da dobra. Este ref traz o erro para a vista quando ele aparece.
+  const erroReagRef                       = useRef<HTMLDivElement>(null);
   const [cancelando, setCancelando]       = useState<number | null>(null);
   // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
   const [conflitoConfirm, setConflitoConfirm] = useState<{
@@ -1040,6 +1153,14 @@ export default function Agendamentos() {
 
   // ── Filtros locais ───────────────────────────────────────────────────────────
   const listaFiltrada = useMemo(() => agendamentos.filter(ag => {
+    // Aba "Minha Agenda": o profissional vê SÓ a agenda dele. O gestor continua vendo
+    // a equipe inteira (com o filtro por profissional logo abaixo) — é a única
+    // diferença de comportamento entre `/clinica/agenda` e `/agendamentos`.
+    if (modoMinhaAgenda && !isGestor && ag.veterinario?.id !== meuUserId) return false;
+    // Por padrão a lista mostra só o que ainda vai acontecer (STATUS_ABERTOS).
+    // Concluído, finalizado, cancelado e reagendado poluem a agenda operacional —
+    // quem precisa deles escolhe no seletor de status.
+    if (!statusCasaFiltro(ag.status, filtroStatus)) return false;
     if (filtroVetId && ag.veterinario?.id !== Number(filtroVetId)) return false;
     if (!busca.trim()) return true;
     const q = busca.toLowerCase();
@@ -1049,7 +1170,7 @@ export default function Agendamentos() {
       ag.veterinario?.fullName.toLowerCase().includes(q) ||
       ag.animal?.user?.fullName.toLowerCase().includes(q)
     );
-  }), [agendamentos, filtroVetId, busca]);
+  }), [agendamentos, filtroVetId, busca, filtroStatus, modoMinhaAgenda, isGestor, meuUserId]);
 
   // Especialidades oferecidas pela equipe — união do catálogo de todos os profissionais
   const especialidadesDisponiveis = useMemo(() => {
@@ -1206,7 +1327,28 @@ export default function Agendamentos() {
     const fim = l.horaFim    ? l.horaFim.slice(0, 5)    : '24:00';
     return `${dias} · ${ini}–${fim}`;
   };
-  const animaisCombo = animaisNoLocal.filter(a => !comboQuery || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
+  // Rótulo que o combo escreve no campo ao escolher um animal. Precisa ser UM SÓ lugar:
+  // é o mesmo texto que o filtro abaixo tem de reconhecer.
+  const rotuloAnimalCombo = (a: { nome: string; localizacaoNome?: string | null }) =>
+    a.nome + (a.localizacaoNome ? ` (${a.localizacaoNome})` : '');
+
+  /** Abre a lista do combo de animal; com um já escolhido, seleciona o texto para
+   *  que digitar por cima troque o paciente em vez de concatenar no rótulo. */
+  const abrirComboAnimal = (el: HTMLInputElement) => {
+    setComboOpen(true);
+    if (bookingForm.animalId) el.select();
+  };
+
+  const animalSelecionadoCombo = animaisNoLocal.find(a => String(a.id) === bookingForm.animalId) ?? null;
+  // ⚠️ Depois de escolher, `comboQuery` guarda o RÓTULO ("Mel (Haras H.P.)"), que NÃO
+  // casa com `a.nome` ("Mel"). Filtrar por ele zerava a lista: reabrir o combo mostrava
+  // "Nenhum animal encontrado" e o usuário ficava PRESO à primeira escolha, sem jeito de
+  // corrigir um animal errado. Enquanto o texto for o rótulo do já selecionado, ele não
+  // é busca — é a exibição da escolha —, então a lista inteira continua disponível.
+  const queryEhRotuloSelecionado =
+    !!animalSelecionadoCombo && comboQuery === rotuloAnimalCombo(animalSelecionadoCombo);
+  const animaisCombo = animaisNoLocal.filter(a =>
+    !comboQuery || queryEhRotuloSelecionado || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
   // ── Conflict check ────────────────────────────────────────────────────────────
   // Verifica se o animal já tem QUALQUER agendamento no dia selecionado (qualquer vet, qualquer hora)
@@ -1433,6 +1575,12 @@ export default function Agendamentos() {
 
   async function handleIniciarAtendimento(ag: AgendamentoGlobal) {
     if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
+    // Autoria: iniciar o atendimento de outro profissional abriria uma evolução no
+    // agendamento dele. O caminho é ASSUMIR primeiro (botão ao lado).
+    if (!ehMinhaAgenda(ag)) {
+      setErroLista('Este atendimento é de outro profissional. Assuma o agendamento antes de iniciá-lo.');
+      return;
+    }
     // ADIANTAR é permitido — o paciente chegou antes, o profissional vagou.
     // Marca EM_ANDAMENTO ANTES de navegar: o status tem de refletir o início na
     // agenda imediatamente. Antes, ele só mudava quando a evolução era criada lá
@@ -1534,6 +1682,13 @@ export default function Agendamentos() {
     return null;
   }
 
+  // Erro do reagendamento: rola até ele. `block: 'nearest'` não mexe na tela quando
+  // já está visível — só corrige o caso de ele nascer fora da dobra do modal.
+  useEffect(() => {
+    if (!erroModal || !reagendando) return;
+    erroReagRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [erroModal, reagendando]);
+
   // Abre o modal de reagendamento já na agenda: dia do agendamento (ou hoje, se ele
   // já passou — não se reagenda para trás) e nenhum horário pré-selecionado.
   function abrirReagendamento(ag: AgendamentoGlobal) {
@@ -1625,7 +1780,7 @@ export default function Agendamentos() {
       // TRANSFERIDO (e não CANCELADO): o atendimento não foi desmarcado, mudou de
       // data. O horário antigo é liberado e a observação registra para quando foi.
       await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
-        status: 'TRANSFERIDO',
+        status: 'REAGENDADO',
         motivo: `Reagendado para ${novaDataStr} às ${novaHoraStr}`,
       });
       cancelado = true;
@@ -1651,14 +1806,21 @@ export default function Agendamentos() {
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────────
-  return (
-    <PageContainer maxWidth="7xl">
+  // No modo aba (`/clinica/agenda`) o shell do Atendimento já dá container e cabeçalho:
+  // aqui vai só o conteúdo, num fragmento.
+  const Wrapper = modoMinhaAgenda
+    ? ({ children }: { children: React.ReactNode }) => <>{children}</>
+    : ({ children }: { children: React.ReactNode }) => <PageContainer maxWidth="7xl">{children}</PageContainer>;
 
-      <BotaoVoltar className="mb-6" />
+  return (
+    <Wrapper>
+
+      {!modoMinhaAgenda && <BotaoVoltar className="mb-6" />}
 
       <InlineError message={erroInline} className="mb-4" />
 
-      {/* Header */}
+      {/* Header — só na página inteira; na aba, o shell já titula a seção */}
+      {!modoMinhaAgenda && (
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
           <CalendarClock size={20} className="text-emerald-700" />
@@ -1668,7 +1830,11 @@ export default function Agendamentos() {
           <p className="text-sm text-gray-500">Agenda Veterinária · Gestão de consultas e atendimentos</p>
         </div>
       </div>
+      )}
 
+      {/* Fora do modo aba: barra de seleção, calendário, filtros e Expediente Ativo.
+          A aba Minha Agenda mostra SÓ o card Agendamentos do Dia. */}
+      {!modoMinhaAgenda && (<>
       {/* ── Barra bidirecional Animal ↔ Proprietário ─────────────────────────── */}
       <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-5">
         <div className="flex flex-col md:flex-row md:items-end gap-4">
@@ -2047,6 +2213,8 @@ export default function Agendamentos() {
         </div>
       </div>
 
+      </>)}
+
       {/* ── Lista de Agendamentos ─────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 gap-2 flex-wrap">
@@ -2058,7 +2226,11 @@ export default function Agendamentos() {
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
           <div className="flex items-center gap-2">
-            {podeEditarAgendamento && vets.length > 1 && (
+            {/* Transferir a agenda de um dia inteiro é o MESMO ato do "Transferir" da
+                linha — passar atendimento para outro profissional — e segue a mesma
+                regra: só o GESTOR. Deixar um dos dois aberto criaria duas regras para
+                a mesma coisa. */}
+            {isGestor && podeGerenciar && vets.length > 1 && (
               <button
                 onClick={() => {
                   setTransferindoDia(true);
@@ -2071,6 +2243,25 @@ export default function Agendamentos() {
                 <CalendarDays size={12} /> Transferir dia inteiro
               </button>
             )}
+            {/* Filtro de status — mora AQUI, e não no bloco "Filtros" acima, porque só
+                recorta ESTA lista; aquele bloco governa a grade do Expediente Ativo. */}
+            <div className="relative">
+              <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value as FiltroStatus)}
+                className="text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-1.5 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
+                <option value="ABERTOS">Em aberto</option>
+                <option value="TODOS">Todos os status</option>
+                <optgroup label="Somente">
+                  {STATUS_FILTRAVEIS.map(s => (
+                    // STATUS_LABEL é CAIXA ALTA (serve aos badges da lista); no seletor
+                    // isso destoaria das outras opções, então cai para "Concluído".
+                    <option key={s} value={s}>
+                      {STATUS_LABEL[s].charAt(0) + STATUS_LABEL[s].slice(1).toLowerCase()}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+              <ChevronDown size={11} className="absolute right-2.5 top-2 text-gray-400 pointer-events-none" />
+            </div>
             <div className="relative">
               <Search size={12} className="absolute left-2.5 top-2 text-gray-400" />
               <input type="text" placeholder="Buscar..." value={busca} onChange={e => setBusca(e.target.value)}
@@ -2086,10 +2277,30 @@ export default function Agendamentos() {
         ) : listaFiltrada.length === 0 ? (
           <div className="py-12 text-center">
             <CalendarClock size={32} className="text-gray-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-gray-500">Nenhum agendamento para esta data</p>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {podeGerenciar ? 'Clique em um horário disponível acima.' : 'Selecione outra data no calendário.'}
-            </p>
+            {/* O dia PODE ter agendamentos e ainda assim a lista vir vazia — todos
+                cancelados/reagendados/concluídos, escondidos pelo filtro padrão.
+                Dizer "nenhum agendamento" aí seria mentira, e o usuário não teria
+                pista de que existe um filtro ativo. */}
+            {agendamentos.length > 0 && filtroStatus !== 'TODOS' ? (
+              <>
+                <p className="text-sm font-semibold text-gray-500">
+                  {filtroStatus === 'ABERTOS'
+                    ? 'Nenhum agendamento em aberto nesta data'
+                    : 'Nenhum agendamento com esse status nesta data'}
+                </p>
+                <button onClick={() => setFiltroStatus('TODOS')}
+                  className="mt-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline">
+                  Ver todos os status ({agendamentos.length})
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-gray-500">Nenhum agendamento para esta data</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {podeGerenciar ? 'Clique em um horário disponível acima.' : 'Selecione outra data no calendário.'}
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <>
@@ -2130,7 +2341,18 @@ export default function Agendamentos() {
                     </div>
                     <div>
                       {ag.animal
-                        ? <p className="font-bold text-sm text-gray-900">{ag.animal.nome}{localDoAnimal(ag.animal) && <span className="font-normal text-gray-500"> · {localDoAnimal(ag.animal)}</span>}</p>
+                        ? (
+                          // Dentro do shell de Atendimento o nome seleciona o paciente
+                          <p className="font-bold text-sm text-gray-900">
+                            {onSelecionarAnimal ? (
+                              <button type="button" onClick={() => onSelecionarAnimal(ag.animal!.id)}
+                                className="text-emerald-700 hover:underline">
+                                {ag.animal.nome}
+                              </button>
+                            ) : ag.animal.nome}
+                            {localDoAnimal(ag.animal) && <span className="font-normal text-gray-500"> · {localDoAnimal(ag.animal)}</span>}
+                          </p>
+                        )
                         : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
                       {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
@@ -2138,22 +2360,22 @@ export default function Agendamentos() {
                         <p className="text-xs text-gray-400">Agendado por: {ag.criadoPor.fullName}</p>
                       )}
                       {isCancelado && ag.observacao && (
-                        <p className={`text-xs mt-0.5 italic ${ag.status === 'TRANSFERIDO' ? 'text-violet-600' : 'text-red-500'}`}>
-                          {ag.status === 'TRANSFERIDO' ? ag.observacao : `Motivo: ${ag.observacao}`}
+                        <p className={`text-xs mt-0.5 italic ${foiReagendado(ag.status) ? 'text-violet-600' : 'text-red-500'}`}>
+                          {foiReagendado(ag.status) ? ag.observacao : `Motivo: ${ag.observacao}`}
                         </p>
                       )}
                     </div>
                     {podeGerenciar && !isCancelado && (
-                      <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
+                      <div onClick={e => e.stopPropagation()} className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
                         {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
-                        {isAgendado && (
+                        {isAgendado && podeOperarLinha(ag) && (
                           <button onClick={() => handleIniciarAtendimento(ag)}
                             title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
                             className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
                             <Stethoscope size={11} /> Iniciar
                           </button>
                         )}
-                        {isAgendado && (
+                        {isAgendado && podeOperarLinha(ag) && (
                           <button onClick={() => abrirReagendamento(ag)} className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
                             <RefreshCw size={11} /> Reagendar
                           </button>
@@ -2163,17 +2385,17 @@ export default function Agendamentos() {
                             <UserCheck size={11} /> Transferir
                           </button>
                         )}
-                        {isAgendado && podeAssumir(ag) && (
+                        {podeAssumir(ag) && (
                           <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
-                            title={`Assumir o atendimento de ${ag.veterinario?.fullName ?? 'outro profissional'}`}
+                            title={ag.veterinario?.fullName ? `Assumir o atendimento de ${ag.veterinario.fullName}` : 'Assumir este atendimento (sem profissional definido)'}
                             className="flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl text-xs font-semibold">
                             {assumindoId === ag.id ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={11} />}
                             Assumir
                           </button>
                         )}
-                        {isAgendado && (
+                        {isAgendado && podeOperarLinha(ag) && (
                           <button onClick={() => setCancelando(ag.id)} className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
-                            <X size={11} /> Cancelar
+                            <Ban size={11} /> Cancelar
                           </button>
                         )}
                       </div>
@@ -2232,7 +2454,17 @@ export default function Agendamentos() {
                           </span>
                         </td>
                         <td className="py-3.5 px-4">
-                          <p className="font-bold text-gray-900">{ag.animal?.nome ?? '—'}</p>
+                          {/* No shell de Atendimento o nome do paciente SELECIONA o
+                              animal (era o comportamento da aba Minha Agenda). Fora
+                              dele não há para onde levar: fica como texto. */}
+                          {onSelecionarAnimal && ag.animal?.id ? (
+                            <button type="button" onClick={() => onSelecionarAnimal(ag.animal!.id)}
+                              className="font-bold text-emerald-700 hover:underline text-left">
+                              {ag.animal.nome}
+                            </button>
+                          ) : (
+                            <p className="font-bold text-gray-900">{ag.animal?.nome ?? '—'}</p>
+                          )}
                           {localDoAnimal(ag.animal) && (
                             <p className="flex items-center gap-1 text-xs text-gray-400">
                               <MapPin size={10} className="flex-shrink-0" /> {localDoAnimal(ag.animal)}
@@ -2257,10 +2489,10 @@ export default function Agendamentos() {
                               <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${STATUS_COR[ag.status]}`}>{STATUS_LABEL[ag.status]}</span>
                               {/* Transferido: a nova data/hora fica VISÍVEL (é a informação
                                   útil da linha); cancelado mantém o motivo no tooltip. */}
-                              {ag.status === 'TRANSFERIDO' && ag.observacao && (
+                              {foiReagendado(ag.status) && ag.observacao && (
                                 <p className="text-[10px] text-violet-600 italic mt-1 whitespace-nowrap">{ag.observacao}</p>
                               )}
-                              {ag.status !== 'TRANSFERIDO' && ag.observacao && (
+                              {!foiReagendado(ag.status) && ag.observacao && (
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 bg-gray-800 text-white text-[10px] rounded-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 max-w-[220px] leading-snug">
                                   <span className="block font-semibold text-gray-300 mb-0.5">Motivo</span>
                                   {ag.observacao}
@@ -2273,24 +2505,28 @@ export default function Agendamentos() {
                         </td>
                         {podeGerenciar && (
                           <td className="py-3.5 px-4">
-                            <div className="flex items-center justify-center gap-1.5">
+                            {/* A LINHA tem onClick próprio (continuar o atendimento em
+                                andamento). Sem parar a propagação aqui, clicar em
+                                Assumir também navegaria para a evolução e tiraria o
+                                usuário da agenda no meio da ação. */}
+                            <div onClick={e => e.stopPropagation()} className="flex items-center justify-center gap-1.5">
                               {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
-                              {isAgendado && (
+                              {isAgendado && podeOperarLinha(ag) && (
                                 <button onClick={() => handleIniciarAtendimento(ag)}
                                   title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
                                   className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
                                   <Stethoscope size={13} />
                                 </button>
                               )}
-                              {isAgendado && (
+                              {isAgendado && podeOperarLinha(ag) && (
                                 <button onClick={() => abrirReagendamento(ag)} title="Reagendar"
                                   className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">
                                   <RefreshCw size={13} />
                                 </button>
                               )}
-                              {isAgendado && podeAssumir(ag) && (
+                              {podeAssumir(ag) && (
                                 <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
-                                  title={`Assumir o atendimento de ${ag.veterinario?.fullName ?? 'outro profissional'}`}
+                                  title={ag.veterinario?.fullName ? `Assumir o atendimento de ${ag.veterinario.fullName}` : 'Assumir este atendimento (sem profissional definido)'}
                                   className="p-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl transition-colors">
                                   {assumindoId === ag.id ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
                                 </button>
@@ -2301,10 +2537,10 @@ export default function Agendamentos() {
                                   <UserCheck size={13} />
                                 </button>
                               )}
-                              {isAgendado && (
+                              {isAgendado && podeOperarLinha(ag) && (
                                 <button onClick={() => setCancelando(ag.id)} title="Cancelar"
                                   className="p-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl transition-colors">
-                                  <X size={13} />
+                                  <Ban size={13} />
                                 </button>
                               )}
                             </div>
@@ -2375,7 +2611,14 @@ export default function Agendamentos() {
                       setComboQuery(e.target.value); setComboOpen(true);
                       if (bookingForm.animalId) setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
                     }}
-                    onFocus={() => setComboOpen(true)}
+                    // `onClick` ALÉM de `onFocus`, e não no lugar dele: ao escolher uma
+                    // opção o `onMouseDown` chama `preventDefault()`, então o foco NUNCA
+                    // sai do input — e `focus` não dispara duas vezes no mesmo campo.
+                    // Só com `onFocus`, clicar no campo depois de escolher não reabria a
+                    // lista, e o paciente errado ficava travado. `onFocus` continua
+                    // cobrindo a chegada por Tab.
+                    onFocus={e => abrirComboAnimal(e.currentTarget)}
+                    onClick={e => abrirComboAnimal(e.currentTarget)}
                     className={`w-full pl-8 pr-9 py-2.5 text-sm border rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none transition-all ${bookingForm.animalId ? 'border-emerald-400 ring-2 ring-emerald-500/20' : 'border-gray-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'}`}
                   />
                   {bookingForm.animalId
@@ -2387,7 +2630,7 @@ export default function Agendamentos() {
                         <button key={a.id} type="button"
                           onMouseDown={e => {
                             e.preventDefault();
-                            setComboQuery(a.nome + (a.localizacaoNome ? ` (${a.localizacaoNome})` : ''));
+                            setComboQuery(rotuloAnimalCombo(a));
                             setComboOpen(false);
                             setBookingForm({ animalId: String(a.id), proprietarioNome: a.user?.fullName ?? '', telefone: a.user?.phone ?? '', cpf: a.user?.cpf ?? '' });
                           }}
@@ -2468,23 +2711,25 @@ export default function Agendamentos() {
               </div>
               <button onClick={() => { setReagendando(null); setErroModal(null); }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
             </div>
+            {/* Identificação em UMA linha: o nome do animal já está no título
+                ("Consulta - Mel"), então repeti-lo embaixo era eco. */}
             <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
               <p className="text-xs font-bold text-gray-400 uppercase mb-1">Agendamento atual</p>
-              <p className="text-sm font-bold text-gray-900">{reagendando.titulo}</p>
-              <p className="text-xs text-gray-500">{reagendando.animal?.nome} · {formatarDataHora(reagendando.dataHora)}</p>
+              <p className="text-sm font-bold text-gray-900">
+                {reagendando.titulo} - {formatarDataHora(reagendando.dataHora)}
+              </p>
             </div>
             <form onSubmit={handleReagendar} className="p-6 flex flex-col gap-4">
-              <InlineError message={erroModal} />
               {/* Mesma agenda da tela principal: escolhe-se o DIA no calendário e o
                   horário na grade de livres do profissional. Dias que já passaram
                   ficam desabilitados. */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-bold text-gray-700">Novo dia <span className="text-red-500">*</span></label>
                 <CalendarioInterativo
                   selectedDate={reagData || hoje()}
                   onChange={d => { setReagData(d); setReagHora(''); }}
                   statusPorDia={new Map()}
                   minDate={hoje()}
+                  semAtalhoHoje
                 />
               </div>
 
@@ -2554,6 +2799,12 @@ export default function Agendamentos() {
                   {salvandoReag ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   Confirmar
                 </button>
+              </div>
+              {/* Erro ABAIXO do botão que o disparou. No topo do formulário ele ficava
+                  atrás do calendário e da grade de horários — o modal rola, e quem
+                  clica em "Confirmar" no rodapé não via nada acontecer. */}
+              <div ref={erroReagRef}>
+                <InlineError message={erroModal} />
               </div>
             </form>
           </div>
@@ -2822,7 +3073,6 @@ export default function Agendamentos() {
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <InlineError message={erroModal} />
               <div>
                 <label className="block text-xs text-gray-500 mb-1">ANIMAL</label>
                 <p className="text-sm font-semibold text-gray-800">{trocandoVetAg.animal?.nome ?? '—'}</p>
@@ -2858,6 +3108,8 @@ export default function Agendamentos() {
                 Transferir
               </button>
             </div>
+            {/* Erro ABAIXO do botao que o disparou (mesmo padrao do reagendamento) */}
+            <div className="px-5 pb-4"><InlineError message={erroModal} /></div>
           </div>
         </div>
       )}
@@ -2876,7 +3128,6 @@ export default function Agendamentos() {
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <InlineError message={erroModal} />
               <p className="text-xs text-gray-500">
                 Transfere todos os agendamentos <span className="font-semibold text-amber-700">AGENDADO</span> do dia <span className="font-semibold">{labelDia(selectedDate)}</span> de um profissional para outro.
               </p>
@@ -2921,10 +3172,12 @@ export default function Agendamentos() {
                 Transferir tudo
               </button>
             </div>
+            {/* Erro ABAIXO do botao que o disparou (mesmo padrao do reagendamento) */}
+            <div className="px-5 pb-4"><InlineError message={erroModal} /></div>
           </div>
         </div>
       )}
 
-    </PageContainer>
+    </Wrapper>
   );
 }

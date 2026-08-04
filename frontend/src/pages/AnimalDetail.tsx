@@ -19,6 +19,7 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
 import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
 import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
+import FotoAnimal from '../components/FotoAnimal';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
 const ESPECIE_EMOJI: Record<string, string> = {
@@ -316,9 +317,7 @@ function HeaderAnimal({ animal }: { animal: AnimalData }) {
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 sm:p-5">
       <div className="flex gap-4 sm:gap-6">
         <div className="w-20 h-20 sm:w-28 sm:h-24 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-          {animal.photoUrl
-            ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-            : <div className="w-full h-full flex items-center justify-center text-2xl text-gray-300">🐾</div>}
+          <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
         </div>
         <div className="flex-1 min-w-0">
           {/* Mobile (< md): nome completo na 1ª linha; Idade, Peso e Baia na 2ª */}
@@ -797,9 +796,9 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
   onConcluir:    (id: number) => void;
   onExcluir:     (id: number) => void;
 }) {
-  // TRANSFERIDO = reagendado: sai da grade como o cancelado, mas NÃO é desistência —
+  // REAGENDADO (e o legado TRANSFERIDO): sai da grade como o cancelado, mas NÃO é desistência —
   // tem badge próprio e mostra para quando o atendimento foi movido (observacao).
-  const isTransferido  = ag.status === 'TRANSFERIDO';
+  const isTransferido  = ag.status === 'REAGENDADO' || ag.status === 'TRANSFERIDO';
   const isCancelado    = ag.status === 'CANCELADO' || isTransferido;
   const isConcluido    = ag.status === 'CONCLUIDO';
   const isEmAndamento  = ag.status === 'EM_ANDAMENTO';

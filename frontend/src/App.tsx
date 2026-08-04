@@ -71,11 +71,14 @@ import Agendamentos    from './pages/Agendamentos';
 import Orcamento           from './pages/Orcamento';
 import RelatoriosOrcamentos from './pages/RelatoriosOrcamentos';
 import MapaAtendimento from './pages/MapaAtendimento';
+import PainelPrincipal from './pages/PainelPrincipal';
 import ConfiguracaoAlerta from './pages/ConfiguracaoAlerta';
 import Monitoracao from './pages/Monitoracao';
 
 // Pages — Módulo Clínico
 import Atendimento  from './pages/Atendimento';
+import Vacina       from './pages/Vacina';
+import CentralDocumentos from './pages/CentralDocumentos';
 import ExameCompra  from './pages/ExameCompra';
 import Resenha      from './pages/Resenha';
 
@@ -173,6 +176,10 @@ function App() {
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/mapa-atendimento" element={<MapaAtendimento />} />
+                          {/* Painel do veterinário de campo. O gate de perfil é da
+                              própria página (userType do contexto ativo), como nas
+                              demais telas com guard próprio. */}
+                          <Route path="/painel-principal" element={<PainelPrincipal />} />
                           <Route path="/cadastro-pessoal" element={<CadastroPessoal />} />
 
                           {/* Cadastro */}
@@ -238,6 +245,7 @@ function App() {
 
                           {/* Orçamento (etapa opcional) */}
                           <Route path="/orcamento" element={<Orcamento />} />
+                          <Route path="/documentos" element={<CentralDocumentos />} />
 
                           {/* Módulo Clínico */}
                           <Route path="/clinica"                          element={<Atendimento />} />
@@ -246,8 +254,9 @@ function App() {
                           <Route path="/clinica/evolucao/:animalId"       element={<Atendimento />} />
                           <Route path="/clinica/prescricao"               element={<Atendimento />} />
                           <Route path="/clinica/prescricao/:animalId"     element={<Atendimento />} />
-                          <Route path="/clinica/vacina"                   element={<Atendimento />} />
-                          <Route path="/clinica/vacina/:animalId"         element={<Atendimento />} />
+                          {/* Vacina é tela APARTADA — não passa pelo shell de Atendimento */}
+                          <Route path="/clinica/vacina"                   element={<Vacina />} />
+                          <Route path="/clinica/vacina/:animalId"         element={<Vacina />} />
                           <Route path="/clinica/exames"                   element={<Atendimento />} />
                           <Route path="/clinica/exames/:animalId"         element={<Atendimento />} />
                           <Route path="/clinica/encaminhamento"           element={<Atendimento />} />

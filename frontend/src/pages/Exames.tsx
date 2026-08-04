@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -13,7 +13,7 @@ import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
 import ModalJustificativa from '../components/ModalJustificativa';
-import { setLaudosPendentes } from '../utils/laudoPendente';
+import ExamesSolicitadosPanel from '../components/ExamesSolicitadosPanel';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -39,7 +39,7 @@ const Exames = () => {
   const [editValues, setEditValues] = useState<any>({});
   const [nutrientes, setNutrientes] = useState<any[]>([]);
   const [filtroData,      setFiltroData]      = useState('');
-  const [filtroNutriente, setFiltroNutriente] = useState('');
+  const [filtroExame,     setFiltroExame]     = useState('');
   const [filtroStatus,    setFiltroStatus]    = useState('');
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
@@ -108,29 +108,13 @@ const Exames = () => {
     Promise.all([loadAnimais(), loadExamesAndAnimal()]).finally(() => setLoading(false));
   }, [effectiveAnimalId, user?.id, loadingPerms]);
 
-  // Carregar Resultado: abre o seletor de arquivo AQUI (clique direto do usuário)
-  // e, com o laudo escolhido, navega para a página de novo exame já processando.
-  const laudoInputRef = useRef<HTMLInputElement>(null);
-
-  const handleCarregarResultado = () => {
-    if (effectiveAnimalId) laudoInputRef.current?.click();
-  };
-
-  // Preserva o tipo (laboratorial/imagem) para o Cancelar voltar à lista certa
-  const sufixoTipo = tipoExame ? `&tipo=${tipoExame}` : '';
-
-  const handleLaudoEscolhido = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = ''; // permite escolher o mesmo arquivo de novo depois
-    if (files.length === 0 || !effectiveAnimalId) return;
-    setLaudosPendentes(files);
-    navigate(`/exames/${effectiveAnimalId}/novo?modo=upload${sufixoTipo}`);
-  };
-
-  // Preencher Manualmente: página de novo exame já com o formulário manual aberto
-  const handlePreencherManualmente = () => {
-    if (effectiveAnimalId) navigate(`/exames/${effectiveAnimalId}/novo?modo=manual${sufixoTipo}`);
-  };
+  // Os botões "Carregar Resultado" e "Preencher Manualmente" que ficavam FORA do card
+  // foram retirados a pedido — os dois caminhos agora vivem em cada linha do card de
+  // exames solicitados (ExamesSolicitadosPanel), junto do exame a que se referem.
+  // ⚠️ Com eles saiu a única entrada para `/exames/:animalId/novo`
+  // (CriaExameNutricional — criação de EXAME NUTRICIONAL, outro módulo; ver armadilha
+  // 27 do CLAUDE.md). A rota continua montada; se aquele fluxo voltar a ser necessário,
+  // precisa de um ponto de entrada novo.
 
   const startEdit = (ex: any) => { setEditingId(ex.id); setEditValues({ ...ex }); };
   const cancelEdit = () => { setEditingId(null); setEditValues({}); };
@@ -180,10 +164,10 @@ const Exames = () => {
 
   const examesFiltrados = useMemo(() => exames.filter(ex => {
     if (filtroData && ex.dataExame?.split('T')[0] !== filtroData) return false;
-    if (filtroNutriente && !(ex.nutriente?.nome ?? '').toLowerCase().includes(filtroNutriente.toLowerCase())) return false;
+    if (filtroExame && !(ex.nutriente?.nome ?? '').toLowerCase().includes(filtroExame.toLowerCase())) return false;
     if (filtroStatus && getStatus(ex) !== filtroStatus) return false;
     return true;
-  }), [exames, filtroData, filtroNutriente, filtroStatus]);
+  }), [exames, filtroData, filtroExame, filtroStatus]);
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) return (
     <PageContainer>
@@ -247,28 +231,17 @@ const Exames = () => {
 
         {currentAnimal && <AnimalCard animal={currentAnimal} />}
 
-        <div className="flex flex-wrap gap-2 justify-end">
-          <input
-            ref={laudoInputRef}
-            type="file"
-            accept=".pdf,image/*"
-            multiple={tipoExame === 'imagem'}
-            onChange={handleLaudoEscolhido}
-            className="hidden"
+        {/* Exames PEDIDOS no Atendimento que ainda aguardam resultado. Cada um traz os
+            dois caminhos (carregar o laudo ou digitar), e o resultado fica amarrado ao
+            pedido de origem — sem esta lista, quem chega com o laudo não sabe o que foi
+            pedido e acaba lançando resultado solto. */}
+        {effectiveAnimalId && (
+          <ExamesSolicitadosPanel
+            animalId={effectiveAnimalId}
+            tipo={tipoExame}
+            onSalvo={() => { loadExamesAndAnimal(); }}
           />
-          <button
-            onClick={handleCarregarResultado}
-            className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
-          >
-            {tipoExame === 'imagem' ? 'Carregar Laudo e Imagens' : 'Carregar Resultado'}
-          </button>
-          <button
-            onClick={handlePreencherManualmente}
-            className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-          >
-            Preencher Manualmente
-          </button>
-        </div>
+        )}
 
         {/* Imagens armazenadas — só na página de Imagem */}
         {tipoExame === 'imagem' && imagensAnexos.length > 0 && (
@@ -304,12 +277,12 @@ const Exames = () => {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">Nutriente</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Exame</label>
               <input
                 type="text"
-                value={filtroNutriente}
-                onChange={e => setFiltroNutriente(e.target.value)}
-                placeholder="Buscar nutriente..."
+                value={filtroExame}
+                onChange={e => setFiltroExame(e.target.value)}
+                placeholder="Buscar exame..."
                 className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
               />
             </div>
@@ -328,11 +301,11 @@ const Exames = () => {
               </select>
             </div>
           </div>
-          {(filtroData || filtroNutriente || filtroStatus) && (
+          {(filtroData || filtroExame || filtroStatus) && (
             <div className="mt-3 flex items-center justify-between">
               <span className="text-xs text-gray-400">{examesFiltrados.length} de {exames.length} exames</span>
               <button
-                onClick={() => { setFiltroData(''); setFiltroNutriente(''); setFiltroStatus(''); }}
+                onClick={() => { setFiltroData(''); setFiltroExame(''); setFiltroStatus(''); }}
                 className="text-xs text-emerald-600 hover:text-emerald-800 font-medium"
               >
                 Limpar filtros
@@ -347,7 +320,7 @@ const Exames = () => {
             <span className="text-xs text-gray-400">{examesFiltrados.length} registro{examesFiltrados.length !== 1 ? 's' : ''}</span>
           </div>
 
-          <datalist id="nutrientes-list">
+          <datalist id="exames-list">
             {nutrientes.map(n => <option key={n.id} value={n.nome} />)}
           </datalist>
 
@@ -365,7 +338,7 @@ const Exames = () => {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <span className="flex items-center gap-1"><Calendar size={11} /> Data</span>
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nutriente</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exame</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
@@ -389,14 +362,14 @@ const Exames = () => {
                       <td className="px-4 py-3 font-medium text-gray-900">
                         {isEditing ? (
                           <input
-                            list="nutrientes-list"
+                            list="exames-list"
                             value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
                             onChange={e => {
                               const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
                               setEditValues({ ...editValues, nutriente: { nome: e.target.value }, nutrienteId: selected ? selected.id : null });
                             }}
                             className="border rounded p-1 text-sm w-full"
-                            placeholder="Digite o nutriente..."
+                            placeholder="Digite o exame..."
                           />
                         ) : ex.nutriente?.nome || '—'}
                       </td>
@@ -470,14 +443,14 @@ const Exames = () => {
                         className="border rounded-lg p-1.5 text-sm w-full"
                       />
                       <input
-                        list="nutrientes-list"
+                        list="exames-list"
                         value={editValues.nutriente?.nome || ex.nutriente?.nome || ''}
                         onChange={e => {
                           const selected = nutrientes.find(n => n.nome.toLowerCase() === e.target.value.toLowerCase());
                           setEditValues({ ...editValues, nutriente: { nome: e.target.value }, nutrienteId: selected ? selected.id : null });
                         }}
                         className="border rounded-lg p-1.5 text-sm w-full"
-                        placeholder="Digite o nutriente..."
+                        placeholder="Digite o exame..."
                       />
                       <input
                         type="number" step="0.01"

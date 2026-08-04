@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail, Pencil } from 'lucide-react';
+import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail, Pencil, Eye } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -296,7 +296,14 @@ export default function ExameCompra() {
   const [animais,        setAnimais]        = useState<AnimalSimples[]>([]);
   const [loadingAnimais, setLoadingAnimais] = useState(true);
   // Erro de ação exibido inline (substitui o toast de erro)
+  // Erro fica na SUPERFÍCIE da ação que o disparou (padrão da aplicação):
+  //  erroInline → carga da tela / abrir um exame do histórico (topo)
+  //  erroSalvar → validação e falha do SALVAR, renderizado ABAIXO do rodapé
+  // O formulário é longo: erro de salvar no topo aparece fora da tela e o usuário
+  // clica em Salvar sem ver nada acontecer.
   const [erroInline, setErroInline] = useState<string | null>(null);
+  const [erroSalvar, setErroSalvar] = useState<string | null>(null);
+  const erroSalvarRef = useRef<HTMLDivElement>(null);
   const [abaAtiva,       setAbaAtiva]       = useState<Tab>('clinico-geral');
   const [dataSolicitacao,setDataSolicitacao]= useState(hoje());
   const [saving,         setSaving]         = useState(false);
@@ -348,7 +355,20 @@ export default function ExameCompra() {
   const [historicoCompra,   setHistoricoCompra]   = useState<ExameCompraItem[]>([]);
   const [loadingHistorico,  setLoadingHistorico]  = useState(false);
   const [editingId,         setEditingId]         = useState<number | null>(null);
-  const [editingNumero,     setEditingNumero]      = useState<number | null>(null);
+
+  /**
+   * Camada de VISUALIZAÇÃO × formulário (a lógica de gravação não mudou).
+   * A tela ABRE em leitura, mostrando o último laudo do paciente com as abas
+   * desabilitadas; o formulário só entra por "Novo Exame" (cadastro) ou pelo lápis do
+   * histórico (edição), e é só nele que existem Cancelar/Salvar.
+   * `editingId` continua sendo "qual laudo está carregado nos campos" — em leitura é o
+   * que está sendo EXIBIDO. Quem separa exibir de editar é `modoForm`: sem ele, o
+   * `editingId` do laudo apenas visualizado faria o Salvar virar um PUT silencioso.
+   */
+  const [modoForm, setModoForm] = useState(false);
+
+  // Registro que está na tela (cabeçalho da visualização e selo no histórico).
+  const exameEmTela = historicoCompra.find(ex => ex.id === editingId) ?? null;
 
   const carregarHistoricoCompra = useCallback(async (animalIdParam: number): Promise<ExameCompraItem[]> => {
     setLoadingHistorico(true);
@@ -388,10 +408,14 @@ export default function ExameCompra() {
   useEffect(() => { if (animalId) carregarAnimalPorId(animalId); }, [animalId]);
   useEffect(() => {
     if (!selectedAnimal?.id) return;
-    // Tela sempre inicia LIMPA (novo exame); os já registrados ficam no
-    // histórico abaixo, com botão Editar para carregar no formulário.
+    // Tela abre em VISUALIZAÇÃO com o laudo mais recente do paciente (a listagem vem
+    // `orderBy dataSolicitacao desc` do backend, então é o primeiro). Sem exame
+    // nenhum, cai no estado vazio e a única saída é o botão "Novo Exame".
     resetForm();
-    carregarHistoricoCompra(selectedAnimal.id);
+    setModoForm(false);
+    carregarHistoricoCompra(selectedAnimal.id).then(compras => {
+      if (compras[0]) handleEditar(compras[0], true);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAnimal?.id]);
 
@@ -465,9 +489,32 @@ export default function ExameCompra() {
     setJustificativa('');
     setDataSolicitacao(ex.dataSolicitacao.slice(0, 10));
     setEditingId(ex.id);
-    setEditingNumero(ex.numero);
     setAbaAtiva('clinico-geral');
     if (!silent) window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Carrega o laudo nos campos SEM abrir o formulário — é a camada de leitura.
+  const visualizarExame = (ex: ExameCompraItem) => {
+    setErroSalvar(null);
+    setModoForm(false);
+    handleEditar(ex, true);
+  };
+
+  // Lápis do histórico: mesmo carregamento, mas com os campos liberados.
+  const abrirEdicao = (ex: ExameCompraItem) => {
+    setErroSalvar(null);
+    setModoForm(true);
+    handleEditar(ex);
+  };
+
+  /**
+   * "Novo Exame" — zera os campos e entra no formulário. É o único caminho de cadastro:
+   * a tela não abre mais em branco, então sem este botão não há como registrar um laudo.
+   */
+  const handleNovoExame = () => {
+    setErroSalvar(null);
+    resetForm();
+    setModoForm(true);
   };
 
   const resetForm = () => {
@@ -511,7 +558,26 @@ export default function ExameCompra() {
     setDataSolicitacao(hoje());
     setAbaAtiva('clinico-geral');
     setEditingId(null);
-    setEditingNumero(null);
+  };
+
+  // Traz o erro do Salvar para a vista. `block: 'nearest'` não mexe na tela quando ele
+  // já está visível — só corrige o caso de nascer logo abaixo da dobra.
+  useEffect(() => {
+    if (!erroSalvar) return;
+    erroSalvarRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [erroSalvar]);
+
+  /**
+   * Cancelar do rodapé: sai sem salvar e VOLTA À VISUALIZAÇÃO do último laudo (o
+   * registro do histórico fica intacto). Antes ele apenas zerava os campos e deixava o
+   * formulário aberto e vazio — com a camada de leitura, "cancelar" tem para onde
+   * voltar. Sem nenhum laudo registrado, cai no estado vazio.
+   */
+  const handleCancelarForm = () => {
+    setErroSalvar(null);
+    resetForm();
+    setModoForm(false);
+    if (historicoCompra[0]) handleEditar(historicoCompra[0], true);
   };
 
   // ── Imprimir ──────────────────────────────────────────────────────────────
@@ -542,12 +608,25 @@ export default function ExameCompra() {
   }
 
   const handleSalvar = async () => {
-    if (!podeCriar) { setErroInline('Sem permissão para registrar exames.'); return; }
-    if (!selectedAnimal) { setErroInline('Selecione um paciente.'); return; }
-    if (!dataSolicitacao) { setErroInline('Informe a data do exame.'); return; }
+    setErroSalvar(null);
+    if (!podeCriar) { setErroSalvar('Sem permissão para registrar exames.'); return; }
+    if (!selectedAnimal) { setErroSalvar('Selecione um paciente.'); return; }
+    if (!dataSolicitacao) { setErroSalvar('Informe a data do exame.'); return; }
     const isEditing = editingId !== null;
+
+    // Um Exame de Compra por paciente/dia. O backend é a autoridade (409
+    // COMPRA_DUPLICADA); aqui a checagem é só para avisar ANTES de o usuário perder o
+    // preenchimento de um formulário longo — o histórico já está carregado em memória.
+    const duplicado = historicoCompra.find(ex =>
+      ex.id !== editingId && (ex.dataSolicitacao ?? '').slice(0, 10) === dataSolicitacao);
+    if (duplicado) {
+      setErroSalvar(
+        `Este paciente já tem um Exame de Compra em ${dataSolicitacao.split('-').reverse().join('/')}`
+        + ' — Altere o exame existente.');
+      return;
+    }
     if (isEditing && !justificativa.trim()) {
-      setErroInline('Preencha a justificativa da alteração antes de salvar.');
+      setErroSalvar('Preencha a justificativa da alteração antes de salvar.');
       return;
     }
     setSaving(true);
@@ -586,13 +665,21 @@ export default function ExameCompra() {
         await api.post('/clinica/exames', payload);
       }
       toast.success(isEditing ? 'Exame de Compra atualizado com sucesso' : 'Exame de Compra registrado com sucesso');
-      // Salvou (novo ou atualização) → limpa os campos da tela; o registro fica
-      // acessível no histórico abaixo (botão Editar recarrega no formulário).
+      // Salvou (novo ou atualização) → fecha o formulário e volta à VISUALIZAÇÃO já
+      // mostrando o laudo gravado. `idSalvo` é lido antes do reset: editando um laudo
+      // ANTIGO, o mais recente da lista não é o que a pessoa acabou de salvar, e cair
+      // em outro registro daria a impressão de que a alteração não pegou.
+      const idSalvo = editingId;
       resetForm();
-      if (selectedAnimal?.id) carregarHistoricoCompra(selectedAnimal.id);
+      setModoForm(false);
+      if (selectedAnimal?.id) {
+        const compras = await carregarHistoricoCompra(selectedAnimal.id);
+        const alvo = compras.find(c => c.id === idSalvo) ?? compras[0];
+        if (alvo) handleEditar(alvo, true);
+      }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao registrar exame');
+      setErroSalvar(msg ?? 'Erro ao registrar exame');
     } finally { setSaving(false); }
   };
 
@@ -941,9 +1028,12 @@ export default function ExameCompra() {
           </h1>
         </div>
 
-        {/* Paciente + data — seletor logo após o título (padrão da aplicação) */}
+        {/* Paciente — seletor logo após o título (padrão da aplicação).
+            A DATA não é mais campo de tela: exame novo nasce com a data de hoje e a
+            edição preserva a data com que o laudo foi registrado (ver `hoje()` no
+            estado inicial e `handleEditar`). */}
         {animais.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
             <div>
               <label className="block text-sm font-medium text-gray-500 mb-1">Paciente</label>
               <select value={effectiveAnimalId ?? ''}
@@ -960,12 +1050,6 @@ export default function ExameCompra() {
                 <option disabled>──────────────</option>
                 {animais.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1">Data do Exame *</label>
-              <input type="date" value={dataSolicitacao} onChange={e => setDataSolicitacao(e.target.value)}
-                className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm bg-white focus:outline-none focus:border-emerald-600 shadow-sm"
-              />
             </div>
           </div>
         )}
@@ -990,41 +1074,107 @@ export default function ExameCompra() {
           </div>
         )}
 
-        {selectedAnimal && (
+        {/* Nada registrado ainda: sem isso a tela ficaria só com o card do paciente,
+            sem dizer que o histórico está vazio. Aqui o "Novo Exame" vem DENTRO do
+            card — a barra de abas (onde ele mora normalmente) não é renderizada quando
+            não há laudo a exibir, e sem esta cópia o cadastro ficaria sem porta.
+            O gate é o histórico VAZIO, não `!exameEmTela`: laudo com JSON corrompido
+            não carrega nos campos e diria "nenhum exame registrado" com o histórico
+            cheio logo abaixo — ali quem fala é o erro do topo. */}
+        {selectedAnimal && !modoForm && !loadingHistorico && historicoCompra.length === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center">
+            <Activity size={22} className="text-amber-400 mx-auto mb-3" />
+            <p className="text-sm text-gray-600 font-medium">Nenhum exame de compra registrado para este paciente</p>
+            {podeCriar && (
+              <button type="button" onClick={handleNovoExame}
+                className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors">
+                <PlusCircle size={16} /> Novo Exame
+              </button>
+            )}
+          </div>
+        )}
+
+        {selectedAnimal && (modoForm || exameEmTela) && (
           <>
-            {/* Tabs — scrollável no mobile */}
-            <div className="overflow-x-auto -mx-1 px-1 pb-1">
-              <div className="flex gap-2 min-w-max">
-                {TABS.map(tab => (
-                  <button key={tab.id} type="button" onClick={() => setAbaAtiva(tab.id)}
-                    className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-colors whitespace-nowrap ${
-                      abaAtiva === tab.id
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                    }`}
-                  >{tab.label}</button>
-                ))}
+            {/* Cabeçalho do laudo em exibição — identifica QUAL registro está nas abas.
+                No formulário ele não aparece: ali o contexto é o rodapé (Salvar). */}
+            {!modoForm && exameEmTela && (
+              <div className="flex items-center gap-2 flex-wrap px-1">
+                <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-lg border border-gray-200">
+                  {fmtNumero(exameEmTela.numero)}
+                </span>
+                <span className="text-xs text-gray-500">{fmtData(exameEmTela.dataSolicitacao)}</span>
+                {exameEmTela.veterinario && (
+                  <span className="text-xs text-gray-400">· {exameEmTela.veterinario.fullName}</span>
+                )}
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full uppercase">
+                  Somente leitura
+                </span>
               </div>
+            )}
+
+            {/* Barra de abas + "Novo Exame" na MESMA linha. As abas rolam no mobile
+                (`overflow-x-auto`), o botão fica fora desse container e por isso não
+                sai da tela junto com elas.
+                FORA do fieldset de propósito: trocar de aba é navegação, não edição, e
+                em leitura elas continuam clicáveis.
+                CORES — em LEITURA a barra é cinza (clara; ativa em cinza escuro) e em
+                EDIÇÃO segue emerald. ⚠️ É exceção deliberada à regra "cinza = ação
+                indisponível" (CLAUDE.md §6): aqui não há ação sobre o registro, é
+                navegação entre as seções de um laudo fechado — e o cinza é justamente o
+                que diferencia, à primeira vista, a tela que só lê da que edita. */}
+            <div className="flex items-start gap-2">
+              <div className="overflow-x-auto -mx-1 px-1 pb-1 flex-1 min-w-0">
+                <div className="flex gap-2 min-w-max">
+                  {TABS.map(tab => (
+                    <button key={tab.id} type="button" onClick={() => setAbaAtiva(tab.id)}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-colors whitespace-nowrap ${
+                        abaAtiva === tab.id
+                          ? modoForm
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                            : 'bg-gray-600 text-white border-gray-600 shadow-sm'
+                          : modoForm
+                            ? 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                            : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
+                      }`}
+                    >{tab.label}</button>
+                  ))}
+                </div>
+              </div>
+              {!modoForm && podeCriar && (
+                <button type="button" onClick={handleNovoExame}
+                  className="shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors whitespace-nowrap">
+                  <PlusCircle size={16} /> Novo Exame
+                </button>
+              )}
             </div>
 
-            {/* Tab content */}
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 sm:p-5">
-              {renderTabContent()}
-            </div>
+            {/* `<fieldset disabled>` desabilita TODO controle descendente pelo próprio
+                DOM — os ~320 linhas de campos das abas não precisaram de uma prop
+                `somenteLeitura` cada. Também cobre o teclado (nada recebe foco), o que
+                um `pointer-events-none` não faria. `min-w-0` neutraliza o
+                `min-inline-size: min-content` que o UA aplica a fieldset e que
+                estouraria o grid das abas. */}
+            <fieldset disabled={!modoForm} className="space-y-5 min-w-0">
+              {/* Tab content */}
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 sm:p-5">
+                {renderTabContent()}
+              </div>
 
-            {/* Conclusão */}
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                Conclusão / Parecer Final
-              </label>
-              <textarea rows={4} value={conclusao} onChange={e => setConclusao(e.target.value)}
-                placeholder="Impressões clínicas, recomendações, parecer para a compra..."
-                className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:border-amber-500 resize-none shadow-sm"
-              />
-            </div>
+              {/* Conclusão */}
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Conclusão / Parecer Final
+                </label>
+                <textarea rows={4} value={conclusao} onChange={e => setConclusao(e.target.value)}
+                  placeholder={modoForm ? 'Impressões clínicas, recomendações, parecer para a compra...' : 'Sem conclusão registrada'}
+                  className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:border-amber-500 resize-none shadow-sm disabled:bg-gray-50"
+                />
+              </div>
+            </fieldset>
 
             {/* Justificativa de alteração — obrigatória ao editar exame existente */}
-            {editingId !== null && (
+            {modoForm && editingId !== null && (
               <div>
                 <label className="block text-xs font-bold text-amber-600 uppercase tracking-widest mb-1.5">
                   Justificativa da Alteração *
@@ -1038,14 +1188,33 @@ export default function ExameCompra() {
               </div>
             )}
 
-            {/* Salvar */}
-            <div className="flex justify-end pb-6">
-              <button onClick={handleSalvar} disabled={saving || !dataSolicitacao}
-                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
-                {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                {saving ? 'Salvando…' : editingId !== null ? 'Atualizar Exame de Compra' : 'Salvar Exame de Compra'}
-              </button>
-            </div>
+            {/* Rodapé no padrão da aplicação: ações à direita, Cancelar ao lado do
+                Salvar. O rótulo é só "Salvar" — o nome do módulo já está no cabeçalho
+                da tela, e repeti-lo no botão não informa nada. Vale para o cadastro E
+                para a edição: o que muda é o estado do formulário, não a ação.
+                SÓ no formulário: em leitura não há o que salvar nem o que cancelar. */}
+            {modoForm && (
+              <>
+                <div className="flex items-center justify-end gap-3 pb-6">
+                  <button type="button" onClick={handleCancelarForm} disabled={saving}
+                    className="px-4 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 rounded-xl text-sm font-semibold transition-colors">
+                    Cancelar
+                  </button>
+                  <button onClick={handleSalvar} disabled={saving || !dataSolicitacao}
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {saving ? 'Salvando…' : 'Salvar'}
+                  </button>
+                </div>
+
+                {/* Erro ABAIXO do botão que o disparou. No topo da página ele ficava a
+                    uma tela inteira de distância do Salvar — o usuário clicava e nada
+                    parecia acontecer. `scrollIntoView` cobre o caso de nascer fora da dobra. */}
+                <div ref={erroSalvarRef} className="pb-6">
+                  <InlineError message={erroSalvar} />
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -1067,12 +1236,17 @@ export default function ExameCompra() {
             ) : (
               <div className="space-y-2">
                 {historicoCompra.map(ex => {
-                  const laudo    = parseLaudo(ex.observacao);
-                  const emEdicao = editingId === ex.id;
+                  const laudo = parseLaudo(ex.observacao);
+                  // `editingId` é "o laudo carregado nos campos" — `modoForm` diz se ele
+                  // está aberto para edição ou apenas sendo exibido acima.
+                  const emEdicao   = modoForm  && editingId === ex.id;
+                  const emExibicao = !modoForm && editingId === ex.id;
                   return (
                     <div key={ex.id}
                       className={`bg-white rounded-2xl border shadow-sm px-4 py-3 flex items-start gap-3 ${
-                        emEdicao ? 'border-amber-300 bg-amber-50/40' : 'border-gray-200'
+                        emEdicao   ? 'border-amber-300 bg-amber-50/40'
+                        : emExibicao ? 'border-emerald-300 bg-emerald-50/30'
+                        : 'border-gray-200'
                       }`}>
                       <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
                         <Activity size={15} className="text-amber-600" />
@@ -1091,6 +1265,11 @@ export default function ExameCompra() {
                               Em edição
                             </span>
                           )}
+                          {emExibicao && (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full uppercase">
+                              Em exibição
+                            </span>
+                          )}
                           {laudo?.justificativa && (
                             <span className="text-xs text-amber-600 italic">· Alt: {laudo.justificativa}</span>
                           )}
@@ -1101,23 +1280,32 @@ export default function ExameCompra() {
                           <p className="text-xs text-gray-300 italic mt-1">Sem conclusão registrada</p>
                         )}
                       </div>
+                      {/* Paleta do módulo de Atendimento (CLAUDE.md §6): ação disponível
+                          nasce PINTADA — ver emerald, alterar laranja, imprimir e e-mail
+                          azuis, WhatsApp verde. Cinza é reservado ao indisponível. */}
                       <div className="flex items-center gap-1 flex-shrink-0">
+                        {!emExibicao && (
+                          <button onClick={() => visualizarExame(ex)} title="Visualizar"
+                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <Eye size={14} />
+                          </button>
+                        )}
                         {podeCriar && !emEdicao && (
-                          <button onClick={() => handleEditar(ex)} title="Editar"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                          <button onClick={() => abrirEdicao(ex)} title="Editar"
+                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                             <Pencil size={14} />
                           </button>
                         )}
                         <button onClick={() => imprimirLaudo(ex)} title="Imprimir"
-                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Printer size={14} />
                         </button>
                         <button onClick={() => compartilharWhatsApp(ex)} title="WhatsApp"
-                          className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors">
+                          className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
                           <MessageCircle size={14} />
                         </button>
                         <button onClick={() => compartilharEmail(ex)} title="E-mail"
-                          className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                          className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                           <Mail size={14} />
                         </button>
                       </div>

@@ -1903,11 +1903,15 @@ const EquipeController = {
       const expediente = parseExpedienteTrabalho(req.body);
       if (expediente.erro) return res.status(400).json({ sucesso: false, mensagem: expediente.erro });
 
-      // Especialidade só existe para VETERINÁRIO e FORNECEDOR; o vet sem especialidade
-      // informada assume Clínica Médica (o fornecedor aceita nula). O cargo vale o que
-      // está sendo salvo agora (body) e, na falta dele, o atual do membro.
+      // Especialidade existe para VETERINÁRIO, FORNECEDOR e GESTOR; o vet sem
+      // especialidade informada assume Clínica Médica (fornecedor e gestor aceitam
+      // nenhuma). O cargo vale o que está sendo salvo agora (body) e, na falta dele, o
+      // atual do membro.
+      // ⚠️ GESTOR precisa entrar aqui além do `updateMe`: sem isso, uma edição do
+      // membro por esta tela gravaria os locais com `semEspecialidade` e APAGARIA a
+      // especialidade que o próprio gestor cadastrou no Cadastro Pessoal.
       const cargoEfetivo = cargo || membro.cargo;
-      const perfilComEspecialidade = cargoEfetivo === 'VETERINARIO' || cargoEfetivo === 'FORNECEDOR';
+      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'].includes(cargoEfetivo);
       const especPadrao = cargoEfetivo === 'VETERINARIO'
         ? await especialidadesPadraoVeterinario(req, membro.equipeId)
         : [];
@@ -2308,8 +2312,10 @@ const EquipeController = {
 
       // Perfis sem atuação clínica (estagiário, enfermeiro, secretaria, financeiro…)
       // não têm especialidade nem tempo de consulta: o que vier no body é ignorado.
-      const perfilComEspecialidade = cargo === 'VETERINARIO' || cargo === 'FORNECEDOR';
-      // Veterinário que não informa especialidade assume Clínica Médica; fornecedor não.
+      // GESTOR tem, mas OPCIONAL — ver `especPadrao` logo abaixo.
+      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'].includes(cargo);
+      // Veterinário que não informa especialidade assume Clínica Médica; fornecedor e
+      // gestor não — para eles a lista vazia é um resultado válido.
       const especPadrao = cargo === 'VETERINARIO'
         ? await especialidadesPadraoVeterinario(req, equipeIdBody ?? null)
         : [];

@@ -88,3 +88,10 @@
   table.rel-table td[data-label='']::before,
   table.rel-table td[colspan]::before { content: none; }
 }
+/* Bottom sheet da Central de Documentos (mobile): sobe do rodapé.
+   O sheet aparecendo instantaneamente parece um erro de render — a subida curta
+   é o que diz "isto veio de baixo e volta para baixo". */
+@keyframes subir {
+  from { transform: translateY(12%); opacity: .6; }
+  to   { transform: translateY(0);   opacity: 1;  }
+}

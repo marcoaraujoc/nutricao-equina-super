@@ -161,17 +161,26 @@ export default function AppHeader() {
                   <Settings size={16} /> Configurações
                 </Link>
               )}
-
-              <button
-                type="button" role="menuitem"
-                onClick={() => { setMenuAberto(false); logout(); }}
-                className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-100 mt-1"
-              >
-                <LogOut size={16} /> Sair
-              </button>
             </div>
           )}
         </div>
+      )}
+
+      {/* Sair — FORA do dropdown, sempre visível ao lado do menu do usuário.
+          Sair é a ação mais frequente do header e não deve custar dois cliques
+          (abrir o menu + escolher). No mobile fica só o ícone: o rótulo cabe no
+          `aria-label`/`title`, que é o que dá nome ao botão para leitor de tela. */}
+      {user && (
+        <button
+          type="button"
+          onClick={logout}
+          title="Sair"
+          aria-label="Sair"
+          className="flex items-center gap-2 flex-shrink-0 px-2.5 md:px-3 py-2 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+        >
+          <LogOut size={18} />
+          <span className="hidden md:inline">Sair</span>
+        </button>
       )}
     </header>
   );

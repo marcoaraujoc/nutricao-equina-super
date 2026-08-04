@@ -128,6 +128,54 @@ const mascaraCEP = (v: string): string => {
   return d.length <= 5 ? d : `${d.slice(0,5)}-${d.slice(5)}`;
 };
 
+// ─── Máscaras do valor de pagamento ───────────────────────────────────────────
+// Digitação da DIREITA para a esquerda (padrão de campo monetário): os dígitos
+// entram nos centavos e vão empurrando as casas. Colar "3500" vira 35,00 — quem
+// quer 3.500,00 digita "350000", que é como todo caixa/ERP se comporta.
+//
+// As duas usam VÍRGULA decimal. O pedido escreveu o percentual como "00.00", mas
+// as duas máscaras dividem o MESMO input (ele troca de formato conforme R$/%): com
+// separadores diferentes, o mesmo campo mudaria de idioma ao trocar o seletor ao lado.
+
+/** Salário / valor fixo → 000.000,00 (milhar com ponto, 2 casas). Teto: 999.999.999,99 */
+const mascaraMoeda = (v: string): string => {
+  const d = v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 11);
+  if (!d) return '';
+  return (Number(d) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/** Percentual → 00,00, limitado a 100 (o backend recusa acima disso). */
+const mascaraPercentual = (v: string): string => {
+  const d = v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 5);
+  if (!d) return '';
+  const n = Math.min(Number(d) / 100, 100);
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const mascaraValorPagamento = (v: string, forma?: 'VALOR' | 'PERCENTUAL'): string =>
+  forma === 'PERCENTUAL' ? mascaraPercentual(v) : mascaraMoeda(v);
+
+/**
+ * Mascarado → número. Tira o separador de MILHAR antes de trocar a vírgula pelo
+ * ponto: `Number('3.500,00'.replace(',', '.'))` (o que havia aqui) dá NaN, e o
+ * salário do membro ia para o backend como nulo.
+ */
+const valorPagamentoNumero = (v?: string): number => {
+  const s = String(v ?? '').replace(/\./g, '').replace(',', '.').trim();
+  return s === '' ? NaN : Number(s);
+};
+
+/**
+ * Valor SALVO (número cru, "3500" / "3500.5") → fluxo de centavos que a máscara
+ * consome. Sem esta ponte, abrir a edição alimentaria a máscara com "3500", que ela
+ * leria como 35,00.
+ */
+const formatarValorSalvo = (v?: string | number | null): string => {
+  if (v == null || v === '') return '';
+  const n = Number(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? String(Math.round(n * 100)) : '';
+};
+
 const FORM_VAZIO: UsuarioFormValues = {
   fullName: '', email: '', phone: '', perfil: 'VETERINARIO', cargos: ['VETERINARIO'], senha: '', ativo: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
@@ -189,7 +237,14 @@ export function uniaoEspecialidadesLocais(locais: LocalTrabalhoForm[]): number[]
 
 // Campo de hora 24h (HH:MM), SEM AM/PM — o <input type="time"> herda 12/24h do locale
 // do SO, então usamos texto com máscara. Vazio = sem restrição (herda o da empresa);
-// preenchido é sempre normalizado ao intervalo 00:01–23:59.
+// preenchido é sempre normalizado ao intervalo 00:00–23:59.
+//
+// ⚠️ 00:00 É VÁLIDO (2026-08-04). A normalização empurrava 00:00 para 00:01, e com isso
+// a clínica que atende 24h ou vira a noite não conseguia lançar a abertura à
+// meia-noite. Vale para o expediente da empresa (Configurações) e para os locais de
+// trabalho do profissional (Cadastro Pessoal) — os dois usam este campo.
+// Não há ambiguidade com "sem restrição": esse caso é a string VAZIA, e o backend
+// (`parseHora`, regex `^([01]\d|2[0-3]):[0-5]\d$`) sempre aceitou 00:00.
 export function HoraInput({ value, onChange, className }: {
   value: string; onChange: (v: string) => void; className?: string;
 }) {
@@ -200,13 +255,12 @@ export function HoraInput({ value, onChange, className }: {
     const d = raw.replace(/\D/g, '').slice(0, 4);
     return d.length <= 2 ? d : `${d.slice(0, 2)}:${d.slice(2)}`;
   };
-  // Normaliza para o intervalo 00:01–23:59
+  // Normaliza para o intervalo 00:00–23:59
   const normalizar = (t: string): string => {
     const d = t.replace(/\D/g, '');
     if (d.length === 0) return '';
     const h  = Math.min(23, parseInt(d.slice(0, 2), 10) || 0);
-    let   mi = Math.min(59, parseInt(d.slice(2, 4) || '0', 10) || 0);
-    if (h === 0 && mi === 0) mi = 1; // 00:00 não é permitido → 00:01
+    const mi = Math.min(59, parseInt(d.slice(2, 4) || '0', 10) || 0);
     return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
   };
 
@@ -543,6 +597,13 @@ export default function UsuarioFormModal({
     ...initial,
     cargos: initCargos,
     perfil: initCargos[0],
+    // O valor salvo chega como número cru ("3500"). Sem a máscara na hidratação, a
+    // EDIÇÃO abriria fora do formato do campo — e o salvar seguinte reinterpretaria
+    // "3500" como 35,00, rebaixando o salário do membro sem ninguém digitar nada.
+    valorPagamento: mascaraValorPagamento(
+      formatarValorSalvo(initial?.valorPagamento),
+      initial?.formaPagamento ?? FORM_VAZIO.formaPagamento,
+    ),
   });
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [erroSenhaLocal, setErroSenhaLocal] = useState('');
@@ -731,7 +792,7 @@ export default function UsuarioFormModal({
     if (comVinculoEmpresa) {
       // Mesmas regras do backend (lib/usuarioEmpresa.normalizarPagamento), que é a autoridade
       if (!form.tipoPagamento) { setErroInline('Informe o tipo de pagamento (salário ou comissão)'); return; }
-      const valorNum = Number(String(form.valorPagamento ?? '').replace(',', '.'));
+      const valorNum = valorPagamentoNumero(form.valorPagamento);
       if (!Number.isFinite(valorNum) || valorNum <= 0) {
         setErroInline('Informe o valor do pagamento'); return;
       }
@@ -797,10 +858,12 @@ export default function UsuarioFormModal({
       perfil:       perfilFinal,
       fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
-      // Vírgula decimal do teclado brasileiro: normaliza aqui para o caller poder
-      // fazer Number() direto (o backend recebe número, não string localizada).
+      // O campo é MASCARADO (000.000,00 / 00,00): desfaz a formatação aqui para o
+      // caller poder fazer Number() direto — o backend recebe número, não string
+      // localizada. Todos os consumidores (Equipe, ControleAcesso) fazem
+      // `Number(values.valorPagamento)`, que engasgaria com o separador de milhar.
       valorPagamento: comVinculoEmpresa
-        ? String(form.valorPagamento ?? '').replace(',', '.')
+        ? String(valorPagamentoNumero(form.valorPagamento))
         : undefined,
       // [] (e não undefined) para o perfil sem especialidade: limpa vínculo herdado
       // de quando o membro era veterinário.
@@ -1221,13 +1284,18 @@ export default function UsuarioFormModal({
                       // Comissão quase sempre é percentual, e salário é valor fixo —
                       // a forma acompanha o tipo escolhido. Continua editável: quem
                       // acertou comissão em R$ fixo só troca o seletor ao lado.
-                      setForm(prev => ({
-                        ...prev,
-                        tipoPagamento:  tipo,
-                        formaPagamento: tipo === 'COMISSAO' ? 'PERCENTUAL'
-                                      : tipo === 'SALARIO'  ? 'VALOR'
-                                      : prev.formaPagamento,
-                      }));
+                      setForm(prev => {
+                        const forma = tipo === 'COMISSAO' ? 'PERCENTUAL'
+                                    : tipo === 'SALARIO'  ? 'VALOR'
+                                    : prev.formaPagamento;
+                        return {
+                          ...prev,
+                          tipoPagamento:  tipo,
+                          formaPagamento: forma,
+                          // A forma mudou junto → o valor já digitado é remascarado
+                          valorPagamento: mascaraValorPagamento(prev.valorPagamento ?? '', forma),
+                        };
+                      });
                     }}
                     className={inputCls}>
                     <option value="">Selecionar…</option>
@@ -1240,13 +1308,22 @@ export default function UsuarioFormModal({
                     <span className="px-3 flex items-center text-sm text-gray-400 bg-gray-50 border-r border-gray-200">
                       {form.formaPagamento === 'PERCENTUAL' ? '%' : 'R$'}
                     </span>
-                    <input type="number" min="0" step="0.01"
+                    <input type="text" inputMode="numeric"
                       value={form.valorPagamento ?? ''}
-                      onChange={e => set('valorPagamento', e.target.value)}
-                      placeholder={form.formaPagamento === 'PERCENTUAL' ? 'Ex.: 30' : 'Ex.: 3500,00'}
+                      onChange={e => set('valorPagamento', mascaraValorPagamento(e.target.value, form.formaPagamento))}
+                      placeholder={form.formaPagamento === 'PERCENTUAL' ? '00,00' : '000.000,00'}
                       className="flex-1 min-w-0 px-3 py-2.5 text-sm text-gray-900 focus:outline-none" />
+                    {/* Trocar R$ ↔ % REAPLICA a máscara sobre o que já está digitado:
+                        sem isso, "3.500,00" sobrevivia como percentual (e vice-versa). */}
                     <select value={form.formaPagamento ?? 'VALOR'}
-                      onChange={e => set('formaPagamento', e.target.value as 'VALOR' | 'PERCENTUAL')}
+                      onChange={e => {
+                        const forma = e.target.value as 'VALOR' | 'PERCENTUAL';
+                        setForm(prev => ({
+                          ...prev,
+                          formaPagamento: forma,
+                          valorPagamento: mascaraValorPagamento(prev.valorPagamento ?? '', forma),
+                        }));
+                      }}
                       className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer">
                       <option value="VALOR">R$</option>
                       <option value="PERCENTUAL">%</option>

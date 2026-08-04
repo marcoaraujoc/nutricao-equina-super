@@ -4,6 +4,7 @@
 
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import FotoAnimal from './FotoAnimal';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -104,13 +105,11 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
         animal.id ? 'cursor-pointer hover:border-emerald-200 hover:shadow-md transition-all' : ''
       }`}>
 
-      {/* Foto */}
+      {/* Foto — sem foto cadastrada, o ícone de paciente (nunca uma imagem de banco
+          de imagens: o `picsum` que estava aqui mostrava o cavalo de outra pessoa
+          como se fosse o do cliente). */}
       <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
-        <img
-          src={animal.photoUrl ?? 'https://picsum.photos/id/1015/80/80'}
-          alt={animal.nome}
-          className="w-full h-full object-cover"
-        />
+        <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={28} />
       </div>
 
       {/* Info MOBILE (< md): nome completo na 1ª linha; Idade, Peso e Baia na 2ª */}

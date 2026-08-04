@@ -11,7 +11,7 @@ const perfilProp = require('../lib/proprietarioPerfil');
 // Localidades atendidas do cliente, com a frequência de visitas de CADA uma
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
-const { salvarVinculo } = require('../lib/usuarioEmpresa');
+const { salvarVinculo, perfilDaEmpresa } = require('../lib/usuarioEmpresa');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -51,6 +51,37 @@ function whereProprietarioNoEscopo(empresaId, equipeScope) {
   };
 }
 
+/**
+ * Quem é CLIENTE (proprietário) DENTRO DESTA EMPRESA.
+ *
+ * ⚠️ NÃO usar `users.userType === 'PROPRIETARIO'` sozinho: aquele campo é GLOBAL e
+ * vale para todas as empresas (CLAUDE.md 36-e). A mesma pessoa pode ser GESTORA de uma
+ * clínica e CLIENTE dela — e era exatamente esse caso que sumia da tela: ao virar
+ * gestora, o `userType` global passa a VETERINARIO e o filtro a descartava, mesmo com
+ * cadastro de cliente e animal ativo na empresa.
+ *
+ * É cliente aqui quem tem QUALQUER um destes:
+ *   - `userType` PROPRIETARIO (cliente puro — legado e caso comum);
+ *   - cadastro de cliente NESTA empresa (`ProprietarioPerfil`);
+ *   - vínculo com perfil PROPRIETARIO nesta empresa (`UsuarioEmpresa`);
+ *   - animal ATIVO aos cuidados da empresa (o profissional dono do próprio animal).
+ *
+ * Sempre combinado com `whereProprietarioNoEscopo` — este predicado diz "é cliente",
+ * o outro diz "é cliente DAQUI". Sem empresa no contexto (ADMIN de plataforma) não há
+ * o que resolver por empresa: vale o `userType` global.
+ */
+function whereEhClienteDaEmpresa(empresaId) {
+  if (!empresaId) return { userType: 'PROPRIETARIO' };
+  return {
+    OR: [
+      { userType: 'PROPRIETARIO' },
+      { proprietarioPerfis: { some: { empresaId } } },
+      { empresasVinculadas: { some: { empresaId, perfil: 'PROPRIETARIO' } } },
+      { animais: { some: { empresaId, ativo: true } } },
+    ],
+  };
+}
+
 // Verifica se o proprietário está no escopo de empresa/equipe do solicitante
 async function verificarAcessoNoEscopo(proprietarioId, empresaId, equipeScope) {
   const prop = await prisma.user.findFirst({
@@ -69,7 +100,7 @@ const ProprietarioController = {
       const isAdmin   = req.user?.role === 'ADMIN';
       const termo     = busca?.trim() ?? '';
 
-      const where = { userType: 'PROPRIETARIO', AND: [] };
+      const where = { AND: [whereEhClienteDaEmpresa(req.empresaId)] };
 
       if (!isAdmin) {
         if (!req.empresaId) {
@@ -95,9 +126,6 @@ const ProprietarioController = {
           ],
         });
       }
-
-      // Remove o AND vazio se não há filtros (ADMIN sem busca)
-      if (where.AND.length === 0) delete where.AND;
 
       const encontrados = await prisma.user.findMany({
         where,
@@ -132,7 +160,7 @@ const ProprietarioController = {
     try {
       const isAdmin = req.user?.role === 'ADMIN';
       const proprietario = await prisma.user.findFirst({
-        where:  { id: Number(req.params.id), userType: 'PROPRIETARIO' },
+        where:  { id: Number(req.params.id), ...whereEhClienteDaEmpresa(req.empresaId) },
         select: SELECT_PROPRIETARIO,
       });
       if (!proprietario) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
@@ -205,9 +233,6 @@ const ProprietarioController = {
       // O login é um só (e-mail único); esta empresa ganha o PRÓPRIO cadastro dele,
       // preenchido com o que o gestor digitou — sem herdar nem alterar o da outra.
       if (existente) {
-        if (existente.userType !== 'PROPRIETARIO') {
-          return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
-        }
         if (!req.empresaId) {
           return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
         }
@@ -219,7 +244,20 @@ const ProprietarioController = {
           return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado nesta empresa' });
         }
 
-        await salvarVinculo(prisma, existente.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
+        // PROFISSIONAL que também é cliente: o vínculo é UM por (usuário, empresa) e
+        // guarda um só `perfil` — sobrescrevê-lo com PROPRIETARIO REBAIXARIA a gestora
+        // ou o veterinário a cliente na própria clínica. O papel profissional vence; o
+        // que registra o cliente é o `ProprietarioPerfil`, que é tabela à parte.
+        // (Antes este caminho respondia 409 "E-mail já cadastrado" e a pessoa
+        // simplesmente não podia ser cadastrada como cliente da empresa onde trabalha.)
+        const vinculoAtual = await perfilDaEmpresa(existente.id, req.empresaId);
+        const perfilProfissional = vinculoAtual && vinculoAtual.perfil !== 'PROPRIETARIO';
+
+        await salvarVinculo(prisma, existente.id, req.empresaId, {
+          ...(perfilProfissional ? {} : { perfil: 'PROPRIETARIO' }),
+          ...dadosDaEmpresa,
+          ativo: true,
+        });
         await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
         await localidadesProp.salvarLocalidades(prisma, existente.id, req.empresaId, locParsed.localidades);
 
@@ -313,7 +351,7 @@ const ProprietarioController = {
 
     try {
       const isAdmin = req.user?.role === 'ADMIN';
-      const existe  = await prisma.user.findFirst({ where: { id: Number(id), userType: 'PROPRIETARIO' } });
+      const existe  = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
       if (!isAdmin && req.empresaId) {
@@ -415,7 +453,7 @@ const ProprietarioController = {
     }
 
     try {
-      const existe = await prisma.user.findFirst({ where: { id: Number(id), userType: 'PROPRIETARIO' } });
+      const existe = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
       const proprietario = await prisma.user.update({
@@ -454,7 +492,7 @@ const ProprietarioController = {
     }
 
     try {
-      const existe = await prisma.user.findFirst({ where: { id: Number(id), userType: 'PROPRIETARIO' } });
+      const existe = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
 
       const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);

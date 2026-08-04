@@ -3,6 +3,7 @@
 // Tracking de "visto" via localStorage — evita re-exibir após dismiss.
 import { useState, useMemo } from 'react';
 import { Bell, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import FotoAnimal from './FotoAnimal';
 
 export interface SolicitacaoNotif {
   id:               number;
@@ -122,10 +123,7 @@ export function VetNotificationModal({ solicitations, vetId, onResponder, onDism
 
                 <div className="flex items-start gap-3">
                   <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                    {sol.animal.photoUrl
-                      ? <img src={sol.animal.photoUrl} alt={sol.animal.nome} className="w-full h-full object-cover" />
-                      : <div className="w-full h-full flex items-center justify-center text-xl">🐾</div>
-                    }
+                    <FotoAnimal url={sol.animal.photoUrl} nome={sol.animal.nome} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>

@@ -163,11 +163,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // ── Logout automático por inatividade (1 hora sem interação) ───────────────
+  // ── Logout automático por inatividade (2 horas sem interação) ──────────────
+  // Espelha a JANELA DE SESSÃO do backend (SESSION_IDLE_MINUTES, padrão 120 em
+  // lib/sessionTokens.js): passado esse tempo parado, o cookie de refresh já
+  // expirou e nada mais renova a sessão. Este timer só limpa a tela ANTES de o
+  // usuário esbarrar num 401 — quem fecha o navegador é barrado pelo cookie.
   useEffect(() => {
     if (!user) return;
 
-    const TIMEOUT_MS = 60 * 60 * 1000;
+    const TIMEOUT_MS = 2 * 60 * 60 * 1000;
     let timer: ReturnType<typeof setTimeout>;
 
     const resetTimer = () => {

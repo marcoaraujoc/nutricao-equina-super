@@ -6,7 +6,7 @@ const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 
 // ─── Include padrão ───────────────────────────────────────────────────────────
@@ -905,6 +905,11 @@ const adicionarItem = async (req, res) => {
     if (!grupo)               return res.status(404).json({ error: 'Prescrição não encontrada.' });
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível adicionar itens em prescrições com status SALVO.' });
 
+    // Autoria: incluir item na prescrição de outro é alterar o documento clínico dele.
+    if (!podeOperarRegistro(req, grupo.veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
+    }
+
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
@@ -984,6 +989,13 @@ const atualizarItem = async (req, res) => {
     if (!item)       return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo) return res.status(400).json({ error: 'Item já foi removido.' });
 
+    // Autoria: o dono do DOCUMENTO manda no item. Sem isto, qualquer profissional com
+    // "alterar prescrição" reescrevia a posologia prescrita por outro — e o antigo
+    // `data.veterinarioId = <quem editou>` ainda fazia o documento mudar de dono calado.
+    if (!podeOperarRegistro(req, item.grupo?.veterinarioId ?? item.veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
+    }
+
     // Regra: prescrição que já teve QUALQUER execução não pode ser alterada.
     const execucoesNoGrupo = await prisma.prescricao.count({
       where: { grupoId: item.grupoId, executadoEm: { not: null } },
@@ -1007,7 +1019,11 @@ const atualizarItem = async (req, res) => {
     if (observacao         !== undefined) data.observacao        = observacao;
     if (dataInicio         !== undefined) data.dataInicio        = new Date(dataInicio);
     if (medicamentoCliente !== undefined) data.medicamentoCliente = medicamentoCliente === true;
-    data.veterinarioId = veterinarioId;
+    // Editar NÃO transfere a autoria (2026-08-04): quem chegou até aqui é o próprio dono
+    // ou o gestor, e um ajuste feito pelo gestor não pode tirar do veterinário a
+    // prescrição que ele conduz. A troca de dono tem caminho próprio (assumir/transferir).
+    const donoDoDocumento = item.grupo?.veterinarioId ?? item.veterinarioId ?? veterinarioId;
+    data.veterinarioId = donoDoDocumento;
 
     // Split na edição: se a alteração muda a categoria do item e o grupo tem OUTROS
     // itens de categoria diferente (ficaria misto), move o item para uma prescrição
@@ -1036,7 +1052,7 @@ const atualizarItem = async (req, res) => {
           categoriaAlvo:  catItem,
         });
         data.grupoId = destinoInfo.id;
-        await tx.prescricaoGrupo.update({ where: { id: destinoInfo.id }, data: { veterinarioId } });
+        await tx.prescricaoGrupo.update({ where: { id: destinoInfo.id }, data: { veterinarioId: donoDoDocumento } });
       }
 
       const updated = await tx.prescricao.update({
@@ -1050,8 +1066,27 @@ const atualizarItem = async (req, res) => {
 
       await gravarAplicadaProprietario(tx, itemId, aplicadaPeloProprietario);
 
-      // Responsável passa a ser quem editou (grupo de origem)
-      await tx.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId } });
+      // O grupo de origem MANTÉM o responsável (ver comentário em `donoDoDocumento`);
+      // só assume um quando estava órfão.
+      if (item.grupo?.veterinarioId == null) {
+        await tx.prescricaoGrupo.update({ where: { id: item.grupoId }, data: { veterinarioId: donoDoDocumento } });
+      }
+
+      await registrarAlteracao(tx, req, {
+        entidade: 'PRESCRICAO', entidadeId: item.grupoId, animalId: item.animalId,
+        donoAtualId: donoDoDocumento,
+        campos: {
+          [`item.medicamento`]: { de: item.medicamento, para: updated.medicamento },
+          [`item.dosagem`]:     { de: item.dosagem,     para: updated.dosagem },
+          [`item.unidade`]:     { de: item.unidade,     para: updated.unidade },
+          [`item.via`]:         { de: item.via,         para: updated.via },
+          [`item.frequencia`]:  { de: item.frequencia,  para: updated.frequencia },
+          [`item.duracaoDias`]: { de: item.duracaoDias, para: updated.duracaoDias },
+          [`item.horaInicio`]:  { de: item.horaInicio,  para: updated.horaInicio },
+          [`item.observacao`]:  { de: resumoTexto(item.observacao), para: resumoTexto(updated.observacao) },
+        },
+      });
+
       return { updated, destinoInfo };
     });
 
@@ -1081,6 +1116,11 @@ const removerItem = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)             return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo)       return res.status(400).json({ error: 'Item já foi removido.' });
+
+    // Autoria: cancelar item da prescrição de outro é ato do dono — ou do gestor.
+    if (!podeOperarRegistro(req, item.grupo?.veterinarioId ?? item.veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
+    }
 
     // Regra: prescrição que já teve QUALQUER execução não pode ser excluída.
     const execucoesNoGrupoRem = await prisma.prescricao.count({
@@ -1183,7 +1223,7 @@ const finalizar = async (req, res) => {
 
     // Autoria via RBAC (nível efetivo em atendimento.prescricoes.finalizar):
     // PROPRIO → só as próprias; EQUIPE/FULL → qualquer da equipe.
-    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, veterinarioId)) {
+    if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar prescrições criadas por você.' });
     }
     if (grupo.itens.length === 0) return res.status(400).json({ error: 'A prescrição não possui itens ativos.' });
@@ -1289,6 +1329,24 @@ const finalizar = async (req, res) => {
           });
         }
       }
+
+      // Finalizar grava `veterinarioId` = quem finalizou. Quando isso muda o dono do
+      // documento (gestor finalizando a prescrição de outro), é uma TRANSFERÊNCIA e
+      // precisa do mesmo rastro do assumir — senão o documento troca de mãos calado.
+      if (grupo.veterinarioId != null && Number(grupo.veterinarioId) !== Number(veterinarioId)) {
+        await registrarTransferencia(tx, req, {
+          entidade: 'PRESCRICAO', entidadeId: grupoId, animalId: grupo.animalId,
+          deVetId: grupo.veterinarioId, paraVetId: veterinarioId,
+          motivo: 'Prescrição finalizada por outro profissional',
+        });
+      }
+
+      await registrarAlteracao(tx, req, {
+        entidade: 'PRESCRICAO', entidadeId: grupoId, animalId: grupo.animalId,
+        donoAnteriorId: grupo.veterinarioId,
+        donoAtualId:    veterinarioId,
+        campos: { status: { de: grupo.status, para: 'FINALIZADO' } },
+      });
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -1319,7 +1377,7 @@ const cancelar = async (req, res) => {
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
 
     // Autoria via RBAC (nível efetivo em atendimento.prescricoes.deletar)
-    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+    if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
     }
 
@@ -1378,7 +1436,7 @@ const cancelarNaExecucao = async (req, res) => {
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
 
-    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+    if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
     }
     if (grupo.status === 'EXECUTADO') {
@@ -1444,7 +1502,7 @@ const reabrirParaEdicao = async (req, res) => {
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
 
-    if (!podeOperarRegistro(req.permissaoNivel, grupo.veterinarioId, userId)) {
+    if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite editar prescrições criadas por você.' });
     }
     if (grupo.status === 'SALVO') {
@@ -1742,7 +1800,26 @@ const listarParaExecucao = async (req, res) => {
       // prescrições canceladas no meio da execução — filtradas abaixo (só com execução).
       status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO', 'CANCELADO'] },
     };
-    if (empresaId) whereGrupo.empresaId = Number(empresaId);
+    // TENANCY DO DOCUMENTO — o plantão é da EMPRESA ATIVA e de mais ninguém.
+    //
+    // ⚠️ Esta linha é o que impede o vazamento entre clínicas. O `empresaId` só entrava
+    // quando vinha na QUERY, e o front nunca o manda: o filtro simplesmente não existia,
+    // e o escopo por ANIMAL abaixo não substitui isso por dois motivos —
+    //   1. `buildAnimalScopeWhere` inclui, para dono/gestor, os vínculos do vet em
+    //      QUALQUER empresa (regra da tela de Pacientes: "base própria vê o co-tratado
+    //      de outra empresa" — CLAUDE.md §5). Correto lá, vazamento aqui.
+    //   2. Mesmo com o animal certo, o MESMO paciente pode ser tratado por duas
+    //      clínicas: sem este filtro, o plantão de uma exibia (e deixava executar) a
+    //      prescrição da outra.
+    // Mesma decisão da busca global (§16): escopo é a empresa do contexto, nunca
+    // "todos os vínculos do usuário". `empresaId` da query NÃO pode ampliar — ele só
+    // estreita dentro da empresa ativa; tenant vindo do cliente jamais define escopo.
+    // Seguro para o legado: 100% dos PrescricaoGrupo têm `empresaId` gravado.
+    if (req.empresaId) {
+      whereGrupo.empresaId = Number(req.empresaId);
+    } else if (empresaId) {
+      whereGrupo.empresaId = Number(empresaId);
+    }
     if (animalId)  whereGrupo.animalId  = Number(animalId);
 
     // Escopo base × convidado por ANIMAL (mesma regra da listagem/agendamento): o vet

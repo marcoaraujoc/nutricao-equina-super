@@ -27,7 +27,18 @@ async function main() {
     const existe = await prisma.raca.findFirst({ where: { nome, especieId: 1 } });
     if (!existe) await prisma.raca.create({ data: { nome, especieId: 1 } });
   }
-  console.log('  ✓ Raças');
+
+  // ── SRD (Sem Raça Definida) — em TODA espécie ────────────────────────────────
+  // Raça é obrigatória no cadastro do paciente e boa parte dos animais atendidos
+  // não tem raça definida: sem esta opção o usuário era obrigado a escolher uma
+  // raça ERRADA só para conseguir salvar. Vale para todas as espécies, não só
+  // Equino — o problema é o mesmo em qualquer uma.
+  const todasEspecies = await prisma.especie.findMany({ select: { id: true } });
+  for (const { id } of todasEspecies) {
+    const existe = await prisma.raca.findFirst({ where: { nome: 'SRD', especieId: id } });
+    if (!existe) await prisma.raca.create({ data: { nome: 'SRD', especieId: id } });
+  }
+  console.log('  ✓ Raças (inclui SRD por espécie)');
 
   // ── Módulos do Sistema ────────────────────────────────────────────────────────
   for (const mod of MODULOS_SISTEMA) {

@@ -84,6 +84,11 @@ interface EvolucaoAtiva {
   numero:           number | null;
   tipoAtendimento:  string | null;
   atendimentoNumero: string | null;
+  // Quem CONDUZ a evolução. O shell precisa disto para decidir se pode oferecer
+  // "Finalizar Atendimento": com atendimento em paralelo, a evolução ativa pode ser
+  // de outro profissional, e finalizar o atendimento alheio não é opção de ninguém
+  // que não seja o gestor (premissa de autoria — CLAUDE.md 28-c).
+  veterinarioId:    number | null;
 }
 
 /**
@@ -332,7 +337,7 @@ function ViewEvolucaoModal({ ev, animal, onClose, onImprimir, podeImprimir }: {
           </button>
           {podeImprimir && (
             <button onClick={onImprimir}
-              className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2.5 border border-blue-200 rounded-xl text-sm text-blue-600 font-medium hover:bg-blue-50 transition-colors">
               <Printer size={14} /> Imprimir
             </button>
           )}
@@ -783,15 +788,13 @@ function NovaEvolucaoModal({
             </div>
           )}
 
-          {editingId && (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</label>
-              <select value={form.status} onChange={e => onFormChange('status', e.target.value as EvolucaoStatus)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500">
-                {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-            </div>
-          )}
+          {/* ⚠️ NÃO reintroduzir um seletor de "Status" aqui (removido em 2026-08-04).
+              O status da evolução é consequência da AÇÃO, não um campo digitável:
+              Salvar mantém EM_ANDAMENTO, Finalizar leva a FINALIZADA e Cancelar leva a
+              CANCELADA — cada um com o seu gate de permissão e, no cancelamento, com a
+              justificativa obrigatória que a auditoria exige. Escolher o status na mão
+              contornava tudo isso: bastava marcar "Cancelada" e Salvar para cancelar um
+              atendimento sem motivo nenhum registrado. */}
 
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -908,7 +911,7 @@ function NovaEvolucaoModal({
                       <span className="text-xs text-gray-700 truncate flex-1">{f.name}</span>
                       <span className="text-[10px] text-gray-400 flex-shrink-0">{formatBytes(f.size)}</span>
                       <button onClick={() => removerNovoArquivo(i)}
-                        className="p-0.5 text-gray-400 hover:text-red-500 transition-colors flex-shrink-0">
+                        className="p-0.5 text-red-500 hover:text-red-600 transition-colors flex-shrink-0">
                         <X size={12} />
                       </button>
                     </div>
@@ -1012,6 +1015,15 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const podeImprimir  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
   const podeDeletar   = isGestor || podeExecutar('atendimento.evolucoes.deletar');
 
+  /**
+   * AUTORIA (CLAUDE.md 28-c) — FONTE ÚNICA da regra nesta tela.
+   * A ação concedida vale sobre a evolução que a pessoa criou ou ASSUMIU; a de outro
+   * profissional é do gestor, ou de ninguém até que alguém a assuma. Vale para
+   * alterar, finalizar, excluir e cancelar — NÃO para "assumir", que é justamente
+   * sobre a evolução alheia e usa o nível cru.
+   */
+  const ehMinhaEvolucao = (ev: { veterinarioId: number | null }) =>
+    isGestor || ev.veterinarioId === (user?.id ?? 0);
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -1117,6 +1129,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         numero:           aberta.numero ?? null,
         tipoAtendimento:  aberta.tipoAtendimento ?? null,
         atendimentoNumero: aberta.atendimentoNumero ?? null,
+        veterinarioId:    aberta.veterinarioId ?? null,
       } : null);
     } catch { setErroInline('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
@@ -1267,16 +1280,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   // Abre a evolução informada no formulário de edição (usada após assumir e no
   // "continuar" da própria evolução aberta).
-  const abrirEvolucaoPorId = async (id: number) => {
-    try {
-      const res = await api.get(`/clinica/evolucoes/${id}`);
-      if (res.data?.dados) {
-        abrirEdicao(res.data.dados as EvolucaoItem);
-        onAbrirAtendimento?.(id, 'editar');
-      }
-    } catch { setErroInline('Erro ao abrir a evolução'); }
-  };
-
   // Assumir a evolução em andamento de outro profissional — ele é comunicado por
   // e-mail e WhatsApp pelo backend (mesma comunicação do assumir da agenda).
   const handleAssumirEvolucao = async (id: number) => {
@@ -1288,8 +1291,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       toast.success('Evolução assumida — o profissional anterior foi comunicado');
       setEvolucaoAbertaInfo(null);
       setCriandoConcorrente(false);
+      // Assumir NÃO abre o formulário de edição (2026-08-04): assumir é passar a
+      // responder pelo atendimento, não necessariamente editá-lo agora. A lista
+      // recarrega e a evolução já aparece como sua, com as ações liberadas — quem
+      // quiser escrever clica em Alterar. Abrir o editor por conta própria tirava o
+      // usuário da lista a cada "Assumir".
       await carregarEvolucoes();
-      await abrirEvolucaoPorId(id);
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
@@ -1322,7 +1329,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setArquivosModal([]);
     // Sem permissão de alterar (ex: entrada pelo `editItemId` do Histórico do
     // Paciente), o formulário abre em SOMENTE LEITURA — nunca editável.
-    setFormLeitura(!podeEditar);
+    // A AUTORIA entra aqui também: a evolução conduzida por outro profissional só é
+    // editável pelo gestor. Sem isso, o `editItemId` do Histórico seria a porta dos
+    // fundos para o formulário de edição do prontuário alheio.
+    const meuRegistro = isGestor || ev.veterinarioId === (user?.id ?? 0);
+    setFormLeitura(!podeEditar || !meuRegistro);
     setShowModal(true);
     rolarParaFormulario();
   };
@@ -1390,7 +1401,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
           texto:         form.texto,
-          status:        form.status,
+          // Salvar NÃO muda o status — preserva o que a evolução já tem. Antes ia
+          // `form.status`, alimentado pelo seletor removido; enviar o status daqui
+          // faria o "Salvar" virar um atalho para finalizar/cancelar sem passar pelos
+          // botões (e, no cancelamento, sem a justificativa obrigatória).
+          status:        editingEv.status,
         });
         evolucaoId = editingEv.id;
         toast.success('Evolução salva');
@@ -1410,6 +1425,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           numero:           criada.numero ?? null,
           tipoAtendimento:  criada.tipoAtendimento ?? null,
           atendimentoNumero: criada.atendimentoNumero ?? null,
+          // Acabou de criar: é dela mesma. Cai no `user?.id` quando o POST não
+          // devolve o campo, senão o shell esconderia o Finalizar de quem prescreveu.
+          veterinarioId:    criada.veterinarioId ?? user?.id ?? null,
         });
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
@@ -1430,6 +1448,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleFinalizar = async () => {
     if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
+    // Editando a evolução de outro (o formulário abre em leitura, mas o guard fecha
+    // qualquer outro caminho até aqui): assumir primeiro.
+    if (editingEv && !ehMinhaEvolucao(editingEv)) {
+      setErroInline('Este atendimento é conduzido por outro profissional. Assuma a evolução antes de finalizá-la.');
+      return;
+    }
     if (!form.texto.trim()) {
       setErroInline('O texto da evolução é obrigatório');
       return;
@@ -1520,6 +1544,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const handleFinalizarDireto = (ev: EvolucaoItem) => {
     if (!podeFinalizar) { semPermissao('finalizar evolução'); return; }
+    // Autoria: finalizar vale sobre o que a pessoa conduz. Guard também no handler,
+    // e não só no `{podeFinalizarEsta && …}` do botão — o backend recusa de qualquer
+    // forma, e aqui a mensagem diz o que fazer em vez de estourar um 403 genérico.
+    if (!ehMinhaEvolucao(ev)) {
+      setErroInline('Este atendimento é conduzido por outro profissional. Assuma a evolução antes de finalizá-la.');
+      return;
+    }
     setConfirmFinalizar(ev);
   };
 
@@ -1739,7 +1770,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
           somenteLeitura={formLeitura}
           podeSalvar={editingEv ? podeEditar : podeCriar}
-          podeFinalizar={podeFinalizar}
+          // Editando a de outro, o Finalizar do rodapé some (o formulário já abre em
+          // leitura nesse caso; isto fecha o rodapé por conta própria). Evolução NOVA
+          // nasce da própria pessoa — aí basta a permissão.
+          podeFinalizar={podeFinalizar && (!editingEv || ehMinhaEvolucao(editingEv))}
         />
       )}
 
@@ -1767,18 +1801,22 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
               const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
               const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
-              // Só o Controle de Acesso decide: ação concedida ao perfil = pode.
-              // Sem filtro de autoria nem de cargo (a matriz é binária na tela).
-              const podeEditarEsta    = nivelEditar    !== 'NENHUM' && nivelEditar    !== 'NEGADO';
-              const podeExcluir       = emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
-              const podeFinalizarEsta = emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
+              // AUTORIA (2026-08-04): a ação concedida vale sobre a evolução que a
+              // pessoa criou ou assumiu. Só o gestor opera a de outro profissional —
+              // espelho do `podeOperarRegistro` do backend, que é quem de fato barra.
+              const meuRegistro       = ehMinhaEvolucao(ev);
+              const temNivelEditar    = nivelEditar !== 'NENHUM' && nivelEditar !== 'NEGADO';
+              const podeEditarEsta    = meuRegistro && temNivelEditar;
+              const podeExcluir       = meuRegistro && emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
+              const podeFinalizarEsta = meuRegistro && emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
               // Aprovar segue o slug de FINALIZAR (é o que a rota /aprovar exige) —
               // não é mais um check de role, senão quem só tem VER via o botão.
               const podeAprovar    = !ev.aprovado && podeFinalizar;
               const podeAlterar    = (emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
               // Assumir é um "puxar para si": basta ter a permissão de alterar em
-              // qualquer nível — não exige ser o autor (que é justamente o outro).
-              const podeAssumirEsta = emAndamento && !eProprioAutor && podeEditarEsta;
+              // qualquer nível — usa `temNivelEditar`, NUNCA `podeEditarEsta`, que já
+              // exige autoria e por definição é falso na evolução do outro.
+              const podeAssumirEsta = emAndamento && !eProprioAutor && temNivelEditar;
               // Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar).
               const podeCancelarFinalizada = ev.status === 'FINALIZADA' && podeDeletar;
               const tituloDisplay = ev.titulo
@@ -1821,7 +1859,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                       </button>
                     )}
                     <button onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
                     {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
@@ -1839,7 +1877,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     )}
                     {podeAlterar && (
                       <button onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
                         <Pencil size={11} /> Alterar
                       </button>
                     )}
@@ -1870,7 +1908,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     )}
                     {podeImprimir && (
                       <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-500 rounded-lg text-xs hover:bg-gray-50 transition-colors disabled:opacity-50">
+                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors disabled:opacity-50">
                         {imprimindoId === ev.id ? <Loader2 size={11} className="animate-spin" /> : <Printer size={11} />} Imprimir
                       </button>
                     )}
@@ -1904,10 +1942,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
                 const nivelFinalizar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.finalizar'] ?? 'NENHUM');
 
-                // FORNECEDOR: autoria obrigatória independente do nível configurado
-                const podeEditarEsta    = nivelEditar    !== 'NENHUM' && nivelEditar    !== 'NEGADO';
-                const podeExcluir       = emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
-                const podeFinalizarEsta = emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
+                // AUTORIA (2026-08-04): a ação vale sobre o que a pessoa criou ou
+                // assumiu; só o gestor opera registro de outro. `temNivelEditar` é o
+                // nível cru, usado só pelo "assumir" (que é justamente sobre o alheio).
+                const meuRegistro       = ehMinhaEvolucao(ev);
+                const temNivelEditar    = nivelEditar !== 'NENHUM' && nivelEditar !== 'NEGADO';
+                const podeEditarEsta    = meuRegistro && temNivelEditar;
+                const podeExcluir       = meuRegistro && emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
+                const podeFinalizarEsta = meuRegistro && emAndamento && nivelFinalizar !== 'NENHUM' && nivelFinalizar !== 'NEGADO';
                 const podeAprovar    = !ev.aprovado && podeFinalizar;
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
@@ -1970,7 +2012,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         <button
                           onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
                           title="Visualizar"
-                          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                          className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                           <Eye size={14} />
                         </button>
 
@@ -1978,14 +2020,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                           <button
                             onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
                             title="Alterar"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                             <Pencil size={14} />
                           </button>
                         )}
 
                         {/* Assumir a evolução em andamento de outro profissional —
                             ele é comunicado por e-mail e WhatsApp. */}
-                        {emAndamento && !eProprioAutor && podeEditarEsta && (
+                        {emAndamento && !eProprioAutor && temNivelEditar && (
                           <button onClick={() => handleAssumirEvolucao(ev.id)} disabled={assumindoEv}
                             title={`Assumir a evolução de ${ev.veterinario?.fullName ?? 'outro profissional'}`}
                             className="p-1.5 text-teal-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors disabled:opacity-60">
@@ -2023,7 +2065,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
                         {podeImprimir && (
                           <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id} title="Imprimir"
-                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50">
+                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50">
                             {imprimindoId === ev.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
                           </button>
                         )}

@@ -7,13 +7,15 @@ const { verificarAcessoAnimal }                   = require('../lib/animalAccess
 // Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
-const { registrarAuditoria }                      = require('../lib/auditoria');
+const { registrarAuditoria, registrarTransferencia, registrarAlteracao } = require('../lib/auditoria');
+// Assumir/transferir a agenda arrasta a evolução aberta e tudo que está sob ela
+const { transferirEvolucoesDoAgendamento }        = require('../lib/transferenciaAtendimento');
 const emailService                                = require('../services/emailService');
 const whatsappService                             = require('../services/whatsappService');
 const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendamentoLLMService');
 const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
-// Autoria por NÍVEL da matriz (Controle de Acesso), não por cargo — ver CLAUDE.md #28
-const { NIVEL_ORDINAL }                           = require('../middlewares/permissao.middleware');
+// AUTORIA (2026-08-04): a ação vale sobre a PRÓPRIA agenda; só o GESTOR opera a de outro
+const { ehGestorNoContexto }                      = require('../middlewares/permissao.middleware');
 // Rastro de "assumido de quem" (colunas novas lidas por SQL cru)
 const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../lib/agendamentoAssumido');
 
@@ -24,12 +26,18 @@ const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'
 // ATRASADA é setada automaticamente pelo cron marcarAgendamentosAtrasados (agendamentoCronService)
 // 30min após o horário sem conclusão — status informativo, incluído aqui só para permitir
 // exibição/filtro; a rotina noturna de cancelamento (server.ts) também a varre.
-// TRANSFERIDO: o atendimento saiu desta data/profissional porque foi REAGENDADO —
-// o horário é liberado e a observação guarda para quando ele foi. Diferente de
+// REAGENDADO: o atendimento saiu desta data/profissional porque foi remarcado — o
+// horário é liberado e a observação guarda para quando ele foi. Diferente de
 // CANCELADO, que é a desistência do atendimento.
-const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'ATRASADA', 'TRANSFERIDO'];
+// TRANSFERIDO é o nome ANTIGO do mesmo estado (até 2026-08-04). Continua aceito para
+// não invalidar o que já está gravado; nada novo deve ser criado com ele.
+const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'ATRASADA', 'REAGENDADO', 'TRANSFERIDO'];
 // Status que NÃO ocupam mais a grade (o slot volta a ficar livre)
-const STATUS_LIVRES = ['CANCELADO', 'TRANSFERIDO'];
+// ⚠️ TRANSFERIDO continua aqui só por causa do LEGADO: até 2026-08-04 era o status que
+// o reagendamento gravava. Tirá-lo faria os agendamentos já reagendados voltarem a
+// ocupar a grade e a bloquear o horário que eles próprios liberaram.
+// Registro NOVO usa REAGENDADO — ver `atualizarStatus`.
+const STATUS_LIVRES = ['CANCELADO', 'REAGENDADO', 'TRANSFERIDO'];
 // Quem pode agendar/alterar é decidido pela matriz RBAC (checkPermission nas rotas
 // de agenda.js — atendimento.agendamentos.*). Nenhuma checagem de role aqui.
 // Autoria: "próprio" = veterinário responsável OU quem criou o agendamento.
@@ -102,11 +110,11 @@ async function conflitoDeAgenda(vetId, inicio, duracaoMin, ignorarId = null) {
 // concedido no Controle de Acesso, agenda apenas na PRÓPRIA agenda.
 // É invariante de negócio: a agenda pertence a quem atende. Para o estagiário poder
 // marcar, ele precisa ter coluna própria na grade — não de permissão extra.
+// ⚠️ `req.permissaoNivel === 'FULL'` NÃO entra aqui (2026-08-04): FULL é um nível da
+// matriz e, concedido a um perfil comum, deixaria qualquer um agendar na agenda alheia.
+// Gestor é cargo, não nível — `ehGestorNoContexto` cobre GESTOR, dono e ADMIN.
 function podeAgendarParaOutro(req) {
-  return req.membroCargo === 'GESTOR'
-      || req.permissaoNivel === 'FULL'
-      || req.user?.userType === 'ADMIN'
-      || req.user?.role === 'ADMIN';
+  return ehGestorNoContexto(req);
 }
 
 // "Minha agenda" = sou o profissional responsável OU quem criou o agendamento.
@@ -537,6 +545,17 @@ const AgendamentoController = {
         item.id,
       );
 
+      // Marcar um agendamento é uma alteração da agenda e entra na trilha: sem isso a
+      // auditoria mostraria o cancelamento de um atendimento que, para ela, nunca existiu.
+      await registrarAuditoria(null, req, {
+        categoria:  'CRIACAO',
+        entidade:   'AGENDAMENTO',
+        entidadeId: item.id,
+        animalId:   item.animalId,
+        detalhes:   `${item.tipo} — ${item.titulo ?? ''} | ${quando.toISOString()}`
+                  + ` | profissional: ${item.veterinario?.fullName ?? '—'}`,
+      });
+
       res.status(201).json({
         dados: {
           ...item,
@@ -640,22 +659,45 @@ const AgendamentoController = {
         updateData.observacao = motivo.trim();
       }
 
-      const atualizado = await prisma.agendamentoClinico.update({
-        where:   { id: item.id },
-        data:    updateData,
-        include: INCLUDE,
-      });
+      const descricao = `${item.tipo} — ${item.titulo ?? ''}`.trim();
 
-      if (STATUS_LIVRES.includes(status)) {
-        await registrarAuditoria(null, req, {
-          categoria:  'CANCELAMENTO',
-          entidade:   'AGENDAMENTO',
-          entidadeId: item.id,
-          animalId:   item.animalId,
-          motivo,
-          detalhes:   `${item.tipo} — ${item.titulo ?? ''}`.trim(),
+      // TODA mudança de status entra na auditoria, na mesma transaction da escrita.
+      // Antes só o CANCELAMENTO era registrado: iniciar, concluir e finalizar um
+      // atendimento passavam sem rastro — e são exatamente as transições que alguém
+      // vai querer reconstruir depois ("quem deu esse atendimento por concluído?").
+      const atualizado = await prisma.$transaction(async (tx) => {
+        const ag = await tx.agendamentoClinico.update({
+          where:   { id: item.id },
+          data:    updateData,
+          include: INCLUDE,
         });
-      }
+
+        if (status === 'CANCELADO') {
+          // Desistência do atendimento: categoria própria, com a justificativa.
+          await registrarAuditoria(tx, req, {
+            categoria:  'CANCELAMENTO',
+            entidade:   'AGENDAMENTO',
+            entidadeId: item.id,
+            animalId:   item.animalId,
+            motivo,
+            detalhes:   descricao,
+          });
+        } else {
+          // Inclui o REAGENDADO: ele libera o horário, mas NÃO é desistência — marcá-lo
+          // como CANCELAMENTO faria o relatório contar remarcação como cancelamento.
+          await registrarAlteracao(tx, req, {
+            entidade: 'AGENDAMENTO', entidadeId: item.id, animalId: item.animalId,
+            donoAtualId: item.veterinarioId,
+            motivo,
+            campos: {
+              status:     { de: item.status,     para: ag.status },
+              observacao: { de: item.observacao, para: ag.observacao },
+            },
+          });
+        }
+
+        return ag;
+      });
 
       res.json({ dados: atualizado });
     } catch (err) {
@@ -713,12 +755,18 @@ const AgendamentoController = {
       const novoVetId = veterinarioId !== undefined
         ? (veterinarioId === null ? null : Number(veterinarioId))
         : undefined;
-      // Transferir o atendimento: o GESTOR move o de qualquer um; o profissional move
-      // o DELE (é a agenda dele que está sendo passada adiante).
+      // Passar o atendimento para OUTRO profissional é ação EXCLUSIVA DO GESTOR
+      // (2026-08-04). Regra basal, não permissão da matriz: escolher quem atende o
+      // paciente é decisão de quem coordena a equipe. Quem não é gestor tem o ASSUMIR
+      // (puxa para si) como caminho — nunca empurrar para terceiro.
+      // ⚠️ Atribuir profissional a um agendamento SEM responsável não é transferência
+      // (não há de quem tirar) e continua liberado; sem essa exceção o caso caía no
+      // bloqueio porque `Number(null)` é 0 e nunca bate com o id de ninguém.
       const trocaDeVet = novoVetId !== undefined && novoVetId !== item.veterinarioId;
-      if (trocaDeVet && !podeAgendarParaOutro(req) && Number(item.veterinarioId) !== Number(req.user.id)) {
+      const semResponsavel = item.veterinarioId == null;
+      if (trocaDeVet && !podeAgendarParaOutro(req) && !semResponsavel) {
         return res.status(403).json({
-          error: 'Você só pode transferir os atendimentos em que é o profissional responsável.',
+          error: 'Somente o gestor pode transferir o atendimento para outro profissional.',
         });
       }
       const dataHoraMudou = !!data.dataHora;
@@ -750,10 +798,48 @@ const AgendamentoController = {
         return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
       }
 
-      const atualizado = await prisma.agendamentoClinico.update({
-        where:   { id: item.id },
-        data,
-        include: INCLUDE_GLOBAL,
+      const atualizado = await prisma.$transaction(async (tx) => {
+        const ag = await tx.agendamentoClinico.update({
+          where:   { id: item.id },
+          data,
+          include: INCLUDE_GLOBAL,
+        });
+
+        // Trocar o responsável na agenda é transferir o atendimento: a evolução
+        // aberta e tudo que está sob ela vão junto, senão o novo responsável não
+        // consegue operar o que recebeu (premissa de autoria).
+        if (trocaDeVet && novoVetId) {
+          const movidos = await transferirEvolucoesDoAgendamento(tx, item.id, novoVetId);
+          await marcarAssumido(tx, item.id, item.veterinarioId);
+          await registrarTransferencia(tx, req, {
+            entidade: 'AGENDAMENTO', entidadeId: item.id, animalId: item.animalId,
+            deVetId: item.veterinarioId, paraVetId: novoVetId,
+            motivo: 'Troca de profissional responsável pelo agendamento',
+          });
+          for (const m of movidos) {
+            await registrarTransferencia(tx, req, {
+              ...m, paraVetId: novoVetId,
+              motivo: 'Arrasto do atendimento transferido',
+              origem: `agendamento transferido`,
+            });
+          }
+        }
+
+        // Antes → depois do que a edição mudou, sempre amarrado a quem responde pelo
+        // atendimento (o dono muda na mesma operação quando há transferência).
+        await registrarAlteracao(tx, req, {
+          entidade: 'AGENDAMENTO', entidadeId: item.id, animalId: item.animalId,
+          donoAnteriorId: item.veterinarioId,
+          donoAtualId:    novoVetId !== undefined ? novoVetId : item.veterinarioId,
+          campos: {
+            titulo:     { de: item.titulo,     para: ag.titulo },
+            tipo:       { de: item.tipo,       para: ag.tipo },
+            dataHora:   { de: item.dataHora?.toISOString(), para: ag.dataHora?.toISOString() },
+            observacao: { de: item.observacao, para: ag.observacao },
+          },
+        });
+
+        return ag;
       });
 
       // Quem RECEBEU o atendimento é avisado por e-mail e WhatsApp
@@ -996,9 +1082,16 @@ const AgendamentoController = {
   },
 
   // PATCH /clinica/agendamentos/:id/assumir
-  // Qualquer VETERINÁRIO da equipe pode assumir o atendimento de outro veterinário —
-  // é um "puxar para si", não depende de o outro transferir. Por isso NÃO passa por
+  // Qualquer profissional da equipe pode assumir o atendimento de outro — é um "puxar
+  // para si", não depende de o outro transferir. Por isso NÃO passa por
   // `podeOperarAgendamento` (que exigiria ser o dono do agendamento).
+  //
+  // Vale para atendimento JÁ INICIADO (EM_ANDAMENTO), igual ao assumir da EVOLUÇÃO
+  // (`EvolucaoController.assumir`). Antes só aceitava AGENDADO/ATRASADA: bastava o
+  // outro profissional clicar em "Iniciar" para o atendimento ficar preso a ele na
+  // agenda — o mesmo caso que a evolução resolve sem problema, e que é justamente
+  // quando assumir importa (o colega começou e precisou sair). O arrasto abaixo já
+  // move a evolução aberta e tudo que está sob ela.
   assumir: async (req, res) => {
     try {
       const item = await prisma.agendamentoClinico.findUnique({
@@ -1012,7 +1105,7 @@ const AgendamentoController = {
       if (Number(item.veterinarioId) === Number(req.user.id)) {
         return res.status(400).json({ error: 'Este atendimento já é seu.' });
       }
-      if (!['AGENDADO', 'ATRASADA'].includes(item.status)) {
+      if (!['AGENDADO', 'ATRASADA', 'EM_ANDAMENTO'].includes(item.status)) {
         return res.status(400).json({ error: 'Só é possível assumir um atendimento ainda em aberto.' });
       }
 
@@ -1043,12 +1136,25 @@ const AgendamentoController = {
           data:    { veterinarioId: Number(req.user.id) },
           include: INCLUDE_GLOBAL,
         });
-        await tx.evolucaoClinica.updateMany({
-          where: { agendamentoId: item.id, ativo: true, status: 'EM_ANDAMENTO' },
-          data:  { veterinarioId: Number(req.user.id), modificadoPorId: Number(req.user.id), dataModificacao: new Date() },
-        });
+        // Arrasta a evolução aberta E tudo que está sob ela (prescrição, exame,
+        // encaminhamento, vacina) — com a premissa de autoria, deixar um filho com o
+        // dono antigo é deixar quem assumiu sem poder operar o próprio atendimento.
+        const movidos = await transferirEvolucoesDoAgendamento(tx, item.id, req.user.id);
         // Guarda DE QUEM veio: sem isso a troca de responsável fica invisível na tela
         await marcarAssumido(tx, item.id, item.veterinarioId);
+
+        await registrarTransferencia(tx, req, {
+          entidade: 'AGENDAMENTO', entidadeId: item.id, animalId: item.animalId,
+          deVetId: item.veterinarioId, paraVetId: req.user.id,
+          motivo: 'Atendimento assumido por outro profissional',
+        });
+        for (const m of movidos) {
+          await registrarTransferencia(tx, req, {
+            ...m, paraVetId: req.user.id,
+            motivo: 'Arrasto do atendimento assumido',
+            origem: `agendamento assumido`,
+          });
+        }
         return ag;
       });
       await anexarAssumido(atualizado);
@@ -1080,10 +1186,14 @@ const AgendamentoController = {
         return res.status(400).json({ error: 'Profissional de origem e destino devem ser diferentes' });
       }
 
-      // O GESTOR transfere a agenda de qualquer profissional; o profissional transfere
-      // a DELE (deVetId tem de ser ele mesmo).
-      if (!podeAgendarParaOutro(req) && Number(deVetId) !== Number(req.user.id)) {
-        return res.status(403).json({ error: 'Você só pode transferir a sua própria agenda.' });
+      // Transferir agenda para outro profissional é EXCLUSIVO DO GESTOR (2026-08-04).
+      // ⚠️ Reverte a regra de 2026-07-28, que deixava o profissional transferir a agenda
+      // DELE: o ato é o mesmo do "Transferir" da linha, e manter os dois com regras
+      // diferentes só criava confusão sobre quem pode passar paciente para quem.
+      if (!podeAgendarParaOutro(req)) {
+        return res.status(403).json({
+          error: 'Somente o gestor pode transferir a agenda para outro profissional.',
+        });
       }
 
       const doDia = await prisma.agendamentoClinico.findMany({
@@ -1096,7 +1206,7 @@ const AgendamentoController = {
             lte: new Date(data + 'T23:59:59.999'),
           },
         },
-        select: { id: true, dataHora: true, tipo: true, animal: { select: { nome: true } } },
+        select: { id: true, animalId: true, dataHora: true, tipo: true, animal: { select: { nome: true } } },
       });
 
       if (doDia.length === 0) {
@@ -1123,9 +1233,30 @@ const AgendamentoController = {
       const bloqueados    = doDia.filter(a => horariosOcupados.has(a.dataHora.getTime()));
 
       if (transferiveis.length > 0) {
-        await prisma.agendamentoClinico.updateMany({
-          where: { id: { in: transferiveis.map(a => a.id) } },
-          data:  { veterinarioId: Number(paraVetId) },
+        await prisma.$transaction(async (tx) => {
+          await tx.agendamentoClinico.updateMany({
+            where: { id: { in: transferiveis.map(a => a.id) } },
+            data:  { veterinarioId: Number(paraVetId) },
+          });
+
+          for (const a of transferiveis) {
+            // Agendamento AGENDADO em geral não tem evolução aberta, mas o dia pode
+            // conter um atendimento já iniciado — o arrasto é o mesmo do assumir.
+            const movidos = await transferirEvolucoesDoAgendamento(tx, a.id, paraVetId);
+            await marcarAssumido(tx, a.id, Number(deVetId));
+            await registrarTransferencia(tx, req, {
+              entidade: 'AGENDAMENTO', entidadeId: a.id, animalId: a.animalId,
+              deVetId, paraVetId,
+              motivo: `Transferência da agenda do dia ${data}`,
+            });
+            for (const m of movidos) {
+              await registrarTransferencia(tx, req, {
+                ...m, paraVetId,
+                motivo: 'Arrasto do atendimento transferido',
+                origem: `agendamento transferido`,
+              });
+            }
+          }
         });
         // Quem RECEBEU a agenda é avisado por e-mail e WhatsApp
         notificarTransferencia({

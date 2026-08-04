@@ -69,6 +69,24 @@ const parseBRL = (v: string): number =>
 const numToMask = (v: number | null | undefined): string =>
   v === null || v === undefined ? '' : maskBRL(String(Math.round(v * 100)));
 
+/**
+ * Especialidades REAIS do combo: as dos procedimentos que o compõem, sem repetir.
+ *
+ * `Combo.especialidade` é só a CLASSIFICAÇÃO gravada no cadastro — a que estava no
+ * seletor na hora de salvar. Num combo montado com três áreas, exibi-lo sozinho
+ * mostrava apenas a última usada e escondia as outras duas. O campo continua servindo
+ * ao filtro do Orçamento; quem descreve o conteúdo do pacote são os itens.
+ * Combo cujos procedimentos não têm especialidade cai na classificação (não fica sem
+ * nenhum selo).
+ */
+const especialidadesDoCombo = (c: Combo): string[] => {
+  const dosItens = [...new Set(
+    c.itens.map(i => i.procedimento.especialidade).filter((e): e is string => !!e?.trim()),
+  )].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  if (dosItens.length > 0) return dosItens;
+  return c.especialidade ? [c.especialidade] : [];
+};
+
 // ─── Página ───────────────────────────────────────────────────────────────────
 
 export default function CadastroProcedimento() {
@@ -190,7 +208,7 @@ export default function CadastroProcedimento() {
       const novo = res.data?.dados?.valorEmpresa ?? null;
       setProcedimentos(prev => prev.map(x => x.id === p.id ? { ...x, valorEmpresa: novo } : x));
       setEditandoValorId(null);
-      toast.success(novo === null ? 'Valor da empresa removido' : 'Valor salvo');
+      toast.success(novo === null ? 'Valor removido' : 'Valor salvo');
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao salvar valor');
@@ -294,16 +312,32 @@ export default function CadastroProcedimento() {
       .reduce((acc, p) => acc + (p.valorEmpresa ?? p.valorVenda ?? 0), 0),
   [todosProcs, comboIds]);
 
+  /**
+   * Procedimentos LISTADOS na montagem do combo: os da especialidade escolhida no
+   * seletor, filtrados pela busca.
+   *
+   * O seletor de especialidade tem DOIS papéis: classifica o combo (badge do card,
+   * filtro do Orçamento) e escolhe o que aparece nesta lista. Trocar a especialidade
+   * troca a lista — e **NÃO limpa o que já foi marcado**: é assim que o combo reúne
+   * áreas diferentes (marca em Clínica Médica, troca para Anestesiologia, marca mais).
+   * O que está selecionado fora da especialidade atual continua visível e removível
+   * nos chips de "Selecionados", logo acima da lista; sem eles, item de outra área
+   * ficaria preso no combo sem nenhuma forma de tirar.
+   */
   const procsCombo = useMemo(() => {
-    // Só os procedimentos da especialidade escolhida para o combo
     if (!comboEsp) return [];
     const q = comboBusca.trim().toLowerCase();
     const daEsp = todosProcs.filter(p => (p.especialidade ?? '') === comboEsp);
     const base = q
-      ? daEsp.filter(p => p.nome.toLowerCase().includes(q))
+      ? daEsp.filter(p => p.nome.toLowerCase().includes(q) || p.categoria.toLowerCase().includes(q))
       : daEsp;
     return base.slice(0, 60);
   }, [todosProcs, comboBusca, comboEsp]);
+
+  // Tudo que está no combo, de QUALQUER especialidade — a memória da montagem.
+  const procsSelecionados = useMemo(
+    () => todosProcs.filter(p => comboIds.includes(p.id)),
+    [todosProcs, comboIds]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -412,8 +446,11 @@ export default function CadastroProcedimento() {
                     <tr className="text-left text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
                       <th className="px-5 py-3 font-semibold">Procedimento</th>
                       <th className="px-5 py-3 font-semibold">Categoria</th>
-                      <th className="px-5 py-3 font-semibold text-right">Valor padrão</th>
-                      <th className="px-5 py-3 font-semibold text-right">Valor da empresa</th>
+                      {/* Só o VALOR da empresa aparece na grade. O "Valor padrão" do
+                          catálogo (`valorVenda`) continua existindo e é editado pelo
+                          ADMIN no modal do procedimento — na lista ele só concorria
+                          com o valor que a clínica realmente cobra. */}
+                      <th className="px-5 py-3 font-semibold text-right">Valor</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -424,7 +461,6 @@ export default function CadastroProcedimento() {
                           {p.descricao && <p className="text-[11px] text-gray-400 truncate max-w-md">{p.descricao}</p>}
                         </td>
                         <td className="px-5 py-3 text-gray-500">{p.categoria}{p.subcategoria ? ` · ${p.subcategoria}` : ''}</td>
-                        <td className="px-5 py-3 text-right text-gray-500">{brl(p.valorVenda)}</td>
                         <td className="px-5 py-3 text-right">
                           {editandoValorId === p.id ? (
                             <span className="inline-flex items-center gap-1.5">
@@ -443,7 +479,7 @@ export default function CadastroProcedimento() {
                                 {brl(p.valorEmpresa)}
                               </span>
                               {podeEditar && (
-                                <button onClick={() => iniciarEdicaoValor(p)} className="p-1 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded" title="Definir valor da empresa">
+                                <button onClick={() => iniciarEdicaoValor(p)} className="p-1 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded" title="Definir valor">
                                   <Pencil size={13} />
                                 </button>
                               )}
@@ -462,8 +498,10 @@ export default function CadastroProcedimento() {
                   <div key={p.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
                     <p className="font-semibold text-gray-900 text-sm">{p.nome}</p>
                     <p className="text-[11px] text-gray-400 mt-0.5">{p.categoria}{p.subcategoria ? ` · ${p.subcategoria}` : ''}</p>
+                    {/* Espelho do desktop: só o VALOR da empresa (o "Padrão" saiu junto
+                        com a coluna — card e tabela mostram os mesmos dados). */}
                     <div className="flex items-center justify-between mt-2 text-xs">
-                      <span className="text-gray-500">Padrão: {brl(p.valorVenda)}</span>
+                      <span className="text-gray-500">Valor</span>
                       {editandoValorId === p.id ? (
                         <span className="inline-flex items-center gap-1.5">
                           <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={valorEdit} autoFocus
@@ -475,7 +513,7 @@ export default function CadastroProcedimento() {
                       ) : (
                         <span className="inline-flex items-center gap-1.5">
                           <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
-                            Empresa: {brl(p.valorEmpresa)}
+                            {brl(p.valorEmpresa)}
                           </span>
                           {podeEditar && (
                             <button onClick={() => iniciarEdicaoValor(p)} className="p-1 text-gray-400"><Pencil size={13} /></button>
@@ -510,11 +548,15 @@ export default function CadastroProcedimento() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-bold text-gray-900 text-sm truncate">{c.nome}</p>
-                      {c.especialidade && (
-                        <span className="inline-block mt-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                          {c.especialidade}
-                        </span>
-                      )}
+                      {/* TODAS as especialidades do combo, uma por selo — ver
+                          `especialidadesDoCombo`. */}
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {especialidadesDoCombo(c).map(esp => (
+                          <span key={esp} className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                            {esp}
+                          </span>
+                        ))}
+                      </div>
                       {c.descricao && <p className="text-[11px] text-gray-400 mt-0.5">{c.descricao}</p>}
                     </div>
                     <span className="text-sm font-bold text-emerald-700 flex-shrink-0">{brl(c.valor)}</span>
@@ -615,14 +657,11 @@ export default function CadastroProcedimento() {
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
-                  <select value={comboEsp}
-                    onChange={e => {
-                      // Troca de especialidade limpa os itens selecionados (combo é por especialidade)
-                      setComboEsp(e.target.value);
-                      setComboIds([]);
-                      setComboBusca('');
-                    }}
-                    className={inputCls}>
+                  {/* DOIS papéis: classifica o combo (badge do card, filtro do Orçamento)
+                      e escolhe o que a lista de procedimentos mostra. Trocá-la troca a
+                      lista, mas NÃO limpa o que já foi marcado — é assim que se reúnem
+                      áreas diferentes no mesmo pacote. */}
+                  <select value={comboEsp} onChange={e => { setComboEsp(e.target.value); setComboBusca(''); }} className={inputCls}>
                     <option value="">— Selecionar —</option>
                     {especialidades.map(e => <option key={e} value={e}>{e}</option>)}
                   </select>
@@ -646,6 +685,27 @@ export default function CadastroProcedimento() {
                 <label className="block text-xs text-gray-500 mb-1">
                   Procedimentos do combo * <span className="text-gray-400">({comboIds.length} selecionado{comboIds.length !== 1 ? 's' : ''} — mínimo 2)</span>
                 </label>
+                {/* Selecionados de QUALQUER especialidade. A lista abaixo só mostra a
+                    especialidade escolhida no seletor, então sem estes chips o item de
+                    outra área ficaria no combo sem forma de conferir nem de remover. */}
+                {procsSelecionados.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {procsSelecionados.map(p => (
+                      <span key={p.id}
+                        className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg pl-2 pr-1 py-0.5 text-[11px] max-w-full">
+                        <span className="truncate">{p.nome}</span>
+                        {p.especialidade && p.especialidade !== comboEsp && (
+                          <span className="text-emerald-600/70 whitespace-nowrap">· {p.especialidade}</span>
+                        )}
+                        <button type="button" title="Remover do combo"
+                          onClick={() => setComboIds(prev => prev.filter(i => i !== p.id))}
+                          className="p-0.5 text-emerald-600 hover:text-red-600 rounded">
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div className="relative mb-2">
                   <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
                   <input type="text" value={comboBusca} onChange={e => setComboBusca(e.target.value)}
@@ -657,7 +717,9 @@ export default function CadastroProcedimento() {
                   {!comboEsp ? (
                     <p className="text-xs text-gray-400 p-3">Selecione a especialidade para listar os procedimentos.</p>
                   ) : procsCombo.length === 0 ? (
-                    <p className="text-xs text-gray-400 p-3">Nenhum procedimento encontrado para {comboEsp}.</p>
+                    <p className="text-xs text-gray-400 p-3">
+                      {comboBusca.trim() ? 'Nenhum procedimento encontrado para a busca.' : `Nenhum procedimento em ${comboEsp}.`}
+                    </p>
                   ) : procsCombo.map(p => {
                     const sel = comboIds.includes(p.id);
                     return (
@@ -669,7 +731,9 @@ export default function CadastroProcedimento() {
                         </span>
                         <span className="flex-1 min-w-0">
                           <span className="block text-sm text-gray-900 truncate">{p.nome}</span>
-                          <span className="block text-[10px] text-gray-400">{p.categoria} · {brl(p.valorEmpresa ?? p.valorVenda)}</span>
+                          <span className="block text-[10px] text-gray-400 truncate">
+                            {p.categoria} · {brl(p.valorEmpresa ?? p.valorVenda)}
+                          </span>
                         </span>
                       </button>
                     );
@@ -677,17 +741,30 @@ export default function CadastroProcedimento() {
                 </div>
               </div>
             </div>
-            <InlineError message={erroCombo} className="mx-5 mt-3" />
-
-            <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
+            {/* Rodapé no padrão da aplicação: ações à DIREITA, tamanho padrão, Cancelar
+                ao lado do Salvar. Eram dois botões `flex-1` de largura total — o
+                Cancelar com o mesmo peso visual do Salvar. O rótulo é só "Salvar" nos
+                dois modos: o que muda é o estado do formulário, não a ação (o título
+                do modal já diz se é novo ou edição). */}
+            <div className="flex items-center justify-end gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
               <button onClick={() => setShowCombo(false)} disabled={salvandoCombo}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">Cancelar</button>
+                className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-semibold hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                Cancelar
+              </button>
               <button onClick={salvarCombo} disabled={salvandoCombo}
-                className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2">
+                className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
                 {salvandoCombo && <Loader2 size={13} className="animate-spin" />}
-                {comboEditando ? 'Salvar alterações' : 'Criar combo'}
+                {salvandoCombo ? 'Salvando…' : 'Salvar'}
               </button>
             </div>
+
+            {/* Erro ABAIXO do botão que o disparou (CLAUDE.md §6) — estava ACIMA do
+                rodapé, e num modal que rola o usuário clicava em Salvar sem ver nada. */}
+            {erroCombo && (
+              <div className="px-5 pb-5">
+                <InlineError message={erroCombo} />
+              </div>
+            )}
           </div>
         </div>
       )}

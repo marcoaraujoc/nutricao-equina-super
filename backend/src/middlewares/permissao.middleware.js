@@ -373,25 +373,47 @@ function checkPermissaoProprietario(funcionalidade) {
 }
 
 /**
+ * O usuário é GESTOR no contexto ativo? (cargo GESTOR, dono da empresa ou ADMIN)
+ *
+ * `checkPermission` seta `req.membroCargo = 'GESTOR'` em TODOS os caminhos de bypass
+ * (ADMIN, cargo GESTOR na equipe, dono da empresa com ou sem MembroEquipe) — por isso
+ * esta é a única checagem necessária. NÃO usar `req.permissaoNivel === 'FULL'` como
+ * sinônimo: FULL é um nível da matriz e um dia pode ser concedido a um perfil comum.
+ */
+function ehGestorNoContexto(req) {
+  return req?.membroCargo === 'GESTOR'
+      || req?.user?.role === 'ADMIN'
+      || req?.user?.userType === 'ADMIN';
+}
+
+/**
  * Helper utilitário para uso dentro dos services/controllers:
  * Verifica se o usuário pode operar (alterar/excluir/finalizar) sobre um registro
- * CLÍNICO (Evolução, Prescrição, Exame, Encaminhamento, Agendamento).
+ * CLÍNICO (Evolução, Prescrição, Exame, Encaminhamento, Vacina, Agendamento).
  *
- * REGRA (2026-07-30): quem decide é O CONTROLE DE ACESSO, e só ele. Tendo a ação
- * concedida ao perfil (qualquer nível positivo), o usuário opera o registro — sem
- * filtro adicional de autoria. Não existe mais "PROPRIO só mexe no que criou":
- * a tela de Controle de Acesso é binária (a ação está marcada ou não; o PermCheck
- * nem oferece escolha entre PROPRIO e EQUIPE), então diferenciar os dois no código
- * criava restrição que o gestor não tinha como ver nem configurar.
+ * REGRA (2026-08-04) — PREMISSA DE AUTORIA:
+ *   A ação concedida no Controle de Acesso vale sobre O QUE É DE QUEM A EXECUTA.
+ *   "Pode finalizar evolução" = pode finalizar a evolução que ELE criou ou ASSUMIU,
+ *   nunca a de outro profissional. O ÚNICO perfil que opera registro alheio é o
+ *   GESTOR (e o ADMIN da plataforma).
  *
- * Retorna true para qualquer nível positivo (PROPRIO, EQUIPE, FULL) e false para
- * NENHUM/NEGADO/LEITURA — estes já seriam barrados antes pelo checkPermission da rota.
+ *   Assumir transfere a autoria (o `veterinarioId` passa a ser de quem assumiu), então
+ *   "criado ou assumido" se resolve por uma comparação só: autorId === req.user.id.
  *
- * REGRA DE OURO: controllers NÃO devem checar cargo/userType diretamente — passam
- * req.permissaoNivel (setado pelo checkPermission) a este helper.
+ * ⚠️ Isto REVERTE a regra de 2026-07-30 ("sem filtro de autoria; quem decide é só o
+ * Controle de Acesso"). O nível (PROPRIO/EQUIPE/FULL) segue governando o ACESSO à ação
+ * pelo `checkPermission` da rota; a AUTORIA é regra basal e não se configura na matriz —
+ * é o que impede um profissional de mexer no prontuário conduzido por outro.
+ *
+ * @param {object} req       request já passado pelo checkPermission da rota
+ * @param {number|null} autorId  dono do registro (veterinarioId). null = registro sem
+ *                               dono definido → só o gestor opera.
  */
-function podeOperarRegistro(nivelPermissao) {
-  return (NIVEL_ORDINAL[nivelPermissao] ?? 0) >= NIVEL_ORDINAL.PROPRIO;
+function podeOperarRegistro(req, autorId) {
+  if ((NIVEL_ORDINAL[req?.permissaoNivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) return false;
+  if (ehGestorNoContexto(req)) return true;
+  if (autorId == null) return false;
+  return Number(autorId) === Number(req?.user?.id);
 }
 
 /**
@@ -488,6 +510,7 @@ module.exports = {
   checkPermission,
   checkPermissaoProprietario,
   podeOperarRegistro,
+  ehGestorNoContexto,
   getNivelEfetivo,
   resolverContextoPermissao,
   getEquipeIdsDoProprietario,

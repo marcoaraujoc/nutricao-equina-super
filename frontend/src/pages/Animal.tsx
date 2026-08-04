@@ -1,5 +1,5 @@
 // src/pages/Animal.tsx
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -316,10 +316,6 @@ const Animal = () => {
     seguradora: '',
   });
 
-  // Localização com que o animal foi carregado (edição) — ao TROCAR a localidade,
-  // exige-se nova baia e novo tratador. null = criação / sem localização.
-  const localizacaoOriginalRef = useRef<number | null>(null);
-
   // Checagem da baia enquanto o usuário digita (regra: única por local + empresa).
   // A validação definitiva continua no backend ao salvar — esta só antecipa o erro.
   const [baiaStatus, setBaiaStatus] = useState<
@@ -450,7 +446,15 @@ const Animal = () => {
 
   useEffect(() => {
     if (formData.especieId && todasRacas.length > 0) {
-      const filtradas = todasRacas.filter(r => r.especieId === formData.especieId);
+      // SRD ("Sem Raça Definida") vem PRIMEIRO e o resto em ordem alfabética: é a
+      // opção mais escolhida e, no meio de uma lista de raças, ficava escondida.
+      const filtradas = todasRacas
+        .filter(r => r.especieId === formData.especieId)
+        .sort((a, b) => {
+          if (a.nome === 'SRD') return -1;
+          if (b.nome === 'SRD') return 1;
+          return a.nome.localeCompare(b.nome, 'pt-BR');
+        });
       setRacasFiltradas(filtradas);
       setFormData(p => p.racaId && !filtradas.some(r => r.id === p.racaId) ? { ...p, racaId: null } : p);
     }
@@ -555,8 +559,6 @@ const Animal = () => {
             finalidades:       a.finalidade ? a.finalidade.split('|') : [],
             seguradora:        a.seguradora ?? '',
           });
-          // Guarda a localização original — trocar exige nova baia e novo tratador
-          localizacaoOriginalRef.current = a.localizacaoId ?? null;
           // Pré-preenche o texto da busca de localização
           if (a.localizacao?.nome) {
             setLocBusca(a.localizacao.nome);
@@ -572,7 +574,8 @@ const Animal = () => {
             setFormProp({
               nomeCompleto: a.user.fullName ?? '',
               email:        a.user.email   ?? '',
-              telefone:     a.user.phone ? mascaraTelefone(a.user.phone.replace(/\D/g, '')) : '',
+              telefone:     a.user.phone  ? mascaraTelefone(a.user.phone.replace(/\D/g, ''))  : '',
+              telefone2:    a.user.phone2 ? mascaraTelefone(a.user.phone2.replace(/\D/g, '')) : '',
             });
           }
           setAnimalBloqueado(a.bloqueado ?? false);
@@ -652,7 +655,8 @@ const Animal = () => {
         setFormProp(p => ({
           ...p,
           nomeCompleto: res.data.fullName ?? '',
-          telefone:     res.data.phone ? mascaraTelefone(res.data.phone.replace(/\D/g, '')) : '',
+          telefone:     res.data.phone  ? mascaraTelefone(res.data.phone.replace(/\D/g, ''))  : '',
+          telefone2:    res.data.phone2 ? mascaraTelefone(res.data.phone2.replace(/\D/g, '')) : '',
         }));
         setProprietarioExistente(true);
       } else {
@@ -761,7 +765,13 @@ const Animal = () => {
       case 'especieId':       return formData.especieId ? null : 'Selecione a espécie';
       case 'racaId':          return formData.racaId ? null : 'Selecione a raça';
       case 'localizacaoId':   return formData.localizacaoId ? null : 'Selecione ou crie o local do animal';
-      case 'peso':            return formData.peso && Number(formData.peso) <= 0 ? 'O peso deve ser positivo' : null;
+      // O rótulo exibe "Peso (kg) *", então o vazio TEM de acusar. Antes só reclamava
+      // de valor <= 0: o campo aparecia com asterisco, passava em branco no submit e o
+      // animal era gravado com peso 0 — que a Nutrição depois lê como dado válido.
+      case 'peso':
+        if (!formData.peso.trim())    return 'Informe o peso do animal';
+        if (Number(formData.peso) <= 0) return 'O peso deve ser positivo';
+        return null;
       case 'idade':
         if (!formData.dataNascimento && !formData.idadeAnos) return 'Informe a data de nascimento ou a idade';
         if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) return 'A idade deve ser positiva';
@@ -814,24 +824,27 @@ const Animal = () => {
 
     // Valida TODOS os campos de uma vez: cada um recebe a própria mensagem, em vez
     // de parar no primeiro erro com um aviso solto no topo da página.
-    const campos = [...CAMPOS_ANIMAL, ...(criandoNovoRegistro ? CAMPOS_PROPRIETARIO : [])];
+    // Na EDIÇÃO o bloco do proprietário é só leitura, com uma exceção: o telefone,
+    // que a tela grava. Por isso ele entra na validação também aqui — sem isso, um
+    // número pela metade seguiria para o cadastro do cliente sem ninguém avisar.
+    const campos = [
+      ...CAMPOS_ANIMAL,
+      ...(criandoNovoRegistro ? CAMPOS_PROPRIETARIO : isEditMode ? (['propTelefone'] as const) : []),
+    ];
     const novosErros: Record<string, string> = {};
     for (const campo of campos) {
       const msg = erroDoCampo(campo);
       if (msg) novosErros[campo] = msg;
     }
-    // Ao TROCAR a localidade, exige nova baia (quando aplicável) e novo tratador.
-    const trocouLocalidade = isEditMode
-      && formData.localizacaoId != null
-      && formData.localizacaoId !== localizacaoOriginalRef.current;
-    if (trocouLocalidade) {
-      if (labelBaia && !formData.baia.trim()) {
-        novosErros.baia = `Informe a nova ${labelBaia.toLowerCase()} para o local escolhido`;
-      }
-      if (!formData.tratadorId) {
-        novosErros.tratador = 'Informe o tratador para o local escolhido';
-      }
-    }
+    // ⚠️ Trocar a localidade NÃO exige baia nem tratador (2026-08-04). Havia aqui uma
+    // regra que barrava o salvamento pedindo os dois "para o local escolhido" — mas os
+    // dois são OPCIONAIS no cadastro, e a troca de local não deveria transformá-los em
+    // obrigatórios: quem move o animal muitas vezes ainda não sabe em que baia ele vai
+    // ficar nem quem vai tratá-lo. O que a troca faz continua sendo LIMPAR os dois (ver
+    // o onMouseDown do combobox de local), porque pertencem ao lugar anterior; deixá-los
+    // em branco é resultado válido, e a baia pode ser preenchida depois.
+    // O conflito de baia OCUPADA segue barrando logo abaixo — isso é colisão, não
+    // obrigatoriedade.
     setErros(novosErros);
 
     const pendentes = Object.keys(novosErros);
@@ -893,6 +906,14 @@ const Animal = () => {
             phone2:   (formProp.telefone2    ?? '').trim() || null,
           },
         }),
+        // Edição: o ÚNICO dado do proprietário que esta tela grava é o CONTATO — não
+        // se troca o dono do animal por aqui, então nome e e-mail não vão no payload.
+        ...(isEditMode && {
+          proprietario: {
+            phone:  (formProp.telefone  ?? '').trim() || null,
+            phone2: (formProp.telefone2 ?? '').trim() || null,
+          },
+        }),
       };
 
       let createdAnimalId: number | null = null;
@@ -910,6 +931,11 @@ const Animal = () => {
             email:    (formProp.email        ?? '').trim(),
             phone:    (formProp.telefone     ?? '').trim() || null,
             phone2:   (formProp.telefone2    ?? '').trim() || null,
+          }));
+        } else if (isEditMode) {
+          fd.append('proprietario', JSON.stringify({
+            phone:  (formProp.telefone  ?? '').trim() || null,
+            phone2: (formProp.telefone2 ?? '').trim() || null,
           }));
         }
         fd.append('foto', photoFile);
@@ -1065,7 +1091,7 @@ const Animal = () => {
                         if (statusBuscaAnimal !== 'idle') {
                           setStatusBuscaAnimal('idle');
                           setAnimalEncontrado(null);
-                          setFormProp({ nomeCompleto: '', email: '', telefone: '' });
+                          setFormProp({ nomeCompleto: '', email: '', telefone: '', telefone2: '' });
                           setProprietarioExistente(null);
                         }
                       }}
@@ -1172,7 +1198,8 @@ const Animal = () => {
                     {filteredLocs.map(loc => (
                       <button key={loc.id} type="button"
                         onMouseDown={() => {
-                          // Trocar a localidade zera baia e tratador — devem ser reinformados
+                          // Trocar a localidade zera baia e tratador: os dois pertencem
+                          // ao local anterior. Reinformar é OPCIONAL — podem ficar em branco.
                           setFormData(p => p.localizacaoId === loc.id
                             ? { ...p, localizacaoId: loc.id }
                             : { ...p, localizacaoId: loc.id, baia: '', tratadorId: null });
@@ -1450,15 +1477,25 @@ const Animal = () => {
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Tipo / Estágio <span className="text-red-500">*</span>
                     </label>
+                    {/* ⚠️ Este campo era o único OBRIGATÓRIO sem `data-campo`, sem a
+                        classe de erro, sem `ErroCampo` e sem `validarCampo` no blur.
+                        Efeito: o submit acusava "Obrigatório para equinos", mas o
+                        `scrollIntoView` do `[data-campo=...]` não achava nada, o campo
+                        não ficava vermelho e a mensagem não aparecia embaixo dele — o
+                        usuário preenchia tudo o que estava marcado e o erro continuava,
+                        sem dizer onde. Campo obrigatório novo precisa dos QUATRO. */}
                     <select
                       value={formData.tipoExercicio}
-                      onChange={e => setFormData({ ...formData, tipoExercicio: e.target.value })}
+                      onChange={e => { setFormData({ ...formData, tipoExercicio: e.target.value }); setErros(p => { const { tipoExercicio: _t, ...r } = p; return r; }); }}
+                      onBlur={() => validarCampo('tipoExercicio')}
                       disabled={!formData.categoriaAnimal || tiposDisponiveis.length === 0}
-                      className={`${inputClass} ${(!formData.categoriaAnimal || tiposDisponiveis.length === 0) ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                      data-campo="tipoExercicio"
+                      className={`${erros.tipoExercicio ? inputClassErro : inputClass} ${(!formData.categoriaAnimal || tiposDisponiveis.length === 0) ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                     >
                       <option value="">Selecione o tipo</option>
                       {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
+                    <ErroCampo campo="tipoExercicio" />
                   </div>
                 </div>
               </>
@@ -1554,7 +1591,7 @@ const Animal = () => {
                             const v = e.target.value;
                             setFormProp(p => ({ ...p, email: v }));
                             if (proprietarioExistente === true) {
-                              setFormProp(p => ({ ...p, email: v, nomeCompleto: '', telefone: '' }));
+                              setFormProp(p => ({ ...p, email: v, nomeCompleto: '', telefone: '', telefone2: '' }));
                               setProprietarioExistente(null);
                             }
                           }}
@@ -1594,7 +1631,13 @@ const Animal = () => {
                       <ErroCampo campo="propNome" />
                     </div>
                   </div>
-                  {/* Telefones */}
+                  {/* Telefones — SEMPRE editáveis, inclusive com proprietário já
+                      cadastrado e na edição do animal. Nome e e-mail continuam
+                      travados (identidade do cliente é assunto do Cadastro de
+                      Cliente); o contato muda o tempo todo e é o que a clínica precisa
+                      corrigir na hora, sem sair da tela. O backend grava o telefone no
+                      cadastro DESTA empresa e ignora campo vazio — formulário em branco
+                      não apaga o número que a clínica já tem. */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">Telefone 1</label>
@@ -1604,9 +1647,8 @@ const Animal = () => {
                         onChange={e => setFormProp(p => ({ ...p, telefone: mascaraTelefone(e.target.value) }))}
                         onBlur={() => validarCampo('propTelefone')}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || proprietarioExistente === true}
                         data-campo="propTelefone"
-                        className={`${erros.propTelefone ? inputClassErro : inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        className={erros.propTelefone ? inputClassErro : inputClass}
                       />
                       <ErroCampo campo="propTelefone" />
                     </div>
@@ -1617,8 +1659,7 @@ const Animal = () => {
                         value={formProp.telefone2}
                         onChange={e => setFormProp(p => ({ ...p, telefone2: mascaraTelefone(e.target.value) }))}
                         placeholder="(00) 00000-0000"
-                        disabled={isEditMode || proprietarioExistente === true}
-                        className={`${inputClass} ${(isEditMode || proprietarioExistente === true) ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                        className={inputClass}
                       />
                     </div>
                   </div>
@@ -1727,20 +1768,34 @@ const Animal = () => {
               </div>
             )}
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={submitting || statusBuscaAnimal === 'minha_equipe'}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl font-semibold text-base md:text-lg transition-colors"
-            >
-              {submitting
-                ? (isEditMode ? 'Atualizando...' : 'Cadastrando...')
-                : statusBuscaAnimal === 'minha_equipe'
-                  ? 'Animal já com sua equipe'
-                  : (statusBuscaAnimal === 'com_vet' || statusBuscaAnimal === 'sem_vet')
-                    ? 'Cadastrar Animal'
-                    : isEditMode ? 'Atualizar Animal' : 'Salvar e Continuar'}
-            </button>
+            {/* Rodapé no padrão da aplicação: ações à direita, tamanho padrão, Cancelar
+                ao lado do Salvar. O rótulo é só "Salvar" — cadastro e edição são a
+                mesma ação, e "Salvar e Continuar"/"Atualizar Animal" só diziam de novo
+                o que o cabeçalho da tela já diz. Sai da forma antiga (botão de largura
+                total, py-3.5 e texto grande), que destoava das demais telas.
+                O texto do estado BLOQUEADO permanece: ali o botão está desabilitado e a
+                frase é a única explicação do porquê. */}
+            <div className="flex items-center justify-end gap-3 pb-2">
+              <button
+                type="button"
+                onClick={() => navigate(paginaPacientes)}
+                disabled={submitting}
+                className="px-4 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 rounded-xl text-sm font-semibold transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={submitting || statusBuscaAnimal === 'minha_equipe'}
+                className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
+              >
+                {submitting
+                  ? 'Salvando...'
+                  : statusBuscaAnimal === 'minha_equipe'
+                    ? 'Animal já com sua equipe'
+                    : 'Salvar'}
+              </button>
+            </div>
 
           </form>
         </div>

@@ -103,9 +103,12 @@ class UserController {
         },
       });
 
+      // ⚠️ E-mail inexistente e senha errada devolvem A MESMA mensagem, de propósito:
+      // distinguir os dois transforma a tela de login num verificador de cadastro
+      // (enumeração de usuário). Não "melhorar" isso com "usuário não encontrado".
       if (!user) {
         console.log('❌ Usuário não encontrado');
-        return res.status(401).json({ error: 'Credenciais inválidas' });
+        return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
 
       if (user.ativo === false) {
@@ -113,7 +116,7 @@ class UserController {
       }
 
       const match = await bcrypt.compare(password, user.passwordHash);
-      if (!match) return res.status(401).json({ error: 'Credenciais inválidas' });
+      if (!match) return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
 
       // Antes do 2FA: não faz sentido mandar código a quem não pode entrar.
       if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });

@@ -148,7 +148,6 @@ const Usuarios = () => {
   const [modalAberto, setModalAberto] = useState(false);
   const [editando,    setEditando]    = useState<Usuario | null>(null);
   const [salvando,    setSalvando]    = useState(false);
-  const [erroSenha,   setErroSenha]   = useState('');
   const [erroModal,   setErroModal]   = useState<string | null>(null);
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
   // Erro fica na SUPERFÍCIE da ação: `erroLinha` na linha do usuário (ativar/inativar)
@@ -201,7 +200,6 @@ const Usuarios = () => {
   const fecharModal = () => {
     setModalAberto(false);
     setEditando(null);
-    setErroSenha('');
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────
@@ -209,7 +207,6 @@ const Usuarios = () => {
   const handleSubmit = async (values: UsuarioFormValues) => {
     setErroModal(null);
     setSalvando(true);
-    setErroSenha('');
     try {
       // Sem senha na criação: o backend aplica a padrão (Inicial_001)
       // com troca obrigatória no primeiro acesso.
@@ -227,7 +224,9 @@ const Usuarios = () => {
         cidade:      values.cidade.trim()      || null,
         estado:      values.estado.trim()      || null,
       };
-      if (editando && values.senha) payload.senha = values.senha;
+      // `senha` NUNCA entra no payload: o campo saiu da tela e a edição pelo ADMIN
+      // não troca a senha de ninguém. Enviá-la "por via das dúvidas" reabriria pelo
+      // corpo da requisição exatamente o que foi retirado da interface.
 
       if (editando) {
         await api.put(`/users/${editando.id}`, payload);
@@ -242,9 +241,10 @@ const Usuarios = () => {
       const msg = axios.isAxiosError(err)
         ? err.response?.data?.mensagem ?? 'Erro ao salvar'
         : 'Erro inesperado';
-      if (/senha/i.test(msg)) setErroSenha(msg);
-      // Modal aberto: a mensagem vai PARA ELE (o topo da página fica atrás do overlay)
-      else setErroModal(msg);
+      // Modal aberto: a mensagem vai PARA ELE (o topo da página fica atrás do overlay).
+      // O desvio de mensagens com "senha" para um campo próprio saiu junto com o campo:
+      // sem ele na tela, o erro sumiria — o modal exibe o do rodapé, e só.
+      setErroModal(msg);
     } finally {
       setSalvando(false);
     }
@@ -432,14 +432,16 @@ const Usuarios = () => {
       </div>
 
       {/* ── Modal criar / editar ───────────────────────────────────────────────
-          Tela ADMIN-only (as rotas /users/:id exigem authorize('ADMIN')) — o ADMIN é,
-          junto com o próprio dono da conta, quem pode trocar uma senha. */}
+          Tela ADMIN-only (as rotas /users/:id exigem authorize('ADMIN')).
+          ⚠️ SEM campo de senha (2026-08-04): senha é da PESSOA, e nem o ADMIN a
+          troca por ela pela tela. Os caminhos que restam são os do próprio dono —
+          "esqueci minha senha" e a troca em Cadastro Pessoal — e a padrão
+          `Inicial_001` + troca obrigatória no primeiro acesso, para conta nova.
+          Não reintroduzir `permitirSenha` aqui. */}
       {modalAberto && (
         <UsuarioFormModal
           titulo={editando ? 'Editar Usuário' : 'Novo Usuário'}
           modoEdicao={!!editando}
-          permitirSenha={!!editando}
-          erroSenhaServidor={erroSenha}
           erroServidor={erroModal}
           salvando={salvando}
           onClose={fecharModal}

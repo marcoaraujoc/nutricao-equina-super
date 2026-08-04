@@ -11,6 +11,7 @@ import {
   FlaskConical, Share2, Stethoscope,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import FotoAnimal from '../components/FotoAnimal';
 
 interface Animal {
   id:               number;
@@ -182,10 +183,7 @@ export default function ClinicaDashboard() {
               >
                 {/* Foto */}
                 <div className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                  {animal.photoUrl
-                    ? <img src={animal.photoUrl} alt={animal.nome} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-xl">🐴</div>
-                  }
+                  <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
                 </div>
 
                 {/* Nome + proprietário */}

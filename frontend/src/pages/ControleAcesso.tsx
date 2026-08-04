@@ -34,6 +34,7 @@ import { isValidEmail } from '../utils/validators';
 import FieldError, { inputErrCls } from '../components/FieldError';
 import ConfirmModal from '../components/ConfirmModal';
 import InlineError from '../components/InlineError';
+import FotoAnimal from '../components/FotoAnimal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -2840,10 +2841,7 @@ function GerenciarAcessoPrestadorModal({
                     {ativas.map(d => (
                       <div key={d.id} className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl">
                         <div className="w-9 h-9 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
-                          {d.animal.photoUrl
-                            ? <img src={d.animal.photoUrl} alt={d.animal.nome} className="w-full h-full object-cover" />
-                            : <div className="w-full h-full flex items-center justify-center text-lg">🐴</div>
-                          }
+                          <FotoAnimal url={d.animal.photoUrl} nome={d.animal.nome} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-900 truncate">{d.animal.nome}</p>

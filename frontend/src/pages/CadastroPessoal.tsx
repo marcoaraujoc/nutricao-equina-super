@@ -17,7 +17,7 @@ import {
   TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
-import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2 } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import FieldError from '../components/FieldError';
 
@@ -69,10 +69,6 @@ const comprimirImagem = (file: File, maxWidth = 600, qualidade = 0.82): Promise<
     img.src = url;
   });
 
-// Iniciais para o avatar sem foto (mesmo fallback da tela de Equipe)
-const iniciaisDe = (nome: string): string =>
-  nome.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('') || '?';
-
 // Dias da semana (0=Dom … 6=Sáb) — convenção de Date.getDay()
 const DIAS_SEMANA_ATEND = [
   { v: 0, l: 'Dom' }, { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' },
@@ -103,10 +99,13 @@ const LABEL_CARGO_EQUIPE: Record<string, string> = {
   PROPRIETARIO: 'Proprietário(a)',
 };
 
-// Cargos que exercem atuação clínica — só eles têm especialidade e tempo de consulta
-// (mesma regra do backend: ver CLAUDE.md §15). Estagiário, enfermeiro, secretaria,
-// financeiro e gestor informam apenas local e horário de trabalho.
-const CARGOS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR'];
+// Cargos que podem informar especialidade e tempo de consulta (mesma regra do
+// backend: ver CLAUDE.md §15). Estagiário, enfermeiro, secretaria e financeiro
+// informam apenas local e horário de trabalho.
+// ⚠️ GESTOR entrou em 2026-08-04: ele PODE cadastrar especialidade, mas nunca é
+// obrigado — quem obriga (assumindo Clínica Médica quando nada é informado) é o
+// backend, e só para VETERINARIO. Gestor sem especialidade continua válido.
+const CARGOS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR', 'GESTOR'];
 
 // ── Label com asterisco de obrigatório ────────────────────────────────────────
 function Label({ text, required, optional }: { text: string; required?: boolean; optional?: boolean }) {
@@ -156,9 +155,6 @@ export default function CadastroPessoal() {
   const [erroLocal,        setErroLocal]        = useState<string | null>(null);
   // Índice do local em edição (null = adicionando um novo)
   const [editIndex,        setEditIndex]        = useState<number | null>(null);
-  // Locais definidos na INCLUSÃO como membro (pelo gestor) — bound: o dia/horário que o
-  // profissional informar por local deve caber dentro deste. Snapshot imutável do load.
-  const [locaisBase,       setLocaisBase]       = useState<LocalTrabalhoForm[]>([]);
   // Cargo na equipe (ex: GESTOR) — definido quando foi incluído como membro
   const [cargoEquipe,     setCargoEquipe]     = useState<string | null>(null);
   // Vínculo com a empresa ativa — SOMENTE LEITURA aqui: quem define remuneração e
@@ -328,11 +324,6 @@ export default function CadastroPessoal() {
             especialidadeIds:   Array.isArray(l.especialidadeIds) ? l.especialidadeIds : [],
             temposConsulta:     l.temposConsulta ?? {},
           }));
-          // Snapshot imutável do bound (cópia — não muda quando o form é editado)
-          setLocaisBase(locaisCarregados.map(l => ({
-            ...l, diasTrabalho: [...l.diasTrabalho], especialidadeIds: [...l.especialidadeIds],
-            temposConsulta: { ...l.temposConsulta },
-          })));
           setForm({
             nomeCompleto:      data.fullName          || '',
             telefone:          data.phone             || '',
@@ -595,44 +586,12 @@ export default function CadastroPessoal() {
     return null;
   };
 
-  // ── Bound do local pela INCLUSÃO como membro ──────────────────────────────
-  // O horário definido pelo gestor ao incluir o membro é o que manda. O dia/horário
-  // que o profissional informar por local deve caber DENTRO dele. Retorna a mensagem
-  // de erro se extrapolar (dia fora ou horário fora da faixa); null se estiver ok.
-  //
-  // O MESMO local pode ter VÁRIAS linhas base (turnos com especialidades diferentes),
-  // então basta caber em UMA delas — validar contra a primeira encontrada reprovaria o
-  // turno da tarde por causa da faixa do turno da manhã.
-  const validarDentroDaBase = (local: LocalTrabalhoForm): string | null => {
-    const bases = locaisBase.filter(b => b.localizacaoId === local.localizacaoId);
-    if (bases.length === 0) return null; // local não definido na inclusão → sem limite da equipe
-    const nomeDia = (n: number) => DIAS_SEMANA_ATEND.find(x => x.v === n)?.l ?? String(n);
-
-    const cabeEm = (base: LocalTrabalhoForm): string | null => {
-      if (base.diasTrabalho.length > 0) {
-        const fora = local.diasTrabalho.filter(d => !base.diasTrabalho.includes(d));
-        if (fora.length > 0) {
-          const permitidos = [...base.diasTrabalho].sort((a, b) => a - b).map(nomeDia).join(', ');
-          return `Dias fora do definido pela equipe (permitido: ${permitidos}).`;
-        }
-      }
-      if (base.horaInicioTrabalho && local.horaInicioTrabalho && local.horaInicioTrabalho < base.horaInicioTrabalho) {
-        return `Entrada antes do definido pela equipe (a partir de ${base.horaInicioTrabalho}).`;
-      }
-      if (base.horaFimTrabalho && local.horaFimTrabalho && local.horaFimTrabalho > base.horaFimTrabalho) {
-        return `Saída após o definido pela equipe (até ${base.horaFimTrabalho}).`;
-      }
-      return null;
-    };
-
-    let primeiroErro: string | null = null;
-    for (const base of bases) {
-      const erro = cabeEm(base);
-      if (!erro) return null;                       // coube em algum turno da equipe
-      if (primeiroErro === null) primeiroErro = erro;
-    }
-    return primeiroErro;
-  };
+  // NOTA: NÃO existe bound pelo que o gestor definiu na inclusão do membro.
+  // O profissional é dono do próprio expediente e pode trocar dias e horários aqui —
+  // o que o gestor lançou na inclusão é ponto de partida, não teto. O único limite é
+  // o EXPEDIENTE DA EMPRESA (validarExpedienteEmpresa), que o backend também aplica
+  // em updateMe. Não reintroduzir a validação contra o snapshot da inclusão: era ela
+  // que travava a alteração de dias/horário no Cadastro Pessoal.
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -779,17 +738,25 @@ export default function CadastroPessoal() {
       <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
 
         {/* Foto do cadastro NESTA empresa (tb_usuario_empresa.foto_url) — é ela que a
-            tela de Equipe exibe. Só é enviada ao salvar o formulário. */}
-        <div className="flex flex-col items-center gap-2 mb-6">
+            tela de Equipe exibe. Só é enviada ao salvar o formulário.
+            MESMO formato da foto do animal (`Animal.tsx`): 128px, `rounded-3xl`, fundo
+            neutro e o vazio convidando a ação (câmera + "Adicionar foto") em vez das
+            INICIAIS. Iniciais são bom fallback em LISTA (é o que a tela de Equipe faz,
+            e lá continua), mas num formulário elas parecem conteúdo já preenchido e
+            escondem que ali se clica para enviar a foto. */}
+        <div className="flex flex-col items-center gap-3 mb-8">
           <label className="cursor-pointer group">
-            <div className="w-28 h-28 rounded-full border-4 border-emerald-600 overflow-hidden bg-emerald-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
+            <div className="w-32 h-32 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
               {fotoPreview
                 ? <img src={fotoPreview} alt="Sua foto" className="w-full h-full object-cover" />
-                : <span className="text-2xl font-bold text-emerald-600">{iniciaisDe(form.nomeCompleto)}</span>}
+                : <div className="flex flex-col items-center gap-1 text-emerald-500 p-3">
+                    <Camera size={28} />
+                    <span className="text-xs font-medium text-gray-400 text-center leading-tight">Adicionar foto</span>
+                  </div>
+              }
             </div>
             <input type="file" accept="image/*" className="hidden" onChange={handleFotoChange} />
           </label>
-          <p className="text-xs text-gray-400">Sua foto</p>
           {fotoPreview && (
             <div className="flex items-center gap-3">
               <button type="button" onClick={() => setEditandoFoto(fotoPreview)}
@@ -931,9 +898,6 @@ export default function CadastroPessoal() {
             {(fromConvite || tipoDefinidoPelaEquipe) ? (
               <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
                 <span className="text-gray-800 font-medium">{labelTipoUsuario}</span>
-                <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
-                  <Info size={11} /> Definido pela equipe
-                </span>
               </div>
             ) : (
               <select name="tipoUsuario" value={form.tipoUsuario} onChange={handleChange}
@@ -958,9 +922,6 @@ export default function CadastroPessoal() {
                     {rotuloPagamento(vinculoEmpresa?.tipoPagamento, vinculoEmpresa?.formaPagamento, vinculoEmpresa?.valorPagamento)
                       ?? 'Não informado'}
                   </span>
-                  <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
-                    <Info size={11} /> Definido pela equipe
-                  </span>
                 </div>
               </div>
               <div>
@@ -968,9 +929,6 @@ export default function CadastroPessoal() {
                 <div className="flex items-center gap-2 px-4 py-3 border border-gray-200 bg-gray-50 rounded-2xl">
                   <span className={`font-medium ${vinculoEmpresa?.acessoSistema === false ? 'text-red-600' : 'text-gray-800'}`}>
                     {vinculoEmpresa?.acessoSistema === false ? 'Sem acesso' : 'Liberado'}
-                  </span>
-                  <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
-                    <Info size={11} /> Definido pela equipe
                   </span>
                 </div>
               </div>
@@ -1185,7 +1143,11 @@ export default function CadastroPessoal() {
               {mostrarFormLocal && (
                 <div className="p-3 bg-gray-50/60 border border-gray-200 rounded-2xl space-y-3">
                   {/* MESMO formulário do "Incluir/Editar Membro" — componente único
-                      (LocalTrabalhoFields): mesma distribuição de campos, classes e textos. */}
+                      (LocalTrabalhoFields): mesma distribuição de campos, classes e textos.
+                      `textoEspecialidade` segue `atuaComoVet`, não `form.tipoUsuario`:
+                      só quem atua como vet NESTA empresa cai no padrão Clínica Médica.
+                      O gestor tem `tipoUsuario` VETERINARIO no login, mas para ele a
+                      especialidade é opcional — prometer o padrão seria mentira. */}
                   <LocalTrabalhoFields
                     rascunho={rascunhoLocal}
                     onChange={fn => setRascunhoLocal(fn)}
@@ -1195,7 +1157,7 @@ export default function CadastroPessoal() {
                     tempoPadraoEmpresa={tempoPadraoEmpresa}
                     diasEmpresaLabel={diasEmpresaLabel}
                     horarioEmpresaLabel={horarioEmpresaLabel}
-                    textoEspecialidade={form.tipoUsuario === 'VETERINARIO'
+                    textoEspecialidade={atuaComoVet
                       ? 'sem nenhuma, você assume Clínica Médica'
                       : 'opcional'}
                     emptyTextEspecialidade="Selecione as espécies atendidas para listar as especialidades."
@@ -1221,12 +1183,9 @@ export default function CadastroPessoal() {
                         // o que não pode é sobrepor o turno de outra linha.
                         const conflito = conflitoEntreLocais([...outros, rascunhoLocal]);
                         if (conflito) { setErroLocal(conflito); return; }
-                        // Dia/horário deve caber no expediente da empresa (o que manda)…
+                        // Único limite: o expediente da empresa (o mesmo que o backend aplica)
                         const foraEmpresa = validarExpedienteEmpresa(rascunhoLocal);
                         if (foraEmpresa) { setErroLocal(foraEmpresa); return; }
-                        // …e dentro do que foi definido na inclusão como membro
-                        const foraDaBase = validarDentroDaBase(rascunhoLocal);
-                        if (foraDaBase) { setErroLocal(foraDaBase); return; }
                         setForm(prev => ({
                           ...prev,
                           locaisTrabalho: editIndex === null
@@ -1258,12 +1217,24 @@ export default function CadastroPessoal() {
           {/* Erro de salvamento/conexão — junto ao botão, visível ao agir */}
           <InlineError message={erroInline} />
 
-          <button
-            type="submit" disabled={saving}
-            className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-4 rounded-3xl text-base sm:text-lg font-semibold mt-2 transition-colors"
-          >
-            {saving ? 'Salvando...' : 'Salvar'}
-          </button>
+          {/* Botões no tamanho padrão da aplicação (mesmas classes da tela de
+              prescrição), alinhados à direita. */}
+          <div className="flex justify-end gap-2 mt-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => navigate(-1)}
+              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit" disabled={saving}
+              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
+            >
+              {saving ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
 
         </form>
       </div>

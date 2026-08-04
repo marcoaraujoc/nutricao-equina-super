@@ -2,6 +2,17 @@
 // =============================================================================
 // Carrega e disponibiliza as permissões do usuário logado.
 // Gestores recebem FULL em tudo (isGestor=true). Usuários sem equipe recebem {}.
+//
+// STORE ÚNICO no módulo (2026-08-02). O hook é consumido por ~46 componentes —
+// Sidebar, AppHeader, a página e cada submódulo dela ficam montados ao mesmo tempo.
+// Com estado por instância, CADA UM disparava o seu `GET /equipes/minhas-permissoes`,
+// e o mesmo mapa era buscado 4-6 vezes por navegação. Isso sozinho consumia a maior
+// fatia do rate limit (200 req/min em /api) e produzia 429 em uso normal.
+//
+// Agora: UMA requisição por contexto (empresa/equipe), compartilhada por todos os
+// assinantes; quem monta depois recebe o valor já em memória, sem tocar na rede.
+// Mesmo padrão de `useVetPendentes`. Regra geral: hook de fetch consumido em mais de
+// um lugar precisa de store — ver CLAUDE.md.
 // =============================================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -35,6 +46,76 @@ interface UsePermissoesResult {
 // ADMIN tem bypass total via podeExecutar.
 // PROPRIETARIO carrega permissões reais do backend (Dashboard sempre + grants do vet/empresa).
 
+// ─── Store de módulo ─────────────────────────────────────────────────────────
+
+interface EstadoPermissoes {
+  permissoes: PermissaoMap;
+  isGestor:   boolean;
+  temEquipe:  boolean;
+  loading:    boolean;
+}
+
+const VAZIO: EstadoPermissoes = { permissoes: {}, isGestor: false, temEquipe: false, loading: false };
+
+let estado: EstadoPermissoes = VAZIO;
+// Chave do que está em memória: userId + contexto ativo. Mudou a chave, os dados em
+// cache são de outro escopo e não valem — é o que impede o gestor de ver o mapa da
+// empresa anterior por um instante depois de trocar de contexto.
+let chaveAtual: string | null = null;
+// Requisição em VOO: o segundo componente a montar no mesmo tick não dispara outra,
+// aguarda esta. Sem isso, o ganho do store sumiria no carregamento inicial da tela,
+// que é justamente quando todos montam juntos.
+let emVoo: Promise<void> | null = null;
+const assinantes = new Set<(e: EstadoPermissoes) => void>();
+
+function publicar(novo: EstadoPermissoes) {
+  estado = novo;
+  assinantes.forEach(notificar => notificar(novo));
+}
+
+async function buscar(chave: string, manterDados: boolean): Promise<void> {
+  // Troca de contexto ZERA o mapa antes de buscar: manter o anterior enquanto carrega
+  // exibiria, por um instante, as permissões da OUTRA empresa (menus e botões que a
+  // pessoa não tem ali). Numa recarga do MESMO contexto os dados ficam, para a tela
+  // não piscar.
+  publicar(manterDados ? { ...estado, loading: true } : { ...VAZIO, loading: true });
+  try {
+    const res = await api.get('/equipes/minhas-permissoes');
+    // Contexto trocou enquanto a resposta vinha: ela é de outro escopo — descarta.
+    // (Mesmo motivo do `fetchSeq` que existia aqui antes do store.)
+    if (chave !== chaveAtual) return;
+    publicar({
+      permissoes: res.data?.dados?.permissoes ?? {},
+      isGestor:   res.data?.dados?.isGestor   ?? false,
+      temEquipe:  res.data?.dados?.temEquipe  ?? false,
+      loading:    false,
+    });
+  } catch {
+    if (chave !== chaveAtual) return;
+    publicar({ permissoes: {}, isGestor: false, temEquipe: false, loading: false });
+  } finally {
+    if (chave === chaveAtual) emVoo = null;
+  }
+}
+
+/** Garante os dados da `chave` em memória, sem duplicar requisição. */
+function garantir(chave: string, forcar = false): Promise<void> {
+  const mesmaChave = chave === chaveAtual;
+  // Já é a chave em memória e não é recarga explícita: aproveita o cache (ou a
+  // requisição em voo). É AQUI que os 4-6 pedidos idênticos por navegação viram um.
+  if (!forcar && mesmaChave) return emVoo ?? Promise.resolve();
+  chaveAtual = chave;
+  emVoo = buscar(chave, mesmaChave);
+  return emVoo;
+}
+
+/** Limpa o store — logout ou usuário sem permissões a carregar (ADMIN). */
+function limpar() {
+  chaveAtual = null;
+  emVoo = null;
+  publicar(VAZIO);
+}
+
 export function usePermissoes(): UsePermissoesResult {
   const { user } = useAuth();
   // O contexto ativo (empresa/equipe) define QUAIS permissões o backend resolve.
@@ -46,52 +127,50 @@ export function usePermissoes(): UsePermissoesResult {
   const userType  = (user?.userType ?? '').toUpperCase();
   const userRole  = (user?.role     ?? '').toUpperCase();
   const isAdminUser = userType === 'ADMIN' || userRole === 'ADMIN';
-  const precisaCarregar = user && !isAdminUser;
+  const precisaCarregar = !!user && !isAdminUser;
 
-  const [permissoes, setPermissoes] = useState<PermissaoMap>({});
-  const [isGestor,    setIsGestor]    = useState(false);
-  const [temEquipe,  setTemEquipe]  = useState(false);
-  // Começa true quando há permissões reais a carregar — evita flash de "sem acesso"
-  const [loading,    setLoading]    = useState(() => !!precisaCarregar);
+  const chave = precisaCarregar
+    ? `${user!.id}|${contextoAtivo?.empresaId ?? ''}|${contextoAtivo?.equipeId ?? ''}`
+    : '';
 
-  // Sequência para descartar respostas obsoletas: se o contexto ativo mudar (ex.:
-  // multi-perfil trocando de empresa) enquanto um fetch está em voo, só o resultado
-  // da última chamada é aplicado — evita que uma resposta antiga (ex.: FORNECEDOR)
-  // sobrescreva a correta (ex.: GESTOR) por chegar fora de ordem.
-  const fetchSeq = useRef(0);
+  const [local, setLocal] = useState<EstadoPermissoes>(() =>
+    // Já há dados desta mesma chave? Começa com eles — quem monta depois não passa
+    // por um `loading` falso nem re-dispara a busca.
+    precisaCarregar && chave === chaveAtual ? estado : { ...VAZIO, loading: precisaCarregar },
+  );
 
-  const carregar = useCallback(async () => {
-    if (!precisaCarregar) {
-      fetchSeq.current++; // invalida qualquer fetch em voo
-      setPermissoes({});
-      setIsGestor(false);
-      setTemEquipe(false);
-      setLoading(false);
-      return;
-    }
-    const seq = ++fetchSeq.current;
-    setLoading(true);
-    try {
-      const res = await api.get('/equipes/minhas-permissoes');
-      if (seq !== fetchSeq.current) return; // resposta obsoleta — ignora
-      setPermissoes(res.data?.dados?.permissoes ?? {});
-      setIsGestor(res.data?.dados?.isGestor     ?? false);
-      setTemEquipe(res.data?.dados?.temEquipe  ?? false);
-    } catch {
-      if (seq !== fetchSeq.current) return;
-      setPermissoes({});
-      setTemEquipe(false);
-    } finally {
-      if (seq === fetchSeq.current) setLoading(false);
-    }
-  }, [precisaCarregar]);
+  // Evita publicar em componente desmontado no meio de uma troca de contexto
+  const vivo = useRef(true);
+  useEffect(() => { vivo.current = true; return () => { vivo.current = false; }; }, []);
 
-  // Só busca depois que o contexto ativo foi resolvido/persistido (empresaLoading=false)
-  // e refaz quando o contexto muda (empresaId/equipeId) — garante o header correto.
   useEffect(() => {
-    if (empresaLoading) return;
-    carregar();
-  }, [carregar, empresaLoading, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
+    const ouvinte = (e: EstadoPermissoes) => { if (vivo.current) setLocal(e); };
+    assinantes.add(ouvinte);
+
+    if (!precisaCarregar) {
+      // ADMIN (bypass) ou deslogado: nada a buscar. Só limpa se o store ainda
+      // guardava algo — senão o logout de um usuário zeraria o de outro em outra aba.
+      if (chaveAtual !== null) limpar();
+      else setLocal(VAZIO);
+    } else if (!empresaLoading) {
+      // Só busca depois que o contexto ativo foi resolvido/persistido, e refaz quando
+      // ele muda — garante o header x-empresa-id/x-equipe-id correto.
+      // `garantir` publica de forma síncrona (loading ou cache) antes de retornar, e
+      // `setLocal(estado)` logo abaixo adota esse valor: quem monta com o cache quente
+      // não passa por um `loading` falso nem dispara requisição nenhuma.
+      garantir(chave);
+      setLocal(estado);
+    }
+
+    return () => { assinantes.delete(ouvinte); };
+  }, [chave, precisaCarregar, empresaLoading]);
+
+  const recarregar = useCallback(() => {
+    if (!precisaCarregar) return;
+    garantir(chave, true);   // força: é um pedido explícito de recarga
+  }, [chave, precisaCarregar]);
+
+  const { permissoes, isGestor, temEquipe, loading } = local;
 
   const podeExecutar = useCallback((slug: string, nivelMinimo: Nivel = 'LEITURA'): boolean => {
     if (isGestor || isAdminUser) return true;
@@ -100,5 +179,5 @@ export function usePermissoes(): UsePermissoesResult {
     return NIVEL_ORDINAL[nivelAtual] >= NIVEL_ORDINAL[nivelMinimo];
   }, [isGestor, isAdminUser, permissoes]);
 
-  return { permissoes, isGestor, temEquipe, loading, podeExecutar, recarregar: carregar };
+  return { permissoes, isGestor, temEquipe, loading, podeExecutar, recarregar };
 }

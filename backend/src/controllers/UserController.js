@@ -522,14 +522,18 @@ const UserController = {
       // ficam no vínculo do CONTEXTO ATIVO — a localização pertence à empresa. Usa o
       // mesmo parser da tela de Equipe, então a regra de horários que não podem
       // coincidir vale igual aqui.
-      // Especialidade só existe para VETERINARIO e FORNECEDOR. O vet que não informar
-      // nenhuma assume Clínica Médica; o fornecedor pode ficar sem. Demais perfis não
-      // têm especialidade nem tempo de consulta — inclusive o GESTOR, que tem userType
-      // VETERINARIO mas não preenche dados profissionais (mesma regra do formulário).
+      // Especialidade existe para VETERINARIO, FORNECEDOR e GESTOR. Demais perfis
+      // (estagiário, enfermeiro, secretaria, financeiro) não têm especialidade nem
+      // tempo de consulta — o que vier no body é ignorado.
+      //
+      // ⚠️ GESTOR entrou em 2026-08-04 e é caso PRÓPRIO: pode informar especialidade,
+      // mas NUNCA é obrigado a isso. Por isso ele fica fora de `ehVet` — quem manda o
+      // padrão "sem nenhuma, assume Clínica Médica" é `especPadrao`, e para o gestor
+      // ele é lista vazia. Gestor que não escolher nada continua sem especialidade.
       const membroCtx  = await resolverMembroDoContexto(updatedUser.id, req);
       const ehGestor   = membroCtx?.cargo === 'GESTOR';
       const ehVet      = updatedUser.userType === 'VETERINARIO' && !ehGestor;
-      const perfilComEspecialidade = ehVet || updatedUser.userType === 'FORNECEDOR';
+      const perfilComEspecialidade = ehVet || ehGestor || updatedUser.userType === 'FORNECEDOR';
       const especPadrao = ehVet
         // Fallback nas espécies que ELE informou: o vet autônomo pode não ter empresa
         // com espécies configuradas, mas acabou de escolher as que atende.
@@ -647,7 +651,7 @@ const UserController = {
     if (!email) return res.status(400).json({ error: 'E-mail obrigatório' });
     try {
       const user = await findUserByEmail(prisma, email, {
-        select: { id: true, fullName: true, phone: true, userType: true },
+        select: { id: true, fullName: true, phone: true, phone2: true, userType: true },
       });
       if (!user) return res.json({ encontrado: false });
 
@@ -662,7 +666,18 @@ const UserController = {
         if (!noEscopo) return res.json({ encontrado: false });
       }
 
-      return res.json({ encontrado: true, fullName: user.fullName, phone: user.phone ?? '' });
+      // Nome e telefone saem do PERFIL DA EMPRESA ATIVA, nunca do `users` (CLAUDE.md
+      // §36). O `users` só recebe uma cópia na CRIAÇÃO do cliente: editar o telefone
+      // depois grava no perfil, e cliente que já existia e foi cadastrado por esta
+      // clínica nem chega a tocar o `users`. Lendo dali, o formulário do animal vinha
+      // com o telefone VAZIO (ou com o número que outra clínica cadastrou).
+      const comPerfil = await aplicarPerfilProprietario(user, req.empresaId);
+      return res.json({
+        encontrado: true,
+        fullName:   comPerfil.fullName,
+        phone:      comPerfil.phone  ?? '',
+        phone2:     comPerfil.phone2 ?? '',
+      });
     } catch (err) {
       console.error('[UserController.buscarProprietarioPorEmail]', err);
       return res.status(500).json({ error: 'Erro interno' });

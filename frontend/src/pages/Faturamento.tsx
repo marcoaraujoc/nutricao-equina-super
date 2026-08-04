@@ -16,6 +16,7 @@ import {
 import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/FaturaExport';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import InlineError from '../components/InlineError';
+import FotoAnimal from '../components/FotoAnimal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -940,14 +941,8 @@ function PainelFatura({
                 </p>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    {animal.photoUrl ? (
-                      <img src={animal.photoUrl} alt={animal.nome}
-                        className="w-10 h-10 rounded-xl object-cover flex-shrink-0"/>
-                    ) : (
-                      <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0 text-indigo-600 font-bold text-sm">
-                        {animal.nome?.[0]?.toUpperCase() ?? '?'}
-                      </div>
-                    )}
+                    <FotoAnimal url={animal.photoUrl} nome={animal.nome}
+                      className="w-10 h-10 rounded-xl flex-shrink-0" iconSize={18} />
                     <div>
                       <p className="text-sm font-bold text-gray-900">{animal.nome}</p>
                       <p className="text-[10px] text-gray-400">
