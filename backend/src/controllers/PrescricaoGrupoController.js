@@ -1836,8 +1836,12 @@ const listarParaExecucao = async (req, res) => {
         executadoPor: { select: { id: true, fullName: true } },
         animal: {
           select: {
-            id: true, nome: true, photoUrl: true, peso: true,
-            // baia: true, ← reabilitar após npx prisma generate com servidor parado
+            id: true, nome: true, photoUrl: true, peso: true, baia: true,
+            // A fila do plantão mostra "Local • Peso • Idade" sob o paciente: quem vai
+            // aplicar precisa saber PARA ONDE ir e o peso da dose. `local` é o campo
+            // textual legado (fallback de quem foi cadastrado antes do catálogo).
+            local: true, dataNascimento: true, idadeAnos: true,
+            localizacao: { select: { nome: true } },
             especie: { select: { nome: true } },
             raca:    { select: { nome: true } },
           },

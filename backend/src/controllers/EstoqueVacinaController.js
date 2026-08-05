@@ -3,6 +3,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const { registrarAuditoria } = require('../lib/auditoria');
 
 const INCLUDE_LOTE = {
@@ -550,7 +551,9 @@ const listarLotesDisponiveisPorMed = async (req, res) => {
       ativo:            true,
       qtdDisponivel:    { gt: 0 },
       validade:         { gte: hoje },
-      ...(empresaId ? { OR: [{ empresaId }, { empresaId: null }] } : {}),
+      // FAIL-CLOSED: sem empresa resolvida este spread virava `{}` e listava o lote de
+      // TODAS as clínicas. Sem empresa vê-se apenas o lote global (empresaId null).
+      ...escopoCatalogoEmpresa(empresaId),
     };
 
     const lotes = await prisma.loteVacina.findMany({

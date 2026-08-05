@@ -9,6 +9,7 @@ const {
 } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const {
   aplicarPerfil: aplicarPerfilProprietario,
   aplicarPerfilEmLista: aplicarPerfilProprietarioEmLista,
@@ -184,6 +185,20 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
   return true;
 }
 
+// ISOLAMENTO ENTRE EMPRESAS na fatura alcançada por ID.
+//
+// `checkPermission('financeiro.faturas.*')` diz que a pessoa mexe em fatura — não em
+// QUAL fatura. `adicionarItem`, `atualizarItem`, `removerItem` e `atualizarStatus`
+// chegavam ao documento só pelo id: dava para lançar cobrança, alterar valor e marcar
+// como PAGA a fatura de OUTRA clínica trocando o número na URL.
+//
+// `fecharFatura` já fazia esta checagem — aqui ela vira função única para os quatro.
+// Fatura legada sem `empresaId` (anterior ao multi-tenant) NÃO é bloqueada: travá-la
+// deixaria o financeiro dessas bases sem conserto. Quem tem tenant definido é comparado.
+function faturaForaDoEscopo(fatura, req) {
+  return Boolean(req.empresaId && fatura?.empresaId && fatura.empresaId !== Number(req.empresaId));
+}
+
 const FaturaController = {
 
   // GET /proprietarios
@@ -266,7 +281,8 @@ const FaturaController = {
       // "Informação do Cavalo". Animal legado sem empresa continua aparecendo.
       const whereAnimaisDoEscopo = {
         ativo: true,
-        ...(empresaId ? { OR: [{ empresaId }, { empresaId: null }] } : {}),
+        // FAIL-CLOSED: sem empresa o spread virava `{}` e trazia animal de outra clínica.
+        ...escopoCatalogoEmpresa(empresaId),
       };
 
       const proprietarios = await prisma.user.findMany({
@@ -431,8 +447,10 @@ const FaturaController = {
     }
 
     try {
-      const fatura = await prisma.fatura.findUnique({ where: { id: Number(faturaId) }, select: { status: true } });
+      const fatura = await prisma.fatura.findUnique({ where: { id: Number(faturaId) }, select: { status: true, empresaId: true } });
       if (!fatura) return res.status(404).json({ error: 'Fatura não encontrada' });
+      // Fatura de outra clínica responde 404 (e não 403): não confirma que ela existe.
+      if (faturaForaDoEscopo(fatura, req)) return res.status(404).json({ error: 'Fatura não encontrada' });
       if (fatura.status === 'PAGA') {
         return res.status(400).json({ error: 'Fatura já paga não pode receber novos itens.', code: 'FATURA_PAGA' });
       }
@@ -479,9 +497,10 @@ const FaturaController = {
     try {
       const item = await prisma.faturaItem.findUnique({
         where:   { id: Number(itemId) },
-        include: { fatura: { select: { status: true } } },
+        include: { fatura: { select: { status: true, empresaId: true } } },
       });
       if (!item) return res.status(404).json({ error: 'Item não encontrado' });
+      if (faturaForaDoEscopo(item.fatura, req)) return res.status(404).json({ error: 'Item não encontrado' });
       if (item.fatura.status === 'PAGA') {
         return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
       }
@@ -519,9 +538,10 @@ const FaturaController = {
 
       const item = await prisma.faturaItem.findUnique({
         where:   { id: Number(itemId) },
-        include: { fatura: { select: { status: true, mesReferencia: true } } },
+        include: { fatura: { select: { status: true, mesReferencia: true, empresaId: true } } },
       });
       if (!item) return res.status(404).json({ error: 'Item não encontrado' });
+      if (faturaForaDoEscopo(item.fatura, req)) return res.status(404).json({ error: 'Item não encontrado' });
       if (item.fatura.status === 'PAGA') {
         return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
       }
@@ -558,6 +578,16 @@ const FaturaController = {
     }
 
     try {
+      // Confere o tenant ANTES de gravar: como o update ia direto pelo id, dava para
+      // marcar como PAGA (ou CANCELADA) a fatura de outra clínica.
+      const alvo = await prisma.fatura.findUnique({
+        where:  { id: Number(faturaId) },
+        select: { id: true, empresaId: true },
+      });
+      if (!alvo || faturaForaDoEscopo(alvo, req)) {
+        return res.status(404).json({ error: 'Fatura não encontrada' });
+      }
+
       const fatura = await prisma.fatura.update({
         where:   { id: Number(faturaId) },
         data:    { status },
@@ -719,13 +749,18 @@ const FaturaController = {
   obterFaturaAberta: async (req, res) => {
     const { animalId } = req.params;
     try {
+      // O acesso ao ANIMAL é garantido pelo middleware da rota. Falta o tenant do
+      // DOCUMENTO: o mesmo paciente pode ser atendido por duas clínicas, e sem este
+      // filtro uma via (e criava item n)a fatura aberta da outra.
+      const empresaId = req.empresaId ? Number(req.empresaId) : null;
+
       let fatura = await prisma.fatura.findFirst({
-        where:   { animalId: Number(animalId), status: 'ABERTA' },
+        where:   { animalId: Number(animalId), status: 'ABERTA', empresaId },
         include: { itens: { include: { veterinario: { select: { fullName: true } } }, orderBy: { criadoEm: 'asc' } } },
       });
       if (!fatura) {
         fatura = await prisma.fatura.create({
-          data:    { animalId: Number(animalId), status: 'ABERTA' },
+          data:    { animalId: Number(animalId), status: 'ABERTA', empresaId },
           include: { itens: { include: { veterinario: { select: { fullName: true } } } } },
         });
       }

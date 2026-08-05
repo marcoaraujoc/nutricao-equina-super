@@ -103,7 +103,7 @@ const HistoricoController = {
           id:          `vacina-${v.id}`,
           origem:      'VACINA',
           data:        v.dataAplicacao,
-          titulo:      v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} - ${v.nome}` : v.nome,
+          titulo:      v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} — ${v.nome}` : v.nome,
           badge:       'Vacina',
           status:      null,
           responsavel: v.veterinario?.fullName ?? null,
@@ -256,7 +256,7 @@ const HistoricoController = {
           id:      `vacina-${v.id}`,
           origem:  'VACINA',
           data:    v.dataAplicacao,
-          titulo:  v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} - ${v.nome}` : v.nome,
+          titulo:  v.numero != null ? `Vacina nº ${String(v.numero).padStart(3, '0')} — ${v.nome}` : v.nome,
           resumo:  [v.fabricante ? `Fabricante: ${v.fabricante}` : null, v.observacao].filter(Boolean).join('. '),
         })),
         ...exames.map(x => {

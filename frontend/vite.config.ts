@@ -34,14 +34,10 @@ export default defineConfig({
         // autorizado garante que CORS passe corretamente em dev.
         headers: { origin: 'http://localhost:5173' },
       },
-      // Proxy para as imagens salvas na pasta uploads
-      '/uploads': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        secure: false,
-        headers: { origin: 'http://localhost:5173' },
-      }
-    }
+      // O proxy de `/uploads` foi REMOVIDO: nada mais é servido do filesystem.
+      // Arquivo agora sai por `/api/midia/:chave` (autorizado) e `/api/marca`
+      // (marca do produto) — ambos cobertos pelo proxy de `/api` acima.
+    },
   },
 
   // Configuração para quando rodar preview (build de produção)

@@ -5,6 +5,7 @@ const { Prisma } = require('@prisma/client');
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { storage } = require('../storage');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
 const { marcarAssumido }        = require('../lib/agendamentoAssumido');
@@ -1084,11 +1085,31 @@ const EvolucaoController = {
         }
       }
 
+      // O binário vai para o BANCO (tb_midia_arquivos) e o arquivo temporário do
+      // multer é descartado. Antes a url apontava para `/uploads/evolucoes/...`,
+      // servido por express.static SEM autenticação — vídeo e áudio do prontuário
+      // ficavam acessíveis a quem tivesse o link, de qualquer empresa.
+      // O multer grava em disco (não em memória) de propósito: são até 100 MB, e o
+      // transcode de áudio para MP3 precisa de um path real.
+      const caminhoFinal = path.join(path.dirname(file.path), nomeArquivoFinal);
+      const url = await storage.upload(
+        {
+          fieldname:    file.fieldname,
+          originalname: nomeExibicao,
+          mimetype:     tipoFinal === 'AUDIO' && nomeArquivoFinal.endsWith('.mp3') ? 'audio/mpeg' : file.mimetype,
+          size:         tamanhoFinal,
+          path:         caminhoFinal,
+        },
+        'evolucoes',
+        { empresaId: req.empresaId ?? null, animalId: evolucao.animalId, criadoPorId: req.user?.id ?? null },
+      );
+      fs.unlink(caminhoFinal, () => {});
+
       const midia = await prisma.evolucaoMidia.create({
         data: {
           evolucaoId: Number(id),
           tipo:       tipoFinal,
-          url:        `/uploads/evolucoes/${nomeArquivoFinal}`,
+          url,
           nome:       nomeExibicao,
           tamanho:    tamanhoFinal,
         },
@@ -1127,9 +1148,14 @@ const EvolucaoController = {
         if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
 
-      // Remove arquivo físico (caminho relativo ao backend)
-      const filePath = path.join(__dirname, '../../', midia.url);
-      fs.unlink(filePath, () => {});
+      // Mídia no banco: storage.delete apaga a linha de tb_midia_arquivos.
+      // Mídia LEGADA (url `/uploads/...`, anterior à migração): o provider de banco
+      // ignora essa url, então o arquivo em disco é removido aqui — senão o binário
+      // ficaria órfão no filesystem depois de o registro sumir.
+      await storage.delete(midia.url);
+      if (midia.url && midia.url.startsWith('/uploads/')) {
+        fs.unlink(path.join(__dirname, '../../', midia.url), () => {});
+      }
 
       await prisma.evolucaoMidia.delete({ where: { id: Number(midiaId) } });
 

@@ -18,6 +18,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
+import { formatNumeroClinico } from '../utils/numeroClinico';
+import { linhaInfoAnimal } from '../utils/animalInfo';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -56,6 +58,12 @@ export interface GrupoExecucao {
     baia:     string | null;
     especie:  { nome: string } | null;
     raca:     { nome: string } | null;
+    // Linha "Local • Peso • Idade" da fila (ver utils/animalInfo). `localizacao` é o
+    // catálogo; `local` é o campo textual legado — a resolução é do helper.
+    local?:          string | null;
+    localizacao?:    { nome: string } | null;
+    dataNascimento?: string | null;
+    idadeAnos?:      number | null;
   };
   itens: ItemExecucao[];
 }
@@ -136,6 +144,32 @@ export function localToday(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** Data ('YYYY-MM-DD') de um timestamp ISO no fuso LOCAL — nunca `slice(0, 10)`,
+ *  que devolve a data em UTC e adianta o dia à noite (ver `itemPendenteHoje`). */
+export function dataLocalDe(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Item ainda a executar NAQUELE dia: dentro da janela do tratamento e ainda não
+ * executado na data. Exportado porque o **Painel Principal** monta a mesma fila —
+ * duas definições de "o que falta hoje" divergiriam na primeira correção.
+ *
+ * ⚠️ A data de `executadoEm` é lida no fuso LOCAL (`dataLocalDe`). `slice(0, 10)`
+ * devolve a data em UTC e, a partir das 21h (BRT = UTC-3), isso já é o DIA SEGUINTE:
+ * o item executado à noite não contaria como feito hoje.
+ */
+export function itemPendenteEm(
+  item: Pick<ItemExecucao, 'diaAtual' | 'duracaoDias' | 'executadoEm'>,
+  data: string,
+): boolean {
+  const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
+  return dentroJanela && dataLocalDe(item.executadoEm) !== data;
+}
+
 const execKey      = (grupoId: number) => `s2vet_exec_${grupoId}_${localToday()}`;
 const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${localToday()}`;
 
@@ -194,64 +228,219 @@ export function AnimalAvatar({ animal, size = 'md' }: {
     iconSize={size === 'lg' ? 24 : size === 'sm' ? 16 : 20} />;
 }
 
-// ─── VacinaExecViewModal — detalhes da vacina a aplicar (somente leitura) ──────
+// ─── ModalExecucaoVacina ──────────────────────────────────────────────────────
+// Espelho do ModalExecucao (prescrição): executar a vacina ABRE ESTA TELA, onde o
+// plantonista confere o que vai aplicar e confirma. Antes o ícone da lista aplicava
+// direto, sem conferência — a dose sai do estoque e vai para a fatura no mesmo clique.
+// Mesma estrutura do modal do medicamento: cabeçalho do paciente, faixa de contexto,
+// corpo com o item e rodapé Executar + Fechar. `soVisualizacao` cobre o olho, igual lá.
 
-function VacRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start gap-2">
-      <span className="text-xs text-gray-400 w-28 flex-shrink-0 pt-0.5">{label}</span>
-      <span className="text-sm text-gray-800 font-medium">{value}</span>
-    </div>
-  );
-}
-
-function VacinaExecViewModal({ v, onClose, onImprimir }: {
-  v:          VacinaExecucao;
-  onClose:    () => void;
-  onImprimir: () => void;
+export function ModalExecucaoVacina({
+  v, onClose, onExecutada, podeExecutarAcao, podeCancelar = false, soVisualizacao = false,
+}: {
+  v:                 VacinaExecucao;
+  onClose:           () => void;
+  /** Chamado após aplicar/cancelar — o pai recarrega a fila (a vacina sai dela). */
+  onExecutada:       () => void;
+  podeExecutarAcao:  boolean;
+  /** `enfermagem.prescricao.deletar`, o mesmo gate do cancelar item do medicamento. */
+  podeCancelar?:     boolean;
+  soVisualizacao?:   boolean;
 }) {
-  const vcNum = v.numero != null
-    ? `${v.tipoAtendimento ?? 'VC'}-${String(v.numero).padStart(4, '0')}`
-    : null;
+  const [salvando,     setSalvando]     = useState(false);
+  const [cancelando,   setCancelando]   = useState(false);
+  const [confirmarCan, setConfirmarCan] = useState(false);
+  const [erroInline,   setErroInline]   = useState<string | null>(null);
+
+  const vcNum       = formatNumeroClinico(v.numero);
   const especieInfo = [v.animal.especie?.nome, v.animal.raca?.nome].filter(Boolean).join(' • ');
+
+  const handleExecutar = async () => {
+    if (salvando) return;
+    if (!podeExecutarAcao) {
+      setErroInline('Sem permissão para executar vacina. Verifique com o responsável da equipe.');
+      return;
+    }
+    setSalvando(true);
+    setErroInline(null);
+    try {
+      await api.patch(`/clinica/vacinas/${v.id}/executar`);
+      toast.success(`${v.nome} — aplicada e lançada na fatura`);
+      onExecutada();
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao executar vacina');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  // Cancelar a vacina daqui de dentro — irmão do "cancelar item" do medicamento, e pela
+  // MESMA rota de plantão (`cancelar-plantao`), com justificativa obrigatória.
+  const handleCancelar = async (motivo: string) => {
+    setCancelando(true);
+    try {
+      await api.delete(`/clinica/vacinas/${v.id}/cancelar-plantao`, { data: { motivo } });
+      toast.success(`${v.nome} — cancelada`);
+      setConfirmarCan(false);
+      onExecutada();
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setConfirmarCan(false);
+      setErroInline(msg ?? 'Erro ao cancelar vacina');
+    } finally {
+      setCancelando(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <Syringe size={16} className="text-teal-600" />
-            <h3 className="font-bold text-gray-900">Detalhes da Vacina</h3>
-            {vcNum && (
-              <span className="text-xs font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-lg">{vcNum}</span>
-            )}
+    <>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col max-h-[92vh]">
+
+        <InlineError message={erroInline} className="mx-4 mt-3 flex-shrink-0" />
+
+        <div className="flex items-start gap-3 px-4 pt-4 pb-3 border-b border-gray-100 flex-shrink-0">
+          <AnimalAvatar animal={v.animal} size="lg" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-gray-900 text-base leading-tight">{v.animal.nome}</p>
+            <p className="text-xs text-gray-500">{especieInfo}</p>
           </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="font-mono text-sm font-bold text-emerald-600">{vcNum ? `#${vcNum}` : '—'}</span>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">
+              <X size={16} />
+            </button>
+          </div>
         </div>
-        <div className="p-5 space-y-3">
-          <VacRow label="Paciente" value={`${v.animal.nome}${especieInfo ? ` — ${especieInfo}` : ''}`} />
-          <VacRow label="Vacina" value={v.nome} />
-          {v.dose && <VacRow label="Tipo Dose" value={v.dose} />}
-          {v.quantidade != null && v.quantidade > 1 && <VacRow label="Qtd Doses" value={String(v.quantidade)} />}
-          {v.via && <VacRow label="Via" value={v.via} />}
-          {v.fabricante && <VacRow label="Fabricante" value={v.fabricante} />}
-          {v.lote && <VacRow label="Lote" value={v.lote} />}
-          <VacRow label="Aplicação" value={formatDate(v.dataAplicacao)} />
-          {v.dataReforco && <VacRow label="Reforço" value={formatDate(v.dataReforco)} />}
-          {v.veterinario && <VacRow label="Prescrito por" value={v.veterinario.fullName} />}
-          {v.observacao && <VacRow label="Obs." value={v.observacao} />}
+
+        <div className="flex flex-wrap items-center gap-4 px-4 py-2 text-xs text-gray-500 border-b border-gray-50 flex-shrink-0">
+          <span className="flex items-center gap-1">
+            <User size={11} /> {v.veterinario?.fullName ?? '—'}
+          </span>
+          <span>📅 Aplicação: {formatDate(v.dataAplicacao)}</span>
         </div>
-        <div className="flex gap-2 px-5 pb-5 pt-2 border-t border-gray-100">
-          <button onClick={onClose}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            Fechar
-          </button>
-          <button onClick={onImprimir}
-            className="flex items-center justify-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            <Printer size={14} /> Imprimir
-          </button>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            Vacina a aplicar (1)
+          </p>
+
+          <div className="rounded-xl border bg-gray-50 border-gray-100">
+            <div className="flex items-start gap-2.5 p-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700">
+                    <Syringe size={8} /> Vacina
+                  </span>
+                  <p className="text-sm font-semibold leading-tight text-gray-800">{v.nome}</p>
+                </div>
+
+                <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">
+                  {v.dose ? `${v.dose} • ` : ''}
+                  {v.via ?? '—'}
+                  {v.quantidade != null && v.quantidade > 1 ? ` • ${v.quantidade} doses` : ''}
+                </p>
+
+                {(v.fabricante || v.lote) && (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    {[v.fabricante ? `Fabricante: ${v.fabricante}` : null,
+                      v.lote ? `Lote: ${v.lote}` : null].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+                {v.dataReforco && (
+                  <p className="text-[10px] text-gray-400 mt-1">Reforço: {formatDate(v.dataReforco)}</p>
+                )}
+                {v.observacao && (
+                  <p className="text-[10px] text-gray-500 mt-1">Obs: {v.observacao}</p>
+                )}
+              </div>
+
+              {/* AS DUAS AÇÕES do item, como no medicamento: EXECUTAR e CANCELAR, ícones
+                  na mesma paleta (emerald / vermelho) — nunca botão sólido. E em
+                  visualização, a MESMA tarja "Somente leitura" que o item do medicamento
+                  mostra: a tela do olho é igual nos dois. */}
+              {soVisualizacao ? (
+                <span className="flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-400 cursor-not-allowed whitespace-nowrap">
+                  Somente leitura
+                </span>
+              ) : (
+                <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                  {podeExecutarAcao && (
+                    <button
+                      onClick={handleExecutar}
+                      disabled={salvando || cancelando}
+                      title="Aplicar vacina"
+                      aria-label="Aplicar vacina"
+                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                      {salvando
+                        ? <Loader2 size={16} className="animate-spin" />
+                        : <CheckCircle2 size={16} />}
+                    </button>
+                  )}
+                  {podeCancelar && (
+                    <button
+                      onClick={() => { setErroInline(null); setConfirmarCan(true); }}
+                      disabled={salvando || cancelando}
+                      title="Cancelar vacina"
+                      aria-label="Cancelar vacina"
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50">
+                      <Ban size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Rodapé IDÊNTICO ao do medicamento: em visualização, só a tarja âmbar (o X do
+            cabeçalho fecha); executando, FECHAR e depois EXECUTAR TODOS. */}
+        <div className="px-4 pt-2 pb-4 border-t border-gray-100 flex-shrink-0">
+          {soVisualizacao ? (
+            <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 border border-amber-200 text-amber-700">
+              <Calendar size={14} />
+              Execução disponível apenas para hoje
+            </div>
+          ) : (
+            <>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={onClose}
+                  disabled={salvando}
+                  className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                  Fechar
+                </button>
+                <button
+                  onClick={handleExecutar}
+                  disabled={salvando || !podeExecutarAcao}
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                  {salvando ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                  Executar Todos
+                </button>
+              </div>
+              <p className="text-center text-[10px] text-gray-400 mt-1">
+                Executar debita o lote e lança a vacina na fatura
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>
+
+    {confirmarCan && (
+      <ModalJustificativa
+        aberto
+        titulo={`Cancelar vacina — ${v.nome}`}
+        descricao={`Cancela a vacina de ${v.animal.nome}, devolve as doses ao lote e remove o lançamento da fatura. A justificativa vai para a auditoria.`}
+        acaoLabel="Cancelar vacina"
+        onConfirmar={handleCancelar}
+        onFechar={() => { if (!cancelando) setConfirmarCan(false); }}
+      />
+    )}
+    </>
   );
 }
 
@@ -272,6 +461,9 @@ export function ModalExecucao({
 }) {
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
+  // QUAL item está sendo executado — sem isso o spinner apareceria em TODOS os ícones
+  // (`salvando` é do modal inteiro; era o defeito do antigo rótulo "Executando…").
+  const [execItemId,  setExecItemId]  = useState<number | null>(null);
   const [erroEstoque, setErroEstoque] = useState<AlertaEstoque[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -333,6 +525,7 @@ export function ModalExecucao({
   const handleExecutarItem = async (item: ItemExecucao, slots: string[]) => {
     if (salvando) return;
     setSalvando(true);
+    setExecItemId(item.id);
     setErroEstoque([]);
     try {
       await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { itemIds: [item.id] });
@@ -348,6 +541,7 @@ export function ModalExecucao({
       tratarErroExec(err, 'Erro ao executar item');
     } finally {
       setSalvando(false);
+      setExecItemId(null);
     }
   };
 
@@ -490,12 +684,15 @@ export function ModalExecucao({
                         const done   = isSlotDone(execMap, item.id, idx);
                         const active = idx === activeIdx;
                         const past   = activeIdx >= 0 && idx < activeIdx;
+                        // Horário FEITO é emerald; o horário DA VEZ é âmbar (pendente, a
+                        // convenção de rascunho/pendente da aplicação). Os dois eram verdes
+                        // vizinhos e ficavam indistinguíveis a um relance.
                         return (
                           <span key={slot} className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border transition-all ${
                             done
                               ? 'bg-emerald-500 text-white border-emerald-500'
                               : active
-                              ? 'bg-teal-600 text-white border-teal-600 shadow-sm ring-2 ring-teal-200'
+                              ? 'bg-amber-500 text-white border-amber-500 shadow-sm ring-2 ring-amber-200'
                               : past
                               ? 'bg-gray-100 text-gray-400 border-gray-200'
                               : 'bg-white text-gray-400 border-gray-200'
@@ -517,28 +714,40 @@ export function ModalExecucao({
                     Somente leitura
                   </span>
                 ) : (
+                  /* EXECUTAR é a MESMA ação-ícone da lista (emerald `CheckCircle2`), não
+                     mais um botão sólido — dentro e fora do modal a ação tem a mesma cara.
+                     O ESTADO, que o rótulo antigo carregava ("Executado"/"Aguardando"),
+                     agora aparece em três lugares: a cor do ícone (cinza = ainda não deu o
+                     horário, e cinza é justamente o "indisponível" da §6), o `title` e o
+                     fundo emerald que o card inteiro ganha quando o item é executado. */
                   <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                     <button
                       // Execução item a item: já debita o estoque e lança este item na fatura.
                       onClick={() => handleExecutarItem(item, slots)}
                       disabled={activeIdx < 0 || activeDone || salvando}
-                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
+                      title={activeDone ? 'Executado'
+                        : activeIdx < 0 ? 'Aguardando o horário'
+                        : 'Executar item'}
+                      aria-label={activeDone ? 'Item executado'
+                        : activeIdx < 0 ? 'Aguardando o horário'
+                        : 'Executar item'}
+                      className={`p-1.5 rounded-lg transition-colors ${
                         activeDone
-                          ? 'bg-emerald-500 text-white cursor-default'
+                          ? 'text-emerald-600 cursor-default'
                           : activeIdx < 0
-                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          ? 'text-gray-300 cursor-not-allowed'
+                          : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50'
                       }`}>
-                      {activeDone ? 'Executado'
-                        : activeIdx < 0 ? 'Aguardando'
-                        : salvando ? 'Executando…'
-                        : 'Executar'}
+                      {execItemId === item.id
+                        ? <Loader2 size={16} className="animate-spin" />
+                        : <CheckCircle2 size={16} />}
                     </button>
                     {podeCancelar && (
                       <button
                         onClick={() => { setErroInline(null); setCancelarItem(item); }}
                         disabled={salvando || cancelando}
                         title="Cancelar item"
+                        aria-label="Cancelar item"
                         className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50">
                         <Ban size={14} />
                       </button>
@@ -576,25 +785,25 @@ export function ModalExecucao({
             </div>
           ) : (
             <>
-              {/* Rodapé é só Executar + FECHAR, à direita e no tamanho padrão da aplicação
-                  (mesmas classes dos botões de ação da tela de prescrição). Cancelar a
-                  prescrição inteira é o botão da linha na lista; cancelar item é o botão
-                  ao lado de cada item, acima. */}
+              {/* Rodapé: FECHAR e depois EXECUTAR TODOS — a ação principal fica por
+                  último, encostada à direita, que é onde a mão vai. Cancelar a prescrição
+                  inteira é o botão da linha na lista; executar e cancelar UM item são os
+                  dois ícones ao lado de cada item, acima. */}
               <div className="flex justify-end gap-2">
-                <button
-                  onClick={handleExecutarTodos}
-                  disabled={salvando || todosFeitos}
-                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
-                  {salvando
-                    ? <Loader2 size={13} className="animate-spin" />
-                    : <CheckCircle2 size={13} />}
-                  Executar Todos
-                </button>
                 <button
                   onClick={onClose}
                   disabled={salvando}
                   className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors">
                   Fechar
+                </button>
+                <button
+                  onClick={handleExecutarTodos}
+                  disabled={salvando || todosFeitos}
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                  {salvando && execItemId == null
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <CheckCircle2 size={13} />}
+                  Executar Todos
                 </button>
               </div>
               <p className="text-center text-[10px] text-gray-400 mt-1">
@@ -834,6 +1043,98 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
 
 // ─── Linha da lista ───────────────────────────────────────────────────────────
 
+/**
+ * Casca ÚNICA da linha da fila do plantão — prescrição e vacina são a MESMA linha.
+ *
+ * POR QUÊ um componente e não duas marcações parecidas: a vacina nasceu com um card
+ * próprio (sem as colunas Nº e Veterinário Responsável, com o olho e a impressora em
+ * cinza) e as duas listas foram divergindo a cada ajuste. Mesma lição do
+ * `SubModuloMinhaAgenda` (armadilha 28-g): para variar o comportamento, passe uma
+ * prop — não copie a linha.
+ *
+ * As AÇÕES vêm por `children`, na ordem fixa VISUALIZAR · EXECUTAR · IMPRIMIR · CANCELAR.
+ */
+function LinhaExecucao({
+  animal, detalhe, numeroLabel, numeroFormatado, onNumero, tituloNumero,
+  veterinarioNome, executorNome = null, children,
+}: {
+  animal:          GrupoExecucao['animal'];
+  /** Linha extra sob o paciente — a vacina diz QUAL vacina é (a prescrição tem N itens,
+   *  então não há o que resumir aqui e ela não passa nada). */
+  detalhe?:        string | null;
+  numeroLabel:     string;
+  /** Já formatado, SEM o "#" (ver utils/numeroClinico). `null` = registro legado sem
+   *  número: vira "—" e deixa de ser clicável — não há documento a que apontar. */
+  numeroFormatado: string | null;
+  onNumero:        () => void;
+  tituloNumero:    string;
+  veterinarioNome: string;
+  executorNome?:   string | null;
+  children:        React.ReactNode;
+}) {
+  const lbaia = labelBaia(animal.especie?.nome);
+  // LOCAL • PESO • IDADE — quem vai aplicar precisa saber para ONDE ir e o peso da dose;
+  // "Equino • Brasileiro de Hipismo" não informa nada numa fila de plantão de equinos.
+  // A ESPÉCIE ainda serve para o rótulo da baia (Baia × Leito), logo abaixo.
+  const infoAnimal = linhaInfoAnimal(animal);
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl flex items-center gap-3 px-3 py-2.5 shadow-sm hover:border-emerald-200 transition-colors">
+
+      <AnimalAvatar animal={animal} size="md" />
+
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-gray-900 text-sm leading-tight">{animal.nome}</p>
+        <p className="text-xs text-gray-500 truncate">{infoAnimal}</p>
+        {detalhe && <p className="text-xs text-gray-600 truncate">{detalhe}</p>}
+        {animal.baia && lbaia && (
+          <span className="inline-block mt-0.5 px-2 py-0.5 bg-cyan-50 border border-cyan-200 text-cyan-700 text-[10px] font-bold rounded-full">
+            {lbaia} {animal.baia}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-shrink-0 text-center px-3 border-l border-r border-gray-100 hidden sm:block">
+        <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">{numeroLabel}</p>
+        {numeroFormatado ? (
+          <button
+            onClick={onNumero}
+            className="font-mono font-bold text-emerald-600 text-sm hover:text-emerald-800 hover:underline transition-colors"
+            title={tituloNumero}
+          >
+            #{numeroFormatado}
+          </button>
+        ) : (
+          <span className="font-mono font-bold text-gray-300 text-sm">—</span>
+        )}
+      </div>
+
+      <div className="flex-shrink-0 text-xs px-3 border-r border-gray-100 hidden md:block min-w-[140px]">
+        <p className="text-[10px] text-gray-400 uppercase tracking-wide">Veterinário Responsável</p>
+        <p className="text-gray-700 font-medium truncate">{veterinarioNome}</p>
+        {executorNome && (
+          <>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide mt-1">Executor</p>
+            <p className="text-gray-700 font-medium truncate">{executorNome}</p>
+          </>
+        )}
+      </div>
+
+      {numeroFormatado && (
+        <button
+          onClick={onNumero}
+          title={tituloNumero}
+          className="font-mono font-bold text-emerald-600 text-xs sm:hidden flex-shrink-0 hover:underline"
+        >
+          #{numeroFormatado}
+        </button>
+      )}
+
+      {children}
+    </div>
+  );
+}
+
 function LinhaGrupo({
   g,
   onExecutar,
@@ -861,57 +1162,18 @@ function LinhaGrupo({
   executada?: boolean;
   horaExecucao?: string | null;
 }) {
-  const navigate    = useNavigate();
-  const { animal }  = g;
-  const lbaia       = labelBaia(animal.especie?.nome);
-  const especieRaca = [animal.especie?.nome, animal.raca?.nome].filter(Boolean).join(' • ');
-  const pesoStr     = animal.peso ? `, ${animal.peso}kg` : '';
-  const infoAnimal  = `${especieRaca}${pesoStr}`;
+  const navigate = useNavigate();
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl flex items-center gap-3 px-3 py-2.5 shadow-sm hover:border-emerald-200 transition-colors">
-
-      <AnimalAvatar animal={animal} size="md" />
-
-      <div className="flex-1 min-w-0">
-        <p className="font-semibold text-gray-900 text-sm leading-tight">{animal.nome}</p>
-        <p className="text-xs text-gray-500 truncate">{infoAnimal}</p>
-        {animal.baia && lbaia && (
-          <span className="inline-block mt-0.5 px-2 py-0.5 bg-cyan-50 border border-cyan-200 text-cyan-700 text-[10px] font-bold rounded-full">
-            {lbaia} {animal.baia}
-          </span>
-        )}
-      </div>
-
-      <div className="flex-shrink-0 text-center px-3 border-l border-r border-gray-100 hidden sm:block">
-        <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Nº Prescrição</p>
-        <button
-          onClick={() => navigate(`/clinica/prescricao/${g.animal.id}`)}
-          className="font-mono font-bold text-emerald-600 text-sm hover:text-emerald-800 hover:underline transition-colors"
-          title="Ir para a prescrição original"
-        >
-          #{g.numeroFormatado}
-        </button>
-      </div>
-
-      <div className="flex-shrink-0 text-xs px-3 border-r border-gray-100 hidden md:block min-w-[140px]">
-        <p className="text-[10px] text-gray-400 uppercase tracking-wide">Veterinário Responsável</p>
-        <p className="text-gray-700 font-medium truncate">{g.veterinario.fullName}</p>
-        {g.executadoPor && (
-          <>
-            <p className="text-[10px] text-gray-400 uppercase tracking-wide mt-1">Executor</p>
-            <p className="text-gray-700 font-medium truncate">{g.executadoPor.fullName}</p>
-          </>
-        )}
-      </div>
-
-      <button
-        onClick={() => navigate(`/clinica/prescricao/${g.animal.id}`)}
-        className="font-mono font-bold text-emerald-600 text-xs sm:hidden flex-shrink-0 hover:underline"
-      >
-        #{g.numeroFormatado}
-      </button>
-
+    <LinhaExecucao
+      animal={g.animal}
+      numeroLabel="Nº Prescrição"
+      numeroFormatado={g.numeroFormatado}
+      onNumero={() => navigate(`/clinica/prescricao/${g.animal.id}`)}
+      tituloNumero="Ir para a prescrição original"
+      veterinarioNome={g.veterinario.fullName}
+      executorNome={g.executadoPor?.fullName ?? null}
+    >
       <div className="flex items-center gap-1.5 flex-shrink-0">
         {g.status === 'CANCELADO' && (
           <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
@@ -924,38 +1186,51 @@ function LinhaGrupo({
             <CheckCircle2 size={11} /> Executada{horaExecucao ? ` às ${horaExecucao}` : ''}
           </span>
         )}
-        {podeExecutarAcao && !soVisualizacao && !executada && (
-          <button
-            onClick={onExecutar}
-            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors">
-            Executar
-          </button>
-        )}
-        {/* Ações disponíveis nascem PINTADAS (mesma paleta da tela de prescrição):
-            emerald = ver, azul = imprimir, vermelho = cancelar. Cinza fica reservado
-            para o que está indisponível — ação habilitada não se disfarça de desativada. */}
-        {podeCancelar && onCancelar && (
-          <button
-            onClick={onCancelar}
-            title="Cancelar prescrição"
-            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-            <Ban size={14} />
-          </button>
-        )}
-        <button onClick={onVer} title="Ver prescrição"
+        {/* ORDEM DAS AÇÕES — VISUALIZAR · EXECUTAR · IMPRIMIR · CANCELAR, sempre, nesta
+            sequência. A ação que some por falta de permissão NÃO reordena as outras: a
+            posição de cada ícone é fixa para a mão do plantonista não ter de reaprender
+            a linha a cada perfil.
+            Ações disponíveis nascem PINTADAS (mesma paleta da tela de prescrição):
+            emerald = ver/executar, azul = imprimir, vermelho = cancelar. Cinza fica
+            reservado para o indisponível — ação habilitada não se disfarça de desativada.
+            EXECUTAR é ÍCONE, como as demais: continua gateado por
+            `enfermagem.prescricao.executar` (o chamador resolve `podeExecutarAcao`), então
+            quem não tem a permissão não vê o botão — não vê um botão que só falha depois
+            do clique (armadilha 28-d). `title` + `aria-label` obrigatórios: sem rótulo
+            visível, são eles que dão nome ao botão no hover e no leitor de tela. */}
+        <button onClick={onVer} title="Ver prescrição" aria-label="Ver prescrição"
           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
           <Eye size={14} />
         </button>
+        {podeExecutarAcao && !soVisualizacao && !executada && (
+          <button
+            onClick={onExecutar}
+            title="Executar prescrição"
+            aria-label="Executar prescrição"
+            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+            <CheckCircle2 size={16} />
+          </button>
+        )}
         {podeImprimir && (
           <button
             onClick={onImprimir}
             title="Imprimir prescrição"
+            aria-label="Imprimir prescrição"
             className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
             <Printer size={14} />
           </button>
         )}
+        {podeCancelar && onCancelar && (
+          <button
+            onClick={onCancelar}
+            title="Cancelar prescrição"
+            aria-label="Cancelar prescrição"
+            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+            <Ban size={14} />
+          </button>
+        )}
       </div>
-    </div>
+    </LinhaExecucao>
   );
 }
 
@@ -971,13 +1246,14 @@ export default function ExecucaoPrescricao() {
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
+  const navigate = useNavigate();
+
   const [grupos,   setGrupos]   = useState<GrupoExecucao[]>([]);
   const [vacinas,  setVacinas]  = useState<VacinaExecucao[]>([]);
-  const [execVacinaId, setExecVacinaId] = useState<number | null>(null);
-  const [viewingVac, setViewingVac] = useState<VacinaExecucao | null>(null);
-  // Erro da execução da vacina exibido COLADO no card da vacina (abaixo do botão),
-  // não no topo da página — cada erro fica junto da ação que o gerou.
-  const [erroVacina, setErroVacina] = useState<{ id: number; msg: string } | null>(null);
+  // Vacina aberta no ModalExecucaoVacina + a intenção da abertura (olho = leitura),
+  // exatamente o par `modal`/`modalVer` que a prescrição usa.
+  const [vacModal,   setVacModal]   = useState<VacinaExecucao | null>(null);
+  const [vacModoVer, setVacModoVer] = useState(false);
   const [loading,  setLoading]  = useState(false);
   const [busca,    setBusca]    = useState('');
   const [modal,    setModal]    = useState<GrupoExecucao | null>(null);
@@ -985,9 +1261,10 @@ export default function ExecucaoPrescricao() {
   // prescrição de hoje ainda executável — só o botão "Executar" abre em modo de execução.
   const [modalVer, setModalVer] = useState(false);
   const [dataSel,  setDataSel]  = useState(localToday());
-  // Prescrição escolhida para cancelar (abre o ModalJustificativa da lista)
-  const [cancelarAlvo, setCancelarAlvo] = useState<GrupoExecucao | null>(null);
-  const [cancelando,   setCancelando]   = useState(false);
+  // Prescrição / vacina escolhida para cancelar (abre o ModalJustificativa da lista)
+  const [cancelarAlvo,   setCancelarAlvo]   = useState<GrupoExecucao | null>(null);
+  const [cancelarVacina, setCancelarVacina] = useState<VacinaExecucao | null>(null);
+  const [cancelando,     setCancelando]     = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
 
@@ -1056,6 +1333,30 @@ export default function ExecucaoPrescricao() {
     }
   };
 
+  // Cancela a vacina a partir do plantão. Aponta para `cancelar-plantao`, que no backend é
+  // o MESMO controller do cancelar da tela de Vacina — logo, mesma regra: justificativa
+  // obrigatória, estorno do item de fatura e das doses do lote, e auditoria. Só o slug de
+  // permissão muda (`enfermagem.prescricao.deletar`), como na prescrição.
+  const handleCancelarVacinaPlantao = async (motivo: string) => {
+    if (!cancelarVacina) return;
+    if (!podeCancelar) { semPermissao('cancelar vacina'); return; }
+    const alvo = cancelarVacina;
+    setCancelando(true);
+    try {
+      await api.delete(`/clinica/vacinas/${alvo.id}/cancelar-plantao`, { data: { motivo } });
+      toast.success(`${alvo.nome} — cancelada`);
+      setCancelarVacina(null);
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      // Fecha o modal para o erro não ficar atrás dele (o InlineError vive na página)
+      setCancelarVacina(null);
+      setErroInline(msg ?? 'Erro ao cancelar vacina');
+    } finally {
+      setCancelando(false);
+    }
+  };
+
   // Impressão da vacina — reutiliza o gerador da prescrição (a vacina vira um "grupo"
   // de um único item), igual ao imprimirVacina da tela de Vacina.
   const imprimirVacinaExec = async (v: VacinaExecucao) => {
@@ -1065,9 +1366,9 @@ export default function ExecucaoPrescricao() {
       logoUrl = res.data?.dados?.logoUrl ?? null;
     } catch { /* silencioso — fallback: marca S2Vet no template */ }
 
-    const vcNum = v.numero != null
-      ? `${v.tipoAtendimento ?? 'VC'}-${String(v.numero).padStart(4, '0')}`
-      : `VC-${String(v.id).padStart(4, '0')}`;
+    // O template escreve o "#" — sem número (legado) sai "#—", nunca um id disfarçado
+    // de número de vacina.
+    const vcNum = formatNumeroClinico(v.numero) ?? '—';
 
     const item: PrintItemPrescricao = {
       id:              v.id,
@@ -1106,25 +1407,6 @@ export default function ExecucaoPrescricao() {
     imprimirPrescricao(grupo);
   };
 
-  const executarVacina = async (v: VacinaExecucao) => {
-    setErroVacina(null);
-    if (!podeExecutarAcao) {
-      setErroVacina({ id: v.id, msg: 'Sem permissão para executar vacina. Verifique com o responsável.' });
-      return;
-    }
-    setExecVacinaId(v.id);
-    try {
-      await api.patch(`/clinica/vacinas/${v.id}/executar`);
-      toast.success(`${v.nome} — aplicada e lançada na fatura`);
-      carregar();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroVacina({ id: v.id, msg: msg ?? 'Erro ao executar vacina' });
-    } finally {
-      setExecVacinaId(null);
-    }
-  };
-
   const vacinasFiltradas = vacinas.filter(busca.trim()
     ? (v => {
         const q = busca.toLowerCase();
@@ -1147,12 +1429,8 @@ export default function ExecucaoPrescricao() {
         );
       }) : () => true);
 
-  // Item ainda a executar HOJE: dentro da janela do dia e ainda não executado hoje.
-  const itemPendenteHoje = (item: ItemExecucao): boolean => {
-    const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
-    const feitoHoje = !!item.executadoEm && String(item.executadoEm).slice(0, 10) === dataSel;
-    return dentroJanela && !feitoHoje;
-  };
+  // Item ainda a executar na data selecionada — fonte única com o Painel Principal.
+  const itemPendenteHoje = (item: ItemExecucao): boolean => itemPendenteEm(item, dataSel);
 
   // Grupo concluído hoje (vai para o Histórico) SÓ quando: totalmente executado
   // (EXECUTADO) ou sem NENHUM item pendente para hoje. Com execução item a item,
@@ -1300,7 +1578,7 @@ export default function ExecucaoPrescricao() {
               <div className="pt-2">
                 <div className="flex items-center justify-between px-1 pb-2">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                    <Syringe size={13} className="text-teal-600" /> Vacinas a aplicar
+                    <Syringe size={13} className="text-emerald-600" /> Vacinas a aplicar
                   </p>
                   <span className="text-xs text-gray-400">
                     {vacinasFiltradas.length} vacina{vacinasFiltradas.length !== 1 ? 's' : ''}
@@ -1308,59 +1586,75 @@ export default function ExecucaoPrescricao() {
                 </div>
                 <div className="space-y-2">
                   {vacinasFiltradas.map(v => (
-                    <div key={v.id}
-                      className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 shadow-sm hover:border-teal-200 transition-colors">
-                      <div className="flex items-center gap-3">
-                      <AnimalAvatar animal={v.animal} size="md" />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-gray-900 text-sm leading-tight truncate">{v.animal.nome}</p>
-                        <p className="text-xs text-gray-600 truncate">
-                          <span className="font-medium">{v.nome}</span>
-                          {v.dose ? ` · ${v.dose}` : ''}{v.via ? ` · ${v.via}` : ''}
-                          {v.quantidade && v.quantidade > 1 ? ` · ${v.quantidade} doses` : ''}
-                        </p>
-                        {v.veterinario && (
-                          <p className="text-[11px] text-gray-400 truncate">Prescrito por {v.veterinario.fullName}</p>
-                        )}
-                      </div>
+                    <LinhaExecucao
+                      key={v.id}
+                      animal={v.animal}
+                      detalhe={[
+                        v.nome,
+                        v.dose,
+                        v.via,
+                        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+                      ].filter(Boolean).join(' · ')}
+                      numeroLabel="Nº Vacina"
+                      numeroFormatado={formatNumeroClinico(v.numero)}
+                      onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
+                      tituloNumero="Ir para a vacina original"
+                      veterinarioNome={v.veterinario?.fullName ?? '—'}
+                    >
+                      {/* MESMA ORDEM da linha da prescrição: VISUALIZAR · EXECUTAR ·
+                          IMPRIMIR (a vacina não tem cancelar aqui — o cancelamento é na
+                          tela de Vacina). Ver e Executar abrem a MESMA tela, como no
+                          medicamento; só o olho a abre em somente leitura. */}
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        {podeExecutarAcao && (
-                          <button
-                            onClick={() => executarVacina(v)}
-                            disabled={execVacinaId === v.id}
-                            className="flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 text-white text-xs font-semibold rounded-lg transition-colors">
-                            {execVacinaId === v.id ? <Loader2 size={12} className="animate-spin" /> : <Syringe size={12} />}
-                            Executar
-                          </button>
-                        )}
-                        <button onClick={() => setViewingVac(v)}
-                          className="p-1.5 text-gray-400 hover:text-teal-600 rounded-lg hover:bg-gray-50 transition-colors">
+                        <button onClick={() => { setVacModoVer(true); setVacModal(v); }}
+                          title="Ver vacina"
+                          aria-label="Ver vacina"
+                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
                           <Eye size={14} />
                         </button>
+                        {podeExecutarAcao && (
+                          <button
+                            onClick={() => { setVacModoVer(false); setVacModal(v); }}
+                            title="Aplicar vacina"
+                            aria-label="Aplicar vacina"
+                            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <CheckCircle2 size={16} />
+                          </button>
+                        )}
                         {podeImprimir && (
                           <button onClick={() => imprimirVacinaExec(v)}
                             title="Imprimir vacina"
-                            className="p-1.5 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">
+                            aria-label="Imprimir vacina"
+                            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                             <Printer size={14} />
                           </button>
                         )}
+                        {podeCancelar && (
+                          <button
+                            onClick={() => { setErroInline(null); setCancelarVacina(v); }}
+                            title="Cancelar vacina"
+                            aria-label="Cancelar vacina"
+                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                            <Ban size={14} />
+                          </button>
+                        )}
                       </div>
-                      </div>
-                      {erroVacina?.id === v.id && (
-                        <InlineError message={erroVacina.msg} className="mt-2" />
-                      )}
-                    </div>
+                    </LinhaExecucao>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* ── Histórico — prescrições já executadas hoje ─────────────── */}
+            {/* ── Histórico — prescrições já executadas hoje ───────────────
+                ⚠️ É SEMPRE O ÚLTIMO CARD DA TELA. O medicamento executado sai da fila
+                de "a aplicar" e desce para cá (a vacina executada some da tela: vira
+                EXECUTADA e o /para-execucao deixa de devolvê-la). Seção nova entra
+                ACIMA deste bloco — nada é renderizado depois dele. */}
             {!loading && executadasHoje.length > 0 && (
               <div className="pt-2">
                 <div className="flex items-center justify-between px-1 pb-2">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    Histórico — executadas hoje
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-emerald-600" /> Histórico — executadas hoje
                   </p>
                   <span className="text-xs text-gray-400">
                     {executadasHoje.length} prescrição{executadasHoje.length !== 1 ? 'ões' : ''}
@@ -1409,11 +1703,26 @@ export default function ExecucaoPrescricao() {
         />
       )}
 
-      {viewingVac && (
-        <VacinaExecViewModal
-          v={viewingVac}
-          onClose={() => setViewingVac(null)}
-          onImprimir={() => imprimirVacinaExec(viewingVac)}
+      {cancelarVacina && (
+        <ModalJustificativa
+          aberto
+          titulo={`Cancelar vacina — ${cancelarVacina.nome}`}
+          descricao={`Cancela a vacina de ${cancelarVacina.animal.nome}, devolve as doses ao lote e remove o lançamento da fatura. A justificativa vai para a auditoria.`}
+          acaoLabel="Cancelar vacina"
+          onConfirmar={handleCancelarVacinaPlantao}
+          onFechar={() => { if (!cancelando) setCancelarVacina(null); }}
+        />
+      )}
+
+      {vacModal && (
+        <ModalExecucaoVacina
+          v={vacModal}
+          onClose={() => setVacModal(null)}
+          onExecutada={carregar}
+          // Só o olho abre em leitura; fora de hoje a fila nem lista vacina.
+          soVisualizacao={vacModoVer || !isHoje}
+          podeExecutarAcao={podeExecutarAcao}
+          podeCancelar={podeCancelar}
         />
       )}
     </PageContainer>

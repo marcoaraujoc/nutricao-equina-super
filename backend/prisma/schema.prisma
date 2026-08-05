@@ -2392,3 +2392,45 @@ model ResenhaTracoRegiao {
   @@map("tb_resenha_traco_regiao")
   @@schema("schs2vet")
 }
+
+/// Arquivo binário guardado NO BANCO (bytea), não no filesystem.
+///
+/// POR QUÊ: em `/uploads` servido por `express.static` o byte saía da aplicação sem
+/// passar por autenticação nenhuma — o único gate era o nome aleatório do arquivo
+/// (capability URL). Quem obtivesse o link seguia acessando a foto/laudo do paciente
+/// mesmo depois de perder acesso a ele, inclusive de outra empresa. Guardando aqui,
+/// NÃO EXISTE caminho que não passe pelo controller: o gate deixa de ser o segredo da
+/// URL e passa a ser a mesma regra de acesso do resto do sistema.
+///
+/// `conteudo` é `bytea` (Prisma Bytes) — NÃO usar text/CLOB: obrigaria base64, que
+/// infla ~33% e gasta CPU nas duas pontas. O Postgres TOASTa o valor automaticamente
+/// (comprime e fatia fora da tabela), e a leitura por faixa (HTTP Range) usa
+/// `substring()`, então vídeo grande não é carregado inteiro em memória.
+///
+/// ESCOPO: `empresaId`/`animalId` são o que a rota de download usa para autorizar —
+/// animal → verificarAcessoAnimal; empresa → tem de ser a do contexto. `publico=true`
+/// é só para asset do PRODUTO (a marca S2Vet), nunca para dado de cliente.
+model MidiaArquivo {
+  id            Int      @id @default(autoincrement())
+  /// Identificador opaco usado na URL (/api/midia/<chave>) — nunca o id sequencial,
+  /// que seria enumerável.
+  chave         String   @unique @db.VarChar(64)
+  conteudo      Bytes
+  mimeType      String   @map("mime_type") @db.VarChar(150)
+  nomeOriginal  String?  @map("nome_original") @db.VarChar(255)
+  tamanho       Int
+  /// Categoria de origem (equivale à antiga pasta): animais, evolucoes, exames,
+  /// exames-imagens, empresas, profissionais.
+  pasta         String   @db.VarChar(64)
+  empresaId     Int?     @map("empresa_id")
+  animalId      Int?     @map("animal_id")
+  criadoPorId   Int?     @map("criado_por_id")
+  publico       Boolean  @default(false)
+  criadoEm      DateTime @default(now()) @map("criado_em")
+
+  @@index([empresaId])
+  @@index([animalId])
+  @@index([pasta])
+  @@map("tb_midia_arquivos")
+  @@schema("schs2vet")
+}

@@ -1,5 +1,10 @@
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
+// ISOLAMENTO ENTRE EMPRESAS: `checkPermission` na rota diz SE a pessoa lê/edita dieta,
+// nunca SOBRE QUAL paciente. Nas rotas com :animalId o guard é middleware; aqui, nas
+// rotas por :id do plano/item, o animal só aparece depois de carregar o registro —
+// por isso a checagem vem logo após o findUnique e ANTES de responder qualquer dado.
+const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 
 // =============================================================================
 // PLANOS DE DIETA
@@ -44,6 +49,7 @@ const PlanoDietaController = {
       });
 
       if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano de dieta não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, plano.animalId))) return;
 
       res.json({ sucesso: true, dados: plano });
     } catch (error) {
@@ -83,6 +89,7 @@ const PlanoDietaController = {
     try {
       const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
 
       const plano = await prisma.planoDieta.update({
         where: { id: Number(id) },
@@ -101,6 +108,7 @@ const PlanoDietaController = {
     try {
       const plano = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, plano.animalId))) return;
 
       if (!plano.ativo) {
         await prisma.planoDieta.updateMany({
@@ -126,6 +134,7 @@ const PlanoDietaController = {
     try {
       const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
 
       // Remove os itens vinculados antes de excluir o plano
       await prisma.dieta.deleteMany({ where: { planoDietaId: Number(id) } });
@@ -195,6 +204,13 @@ const DietaItemController = {
   listarPorPlano: async (req, res) => {
     const { planoDietaId } = req.params;
     try {
+      const plano = await prisma.planoDieta.findUnique({
+        where:  { id: Number(planoDietaId) },
+        select: { animalId: true },
+      });
+      if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, plano.animalId))) return;
+
       const itens = await prisma.dieta.findMany({
         where: { planoDietaId: Number(planoDietaId) },
         include: { alimento: true },
@@ -215,6 +231,7 @@ const DietaItemController = {
         include: { alimento: true, plano: true }
       });
       if (!dieta) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, dieta.animalId))) return;
       res.json(dieta);
     } catch (error) {
       console.error('Erro ao buscar item da dieta:', error);
@@ -282,6 +299,7 @@ const DietaItemController = {
     try {
       const existe = await prisma.dieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
 
       const dieta = await prisma.dieta.update({
         where: { id: Number(id) },
@@ -316,6 +334,7 @@ const DietaItemController = {
         include: { alimento: { select: { nome: true } } },
       });
       if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
+      if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
 
       await prisma.dieta.delete({ where: { id: Number(id) } });
 

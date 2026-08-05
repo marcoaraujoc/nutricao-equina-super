@@ -377,7 +377,7 @@ const ExameClinicoController = {
       if (exame.tipo === 'Imagem') {
         const imagens = [];
         for (const file of arquivos) {
-          const arquivoUrl = await storage.upload(file, 'exames-imagens');
+          const arquivoUrl = await storage.upload(file, 'exames-imagens', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
           const anexo = await prisma.exameImagemAnexo.create({
             data: {
               animalId:       exame.animalId,
@@ -409,9 +409,9 @@ const ExameClinicoController = {
       const itensManuais = parseItensManuais(req.body?.itens);
       if (itensManuais.length > 0) {
         itens = itensManuais;
-        if (file) arquivoUrl = await storage.upload(file, 'exames');
+        if (file) arquivoUrl = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
       } else if (file) {
-        arquivoUrl = await storage.upload(file, 'exames');
+        arquivoUrl = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
         try {
           const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null);
           itens = (extracao?.exames ?? [])

@@ -1105,7 +1105,10 @@ const EquipeController = {
 
       let logoUrlFinal;
       if (req.file) {
-        logoUrlFinal = await storage.upload(req.file, 'empresas');
+        logoUrlFinal = await storage.upload(req.file, 'empresas', {
+          empresaId:   escopo?.empresaId ?? req.empresaId ?? null,
+          criadoPorId: req.user?.id ?? null,
+        });
         if (existente?.logoUrl) await storage.delete(existente.logoUrl);
       } else if (removerLogo === 'true' || removerLogo === true) {
         if (existente?.logoUrl) await storage.delete(existente.logoUrl);

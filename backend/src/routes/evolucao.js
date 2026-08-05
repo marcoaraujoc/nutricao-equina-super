@@ -9,6 +9,8 @@ const router  = express.Router();
 
 const EvolucaoController              = require('../controllers/EvolucaoController');
 const { authenticate }                = require('../middlewares/auth');
+// Teto de tamanho do sistema (150 MB) — fonte única em src/storage.
+const { TETO_ARQUIVO_BYTES }          = require('../storage');
 const { injectTenant }                = require('../middlewares/tenant');
 const { checkPermission }             = require('../middlewares/permissao.middleware');
 const { interpretarEvolucao }         = require('../services/clinicaLLMService');
@@ -40,7 +42,9 @@ const uploadMidia = multer({
       cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
     },
   }),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+  // Teto do sistema (150 MB). O multer recusa ANTES de ler o corpo inteiro; o
+  // DbStorageProvider repete a checagem como rede de segurança para toda rota.
+  limits: { fileSize: TETO_ARQUIVO_BYTES },
   fileFilter: (_req, file, cb) => {
     // Valida mimetype declarado E extensão — o mimetype sozinho é falsificável pelo cliente.
     const ext = path.extname(file.originalname).toLowerCase();

@@ -169,6 +169,21 @@ export default function Login() {
           Faça login na sua conta
         </h1>
 
+        {/* ── Banner: link de recuperação enviado (volta de "Esqueci minha senha") ──
+            Repete aqui a confirmação que a tela anterior exibiu antes de redirecionar,
+            para quem chega e já não a tem mais na frente. Texto GENÉRICO ("se houver
+            uma conta"): confirmar a existência do e-mail permitiria enumerar usuários. */}
+        {msg === 'reset_link_enviado' && (
+          <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200
+                          rounded-2xl px-4 py-3 text-sm text-emerald-800 mb-4">
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+            <span>
+              Se houver uma conta com o e-mail informado, enviamos um link para
+              redefinir a senha. Verifique a caixa de entrada e a pasta de spam.
+            </span>
+          </div>
+        )}
+
         {/* ── Banner: proprietário precisa logar para aprovar vínculo ── */}
         {msg === 'login_required_to_approve' && (
           <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200

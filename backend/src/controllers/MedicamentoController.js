@@ -53,6 +53,19 @@ async function getViasExistentes(medicamentoId) {
   return rows.map(r => r.via);
 }
 
+// Catálogo VISÍVEL para a empresa ativa: o global (empresaId null, mantido pelo ADMIN)
+// + o que a própria empresa cadastrou à mão (lib/catalogoManual.js grava `empresaId`).
+//
+// Sem este recorte, `listar`/`listarVacinas`/`obterPorId` devolviam TAMBÉM os itens
+// privados das outras clínicas — nome comercial, fabricante e apresentação do que cada
+// concorrente usa. `paraAtendimento` já filtrava assim; as listagens é que não.
+// ADMIN da plataforma continua vendo tudo (é ele quem mantém o catálogo global).
+function escopoCatalogo(req) {
+  if (req.user?.userType === 'ADMIN') return {};
+  const empresaId = req.empresaId ? Number(req.empresaId) : null;
+  return { OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] };
+}
+
 // ─── Listar ──────────────────────────────────────────────────────────────────
 
 const listar = async (req, res) => {
@@ -112,10 +125,14 @@ const listar = async (req, res) => {
       }
     }
 
+    // O escopo entra como AND para não colidir com o `where.OR` da busca por nome.
+    const escopo = escopoCatalogo(req);
+    where.AND = [...(where.AND ?? []), ...(escopo.OR ? [escopo] : [])];
+
     const [medicamentos, total, totalControlados, totalFiltrado] = await Promise.all([
       prisma.medicamento.findMany({ where, include: INCLUDE_VACINA, orderBy: { nome: 'asc' }, take, skip }),
-      prisma.medicamento.count({ where: { ativo: true } }),
-      prisma.medicamento.count({ where: { ativo: true, controlado: true } }),
+      prisma.medicamento.count({ where: { ativo: true, ...escopo } }),
+      prisma.medicamento.count({ where: { ativo: true, controlado: true, ...escopo } }),
       prisma.medicamento.count({ where }),
     ]);
 
@@ -160,6 +177,9 @@ const listarVacinas = async (req, res) => {
       delete where.classificacao;
     }
 
+    const escopo = escopoCatalogo(req);
+    where.AND = [...(where.AND ?? []), ...(escopo.OR ? [escopo] : [])];
+
     const vacinas = await prisma.medicamento.findMany({
       where,
       include: INCLUDE_VACINA,
@@ -192,10 +212,11 @@ const listarEspecies = async (_req, res) => {
 
 const obterPorId = async (req, res) => {
   try {
-    const med = await prisma.medicamento.findUnique({
-      where: { id: Number(req.params.id) },
+    const med = await prisma.medicamento.findFirst({
+      where: { id: Number(req.params.id), ...escopoCatalogo(req) },
       include: INCLUDE_VACINA,
     });
+    // Item privado de outra clínica responde 404 — não confirma que existe.
     if (!med) return res.status(404).json({ error: 'Medicamento não encontrado.' });
     return res.json({ dados: med });
   } catch (err) {
@@ -390,8 +411,12 @@ const paraAtendimento = async (req, res) => {
     // Catálogo global (empresaId null) + medicamentos próprios da empresa ativa
     where.AND = [{ OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] }];
 
-    const estoqueWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
-    const loteWhere    = { ativo: true, qtdDisponivel: { gt: 0 }, ...(empresaId ? { empresaId } : {}) };
+    // FAIL-CLOSED: estoque e lote pertencem SEMPRE a uma empresa (não existe estoque
+    // global). Sem contexto o spread virava `{}` e mostrava o saldo das outras clínicas
+    // ao lado do medicamento — `?? -1` não casa com nenhuma empresa.
+    const escopoFisico = { empresaId: empresaId ? Number(empresaId) : -1 };
+    const estoqueWhere = { ativo: true, ...escopoFisico };
+    const loteWhere    = { ativo: true, qtdDisponivel: { gt: 0 }, ...escopoFisico };
 
     const medicamentos = await prisma.medicamento.findMany({
       where,

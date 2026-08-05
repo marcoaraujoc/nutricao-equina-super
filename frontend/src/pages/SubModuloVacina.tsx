@@ -1,7 +1,7 @@
 // frontend/src/pages/SubModuloVacina.tsx — registro clínico de vacinas
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
+import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle2, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
@@ -17,6 +17,8 @@ import {
   type PrintAnimalPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao,
 } from '../utils/PrescricaoPrint';
 import InlineError from '../components/InlineError';
+import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -88,7 +90,20 @@ interface VacinaClinica {
 // EXECUTADA (aplicada no plantão: debita estoque + lança na fatura).
 // CANCELADA = registro cancelado (soft delete com justificativa).
 type StatusVacina = 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA';
-type FiltroStatus = 'todos' | 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA';
+type FiltroStatus = 'todos' | StatusVacina;
+
+// Rótulo + cor de cada status — fonte única do selo e das abas de filtro,
+// espelhando STATUS_GRUPO da prescrição (mesmas cores por significado:
+// rascunho = âmbar, em execução = emerald, executado = azul, cancelado = vermelho).
+const STATUS_VACINA: Record<StatusVacina, { label: string; cls: string }> = {
+  SALVA:      { label: 'Salva',       cls: 'bg-amber-100 text-amber-700'     },
+  FINALIZADA: { label: 'Em Execução', cls: 'bg-emerald-100 text-emerald-700' },
+  EXECUTADA:  { label: 'Executada',   cls: 'bg-blue-100 text-blue-700'       },
+  CANCELADA:  { label: 'Cancelada',   cls: 'bg-red-100 text-red-700'         },
+};
+
+// Ordem das abas de filtro no histórico (mesma progressão do ciclo de vida)
+const STATUS_ORDER: StatusVacina[] = ['SALVA', 'FINALIZADA', 'EXECUTADA', 'CANCELADA'];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -144,7 +159,7 @@ function normalizeVia(via: string): string {
 // (gerarHtmlPrescricao/imprimirPrescricao em PrescricaoPrint.ts) — a vacina vira
 // um "grupo" de um único item, para sair com o mesmo layout/cabeçalho/rodapé.
 function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
-  const vcNum   = formatVcNum(v.numero, v.tipoAtendimento);
+  const vcNum   = formatVcNum(v.numero);
   const status  = getStatus(v);
 
   const animalPrint: PrintAnimalPrescricao = {
@@ -175,7 +190,9 @@ function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
 
   const grupo: PrintGrupoPrescricao = {
     numero:          v.numero ?? 0,
-    numeroFormatado: vcNum ?? `VC-${String(v.id).padStart(4, '0')}`,
+    // O template já escreve o "#". Sem número (registro legado) sai "#—" — não se
+    // inventa um número a partir do id (viraria "a vacina nº 812" do paciente).
+    numeroFormatado: vcNum ?? '—',
     status:          status === 'CANCELADA' ? 'CANCELADA' : status === 'SALVA' ? 'SALVO' : status === 'EXECUTADA' ? 'EXECUTADO' : 'FINALIZADA',
     finalizadoEm:    null,
     finalizadoPor:   null,
@@ -191,10 +208,10 @@ function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
 const hoje = () => new Date().toISOString().slice(0, 10);
 
 function montarTextoVacina(v: VacinaClinica): string {
-  const vcNum = formatVcNum(v.numero, v.tipoAtendimento);
+  // Cabeçalho no mesmo molde do `montarTextoPrescricao`: "*Vacina #074*"
+  const vcNum = numeroClinicoComHash(v.numero);
   return [
-    '*Vacina*',
-    vcNum ? `Nº: ${vcNum}` : '',
+    `*Vacina${vcNum ? ` ${vcNum}` : ''}*`,
     `Vacina: ${v.nome}`,
     v.fabricante ? `Fabricante: ${v.fabricante}` : '',
     v.lote ? `Lote: ${v.lote}` : '',
@@ -207,8 +224,9 @@ function montarTextoVacina(v: VacinaClinica): string {
     v.observacao ? `\nObs: ${v.observacao}` : '',
   ].filter(Boolean).join('\n');
 }
-const formatVcNum = (num: number | null, tipo: string | null) =>
-  num != null ? `${tipo ?? 'VC'}-${String(num).padStart(4, '0')}` : null;
+// Nº da vacina = MESMA formatação e lógica do Nº da prescrição (#074) — ver
+// utils/numeroClinico.ts. Não montar o número à mão em tela nenhuma.
+const formatVcNum = (num: number | null) => formatNumeroClinico(num);
 
 function getStatus(v: VacinaClinica): StatusVacina {
   if (!v.ativo) return 'CANCELADA';
@@ -223,32 +241,15 @@ const reforcoVencido = (v: VacinaClinica): boolean =>
   !!v.dataReforco && new Date(v.dataReforco) < new Date();
 
 // ─── StatusBadge ─────────────────────────────────────────────────────────────
+// Mesmo modelo da prescrição (STATUS_GRUPO em SubModuloPrescricao): um mapa
+// status → { label, cls } alimenta o selo E as abas de filtro. Sem isso, rótulo e
+// cor de cada status ficavam escritos duas vezes e divergiam na primeira correção.
 
 function StatusBadge({ status }: { status: StatusVacina }) {
-  if (status === 'CANCELADA') {
-    return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">
-        <Ban size={8} /> CANCELADA
-      </span>
-    );
-  }
-  if (status === 'EXECUTADA') {
-    return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-        <CheckCircle size={8} /> EXECUTADA
-      </span>
-    );
-  }
-  if (status === 'FINALIZADA') {
-    return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-        <CheckCircle size={8} /> EM EXECUÇÃO
-      </span>
-    );
-  }
+  const st = STATUS_VACINA[status];
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-      <Clock size={8} /> SALVA
+    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${st.cls}`}>
+      {st.label}
     </span>
   );
 }
@@ -264,29 +265,28 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// Chip compacto rótulo:valor na linha do item importado (mesmo estilo do InfoChip da prescrição)
-function ChipVac({ label, value }: { label: string; value: string }) {
+// Chip compacto rótulo:valor na linha do item — MESMO markup do InfoChip da prescrição
+function ChipVac({ label, value }: { label: string; value: string | null | undefined }) {
+  if (!value) return null;
   return (
-    <span className="text-[11px] text-gray-400 whitespace-nowrap">
-      {label} <span className="text-gray-600 font-medium">{value}</span>
+    <span className="text-[10px] text-gray-500 whitespace-nowrap">
+      <span className="text-gray-400 mr-0.5">{label}</span>{value}
     </span>
   );
 }
 
 function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) {
-  const vcNum  = formatVcNum(v.numero, v.tipoAtendimento);
+  const vcNum  = formatVcNum(v.numero);
   const status = getStatus(v);
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            <Syringe size={16} className="text-teal-600" />
+            <Syringe size={16} className="text-emerald-600" />
             <h3 className="font-bold text-gray-900">Detalhes da Vacina</h3>
             {vcNum && (
-              <span className="text-xs font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-lg">
-                {vcNum}
-              </span>
+              <span className="font-mono font-bold text-emerald-700 text-sm">#{vcNum}</span>
             )}
             <StatusBadge status={status} />
           </div>
@@ -490,14 +490,6 @@ interface Props {
   onViewConsumed?:    () => void;
 }
 
-const FILTROS: { key: FiltroStatus; label: string }[] = [
-  { key: 'todos',      label: 'Todos'       },
-  { key: 'SALVA',      label: 'Salvas'      },
-  { key: 'FINALIZADA', label: 'Em Execução'  },
-  { key: 'EXECUTADA',  label: 'Executadas'  },
-  { key: 'CANCELADA',  label: 'Canceladas'  },
-];
-
 export default function SubModuloVacina({ animalId, animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
@@ -550,8 +542,15 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const limit = 10;
   const [confirmandoDuplicata, setConfirmandoDuplicata] = useState(false);
   const [showImportOrc, setShowImportOrc] = useState(false);
-  // Erro de ação exibido inline (substitui o toast de erro)
+
+  // Erro de CARGA da página (falha ao listar) — este sim pertence ao topo.
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO do FORMULÁRIO — renderizado logo abaixo de Inserir/Finalizar,
+  // que é onde o clique aconteceu (mesma regra da prescrição).
+  const [erroForm, setErroForm] = useState<ErroAcaoDados | null>(null);
+  // Erro de AÇÃO da LISTA — pertence à LINHA cujo botão foi clicado, não ao topo.
+  const [erroLinha, setErroLinha] = useState<{ id: number; mensagem: string } | null>(null);
+  const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.mensagem : null);
 
   // Rascunho das vacinas importadas — persiste ao trocar de tela (mesmo padrão da
   // prescrição). Restaurado na montagem; limpo ao salvar.
@@ -623,7 +622,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const salvarItens = async (itens: VacImport[]) => {
     if (itens.length === 0) return;
     if (itens.some(i => !i.medicamentoCatId)) {
-      setErroInline('Há vacina sem cadastro no catálogo — remova a linha.'); return;
+      setErroForm({ mensagem: 'Há vacina sem cadastro no catálogo — remova a linha.' }); return;
     }
     // Dose e via são OBRIGATÓRIAS — o registro é o que documenta a aplicação. O item
     // vindo do orçamento entra sem elas (o orçamento não tem esses campos), então a
@@ -631,11 +630,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     // para importar e salvar a vacina sem dose nem via.
     const semDose = itens.find(i => !String(i.dose ?? '').trim());
     if (semDose) {
-      setErroInline(`Informe a dose de "${semDose.nome}" antes de salvar.`); return;
+      setErroForm({ mensagem: `Informe a dose de "${semDose.nome}" antes de salvar.`, campos: ['dose'] }); return;
     }
     const semVia = itens.find(i => !String(i.via ?? '').trim());
     if (semVia) {
-      setErroInline(`Informe a via de administração de "${semVia.nome}" antes de salvar.`); return;
+      setErroForm({ mensagem: `Informe a via de administração de "${semVia.nome}" antes de salvar.`, campos: ['via'] }); return;
     }
     setSaving(true);
     let ok = 0;
@@ -667,7 +666,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(`${msg ?? 'Erro ao registrar vacina'}${ok > 0 ? ` — ${ok} já salva(s)` : ''}`);
+      setErroForm({ mensagem: `${msg ?? 'Erro ao registrar vacina'}${ok > 0 ? ` — ${ok} já salva(s)` : ''}` });
       // Marca só as que chegaram a ser salvas e remove-as da lista (não duplicar)
       if (ok > 0) await marcarOrcamentoImportado(itens.slice(0, ok).filter(i => i.orcamentoItemId > 0).map(i => i.orcamentoItemId));
       setItensImport(itens.slice(ok));
@@ -690,8 +689,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const podeExcluirVac   = (v: VacinaClinica) => podeDeletar   && (isGestor || v.veterinario?.id === user?.id);
   const podeFinalizarVac = (v: VacinaClinica) => podeFinalizar && (isGestor || v.veterinario?.id === user?.id);
 
-  const semPermissao = (acao: string) =>
-    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
+  // Mesma assinatura da prescrição: com id, o aviso nasce NA LINHA; sem id, no formulário.
+  const semPermissao = (acao: string, id?: number) => {
+    const msg = `Sem permissão para ${acao}. Verifique com o responsável da equipe.`;
+    if (id != null) setErroLinha({ id, mensagem: msg });
+    else            setErroForm({ mensagem: msg });
+  };
 
   const medSelecionado = catalogo.find(m => m.id === medicamentoId) ?? null;
 
@@ -724,9 +727,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     setLoadingHist(true);
     try {
       const res = await api.get(`/clinica/vacinas/animal/${animalId}`);
-      if (!res.data) return;
+      if (!res.data) return;   // GET 403 → data null (permissão), não é falha de carga
       setHistorico(res.data?.dados ?? []);
-    } catch { /* silencioso */ }
+      setErroInline(null);
+    } catch { setErroInline('Erro ao carregar vacinas'); }
     finally { setLoadingHist(false); }
   }, [animalId]);
 
@@ -850,7 +854,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   // a gravação real continua no botão "Salvar N vacinas").
   const salvarEdicaoForm = () => {
     if (!editandoKey) return;
-    if (!medicamentoId) { setErroInline('Selecione a vacina'); return; }
+    if (!medicamentoId) { setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return; }
     patchImport(editandoKey, {
       medicamentoCatId: typeof medicamentoId === 'number' ? medicamentoId : null,
       nome:             medSelecionado?.nome ?? undefined,
@@ -894,8 +898,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   // igual ao Inserir da prescrição. A gravação acontece só no "Salvar".
   const handleInserir = () => {
     if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
-    if (!medicamentoId) { setErroInline('Selecione a vacina'); return; }
-    setErroInline(null);
+    if (!medicamentoId) { setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return; }
+    setErroForm(null);
     setItensImport(prev => [...prev, itemDoFormulario()]);
     limparForm();
   };
@@ -918,9 +922,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   const handleSalvar = () => {
     if (!podeCriar) { semPermissao('registrar vacinas'); return; }
     if (formEstaVazio() && itensImport.length === 0) {
-      setErroInline('Selecione a vacina'); return;
+      setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return;
     }
-    setErroInline(null);
+    setErroForm(null);
 
     // Duplicata só faz sentido para o que está no formulário
     if (!formEstaVazio() && medSelecionado) {
@@ -940,7 +944,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
   };
 
   const handleFinalizar = async (v: VacinaClinica) => {
-    if (!podeFinalizarVac(v)) { semPermissao('finalizar vacina'); return; }
+    if (!podeFinalizarVac(v)) { semPermissao('finalizar vacina', v.id); return; }
+    setErroLinha(null);
     setFinalizandoId(v.id);
     try {
       await api.patch(`/clinica/vacinas/${v.id}/finalizar`);
@@ -949,7 +954,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao finalizar vacina');
+      setErroLinha({ id: v.id, mensagem: msg ?? 'Erro ao finalizar vacina' });
     } finally { setFinalizandoId(null); }
   };
 
@@ -957,7 +962,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
     // Autoria também no handler (o botão já usa `podeExcluirVac`): entrada por outro
     // caminho não pode escapar da regra que o backend aplica de qualquer jeito.
     const v = historico.find(x => x.id === id);
-    if (!v || !podeExcluirVac(v)) { semPermissao('cancelar vacina'); return; }
+    if (!v || !podeExcluirVac(v)) { semPermissao('cancelar vacina', id); return; }
+    setErroLinha(null);
     setExcluindoId(id);
   };
 
@@ -971,7 +977,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       carregarHistorico();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao cancelar');
+      setErroLinha({ id, mensagem: msg ?? 'Erro ao cancelar' });
     }
   };
 
@@ -1003,8 +1009,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       {podeCriar && (
         // Alterou qualquer campo → o erro anterior some (change borbulha)
         <div ref={formRef} className="p-5 border-b border-gray-100"
-          onChange={() => setErroInline(null)}
-          onInput={() => setErroInline(null)}>
+          onChange={() => setErroForm(null)}
+          onInput={() => setErroForm(null)}>
 
           {/* Importar orçamento (opcional) */}
           <button onClick={() => setShowImportOrc(true)}
@@ -1022,14 +1028,15 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
           {/* Aviso de edição de item importado */}
           {editandoKey && (
-            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-teal-50 border border-teal-200 text-xs text-teal-700">
+            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700">
               <Pencil size={12} />
               Editando um item importado — ajuste os campos e clique em <b>Atualizar item</b>.
             </div>
           )}
 
-          {/* Linha 1: Vacina (combobox) / Lote */}
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 mb-4">
+          {/* Linha 1: Vacina (combobox) / Lote / Via de aplicação — 3+2+2, mesma
+              proporção da linha "Medicamento / Dosagem / Via" da prescrição. */}
+          <div className="grid grid-cols-1 sm:grid-cols-7 gap-3 mb-4">
 
             <div className="sm:col-span-3" ref={comboboxRef}>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VACINA *</label>
@@ -1046,7 +1053,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                   <button
                     type="button"
                     onClick={() => setDropdownMedAberto(v => !v)}
-                    className="w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-teal-500 text-left"
+                    className={classeErro(erroForm, 'medicamento', 'w-full flex items-center justify-between border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-emerald-500 text-left')}
                   >
                     {medSelecionado ? (
                       <span className="text-gray-900 truncate">{medSelecionado.nome}</span>
@@ -1065,7 +1072,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                           value={buscaMed}
                           onChange={e => setBuscaMed(e.target.value)}
                           placeholder="Buscar vacina…"
-                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-teal-500"
+                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-500"
                         />
                       </div>
                       <ul className="max-h-52 overflow-y-auto">
@@ -1080,13 +1087,13 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                                 setBuscaMed('');
                                 setDropdownMedAberto(false);
                               }}
-                              className={`w-full text-left px-3 py-2 hover:bg-teal-50 transition-colors ${m.id === medicamentoId ? 'bg-teal-50 text-teal-700' : 'text-gray-900'}`}
+                              className={`w-full text-left px-3 py-2 hover:bg-emerald-50 transition-colors ${m.id === medicamentoId ? 'bg-emerald-50 text-emerald-700' : 'text-gray-900'}`}
                             >
                               <p className="text-sm font-medium">{m.nome}</p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 {m.formaFarmaceutica && <p className="text-xs text-gray-400">{m.formaFarmaceutica}</p>}
                                 {m.emEstoque
-                                  ? <span className="text-[10px] font-semibold text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded-full">No estoque</span>
+                                  ? <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">No estoque</span>
                                   : <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">Sem estoque</span>
                                 }
                               </div>
@@ -1119,9 +1126,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                   Sem lotes disponíveis no estoque
                 </div>
               ) : lotesDisponiveis.length === 1 ? (
-                <div className="px-3 py-2.5 border border-teal-200 bg-teal-50 rounded-xl text-sm">
-                  <p className="font-semibold text-teal-900">{lotesDisponiveis[0].lote ?? '—'}</p>
-                  <p className="text-[11px] text-teal-600 mt-0.5">
+                <div className="px-3 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl text-sm">
+                  <p className="font-semibold text-emerald-900">{lotesDisponiveis[0].lote ?? '—'}</p>
+                  <p className="text-[11px] text-emerald-600 mt-0.5">
                     {lotesDisponiveis[0].qtdDisponivel} doses disponíveis
                     {lotesDisponiveis[0].validade
                       ? ` · Val: ${formatDate(lotesDisponiveis[0].validade)}`
@@ -1132,7 +1139,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                 <select
                   value={loteId}
                   onChange={e => setLoteId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-white"
                 >
                   <option value="">Selecione o lote…</option>
                   {lotesDisponiveis.map(l => (
@@ -1144,49 +1151,46 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                 </select>
               )}
             </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VIA APLICAÇÃO</label>
+              <select value={via} onChange={e => setVia(e.target.value)}
+                className={classeErro(erroForm, 'via', `w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500 bg-white ${!via ? 'text-gray-400' : 'text-gray-900'}`)}>
+                <option value="">Selecione…</option>
+                {viasDisponiveis.map(v => <option key={v} className="text-gray-900">{v}</option>)}
+              </select>
+            </div>
           </div>
 
-          {/* Linha 2: Tipo Dose / Via */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          {/* Linha 2: Tipo Dose / Qtd Doses / Data Aplicação */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">TIPO DOSE</label>
               <select value={dose} onChange={e => setDose(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
+                className={classeErro(erroForm, 'dose', `w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500 bg-white ${!dose ? 'text-gray-400' : 'text-gray-900'}`)}>
                 <option value="">Selecione…</option>
-                {DOSES.map(d => <option key={d}>{d}</option>)}
+                {DOSES.map(d => <option key={d} className="text-gray-900">{d}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VIA APLICAÇÃO</label>
-              <select value={via} onChange={e => setVia(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
-                <option value="">Selecione…</option>
-                {viasDisponiveis.map(v => <option key={v}>{v}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Linha 3: Data Aplicação / Qtd Doses */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">DATA APLICAÇÃO</label>
-              <DateInput value={dataAplicacao} onChange={setDataAplicacao}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-teal-500" />
             </div>
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">QTD DOSES</label>
               <input
                 type="number" min={1} value={qtd}
                 onChange={e => setQtd(Math.max(1, Number(e.target.value)))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
               />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">DATA APLICAÇÃO</label>
+              <DateInput value={dataAplicacao} onChange={setDataAplicacao}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-emerald-500" />
             </div>
           </div>
 
           {/* Prévia do agendamento automático — o backend cria os reforços na EXECUÇÃO
               (a 1ª dose é a própria aplicação, por isso qtd-1). */}
           {INTERVALO_REFORCO_MESES[dose] && qtd > 1 && (
-            <p className="-mt-1 mb-3 text-[11px] text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
+            <p className="-mt-1 mb-3 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
               Ao executar, serão agendadas as <b>{qtd - 1} doses seguintes</b>, a cada{' '}
               {INTERVALO_REFORCO_MESES[dose] === 1 ? 'mês' : `${INTERVALO_REFORCO_MESES[dose]} meses`}.
               A 1ª dose é esta aplicação.
@@ -1200,21 +1204,24 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
               type="text" value={observacao}
               onChange={e => setObservacao(e.target.value)}
               placeholder="Observações opcionais"
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-teal-500"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
             />
           </div>
 
           {/* Quem FORNECE × quem APLICA — lado a lado, como na prescrição. São
               decisões irmãs e ambas do ITEM; o cruzamento delas é que decide se a
               dose vai ao plantão e quando é cobrada (matriz em
-              VacinaClinicaController.finalizar). */}
-          <div className="mb-5 flex flex-wrap items-start gap-x-6 gap-y-2">
+              VacinaClinicaController.finalizar).
+              `items-center`: os botões Inserir/Finalizar dividem esta linha e são bem
+              mais altos que o texto do checkbox — com `items-start` os rótulos ficariam
+              desalinhados dos botões (mesma correção feita na prescrição). */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <label className="flex items-center gap-2.5 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={cliente}
                 onChange={e => setCliente(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
               />
               <span className="text-sm text-red-600 font-medium">Vacina fornecida pelo Cliente</span>
             </label>
@@ -1224,13 +1231,53 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                 type="checkbox"
                 checked={aplicadaPeloProprietario}
                 onChange={e => setAplicadaPeloProprietario(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
               />
               <span className="text-sm text-red-600 font-medium">Será aplicada pelo Proprietário</span>
             </label>
+
+            {/* Inserir + Finalizar na MESMA LINHA dos checkboxes, encostados à direita
+                (`ml-auto`) — é onde eles vivem na prescrição. Editando um item da lista,
+                o par vira Cancelar + Atualizar item. */}
+            <div className="flex items-center gap-2 ml-auto">
+              {editandoKey ? (
+                <>
+                  <button onClick={cancelarEdicaoForm}
+                    className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={salvarEdicaoForm}
+                    disabled={!medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
+                    className="flex items-center gap-1.5 px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
+                    <Check size={13} /> Atualizar item
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleInserir}
+                    disabled={saving || !medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
+                    className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
+                    Inserir
+                  </button>
+                  <button
+                    onClick={handleSalvar}
+                    disabled={saving || loadingLotes || (!medicamentoId && itensImport.length === 0) ||
+                              (!!medicamentoId && lotesDisponiveis.length > 1 && !loteId)}
+                    className="flex items-center gap-1.5 px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
+                    {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                    Finalizar
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
-          {/* ── Itens da vacina — abaixo do formulário e ACIMA do rodapé, igual à prescrição ── */}
+          {/* Erro da AÇÃO logo abaixo do botão que a disparou — nunca no topo da tela */}
+          <ErroAcao erro={erroForm} className="mt-3" />
+
+          {/* ── Itens da vacina — abaixo do formulário e dos botões, igual à prescrição ── */}
           {itensImport.length > 0 && (
             <div className="mt-5 pt-4 border-t border-gray-100">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
@@ -1244,8 +1291,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                     ? (item.lotes.find(l => l.id === item.loteId)?.lote ?? null) : null;
                   return (
                   <div key={item.key}
-                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-colors ${emEdicao ? 'border-teal-300 bg-teal-50' : 'border-gray-100 bg-gray-50'}`}>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 bg-teal-100 text-teal-700">
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-colors ${emEdicao ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-gray-50'}`}>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 bg-emerald-100 text-emerald-700">
                       <Syringe size={9} /> Vacina
                     </span>
                     <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -1257,14 +1304,15 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                         <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Cliente</span>
                       )}
                       {item.aplicadaPeloProprietario && (
-                        <span className="text-[10px] font-semibold text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-full">Proprietário aplica</span>
+                        <span title="Aplicada pelo proprietário — fora da Execução de Prescrição"
+                          className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">Proprietário</span>
                       )}
+                      <ChipVac label="Dose:" value={item.dose} />
+                      <ChipVac label="Via:"  value={item.via} />
+                      <ChipVac label="Qtd:"  value={String(item.quantidade)} />
+                      <ChipVac label="Lote:" value={loteLabel} />
                       <ChipVac label="Início:" value={formatDate(item.dataAplicacao)} />
-                      <ChipVac label="Qtd:" value={String(item.quantidade)} />
-                      {item.via  && <ChipVac label="Via:" value={item.via} />}
-                      {item.dose && <ChipVac label="Dose:" value={item.dose} />}
-                      {loteLabel && <ChipVac label="Lote:" value={loteLabel} />}
-                      {item.observacao.trim() && <ChipVac label="Obs:" value={item.observacao.trim()} />}
+                      <ChipVac label="Obs:"  value={item.observacao.trim()} />
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <button onClick={() => emEdicao ? cancelarEdicaoForm() : editarNoForm(item)}
@@ -1284,40 +1332,6 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
             </div>
           )}
 
-          {/* ── Rodapé — mesma composição da prescrição: Inserir + Finalizar ──── */}
-          <div className="flex items-center justify-end gap-2 mt-5 pt-4 border-t border-gray-100 flex-wrap">
-            {editandoKey ? (
-              <>
-                <button onClick={cancelarEdicaoForm}
-                  className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
-                  Cancelar
-                </button>
-                <button
-                  onClick={salvarEdicaoForm}
-                  disabled={!medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
-                  className="flex items-center gap-1.5 px-5 py-2 border border-teal-600 text-teal-700 hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
-                  <Check size={13} /> Atualizar item
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={handleInserir}
-                  disabled={saving || !medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
-                  className="flex items-center gap-1.5 px-5 py-2 border border-teal-600 text-teal-700 hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
-                  Inserir
-                </button>
-                <button
-                  onClick={handleSalvar}
-                  disabled={saving || loadingLotes || (!medicamentoId && itensImport.length === 0) ||
-                            (!!medicamentoId && lotesDisponiveis.length > 1 && !loteId)}
-                  className="flex items-center gap-1.5 px-5 py-2 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors">
-                  {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
-                  {saving ? 'Salvando…' : 'Finalizar'}
-                </button>
-              </>
-            )}
-          </div>
         </div>
       )}
 
@@ -1327,48 +1341,33 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
         <span className="text-xs text-gray-400">{historico.length} registro{historico.length !== 1 ? 's' : ''}</span>
       </div>
 
-      {/* Filtros de status */}
-      {historico.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
-          {FILTROS.map(f => {
-            const count = f.key === 'todos'
-              ? historico.length
-              : counts[f.key as StatusVacina];
-            const isActive = filtroStatus === f.key;
-            let activeClass = 'bg-teal-600 text-white border-teal-600';
-            if (f.key === 'SALVA'     && isActive) activeClass = 'bg-amber-500 text-white border-amber-500';
-            if (f.key === 'EXECUTADA' && isActive) activeClass = 'bg-blue-600 text-white border-blue-600';
-            if (f.key === 'CANCELADA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
-            return (
-              <button
-                key={f.key}
-                onClick={() => setFiltroStatus(f.key)}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                  isActive ? activeClass : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
-                }`}>
-                {f.label}
-                {f.key === 'SALVA' && !isActive && counts.SALVA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.SALVA}
-                  </span>
-                )}
-                {f.key === 'CANCELADA' && !isActive && counts.CANCELADA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.CANCELADA}
-                  </span>
-                )}
-                {f.key === 'todos' && !isActive && (
-                  <span className="text-gray-400">({historico.length})</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Filtros por status — mesma aba da prescrição: um só realce (emerald), a
+          contagem entre parênteses e apenas os status que existem no histórico. */}
+      {historico.length > 0 && (() => {
+        const statusTabs = STATUS_ORDER.filter(s => counts[s] > 0 || filtroStatus === s);
+        return (
+          <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
+            {(['todos', ...statusTabs] as FiltroStatus[]).map(key => {
+              const isActive = filtroStatus === key;
+              const label    = key === 'todos' ? 'Todos' : STATUS_VACINA[key].label;
+              const count    = key === 'todos' ? historico.length : counts[key];
+              return (
+                <button key={key} onClick={() => setFiltroStatus(key)}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    isActive ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                  }`}>
+                  {label}
+                  <span className={isActive ? 'text-emerald-100' : 'text-gray-400'}>({count})</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {loadingHist ? (
         <div className="flex items-center justify-center py-16">
-          <Loader2 size={22} className="animate-spin text-teal-600" />
+          <Loader2 size={22} className="animate-spin text-emerald-600" />
         </div>
       ) : historico.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-gray-300">
@@ -1378,23 +1377,26 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
       ) : historicoFiltrado.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-gray-300">
           <Clock size={28} className="mb-2" />
-          <p className="text-sm text-gray-400">Nenhum registro com status "{filtroStatus}"</p>
+          <p className="text-sm text-gray-400">
+            Nenhuma vacina com status "{filtroStatus === 'todos' ? 'Todos' : STATUS_VACINA[filtroStatus].label}"
+          </p>
         </div>
       ) : (
         <>
           {/* Mobile */}
           <div className="md:hidden divide-y divide-gray-50">
             {historicoPage.map(v => {
-              const vcNum  = formatVcNum(v.numero, v.tipoAtendimento);
+              const vcNum  = formatVcNum(v.numero);
               const status = getStatus(v);
               return (
                 <div key={v.id} className={`px-4 py-3 ${!v.ativo ? 'opacity-60' : ''}`}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <div className="flex items-center gap-1.5 min-w-0">
                       {vcNum && (
-                        <span className="text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded flex-shrink-0">
-                          {vcNum}
-                        </span>
+                        <button onClick={() => setViewingV(v)}
+                          className="font-mono font-bold text-emerald-700 hover:underline text-sm flex-shrink-0">
+                          #{vcNum}
+                        </button>
                       )}
                       <span className="text-sm font-semibold text-gray-900 truncate">{v.nome}</span>
                     </div>
@@ -1403,7 +1405,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
 
                   <p className="text-xs text-gray-500">
                     {v.cliente && <span className="text-amber-700 font-medium">Cliente · </span>}
-                    {v.aplicadaPeloProprietario && <span className="text-violet-700 font-medium">Proprietário aplica · </span>}
+                    {v.aplicadaPeloProprietario && <span className="text-amber-700 font-medium">Proprietário · </span>}
                     {v.dose && <>{v.dose} · </>}
                     {v.quantidade != null && v.quantidade > 1 && <>{v.quantidade} doses · </>}
                     {formatDate(v.dataAplicacao)}
@@ -1419,12 +1421,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                   <div className="flex flex-wrap gap-2 mt-2">
                     <button onClick={() => setViewingV(v)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                      <Eye size={11} /> Ver
+                      <Eye size={11} /> Visualizar
                     </button>
                     {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
                       <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id}
                         className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
-                        {finalizandoId === v.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />} Finalizar
+                        {finalizandoId === v.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Finalizar
                       </button>
                     )}
                     {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
@@ -1453,6 +1455,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                       </button>
                     )}
                   </div>
+                  {/* Erro na superfície da ação: embaixo dos botões deste card */}
+                  <ErroAcao
+                    erro={erroDaLinha(v.id) ? { mensagem: erroDaLinha(v.id)! } : null}
+                    className="mt-2"
+                  />
                 </div>
               );
             })}
@@ -1477,13 +1484,17 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {historicoPage.map(v => {
-                  const vcNum  = formatVcNum(v.numero, v.tipoAtendimento);
+                  const vcNum  = formatVcNum(v.numero);
                   const status = getStatus(v);
                   return (
                     <tr key={v.id} className={`hover:bg-gray-50/60 transition-colors ${!v.ativo ? 'opacity-60' : ''}`}>
                       <td className="px-4 py-3">
+                        {/* Número clicável abre a visualização — igual ao #Nº da prescrição */}
                         {vcNum
-                          ? <span className="text-xs font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded">{vcNum}</span>
+                          ? <button onClick={() => setViewingV(v)}
+                              className="font-mono font-bold text-emerald-700 hover:text-emerald-900 text-sm hover:underline">
+                              #{vcNum}
+                            </button>
                           : <span className="text-gray-300">—</span>
                         }
                       </td>
@@ -1494,7 +1505,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                             <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">CLIENTE</span>
                           )}
                           {v.aplicadaPeloProprietario && (
-                            <span className="text-[10px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded">PROPRIETÁRIO APLICA</span>
+                            <span title="Aplicada pelo proprietário — fora da Execução de Prescrição"
+                              className="text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">PROPRIETÁRIO</span>
                           )}
                         </div>
                         {v.fabricante && <p className="text-xs text-gray-400">{v.fabricante}</p>}
@@ -1523,30 +1535,37 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, atendime
                         {v.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
+                        {/* Cores por AÇÃO (CLAUDE.md §6): ver/finalizar = emerald,
+                            imprimir = azul, cancelar = vermelho. */}
                         <div className="flex items-center gap-1">
                           <button onClick={() => setViewingV(v)} title="Visualizar"
-                            className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors">
-                            <Eye size={14} />
+                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <Eye size={13} />
                           </button>
                           {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
-                            <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id} title="Finalizar"
-                              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
-                              {finalizandoId === v.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                            <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id} title="Finalizar vacina"
+                              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                              {finalizandoId === v.id ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
                             </button>
                           )}
                           {podeImprimir && (
-                            <button onClick={() => imprimirVacina(v, animal)} title="Imprimir"
+                            <button onClick={() => imprimirVacina(v, animal)} title="Imprimir vacina"
                               className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                              <Printer size={14} />
+                              <Printer size={13} />
                             </button>
                           )}
                           {podeExcluirVac(v) && v.ativo && (
-                            <button onClick={() => handleExcluirSolicitado(v.id)} title="Cancelar"
-                              className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                              <Ban size={14} />
+                            <button onClick={() => handleExcluirSolicitado(v.id)} title="Cancelar vacina"
+                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                              <Ban size={13} />
                             </button>
                           )}
                         </div>
+                        {/* Erro na superfície da ação: embaixo dos botões desta linha */}
+                        <ErroAcao
+                          erro={erroDaLinha(v.id) ? { mensagem: erroDaLinha(v.id)! } : null}
+                          className="mt-2 max-w-xs text-left whitespace-normal"
+                        />
                       </td>
                     </tr>
                   );

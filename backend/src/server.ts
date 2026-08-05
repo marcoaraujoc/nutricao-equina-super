@@ -254,6 +254,9 @@ const monitoracaoRoutes        = require('./routes/monitoracao');
 const orcamentosRoutes         = require('./routes/orcamentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const buscaRoutes              = require('./routes/busca');
+const midiaRoutes              = require('./routes/midia');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { TETO_ARQUIVO_BYTES }   = require('./storage');
 
 // ===================== MONTAGEM DAS ROTAS =====================
 app.use('/api/auth',                  authLimiterSeletivo, authRoutes);
@@ -302,34 +305,26 @@ app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
 app.use('/api/busca',                 buscaRoutes); // busca global do header
+app.use('/api/midia',                 midiaRoutes); // download AUTORIZADO de arquivo (substitui /uploads)
+// Marca do PRODUTO — pública por necessidade (aparece na tela de login, antes de haver
+// sessão). Rota SEPARADA e sem parâmetro: não recebe chave do cliente, então não serve
+// para alcançar arquivo de paciente.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+app.get('/api/marca', require('./controllers/MidiaController').marca);
 // Configuração global de segurança (2FA da plataforma) — ADMIN
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 app.use('/api/seguranca',             require('./routes/seguranca'));
 
-// Servir arquivos de upload (fotos, mídias clínicas).
-// Acesso por capability URL: os nomes são gerados com crypto.randomBytes (não enumeráveis).
-// Hardening anti-XSS: nosniff + CSP sandbox neutralizam SVG/HTML maliciosos; tipos não
-// reconhecidos como mídia são forçados a download (Content-Disposition: attachment).
-// Extensões exibidas inline. PDF é seguro aqui (renderizado pelo visualizador do browser,
-// não como HTML; nosniff + CSP sandbox impedem execução). SVG/HTML ficam de fora de
-// propósito → forçados a download, neutralizando XSS armazenado.
-const MEDIA_INLINE_EXT = new Set([
-  '.jpg', '.jpeg', '.png', '.gif', '.webp',
-  '.mp4', '.webm', '.ogg', '.mov', '.m4v',
-  '.mp3', '.wav', '.m4a', '.aac',
-  '.pdf',
-]);
-app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
-  dotfiles: 'deny',
-  index: false,
-  setHeaders: (res: ServerResponse, filePath: string) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'none'");
-    if (!MEDIA_INLINE_EXT.has(path.extname(filePath).toLowerCase())) {
-      res.setHeader('Content-Disposition', 'attachment');
-    }
-  },
-}));
+// ===================== ARQUIVOS =====================
+// NÃO existe mais NENHUM serviço de arquivo a partir do filesystem.
+//
+// O `express.static('/uploads')` foi removido: ele entregava o byte SEM autenticação,
+// tendo como único gate o nome aleatório do arquivo (capability URL) — quem obtivesse
+// o link seguia lendo a foto do paciente ou o laudo mesmo depois de perder o acesso, e
+// de qualquer empresa. Todo arquivo mora em `tb_midia_arquivos` (bytea) e sai por:
+//   GET /api/midia/:chave  → autenticado e autorizado por dono (animal/empresa)
+//   GET /api/marca         → público, e SÓ a marca do produto
+// Sem código de servir arquivo do disco, ninguém reintroduz um static por descuido.
 
 // ===================== HEALTH CHECK =====================
 const APP_VERSION = process.env.npm_package_version ?? '1.0.0';
@@ -391,6 +386,24 @@ app.use((err: Error & { status?: number; statusCode?: number; code?: string; det
       mensagem: err.message,
       error:    err.message,
       detalhe:  err.detalhe ?? null,
+    });
+  }
+
+  // Arquivo acima do teto (150 MB) não é erro do servidor: é o usuário mandando algo
+  // grande demais. 413 + code para a tela dizer o motivo em vez de "erro interno".
+  // Cobre as DUAS bordas: `LIMIT_FILE_SIZE` do multer (recusa antes de ler o corpo
+  // inteiro) e `ARQUIVO_GRANDE_DEMAIS` do provider de storage (rede de segurança para
+  // rota sem `limits` declarado).
+  if (err.code === 'LIMIT_FILE_SIZE' || err.code === 'ARQUIVO_GRANDE_DEMAIS') {
+    logger.warn(`${req.method} ${req.path} — arquivo acima do limite`, {
+      requestId: req.requestId, message: err.message,
+    });
+    const limiteMb = Math.floor(TETO_ARQUIVO_BYTES / 1048576);
+    return res.status(413).json({
+      sucesso:  false,
+      code:     'ARQUIVO_GRANDE_DEMAIS',
+      mensagem: `Arquivo acima do limite de ${limiteMb} MB.`,
+      error:    `Arquivo acima do limite de ${limiteMb} MB.`,
     });
   }
 

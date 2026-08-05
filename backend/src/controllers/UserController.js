@@ -710,7 +710,12 @@ const UserController = {
         return res.status(404).json({ success: false, error: 'Você não tem cadastro nesta empresa.' });
       }
 
-      const novaUrl = remover ? null : await storage.upload(req.file, 'profissionais');
+      const novaUrl = remover
+        ? null
+        : await storage.upload(req.file, 'profissionais', {
+            empresaId:   req.empresaId ?? null,
+            criadoPorId: req.user.id,
+          });
       // salvarFoto devolve a URL anterior — o arquivo velho é apagado DEPOIS de o
       // banco já apontar para o novo, senão uma falha na gravação deixaria o cadastro
       // apontando para um arquivo que não existe mais.

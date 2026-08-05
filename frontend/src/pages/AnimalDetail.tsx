@@ -20,6 +20,7 @@ import InlineError from '../components/InlineError';
 import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
 import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
 import FotoAnimal from '../components/FotoAnimal';
+import { formatNumeroClinico } from '../utils/numeroClinico';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
 const ESPECIE_EMOJI: Record<string, string> = {
@@ -389,12 +390,13 @@ function DetalheModalEvolucao({ dados }: { dados: DetalheEvolucao }) {
 }
 
 function DetalheModalVacina({ dados }: { dados: DetalheVacina }) {
-  const vcNum = dados.numero != null
-    ? `${dados.tipoAtendimento ?? 'VC'}-${String(dados.numero).padStart(4, '0')}`
-    : null;
+  // MESMA formatação e lógica do Nº da prescrição (linha "Nº Prescrição", abaixo):
+  // #074, mono/negrito/emerald. Era `VC-0004` em teal e sob o rótulo "Nº Atendimento",
+  // que é OUTRO número (o do atendimento: AG-0012/EV-0007) — ver utils/numeroClinico.
+  const vcNum = formatNumeroClinico(dados.numero);
   return (
     <div className="space-y-0">
-      {vcNum && <RowDetalhe label="Nº Atendimento" value={<span className="font-mono font-bold text-teal-700">{vcNum}</span>} />}
+      {vcNum && <RowDetalhe label="Nº Vacina" value={<span className="font-mono font-bold text-emerald-700">#{vcNum}</span>} />}
       {dados.cliente && (
         <div className="py-2.5 border-b border-gray-50">
           <span className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">

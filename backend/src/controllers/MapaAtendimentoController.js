@@ -63,10 +63,15 @@ const MapaAtendimentoController = {
       const fimStr    = new Date(fim.getTime()    - fim.getTimezoneOffset()    * 60000).toISOString().slice(0, 10);
 
       // ── Escopo base de animais ────────────────────────────────────────
+      // FAIL-CLOSED: `if (empresaId)` deixava o mapa SEM filtro quando o contexto não
+      // resolvia — o painel passava a mostrar os pacientes de todas as clínicas. Quem
+      // não é ADMIN e não tem empresa não tem mapa; `-1` não casa com empresa nenhuma.
+      // O PROPRIETARIO é a exceção: o recorte dele é o próprio dono do animal, e ele
+      // pode não ter empresa resolvida.
       const whereAnimalBase = { ativo: true };
-      if (!isAdmin) {
-        if (empresaId) whereAnimalBase.empresaId = Number(empresaId);
-        if (equipeId)  whereAnimalBase.equipeId  = Number(equipeId);
+      if (!isAdmin && userType !== 'PROPRIETARIO') {
+        whereAnimalBase.empresaId = empresaId ? Number(empresaId) : -1;
+        if (equipeId) whereAnimalBase.equipeId = Number(equipeId);
       }
       if (userType === 'PROPRIETARIO') whereAnimalBase.userId = Number(userId);
 

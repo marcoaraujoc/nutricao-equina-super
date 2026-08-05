@@ -1,5 +1,7 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-04 (Senha: FormularioNovaSenha compartilhado entre a tela da app e o link do e-mail; "esqueci minha senha" volta sozinho ao login com aviso genérico)
+# Atualizado em: 2026-08-04 (STORAGE: arquivo no BANCO (bytea) — /uploads e express.static REMOVIDOS; download por /api/midia/:chave autorizado; teto 150 MB; caminho de escala = S3StorageProvider trocando só STORAGE_DRIVER — ver §8)
 # Atualizado em: 2026-08-04 (PREMISSA DE AUTORIA: a ação vale sobre o que a pessoa criou ou assumiu, só o gestor opera o de outro; assumir/transferir ARRASTA o atendimento inteiro; auditoria de TRANSFERENCIA e ALTERACAO)
 # Atualizado em: 2026-08-02 (Sessão por INATIVIDADE de 2h (lib/sessionTokens.js), rastro de "assumido de quem" na agenda, vacina aplicada pelo proprietário, resultado de exame manual)
 # Atualizado em: 2026-07-31 (Shell: header e rodapé globais, busca global por empresa (/api/busca), marca no EmpresaContext, sidebar só com o logo da clínica)
@@ -1036,20 +1038,86 @@ Front: `components/relatorios/AnaliseFinanceiraIA.tsx` — chamada SOB DEMANDA (
 
 ## 8. UPLOAD E STORAGE
 
-### Estado atual (⚠️ dívida técnica)
-- Upload de fotos de animais: compressão via Canvas (máx 1200px, 82% JPEG) antes do envio
-- Storage: pasta `uploads/` local no backend
+### 🔴 O ARQUIVO MORA NO BANCO (bytea) — nada é servido do filesystem
 
-### Padrão a implementar
-```typescript
-// StorageProvider interface — cloud-agnostic
-interface StorageProvider {
-  upload(file: Buffer, path: string): Promise<string>
-  delete(path: string): Promise<void>
-  getUrl(path: string): string
-}
-// Implementações: LocalStorageProvider, S3Provider, GCSProvider, etc
 ```
+Tabela:  schs2vet.tb_midia_arquivos  (model MidiaArquivo, coluna `conteudo` BYTEA)
+Driver:  STORAGE_DRIVER=db  (padrão) — src/storage/DbStorageProvider.ts
+Saída:   GET /api/midia/:chave  → autenticado e AUTORIZADO por dono do arquivo
+         GET /api/marca         → público, e SÓ a marca do produto
+Teto:    150 MB por arquivo (UPLOAD_MAX_BYTES) — ver abaixo
+Migration: 20260816000000_midia_arquivos
+```
+
+**POR QUÊ saiu do disco:** `/uploads` era servido por `express.static`, ou seja, o byte
+saía da aplicação **sem passar por autenticação nenhuma** — o único gate era acertar o
+nome aleatório do arquivo (capability URL). Quem obtivesse o link seguia lendo a foto do
+paciente ou o laudo depois de perder o acesso, inclusive de outra empresa. Com o conteúdo
+no banco **não existe caminho que não passe pelo controller**: o gate deixou de ser o
+segredo da URL e passou a ser a mesma regra de acesso do resto do sistema.
+
+**AUTORIZAÇÃO do download** (`MidiaController`), nesta ordem: `publico` → ADMIN da
+plataforma → `animalId` presente → `verificarAcessoAnimal` → `empresaId` presente → tem de
+ser a empresa do contexto → sem dono → só o autor. Negado responde **404**, não 403: não se
+confirma a existência do arquivo a quem não pode vê-lo.
+
+⚠️ **Todo `storage.upload` DEVE passar o contexto de dono** — `{ empresaId, animalId,
+criadoPorId }`. Sem ele o arquivo nasce sem dono e só o ADMIN o alcança.
+
+⚠️ **Vídeo grande não é carregado em memória:** o `Range` é atendido com `substring()` no
+Postgres (`substring(conteudo from $1::int for $2::int)` — o `::int` é obrigatório, o
+Prisma manda `bigint` e o Postgres só tem `substring(bytea, integer, integer)`). O player
+mantém o seek e o consumo fica limitado à fatia pedida.
+
+⚠️ **Teto de 150 MB mora no PROVIDER, não só no multer.** O `limits.fileSize` é por rota:
+rota nova que esqueça de declará-lo aceitaria qualquer tamanho e o binário iria para o
+banco. O provider é o funil por onde tudo passa. Estouro → **413** com
+`code: 'ARQUIVO_GRANDE_DEMAIS'` (cobre `LIMIT_FILE_SIZE` do multer e o erro do provider).
+
+### 🚀 CRESCEU O BANCO? O CAMINHO É O `S3StorageProvider` — TROCA SÓ O `STORAGE_DRIVER`
+
+> **Guardar binário no banco tem um custo conhecido: o dump do backup cresce junto.**
+> Quando isso incomodar (vídeo de prontuário a 150 MB chega lá rápido), **NÃO** volte a
+> servir arquivo do filesystem e **NÃO** mexa em controller. A saída já está prevista pela
+> arquitetura:
+>
+> 1. Implemente `S3StorageProvider` respeitando a interface `StorageProvider`
+>    (`upload` / `delete` / `getUrl` — src/storage/StorageProvider.ts).
+> 2. Registre no `switch` de `src/storage/index.ts` (o `case 's3'` já está lá, comentado).
+> 3. Ligue com **`STORAGE_DRIVER=s3`**. Só isso.
+>
+> **NENHUM controller muda**: todos chamam `storage.upload(...)` / `storage.delete(...)`
+> pela interface, nunca o driver. E o **download continua saindo pela mesma rota
+> autorizada** (`/api/midia/:chave`), que faz o proxy do objeto — o bucket permanece
+> PRIVADO. Jamais devolver URL pública/assinada do S3 direto ao cliente: isso recria
+> exatamente o furo do `express.static` (byte acessível sem passar pela regra de acesso).
+>
+> Mesma receita vale para `GCSStorageProvider` (`case 'gcs'`, também já previsto).
+
+### Regras invioláveis de storage
+- **NUNCA** reintroduzir `express.static` sobre `uploads/` (nem "só para a logo").
+- **NUNCA** acoplar controller a um driver — sempre a interface `StorageProvider`.
+- **NUNCA** expor URL pública/assinada do bucket: o download passa pela rota autorizada.
+- Driver `local` (`STORAGE_DRIVER=local`) existe só para depurar. Não usar em produção.
+
+### Marca do produto
+Fica no banco também (`pasta='marca'`, `publico=true`), servida por `GET /api/marca` —
+rota **sem parâmetro** de propósito: não recebe chave do cliente, então não serve de
+atalho para arquivo de paciente. É pública por necessidade (aparece na tela de login,
+antes de existir sessão) — o ganho de tê-la no banco **não é segurança**, é não sobrar
+código servindo arquivo de disco. Carga: `scripts/carregarMarcaProduto.js`.
+
+### Migração do legado
+`scripts/migrarUploadsParaBanco.js` (idempotente, aceita `--dry`) importa os arquivos de
+`backend/uploads/` e reescreve as URLs em `Animal.photoUrl`, `EvolucaoMidia.url`,
+`ExameNutricional/ExameClinico/ExameImagemAnexo.arquivoUrl`, `EmpresaConfiguracao.logoUrl`
+e `UsuarioEmpresa.foto_url`. Não apaga nada do disco.
+
+### Frontend
+- Upload de fotos: compressão via Canvas (máx 1200px, 82% JPEG) antes do envio.
+- A URL guardada continua **relativa** (`/api/midia/<chave>`), então `<img src>` e
+  `printUrl` funcionam sem mudança: é requisição same-origin e o cookie HttpOnly viaja.
+- O proxy `/uploads` do Vite foi REMOVIDO — `/api` já cobre as duas rotas.
 
 ---
 
@@ -1062,6 +1130,8 @@ interface StorageProvider {
 | Layout scroll | overflow-y-auto no main | Páginas públicas livres, internas controladas |
 | Mobile pattern | cards mobile / tabela desktop | UX otimizada por breakpoint |
 | Upload | Canvas compress antes do envio | Reduz tráfego e storage |
+| Storage | Arquivo no BANCO (bytea), `STORAGE_DRIVER=db` | Nada servido do FS: download passa pela regra de acesso |
+| Escala de storage | `S3StorageProvider` + `STORAGE_DRIVER=s3` | Interface pronta; nenhum controller muda (ver §8) |
 | IA Provider | Google Gemini (único) | Um só fornecedor p/ texto, visão e áudio — abstraído por AIProvider |
 | Schema PG | schs2vet | Isolamento multi-tenant futuro |
 | Soft delete | campo `ativo` | Preservação histórica |
@@ -1077,6 +1147,8 @@ interface StorageProvider {
 - Fazer query direta fora de service/repository
 - Criar componente com mais de ~300 linhas sem decompor
 - Acoplar código ao provider de cloud/storage/IA sem abstração
+- Servir arquivo do filesystem (`express.static`/`sendFile`) — ver §8
+- Expor URL pública/assinada de bucket ao cliente — o download passa por `/api/midia/:chave`
 - Criar `min-h-screen` em páginas internas (quebra o layout)
 - Deixar arquivos residuais (App copy.tsx, test-*.js, etc)
 - Hardcodar URLs, portas ou credenciais (sempre env vars)
@@ -1512,6 +1584,239 @@ New-Item -ItemType Junction `
       ⚠️ **Regra geral:** `semEscopoClinico` libera AUTORIA, não TENANT. Toda listagem
       que ele atender precisa do seu próprio limite de empresa — vale reauditar os
       outros consumidores (evoluções, exames, encaminhamentos) quando forem tocados.
+
+#### Vacina alinhada à PRESCRIÇÃO — layout e lógica de tela (mesma sessão)
+- [x] **O formulário passou a ter 2 linhas** (`SubModuloVacina`): **VACINA · LOTE · VIA
+      APLICAÇÃO** (grid 7 = 3+2+2, a mesma proporção de "Medicamento · Dosagem · Via" da
+      prescrição) e **TIPO DOSE · QTD DOSES · DATA APLICAÇÃO** (grid 3). Eram três linhas
+      com dois campos cada, e a Via ficava longe da vacina a que pertence.
+- [x] **Inserir + Finalizar saíram do rodapé e foram para a LINHA DOS CHECKBOXES**,
+      encostados à direita (`ml-auto`) — é onde a prescrição os coloca. Com isso o rodapé
+      do formulário deixou de existir (não sobra faixa vazia com borda). Editando um item
+      da lista, o par vira **Cancelar + Atualizar item**. O container é `items-center`
+      pelo mesmo motivo da prescrição: os botões são mais altos que o texto do checkbox.
+- [x] **Selo de status virou mapa `STATUS_VACINA` = { label, cls }** (espelho do
+      `STATUS_GRUPO`), fonte ÚNICA do selo E das abas de filtro — antes rótulo e cor
+      estavam escritos duas vezes e divergiriam na primeira correção. Cores por
+      significado: rascunho âmbar, em execução emerald, executado azul, cancelado
+      vermelho. Saíram os ícones de dentro do selo e o CAIXA ALTA.
+- [x] **Abas de filtro como as da prescrição**: um só realce (emerald), contagem entre
+      parênteses e **só os status que existem no histórico** (antes havia 5 abas fixas,
+      com realce de cor diferente por aba e badges contadores só em duas delas).
+- [x] **Cores das AÇÕES pela regra da §6** — o "Visualizar" do desktop era `text-teal-600`
+      e virou emerald; finalizar emerald, imprimir azul, cancelar vermelho, WhatsApp
+      verde, e-mail azul. O **número (VC-0000) virou botão** que abre a visualização,
+      no desktop e no card mobile — igual ao `#Nº` da prescrição.
+- [x] **Erro na superfície da AÇÃO** — o `erroInline` do topo cobria tudo. Agora:
+      `InlineError` (topo) só para falha de CARGA; **`ErroAcao` abaixo de
+      Inserir/Finalizar** para o formulário (com `classeErro` destacando vacina/dose/via);
+      **`ErroAcao` na LINHA** (`erroLinha`/`erroDaLinha`, mesma mecânica da prescrição)
+      para finalizar/cancelar do histórico, na tabela e no card.
+- [x] Paleta **teal → emerald** em toda a tela e chips do item no markup do `InfoChip`;
+      o badge "Proprietário aplica" (violeta) virou **"Proprietário"** em âmbar, como o da
+      prescrição.
+- [ ] A vacina **não tem ação de ALTERAR** no histórico (a prescrição tem): não existe
+      rota de atualização — `routes/vacinaClinica.js` só expõe criar/finalizar/executar/
+      excluir. Enquanto não houver `PUT /clinica/vacinas/:id`, o lápis não pode aparecer
+      ali (seria botão que só falha depois do clique — antipadrão da armadilha 28-d).
+
+#### Execução de Prescrição: EXECUTAR virou ícone e o Histórico é o último card (mesma sessão)
+- [x] **O Nº DA VACINA passou a ter a formatação e a lógica do Nº da PRESCRIÇÃO** —
+      `#074`: 3 dígitos com zero à esquerda, `font-mono font-bold text-emerald-700`,
+      clicável para o registro de origem. Fonte única no front:
+      **`utils/numeroClinico.ts`** (`formatNumeroClinico` / `numeroClinicoComHash`).
+      ⚠️ NUNCA montar o número à mão numa tela. O que havia era `VC-0001` — 4 dígitos com
+      o `tipoAtendimento` de prefixo, que é o molde do número de ATENDIMENTO
+      (`formatAtendimentoNum` → AG-0012, EV-0007): a vacina se disfarçava de atendimento
+      e o MESMO registro aparecia como "VC-0004" na lista e "Vacina nº 004" no histórico.
+      A coluna `tipo_atendimento = 'VC'` CONTINUA — é ela que separa a sequência da vacina
+      em `registrar`; o que mudou é só a exibição.
+      Trocado em TODOS os pontos: lista de vacinas (tabela + card), modal de detalhes,
+      WhatsApp/e-mail (`*Vacina #074*`, no molde do `montarTextoPrescricao`), impressão,
+      fila do plantão (linha + modal de execução) e **Histórico do Paciente**, onde a
+      linha ainda dizia **"Nº Atendimento: VC-0004" em teal** — rótulo de outro número.
+      Virou "Nº Vacina: #004" em emerald, igual à linha "Nº Prescrição" logo abaixo dela.
+      Registro sem número (legado) devolve `null` → a tela mostra "—" e o número deixa de
+      ser clicável. **Não se fabrica número a partir do `id`**: id 812 viraria "#812" e
+      seria lido como a vacina nº 812 daquele paciente.
+      No backend, só o separador do título do histórico mudou (`Vacina nº 004 - Nome` →
+      `— Nome`, igual ao da prescrição); a numeração já era `padStart(3)` lá.
+- [ ] A descrição do item de VACINA na FATURA segue `[VC-0004] [AG-0012] …`
+      (`VacinaClinicaController`, no `darBaixaEFaturar`). Não foi tocada de propósito: é
+      texto GRAVADO na linha da fatura, e mudar o formato agora deixaria a base com dois
+      padrões sem que ninguém tenha pedido. A prescrição, no lugar equivalente, escreve só
+      `[AG-0012]` — a rastreabilidade real é o `FaturaItem.vacinaClinicaId`. Decidir se
+      uniformiza (e se vale reescrever as linhas antigas) antes de mexer.
+- [ ] `EX-0004` (Nº do EXAME, em `ExamesSolicitadosPanel`) continua no molde de 4 dígitos
+      com prefixo, e no Histórico do Paciente o mesmo exame aparece como "Exame nº 003" —
+      exatamente a divergência que a vacina tinha. Aplicar `formatNumeroClinico` quando a
+      tela de exames for tocada.
+- [x] **A linha da fila é UMA SÓ: `LinhaExecucao`** — prescrição e vacina passaram a
+      renderizar o MESMO componente (avatar · paciente · **Nº** · **Veterinário
+      Responsável** · ações). A vacina tinha um card próprio, sem as duas colunas do
+      grid, e as duas listas divergiam a cada ajuste — mesma lição do
+      `SubModuloMinhaAgenda` (armadilha 28-g): **para variar o comportamento, passe uma
+      prop; não copie a linha.** O que difere vem por prop: `numeroLabel`
+      ("Nº Prescrição" × "Nº Vacina"), o destino do número (`/clinica/prescricao/:animalId`
+      × `/clinica/vacina/:animalId?item=:id`) e `detalhe` — a linha extra que diz QUAL
+      vacina é (a prescrição tem N itens, então não passa nada). As ações vêm por
+      `children`. `vcNumDe(v)` é a fonte única do `VC-0000` (linha, modal e impressão).
+- [x] **CANCELAR a vacina pelo plantão** — a linha de "Vacinas a aplicar" tinha ver,
+      executar e imprimir, mas não o cancelar que a prescrição já tinha ao lado.
+      Rota nova `DELETE /clinica/vacinas/:id/cancelar-plantao` → **MESMO controller**
+      (`VacinaClinicaController.excluir`) do cancelar da tela de Vacina, logo mesma regra:
+      justificativa obrigatória, estorno do `FaturaItem` e das doses ao lote, auditoria
+      `CANCELAMENTO` e a checagem de autoria do `podeOperarRegistro`.
+      ⚠️ Só o SLUG muda — `enfermagem.prescricao.deletar` em vez de
+      `atendimento.vacinas.deletar` — pelo MESMO motivo do `cancelar-plantao` da
+      prescrição: quem opera o plantão não tem, nem deveria ter, a permissão de quem
+      prescreve. Sem a rota própria o ícone existiria e responderia 403 para o enfermeiro
+      (o botão que só falha depois do clique). Front: `ModalJustificativa`, igual ao da
+      prescrição.
+- [x] **A linha do paciente na fila é "LOCAL • PESO • IDADE"** (`utils/animalInfo.ts` →
+      `linhaInfoAnimal`), nas duas listas. Era "Equino • Brasileiro de Hipismo, 600kg" —
+      espécie e raça não informam nada numa fila de plantão de equinos, e quem vai aplicar
+      precisa saber PARA ONDE ir e o peso da dose. Campo ausente é omitido junto com o
+      separador (nunca "• •"). A espécie continua servindo ao rótulo da baia (Baia × Leito).
+      O util também recolhe as cópias de `localDoAnimal` (Agendamentos) e `calcularIdade`
+      (AnimalCard, AnimaisVet, Animal) — tela nova usa ele, não uma 4ª cópia.
+      Backend: `local`, `localizacao`, `dataNascimento` e `idadeAnos` entraram nos selects
+      de animal de `PrescricaoGrupoController.listarParaExecucao` **e** de
+      `VacinaClinicaController.listarParaExecucao` — os dois alimentam o MESMO componente.
+      ⚠️ E `baia: true` foi REABILITADO na prescrição: estava comentado com um
+      "reabilitar após prisma generate" antigo, então o selo de baia da linha **nunca
+      aparecia** — o componente tinha o selo e o dado nunca chegava. `BuscaGlobalController`
+      já seleciona `baia` sem problema, ou seja, o client conhece o campo.
+- [ ] `calcularIdade`/`localDoAnimal` seguem duplicados nas 4 telas antigas; migrar para
+      `utils/animalInfo.ts` quando cada uma for tocada.
+- [x] **Rodapé dos modais: FECHAR e depois EXECUTAR TODOS** (a ação principal por último,
+      à direita, que é onde a mão vai) — a ordem estava invertida no do medicamento. O da
+      VACINA passou a ter o mesmo par, e o **spinner do "Executar Todos" só gira quando é
+      ele** (`salvando && execItemId == null`), senão girava junto com o de um item.
+- [x] **A VISUALIZAÇÃO (olho) da vacina é a mesma do medicamento**: item com a tarja
+      "Somente leitura" e rodapé com a tarja âmbar "Execução disponível apenas para hoje",
+      sem botões (o X do cabeçalho fecha). O Imprimir saiu do rodapé do modal da vacina —
+      o medicamento não tem, e a impressão continua na linha da fila.
+- [x] **Duas ações por ITEM nos dois modais: EXECUTAR e CANCELAR.** O do medicamento já
+      tinha; a vacina ganhou o cancelar (mesma rota `cancelar-plantao`, mesmo
+      `ModalJustificativa`, agora DENTRO do modal).
+- [x] **Dentro dos DOIS modais, EXECUTAR deixou de ser botão e virou a ação-ícone da
+      lista** (emerald `CheckCircle2`, do lado do item) — dentro e fora do modal a mesma
+      ação tem a mesma cara. No do medicamento o rótulo carregava o ESTADO
+      ("Executado"/"Aguardando"/"Executando…"); ele agora vem de três lugares: a COR do
+      ícone (cinza = ainda não deu o horário — o "indisponível" da §6), o `title` e o
+      fundo emerald que o card do item ganha quando executado.
+      No da vacina o Executar saiu do RODAPÉ e foi para o lado do item, como no
+      medicamento; o rodapé ficou só com Imprimir + Fechar.
+      ⚠️ Novo estado `execItemId`: o spinner tem de ser do item CLICADO. `salvando` é do
+      modal inteiro e faria todos os ícones girarem — era o defeito do antigo
+      "Executando…", que aparecia em todos os botões habilitados.
+      ⚠️ **"Executar Todos" (rodapé do modal do medicamento) CONTINUA botão**: é ação em
+      LOTE, e como ícone ficaria indistinguível do executar-item ao lado. Se um dia virar
+      ícone, precisa de outra pista visual para não se confundir com ele.
+- [x] **Executar vacina ABRE UMA TELA** (`ModalExecucaoVacina`), como no medicamento — o
+      ícone aplicava direto, e a dose sai do estoque e entra na fatura no mesmo clique,
+      sem nenhuma conferência. O modal espelha o do medicamento: cabeçalho do paciente,
+      faixa de contexto, corpo com o item e rodapé **Executar + Fechar**, com o erro
+      dentro dele. Olho e Executar abrem o MESMO modal; só o olho usa `soVisualizacao` —
+      o par `vacModal`/`vacModoVer` é o mesmo `modal`/`modalVer` da prescrição.
+      Com isso saiu o `VacinaExecViewModal` (a antiga tela só-detalhes) e o estado
+      `erroVacina` — o erro da execução agora mora no modal que a disparou.
+- [x] **ORDEM DAS AÇÕES: VISUALIZAR · EXECUTAR · IMPRIMIR · CANCELAR**, nesta sequência,
+      na linha da prescrição e no card da vacina (a vacina não tem cancelar ali — o
+      cancelamento é na tela de Vacina). ⚠️ A ação que some por falta de permissão **não
+      reordena as demais**: a posição de cada ícone é fixa, para a mão do plantonista não
+      reaprender a linha a cada perfil. Antes a ordem era executar → cancelar → ver →
+      imprimir, com o destrutivo no meio.
+- [x] **O botão "Executar" virou ÍCONE** (`CheckCircle2` emerald) na linha da prescrição e
+      no card da vacina de `/execucao-prescricao`, ao lado de ver/imprimir/cancelar. O
+      gate NÃO mudou: segue `enfermagem.prescricao.executar` (`podeExecutarAcao`), então
+      quem não tem a permissão não vê o ícone — nada de botão que só falha depois do
+      clique (armadilha 28-d). Sem rótulo visível, `title` + `aria-label` são obrigatórios.
+- [x] **Ícone cinza é ação que parece morta** — o olho e a impressora do card da VACINA
+      eram `text-gray-400 hover:text-…`; agora nascem pintados (emerald/azul), como na
+      linha da prescrição. É a regra da §6, que a seção de vacinas ainda não seguia.
+- [x] **`itemPendenteHoje` comparava a data em UTC** (`String(executadoEm).slice(0,10)`).
+      Das 21h em diante (BRT = UTC-3) isso já é o DIA SEGUINTE: o item executado à noite
+      não contava como feito hoje, a prescrição ficava presa em "a aplicar" e **não descia
+      para o Histórico**. Agora a data sai de `dataLocalDe(iso)` (exportada, fuso local) —
+      mesma armadilha que `hojeLocalStr` resolve na tela de prescrição.
+      ⚠️ Em toda comparação de dia, `executadoEm`/`createdAt` passam por `dataLocalDe`,
+      NUNCA por `slice(0, 10)`.
+- [x] **O Histórico é SEMPRE o último card da tela** — ordem fixa da coluna:
+      *Medicamentos a aplicar → Vacinas a aplicar → Histórico (executadas hoje)*. Seção
+      nova entra ACIMA do Histórico; nada é renderizado depois dele.
+      O medicamento executado SAI da fila e desce para o Histórico; a **vacina executada
+      SOME da tela** — vira `EXECUTADA` e `listarParaExecucao` só devolve `FINALIZADA`
+      (comportamento do backend, não mexido).
+- [x] Chip do horário no modal: o horário DA VEZ virou **âmbar** (pendente). Ele era
+      `teal-600` ao lado do feito em `emerald-500` — com a paleta unificada em emerald os
+      dois virariam verdes vizinhos, indistinguíveis a um relance.
+- [ ] O botão **por item DENTRO do modal** de execução continua textual
+      (`Executar`/`Executado`/`Aguardando`/`Executando…`): ali o rótulo carrega o ESTADO,
+      que um ícone sozinho não comunica. Se for para virar ícone também, o "Aguardando"
+      precisa de outra pista visual antes.
+
+#### Painel Principal: a execução do dia INTEIRA, com os popups do plantão (mesma sessão)
+- [x] **A "Fila de execução por localidade" traz TUDO que se aplica hoje** — prescrições
+      (só o que ainda falta, por `itemPendenteEm`) **e vacinas** (`/clinica/vacinas/para-execucao`,
+      o mesmo endpoint do plantão). Cada parada tem selo Med/Vacina e as MESMAS ações, na
+      mesma ordem e cores: **executar** (emerald) e **cancelar** (vermelho, com
+      justificativa pelas rotas `cancelar-plantao`).
+- [x] **Executar abre o POPUP de execução** — `ModalExecucao` / `ModalExecucaoVacina`
+      **importados de `ExecucaoPrescricao`**, não reimplementados. O painel antes só
+      NAVEGAVA para `/execucao-prescricao`.
+      ⚠️ **A tela de retorno é sempre a CHAMADORA**, e é assim porque o popup abre SOBRE a
+      tela e é ela que recarrega no `onClose`: executou pelo painel, volta ao painel;
+      executou pelo plantão, volta ao plantão. **Nunca navegar para outra tela para
+      executar** — isso troca a tela de retorno e é justamente o que foi corrigido.
+- [x] `itemPendenteEm(item, data)` foi EXPORTADO de `ExecucaoPrescricao` e é a fonte única
+      de "o que falta hoje". O painel tinha a sua própria versão, com o bug de UTC que já
+      havia sido corrigido do outro lado (`toISOString().slice(0,10)`); duas definições
+      divergiriam de novo na correção seguinte. `hojeISO()` do painel agora é `localToday`.
+- [x] **Resumo de farmácia virou CHECKLIST DE SEPARAÇÃO**: uma linha por item, no formato
+      **[checkbox] [qtd] [medicamento ou vacina]**, cobrindo medicamentos E vacinas do dia.
+      Itens iguais em prescrições distintas viram UMA linha somada (duas amoxicilinas →
+      qtd 2) — é lista de separação, não extrato de prescrição. Procedimento não entra
+      (não se carrega no carro).
+      O checkbox é só CONFERÊNCIA — não executa nada e não toca no estoque; quem faz isso
+      é a execução, na fila ao lado. Estado em `localStorage` **por dia**
+      (`s2vet_farmacia_separados_<AAAA-MM-DD>`): o painel recarrega o tempo todo e perder o
+      que já foi conferido tornaria o checklist inútil; a chave do dia também é a faxina.
+      A soma da DOSAGEM aparece à parte e só quando todas as linhas somadas são numéricas —
+      "1 ampola" não soma com "2 mL", e total errado em lista de separação é pior que
+      nenhum.
+- [x] O local de cada parada sai do PRÓPRIO animal dos endpoints da fila, com `/animais`
+      como reserva. ⚠️ A combinação é campo a campo com `??` — `{ ...reserva, ...daFila }`
+      APAGARIA o valor da reserva, porque a chave existe com `null` na fila.
+- [x] Linha do resumo de farmácia é UMA SÓ, com o mesmo separador:
+      **`1x • Acetilcisteína - xarope • 10 mL no total`** — quantidade na frente, no mesmo
+      tamanho de fonte do item e sem negrito.
+- [x] **Recarga automática a cada 2 min** e o botão **Atualizar REMOVIDO** — o painel fica
+      aberto o dia todo e precisa refletir o que a equipe executou. Fica só a hora da
+      última carga no cabeçalho, que é como se sabe que ele está vivo.
+      ⚠️ O tique NÃO recarrega com POPUP ABERTO: `carregar()` troca `grupos`/`vacinas`, e
+      puxar o dado debaixo de um diálogo em uso é receita de execução no registro errado.
+      Ao fechar o popup a tela já recarrega (é o `onClose`), então nada se perde.
+- [x] Atalho **Mapa de atendimento** e botão **Cadastrar nova ocorrência** removidos (a pedido).
+
+#### Painel Principal no padrão da aplicação (mesma sessão)
+- [x] `/painel-principal` foi alinhada à tela de referência **`/equipe`**: **`BotaoVoltar`**
+      (não tinha), `InlineError` logo abaixo, cabeçalho `h1` com ícone emerald + subtítulo
+      (data por extenso · CRMV · selo de pendências) e a ação da tela — **Atualizar** — à
+      direita, no botão padrão. Conteúdo em cards brancos direto na página.
+- [x] **Saíram a barra escura do topo e a do rodapé** (`bg-emerald-900`) e a moldura
+      `rounded-3xl` cinza que embrulhava tudo. A barra do topo repetia NOME e PERFIL do
+      usuário, que são do `AppHeader`; a do rodapé competia com o `AppFooter` — os dois são
+      do SHELL (§16) e a tela não repete o que ele já mostra. Os 3 atalhos daquela barra
+      viraram botões secundários no fim do conteúdo.
+- [x] **Loading no padrão**: o spinner ocupa a área do conteúdo e o cabeçalho continua na
+      tela (antes a página inteira era substituída pelo spinner, e o usuário perdia até o
+      botão Voltar durante a carga).
+- [x] Avatar do paciente na fila passou a ser o **`FotoAnimal`** — a inicial do nome era
+      exatamente o vazio que aquele componente veio unificar.
+- [x] O relógio de 30s virou 60s e só mantém a DATA correta na virada da meia-noite: a
+      HORA saiu do cabeçalho junto com a barra escura.
 
 #### Ajustes de UI e mensagem (mesma sessão)
 - [x] **Máscara no valor de pagamento** (`UsuarioFormModal`): salário/valor fixo →
@@ -2917,6 +3222,7 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `relatorios/AnaliseFinanceiraIA.tsx` | IA Financeira em Relatórios > Financeiro. Highlights + análise textual do período; chamada SOB DEMANDA (botão), nunca no load. |
 | `FotoEditorModal.tsx` | Editor da foto do Cadastro Pessoal: ZOOM (slider) + ARRASTAR (pointer events — mouse e toque no mesmo código), devolvendo o arquivo já RECORTADO (512px). Sem biblioteca externa: preview e canvas usam a MESMA conta, só multiplicada por `SAIDA/lado`. ⚠️ O lado do quadro é MEDIDO (`ResizeObserver`), não constante — em tela estreita o quadro encolhe, e com valor fixo o canvas geraria um recorte diferente do que a pessoa enquadrou. |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
+| `FormularioNovaSenha.tsx` | Formulário de definição de senha — fonte ÚNICA de aparência e regras (`REGRAS_SENHA`, checklist ao vivo, indicador de coincidência, `InlineError`). Usado por `AlterarSenhaObrigatoria` (sessão) e `ResetPassword` (token do e-mail). Só COLETA e valida — quem submete é a tela, com a credencial que tiver. Ver §14. |
 
 ### Frontend — Hooks e Contextos
 
@@ -3809,6 +4115,42 @@ SMTP cair). Por usuário: `UPDATE schs2vet.users SET mfa_ativo = false WHERE id 
 
 Front: `components/Verificacao2FA.tsx` (auto-submete aos 6 dígitos, reenvio com espera
 de 45s, `autoComplete="one-time-code"` para o preenchimento automático do SO).
+
+### Tela de senha é UMA SÓ — `components/FormularioNovaSenha.tsx` (2026-08-04)
+
+O formulário de definição de senha é compartilhado por **duas** telas:
+```
+AlterarSenhaObrigatoria  → dentro da app (primeiro acesso / senha temporária)
+ResetPassword            → link do e-mail (/#/reset-password?token=...)
+```
+Antes eram implementações separadas: a do e-mail tinha fundo escuro, emoji (🙈/👁️) no
+lugar dos ícones lucide e só revelava os requisitos DEPOIS de o envio falhar — quem
+chegava pelo link achava que tinha caído em outro sistema. As regras (`REGRAS_SENHA`), o
+checklist ao vivo, o indicador de "as senhas coincidem" e o `InlineError` moram no
+componente; tela nova de senha usa ele, não copia.
+
+⚠️ **O que NÃO é compartilhado é a CREDENCIAL, e isso é deliberado:**
+```
+na aplicação → SESSÃO ativa  → PATCH /users/me/senha
+no e-mail    → TOKEN do link → POST  /api/auth/reset-password
+```
+Não se pede a senha ANTIGA no fluxo do e-mail: quem esqueceu não a tem. Quem prova a
+identidade ali é o token — uso único, com prazo, conferido contra
+`resetPasswordToken`/`resetPasswordExpires`. Reaproveitar a interface não afrouxa nada;
+reaproveitar a checagem de credencial, sim. `ResetPassword` sem `token` na URL mostra
+"Link inválido" em vez de um formulário que só falharia no envio.
+
+### "Esqueci minha senha" volta sozinho para o login (2026-08-04)
+
+`ForgotPassword` mostra a confirmação e redireciona para `/login?msg=reset_link_enviado`
+(4s), onde o `Login` repete o aviso num banner. Antes a tela parava num card com link
+manual e o usuário não sabia que já podia sair dali.
+
+⚠️ **A mensagem é a MESMA exista ou não o e-mail.** O backend responde 200 genérico
+(`respostaGenerica` em `AuthController.forgotPassword`) e o banner do login diz "se
+houver uma conta com o e-mail informado". NUNCA "melhorar" isso avisando que o e-mail
+não foi encontrado: transformaria a tela num verificador de cadastro (enumeração de
+usuário) — mesma razão pela qual o login diz "Usuário ou Senha Inválidos" nos dois casos.
 
 ### Senha é da PESSOA — ninguém a troca POR ela (2026-08-04)
 ```

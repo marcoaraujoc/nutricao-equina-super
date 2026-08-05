@@ -3,14 +3,19 @@
 // Não confundir com a logomarca da EMPRESA do contexto ativo (EmpresaContext.marca),
 // que identifica a clínica assinante e aparece na Sidebar e no rodapé.
 //
-// ARTE OFICIAL: `backend/uploads/empresas/s2vet-logo.png`, servida em
-// `/uploads/empresas/s2vet-logo.png` — o MESMO diretório das logomarcas das empresas
-// clientes (EmpresaConfiguracao.logoUrl), por decisão de manter tudo num lugar só.
-// O Vite proxia `/uploads` em dev e o backend serve o estático em produção.
+// ARTE OFICIAL: guardada NO BANCO (tb_midia_arquivos, pasta 'marca', publico=true) e
+// servida por `GET /api/marca`. Carregada/atualizada por
+// `backend/scripts/carregarMarcaProduto.js`.
 //
-// Nome FIXO de propósito: as logos de empresa recebem nome aleatório (capability URL)
-// porque são conteúdo de cliente; esta é asset do produto e precisa ser referenciável
-// estaticamente daqui.
+// POR QUE saiu do filesystem, se ela é pública de qualquer forma: não foi por
+// segurança — esta rota PRECISA ser aberta, porque a marca aparece antes de existir
+// sessão. Foi para não sobrar NENHUM código servindo arquivo de disco na aplicação;
+// com ela no banco o `express.static` some por completo e ninguém o reintroduz por
+// descuido. De quebra, deploy deixa de exigir volume compartilhado.
+//
+// Rota SEM parâmetro de propósito: não recebe chave do cliente, então não há como
+// usá-la para alcançar arquivo de paciente (esses saem por `/api/midia/:chave`,
+// autenticado e autorizado por dono).
 //
 // O PNG JÁ TRAZ O NOME ESCRITO. Por isso header e rodapé não repetem "S2Vet" nem
 // tagline ao lado dele — a marca é auto-suficiente.
@@ -35,9 +40,10 @@ interface Props {
 export default function BrandS2Vet({ size = 'md', className = '' }: Props) {
   return (
     <img
-      src="/uploads/empresas/s2vet-logo.png"
+      src="/api/marca"
       alt="S2Vet"
-      // Arquivo ausente: esconde em vez de exibir o ícone de imagem quebrada
+      // Marca ainda não carregada no banco (404): esconde em vez de exibir o ícone
+      // de imagem quebrada
       onError={(e) => { e.currentTarget.style.display = 'none'; }}
       className={`${ALTURA[size]} w-auto object-contain flex-shrink-0 ${className}`}
     />

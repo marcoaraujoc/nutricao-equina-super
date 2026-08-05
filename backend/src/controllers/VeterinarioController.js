@@ -6,6 +6,12 @@ const crypto           = require('crypto');
 const emailService     = require('../services/emailService');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
+const { aplicarPerfilEmLista: aplicarPerfilProprietarioEmLista } = require('../lib/proprietarioPerfil');
+// Critério ÚNICO de "quem é cliente desta empresa" — vem do Cadastro de Clientes.
+const {
+  whereProprietarioNoEscopo,
+  whereEhClienteDaEmpresa,
+} = require('./ProprietarioController');
 
 const prisma = new PrismaClient();
 
@@ -138,12 +144,36 @@ const VeterinarioController = {
   // ── GET /api/veterinarios/proprietarios ───────────────────────────────────
   listarProprietarios: async (req, res) => {
     try {
+      // ISOLAMENTO POR EMPRESA: este endpoint listava `userType: 'PROPRIETARIO'`
+      // sem NENHUM filtro de empresa — ou seja, devolvia nome, e-mail e telefone de
+      // TODOS os clientes da plataforma para qualquer usuário autenticado (a rota nem
+      // tem checkPermission). Agora usa o mesmo par de predicados do Cadastro de
+      // Clientes: `whereEhClienteDaEmpresa` ("é cliente") + `whereProprietarioNoEscopo`
+      // ("é cliente DAQUI"), para não haver dois critérios de escopo no sistema.
+      const isAdmin = req.user?.role === 'ADMIN';
+
+      // Sem empresa no contexto não há como delimitar o tenant: devolve vazio em vez
+      // de cair numa consulta global (fail-closed).
+      if (!isAdmin && !req.empresaId) {
+        return res.json({ sucesso: true, dados: [] });
+      }
+
+      const where = { ativo: true, AND: [whereEhClienteDaEmpresa(req.empresaId)] };
+
+      if (!isAdmin) {
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        where.AND.push(whereProprietarioNoEscopo(req.empresaId, equipeScope));
+      }
+
       const proprietarios = await prisma.user.findMany({
-        where:   { userType: 'PROPRIETARIO', ativo: true },
+        where,
         select:  { id: true, fullName: true, email: true, phone: true },
         orderBy: { fullName: 'asc' },
       });
-      res.json({ sucesso: true, dados: proprietarios });
+
+      // Nome/telefone conforme o cadastro DESTA empresa (o `users` só guarda identidade).
+      const dados = await aplicarPerfilProprietarioEmLista(proprietarios, req.empresaId);
+      res.json({ sucesso: true, dados });
     } catch (error) {
       console.error('[VeterinarioController.listarProprietarios]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

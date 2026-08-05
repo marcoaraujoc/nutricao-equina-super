@@ -4,6 +4,22 @@
 const prisma = require('../lib/prisma').default;
 const { situacao, inicioDoMes } = require('../services/iaQuotaService');
 
+// ISOLAMENTO ENTRE EMPRESAS no consumo de IA.
+//
+// `resumo`, `evolucaoDiaria` e `projecaoMensal` são abertas a QUALQUER autenticado
+// (rotas sem `authorize('ADMIN')`) e agregavam `AiUsageLog` sem filtro nenhum: cada
+// clínica enxergava o volume, o custo e as operações de IA da plataforma inteira —
+// dado de negócio das concorrentes.
+//
+// ADMIN da plataforma continua vendo o consolidado (é o dono da conta única no
+// provedor). Sem empresa resolvida, `empresaId: null` bate só com os registros sem
+// tenant — fail-closed, nunca a base toda.
+// As rotas `porModelo`, `logRecente` e `porEmpresa` já são ADMIN-only e seguem globais.
+function escopoEmpresaIA(req) {
+  if (req.user?.userType === 'ADMIN' || req.user?.role === 'ADMIN') return {};
+  return { empresaId: req.empresaId ? Number(req.empresaId) : null };
+}
+
 const AiUsageController = {
 
   // ── Resumo geral (cards do dashboard) ─────────────────────────────────────
@@ -25,30 +41,30 @@ const AiUsageController = {
 
         // Total de chamadas no período
         prisma.aiUsageLog.count({
-          where: { createdAt: { gte: dataInicio } },
+          where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
         }),
 
         // Total de tokens
         prisma.aiUsageLog.aggregate({
           _sum: { tokensTotal: true },
-          where: { createdAt: { gte: dataInicio } },
+          where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
         }),
 
         // Custo total
         prisma.aiUsageLog.aggregate({
           _sum: { custoUsd: true },
-          where: { createdAt: { gte: dataInicio } },
+          where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
         }),
 
         // Latência média
         prisma.aiUsageLog.aggregate({
           _avg: { latenciaMs: true },
-          where: { createdAt: { gte: dataInicio }, sucesso: true },
+          where: { createdAt: { gte: dataInicio }, sucesso: true, ...escopoEmpresaIA(req) },
         }),
 
         // Taxa de erro
         prisma.aiUsageLog.count({
-          where: { createdAt: { gte: dataInicio }, sucesso: false },
+          where: { createdAt: { gte: dataInicio }, sucesso: false, ...escopoEmpresaIA(req) },
         }),
 
         // Top operações por custo
@@ -56,7 +72,7 @@ const AiUsageController = {
           by: ['operacao'],
           _sum: { custoUsd: true, tokensTotal: true },
           _count: { id: true },
-          where: { createdAt: { gte: dataInicio } },
+          where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
           orderBy: { _sum: { custoUsd: 'desc' } },
           take: 5,
         }),
@@ -66,7 +82,7 @@ const AiUsageController = {
           by: ['modulo'],
           _sum: { custoUsd: true, tokensTotal: true, tokensEntrada: true, tokensSaida: true },
           _count: { id: true },
-          where: { createdAt: { gte: dataInicio } },
+          where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
           orderBy: { _sum: { custoUsd: 'desc' } },
         }),
       ]);
@@ -118,7 +134,7 @@ const AiUsageController = {
       const dataInicio = calcularDataInicio(periodo);
 
       const logs = await prisma.aiUsageLog.findMany({
-        where: { createdAt: { gte: dataInicio } },
+        where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
         select: { createdAt: true, tokensTotal: true, custoUsd: true, sucesso: true },
         orderBy: { createdAt: 'asc' },
       });
@@ -158,7 +174,7 @@ const AiUsageController = {
         by: ['modelo', 'provedor'],
         _sum: { custoUsd: true, tokensTotal: true },
         _count: { id: true },
-        where: { createdAt: { gte: dataInicio } },
+        where: { createdAt: { gte: dataInicio }, ...escopoEmpresaIA(req) },
         orderBy: { _sum: { custoUsd: 'desc' } },
       });
 
@@ -243,7 +259,7 @@ const AiUsageController = {
         by: ['empresaId'],
         _sum: { custoUsd: true, tokensTotal: true, tokensEntrada: true, tokensSaida: true },
         _count: { id: true },
-        where: { createdAt: { gte: dataInicio }, sucesso: true },
+        where: { createdAt: { gte: dataInicio }, sucesso: true, ...escopoEmpresaIA(req) },
         orderBy: { _sum: { tokensTotal: 'desc' } },
       });
 
@@ -365,7 +381,7 @@ const AiUsageController = {
       const resultado = await prisma.aiUsageLog.aggregate({
         _sum: { custoUsd: true, tokensTotal: true },
         _count: { id: true },
-        where: { createdAt: { gte: dataInicio }, sucesso: true },
+        where: { createdAt: { gte: dataInicio }, sucesso: true, ...escopoEmpresaIA(req) },
       });
 
       const diasObservados = 7;

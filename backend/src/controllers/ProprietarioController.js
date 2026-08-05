@@ -540,4 +540,6 @@ module.exports = ProprietarioController;
 
 // Exportado para reuso por outros controllers (ex.: busca de proprietário por
 // e-mail no cadastro de animal) — mantém um critério ÚNICO de escopo de empresa.
+// Os dois andam SEMPRE juntos: um diz "é cliente", o outro "é cliente DAQUI".
 module.exports.whereProprietarioNoEscopo = whereProprietarioNoEscopo;
+module.exports.whereEhClienteDaEmpresa   = whereEhClienteDaEmpresa;

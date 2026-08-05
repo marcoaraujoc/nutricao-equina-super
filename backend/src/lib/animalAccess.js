@@ -157,6 +157,28 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
   }
 
   if (userType === 'VETERINARIO') {
+    // VÍNCULO DIRETO × CONTEXTO ATIVO — espelha a LISTAGEM (lib/animalScope.js).
+    //
+    // Lá, só quem é dono/GESTOR da empresa ativa ("base própria") enxerga vínculos de
+    // QUALQUER empresa; em contexto CONVIDADO o isolamento é estrito (`vetVinculoNaEmpresa`).
+    // Aqui o vínculo valia sempre, então o animal de outra clínica NÃO aparecia na lista
+    // mas ABRIA pela URL — e com ele histórico, evoluções, prescrições e agenda.
+    // Duas regras para o mesmo fato é o que produz esse tipo de buraco: agora é uma só.
+    const daEmpresaAtiva = empresaId != null && animal.empresaId === Number(empresaId);
+
+    if (!daEmpresaAtiva && empresaId != null) {
+      const gestorAqui = await prisma.membroEquipe.findFirst({
+        where:  { userId: Number(userId), cargo: 'GESTOR', equipe: { empresaId: Number(empresaId) } },
+        select: { id: true },
+      });
+      const donoAqui = gestorAqui ? null : await prisma.empresa.findFirst({
+        where:  { id: Number(empresaId), ownerId: Number(userId) },
+        select: { id: true },
+      });
+      // Contexto convidado: o vínculo não atravessa a fronteira da empresa ativa.
+      if (!gestorAqui && !donoAqui) return false;
+    }
+
     const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
       where: {
         animalId:  Number(animalId),

@@ -448,34 +448,50 @@ class AnimalController {
           }
         }
 
+        // IDENTIDADE do animal: atributos do próprio bicho, iguais em qualquer clínica.
+        // Podem pré-preencher o cadastro mesmo vindo de outra empresa.
+        const identidade = {
+          id:              animal.id,
+          nome:            animal.nome,
+          dataNascimento:  animal.dataNascimento  ?? null,
+          idadeAnos:       animal.idadeAnos       ?? null,
+          sexo:            animal.sexo            ?? null,
+          especieId:       animal.especieId       ?? null,
+          racaId:          animal.racaId          ?? null,
+          especie:         animal.especie         ?? null,
+          raca:            animal.raca            ?? null,
+          pelagem:         animal.pelagem         ?? null,
+          altura:          animal.altura          ?? null,
+          registroPassaporte: animal.registroPassaporte ?? null,
+        };
+
+        // CADASTRO OPERACIONAL: o que descreve como AQUELA clínica trata o animal.
+        // `tratador` e `localizacao` são linhas de tb_tratadores / tb_localizacoes_animal,
+        // que têm `empresaId` próprio — devolvê-las entregava um cadastro inteiro de
+        // outra empresa (nome do tratador, haras onde o animal está) para quem só
+        // digitou um nome na busca. Junto vão baia, peso, foto, seguradora, finalidade
+        // e categoria/exercício: são a operação e o contrato comercial da outra clínica,
+        // não a identidade do animal.
+        const operacional = outraEmpresa ? {} : {
+          photoUrl:           animal.photoUrl        ?? null,
+          peso:               animal.peso            ?? null,
+          categoriaAnimal:    animal.categoriaAnimal ?? null,
+          tipoExercicio:      animal.tipoExercicio   ?? null,
+          baia:               animal.baia            ?? null,
+          local:              animal.local           ?? null,
+          localizacaoId:      animal.localizacaoId   ?? null,
+          localizacao:        animal.localizacao     ?? null,
+          tratadorId:         animal.tratadorId      ?? null,
+          tratador:           animal.tratador        ?? null,
+          finalidade:         animal.finalidade      ?? null,
+          seguradora:         animal.seguradora      ?? null,
+        };
+
         res.json({
           sucesso: true,
           dados: {
-            id:              animal.id,
-            nome:            animal.nome,
-            photoUrl:        animal.photoUrl        ?? null,
-            dataNascimento:  animal.dataNascimento  ?? null,
-            idadeAnos:       animal.idadeAnos       ?? null,
-            peso:            animal.peso            ?? null,
-            sexo:            animal.sexo            ?? null,
-            categoriaAnimal: animal.categoriaAnimal ?? null,
-            tipoExercicio:   animal.tipoExercicio   ?? null,
-            especieId:       animal.especieId       ?? null,
-            racaId:          animal.racaId          ?? null,
-            especie:         animal.especie         ?? null,
-            raca:            animal.raca            ?? null,
-            // Demais dados do cadastro — para pré-preencher ao continuar o cadastro
-            baia:               animal.baia               ?? null,
-            local:              animal.local              ?? null,
-            localizacaoId:      animal.localizacaoId      ?? null,
-            localizacao:        animal.localizacao        ?? null,
-            tratadorId:         animal.tratadorId         ?? null,
-            tratador:           animal.tratador           ?? null,
-            pelagem:            animal.pelagem            ?? null,
-            altura:             animal.altura             ?? null,
-            registroPassaporte: animal.registroPassaporte ?? null,
-            finalidade:         animal.finalidade         ?? null,
-            seguradora:         animal.seguradora         ?? null,
+            ...identidade,
+            ...operacional,
             temVet,
             vetDaMinhaEquipe,
             // NÃO devolvemos o proprietário do registro de origem: o cadastro em
@@ -985,7 +1001,12 @@ class AnimalController {
               proprietarioEmailParaEmail = prop?.email    || null;
             }
 
-      let photoUrl = req.file ? await storage.upload(req.file, '') : null;
+      // Contexto de DONO do arquivo — é o que /api/midia usa para autorizar. Na
+      // CRIAÇÃO o animal ainda não existe, então o arquivo nasce com a empresa e é
+      // amarrado ao animal logo após o insert (ver `vincularFotoAoAnimal`).
+      let photoUrl = req.file
+        ? await storage.upload(req.file, 'animais', { empresaId: req.empresaId ?? null, criadoPorId: req.user?.id ?? null })
+        : null;
 
       // Duplicação de animal existente (novo registro para outro vet): sem foto
       // nova enviada, reaproveita a foto do animal de origem
@@ -1216,7 +1237,13 @@ class AnimalController {
         }
       }
 
-      const photoUrl = req.file ? await storage.upload(req.file, '') : undefined;
+      const photoUrl = req.file
+        ? await storage.upload(req.file, 'animais', {
+            empresaId:   req.empresaId ?? null,
+            animalId,
+            criadoPorId: req.user?.id ?? null,
+          })
+        : undefined;
 
       const animal = await prisma.animal.update({
         where: { id: animalId },

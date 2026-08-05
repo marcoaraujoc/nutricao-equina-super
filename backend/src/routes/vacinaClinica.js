@@ -21,4 +21,11 @@ router.patch('/:id/finalizar',                checkPermission('atendimento.vacin
 router.patch('/:id/executar',                 checkPermission('enfermagem.prescricao.executar', 'PROPRIO'), ctrl.executar);
 router.delete('/:id',                         checkPermission('atendimento.vacinas.deletar', 'PROPRIO'), ctrl.excluir);
 
+// Cancelar a vacina PELO PLANTÃO (/execucao-prescricao). MESMO controller do cancelar da
+// tela de Vacina — logo, mesma regra: justificativa obrigatória, estorno do item de fatura
+// e das doses do lote, e auditoria. Só o SLUG muda, pelo mesmo motivo do
+// `cancelar-plantao` da prescrição: quem opera o plantão não tem — nem deveria ter — a
+// permissão de quem prescreve (`atendimento.vacinas.deletar`).
+router.delete('/:id/cancelar-plantao',        checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), ctrl.excluir);
+
 module.exports = router;

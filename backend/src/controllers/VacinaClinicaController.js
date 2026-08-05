@@ -433,7 +433,11 @@ async function listarParaExecucao(req, res) {
         ...INCLUDE_VACINA,
         animal: {
           select: {
-            id: true, nome: true, photoUrl: true, peso: true,
+            id: true, nome: true, photoUrl: true, peso: true, baia: true,
+            // Mesmos campos do select da PRESCRIÇÃO para a fila do plantão: a linha sob o
+            // paciente é "Local • Peso • Idade" e as duas listas usam o MESMO componente.
+            local: true, dataNascimento: true, idadeAnos: true,
+            localizacao: { select: { nome: true } },
             especie: { select: { nome: true } },
             raca:    { select: { nome: true } },
           },

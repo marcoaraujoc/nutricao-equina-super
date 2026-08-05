@@ -5,6 +5,7 @@ const router  = express.Router();
 const Ctrl    = require('../controllers/FaturaController');
 const { authenticate }    = require('../middlewares/auth');
 const { checkPermission } = require('../middlewares/permissao.middleware');
+const { exigirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 
 // Listagem e consulta por proprietário
 router.get('/proprietarios',                   authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), Ctrl.listarProprietarios);
@@ -31,6 +32,6 @@ router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.fatu
 router.patch('/:faturaId/status', authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'), Ctrl.atualizarStatus);
 
 // Legado
-router.get('/animal/:animalId',   authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), Ctrl.obterFaturaAberta);
+router.get('/animal/:animalId',   authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), exigirAcessoAnimal(), Ctrl.obterFaturaAberta);
 
 module.exports = router;

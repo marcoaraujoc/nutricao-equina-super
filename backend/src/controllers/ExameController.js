@@ -3,6 +3,10 @@ const prisma = require('../lib/prisma').default;
 const { processarExame } = require('../services/exameParserService');
 const { storage }        = require('../storage');
 const { registrarAuditoria } = require('../lib/auditoria');
+// ISOLAMENTO ENTRE EMPRESAS: as rotas com :animalId usam o middleware; aqui o exame é
+// alcançado pelo próprio id, então o animal (e com ele o tenant) só é conhecido depois
+// de carregar o registro — nunca excluir/alterar antes de conferir.
+const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 
 // Helper seguro para converter valor (aceita número ou string com vírgula)
 const safeParseFloat = (val) => {
@@ -30,7 +34,13 @@ exports.getExamesByAnimal = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const { animalId, nutrienteId, dataExame, valorEncontrado, unidade, valorMinRef, valorMaxRef, observacao } = req.body;
-    const arquivoUrl = req.file ? await storage.upload(req.file, 'exames') : null;
+    const arquivoUrl = req.file
+      ? await storage.upload(req.file, 'exames', {
+          empresaId:   req.empresaId ?? null,
+          animalId:    animalId ? Number(animalId) : null,
+          criadoPorId: req.user?.id ?? null,
+        })
+      : null;
 
     const exame = await prisma.exameNutricional.create({
       data: {
@@ -167,7 +177,11 @@ exports.analisarImagens = async (req, res) => {
         if (!dataExameFinal) dataExameFinal = dataExame;
         examesTotais.push(...exames);
       } else {
-        const arquivoUrl = await storage.upload(file, 'exames-imagens');
+        const arquivoUrl = await storage.upload(file, 'exames-imagens', {
+          empresaId:   req.empresaId ?? null,
+          animalId:    Number(animalId),
+          criadoPorId: req.user?.id ?? null,
+        });
         const anexo = await prisma.exameImagemAnexo.create({
           data: {
             animalId:    Number(animalId),
@@ -243,6 +257,10 @@ exports.delete = async (req, res) => {
     return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
   }
   try {
+    const existente = await prisma.exameNutricional.findUnique({ where: { id: Number(id) } });
+    if (!existente) return res.status(404).json({ error: 'Exame não encontrado' });
+    if (!(await garantirAcessoAnimal(req, res, existente.animalId))) return;
+
     const exame = await prisma.exameNutricional.delete({
       where: { id: Number(id) }
     });
@@ -269,6 +287,10 @@ exports.update = async (req, res) => {
   const { nutrienteId, dataExame, valorEncontrado, unidade, valorMinRef, valorMaxRef, observacao } = req.body;
 
   try {
+    const existente = await prisma.exameNutricional.findUnique({ where: { id: Number(id) } });
+    if (!existente) return res.status(404).json({ error: 'Exame não encontrado' });
+    if (!(await garantirAcessoAnimal(req, res, existente.animalId))) return;
+
     const exame = await prisma.exameNutricional.update({
       where: { id: Number(id) },
       data: {

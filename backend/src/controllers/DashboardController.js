@@ -12,6 +12,20 @@ const stats = async (req, res) => {
   try {
     const empresaId = req.empresaId ?? null;
 
+    // FAIL-CLOSED. Todo `where` daqui usa `...(empresaId ? { empresaId } : {})`: com o
+    // contexto NÃO resolvido o filtro simplesmente some e a consulta vira GLOBAL —
+    // números, pacientes, clientes, estoque e ranking de TODAS as clínicas num painel só.
+    // Acontece com quem não tem vínculo de equipe nem empresa própria (vet autônomo,
+    // convite pendente). Sem empresa não há painel a mostrar; só o ADMIN da plataforma
+    // enxerga o consolidado.
+    const isAdminPlataforma = req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN';
+    if (!empresaId && !isAdminPlataforma) {
+      return res.status(400).json({
+        error: 'Contexto de empresa não resolvido.',
+        code:  'SEM_EMPRESA_ATIVA',
+      });
+    }
+
     const hoje = new Date();
     const inicioDia = new Date(hoje);
     inicioDia.setHours(0, 0, 0, 0);

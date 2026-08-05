@@ -5,6 +5,16 @@ const { registrarAuditoria } = require('../lib/auditoria');
 
 // ─── Listar ───────────────────────────────────────────────────────────────────
 
+// Catálogo VISÍVEL para a empresa ativa: o global (empresaId null, do ADMIN) + o que a
+// própria empresa cadastrou à mão (lib/catalogoManual.js grava `empresaId`).
+// Sem o recorte, `listar` e `obterPorId` entregavam os procedimentos privados das outras
+// clínicas. Mesmo critério do ProcedimentoCadastroController, que já filtrava assim.
+function escopoCatalogo(req) {
+  if (req.user?.userType === 'ADMIN') return {};
+  const empresaId = req.empresaId ? Number(req.empresaId) : null;
+  return { OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] };
+}
+
 const listar = async (req, res) => {
   try {
     const { busca, ativo, categoria } = req.query;
@@ -22,12 +32,16 @@ const listar = async (req, res) => {
       ];
     }
 
+    // AND para não colidir com o `where.OR` da busca por nome/categoria.
+    const escopo = escopoCatalogo(req);
+    if (escopo.OR) where.AND = [...(where.AND ?? []), escopo];
+
     const [procedimentos, total] = await Promise.all([
       prisma.procedimentoVeterinario.findMany({
         where,
         orderBy: [{ categoria: 'asc' }, { nome: 'asc' }],
       }),
-      prisma.procedimentoVeterinario.count({ where: { ativo: true } }),
+      prisma.procedimentoVeterinario.count({ where: { ativo: true, ...escopo } }),
     ]);
 
     return res.json({ dados: procedimentos, meta: { total } });
@@ -41,9 +55,10 @@ const listar = async (req, res) => {
 
 const obterPorId = async (req, res) => {
   try {
-    const p = await prisma.procedimentoVeterinario.findUnique({
-      where: { id: Number(req.params.id) },
+    const p = await prisma.procedimentoVeterinario.findFirst({
+      where: { id: Number(req.params.id), ...escopoCatalogo(req) },
     });
+    // Item privado de outra clínica responde 404 — não confirma que existe.
     if (!p) return res.status(404).json({ error: 'Procedimento não encontrado.' });
     return res.json({ dados: p });
   } catch (err) {
