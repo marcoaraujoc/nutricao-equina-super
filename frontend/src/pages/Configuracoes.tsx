@@ -227,19 +227,19 @@ export default function Configuracoes() {
     carregar();
   }, [loadingPerms, isGestor, carregar]);
 
+  // Catálogo de espécies só para RESOLVER OS NOMES exibidos (a seleção é somente
+  // leitura — ver a seção abaixo). Lido de `/especies` (tb_especies), não de
+  // `/especialidades/especies`: aquele endpoint deriva a lista de `tb_especialidades`
+  // (distinct por espécie) e omite qualquer espécie sem especialidade cadastrada —
+  // o mesmo problema já corrigido em EquipeManager.tsx.
   useEffect(() => {
     if (loadingPerms || !isGestor) return;
-    api.get('/especialidades/especies')
+    api.get('/especies')
       .then(res => {
         const lista = res.data?.dados ?? res.data ?? [];
-        const permitidas: { id: number; nome: string }[] = Array.isArray(lista)
+        setEspecies(Array.isArray(lista)
           ? lista.filter((e: { nome: string }) => ESPECIES_PERMITIDAS.includes(normalizarNome(e.nome)))
-          : [];
-        setEspecies(permitidas);
-        // Config antiga podia ter espécie que esta tela não oferece mais: sem o corte
-        // ela continuaria marcada de forma invisível e voltaria a ser salva.
-        const ids = new Set(permitidas.map(e => e.id));
-        setEspeciesAtendidas(prev => prev.filter(i => ids.has(i)));
+          : []);
       })
       .catch(() => setEspecies([]));
   }, [loadingPerms, isGestor]);
@@ -312,13 +312,11 @@ export default function Configuracoes() {
       return;
     }
 
-    // Espécie atendida é obrigatória — sem ela o cadastro de profissionais não sabe
-    // quais especialidades oferecer. Só valem as espécies que esta tela lista.
-    const especiesValidas = especiesAtendidas.filter(id => especies.some(e => e.id === id));
-    if (especiesValidas.length === 0) {
-      setErroAcao({ mensagem: 'Selecione ao menos uma espécie atendida.', campos: ['especies'] });
-      return;
-    }
+    // ⚠️ Espécie atendida SAIU da validação e do payload (2026-08-16): a partir de
+    // agora é SOMENTE LEITURA nesta tela — herda o que o ADMIN definiu na criação da
+    // empresa (ou editou depois em /admin/empresas). Nada aqui manda `especiesAtendidas`
+    // no FormData, então o backend simplesmente NÃO ALTERA o valor já gravado
+    // (`especiesAtendidas !== undefined` → não mexe — ver EquipeController.salvarConfiguracao).
 
     // Expediente é obrigatório — a agenda gera a grade a partir dele.
     if (diasAtend.length === 0) {
@@ -360,7 +358,6 @@ export default function Configuracoes() {
       fd.append('diasAtendimento', diasAtend.join(','));       // vazio = todos os dias
       fd.append('horaInicioAtendimento', horaInicio);          // vazio = sem restrição
       fd.append('horaFimAtendimento', horaFim);
-      fd.append('especiesAtendidas', especiesValidas.join(','));
       fd.append('tempoConsultaPadraoMin', tempoConsultaPadrao);    // vazio = padrão do sistema
       fd.append('validadeOrcamentoDias', validadeTrim);            // vazio = sem validade
       if (logoFile) fd.append('logo', logoFile);
@@ -577,35 +574,33 @@ export default function Configuracoes() {
             </div>
           </div>
 
-          {/* Espécies atendidas pela empresa */}
+          {/* Espécies atendidas pela empresa — SOMENTE LEITURA (2026-08-16).
+              Herda o que o ADMIN definiu na criação da empresa (ou editou depois em
+              /admin/empresas); esta tela deixou de poder alterar. */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Espécies atendidas <span className="text-red-500">*</span>
+              Espécies atendidas
             </label>
-            {especies.length === 0 ? (
-              <p className="text-xs text-amber-600">Nenhuma espécie cadastrada.</p>
+            {especiesAtendidas.length === 0 ? (
+              <p className="text-xs text-amber-600">
+                Nenhuma espécie definida — fale com o administrador da plataforma.
+              </p>
             ) : (
-              <div className={`grid grid-cols-2 sm:grid-cols-3 gap-2 ${
-                temErro(erroAcao, 'especies') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''
-              }`}>
-                {especies.map(esp => {
-                  const on = especiesAtendidas.includes(esp.id);
+              <div className="flex flex-wrap gap-2">
+                {especiesAtendidas.map(id => {
+                  const nome = especies.find(e => e.id === id)?.nome ?? `#${id}`;
                   return (
-                    <label key={esp.id}
-                      className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border cursor-pointer transition-colors select-none ${
-                        on ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                           : 'border-gray-200 bg-white text-gray-700 hover:border-emerald-300'
-                      }`}>
-                      <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
-                        checked={on}
-                        onChange={() => setEspeciesAtendidas(prev =>
-                          prev.includes(esp.id) ? prev.filter(i => i !== esp.id) : [...prev, esp.id])} />
-                      <span className="text-sm font-medium">{esp.nome}</span>
-                    </label>
+                    <span key={id}
+                      className="inline-flex items-center px-3 py-1.5 rounded-2xl border border-gray-200 bg-gray-50 text-gray-700 text-sm font-medium">
+                      {nome}
+                    </span>
                   );
                 })}
               </div>
             )}
+            <p className="text-xs text-gray-400 mt-1.5">
+              Definido pelo administrador da plataforma na criação da empresa.
+            </p>
           </div>
 
           {/* Expediente de atendimento */}

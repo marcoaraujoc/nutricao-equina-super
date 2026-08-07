@@ -77,8 +77,6 @@ model User {
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
   especialidades       UsuarioEspecialidade[]
-  vetSolicitacoes      VetAnimalSolicitacao[] @relation("VetSolicitacoes")
-  novasVetSolicitacoes VetAnimalSolicitacao[] @relation("NovoVetSolicitacoes")
   empresasOwner        Empresa[]              @relation("EmpresaOwner")
   membrosEquipe        MembroEquipe[]
   permissoesMembro       PermissaoMembro[]
@@ -137,7 +135,7 @@ model Animal {
   especieId          Int
   racaId             Int?
   userId             Int
-  empresaId          Int?     // multi-tenant: clínica principal que gerencia este animal
+  empresaId          Int      // multi-tenant: clínica principal que gerencia este animal
   equipeId           Int?     // equipe responsável dentro da empresa (segregação de permissões)
   categoriaAnimal    String?  @db.VarChar(100)
   tipoExercicio      String?  @db.VarChar(100)
@@ -160,7 +158,7 @@ model Animal {
   especie         Especie              @relation(fields: [especieId],    references: [id])
   raca            Raca?                @relation(fields: [racaId],       references: [id])
   user            User                 @relation(fields: [userId],       references: [id], onDelete: Cascade)
-  empresa         Empresa?             @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: SetNull)
+  empresa         Empresa              @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: Restrict)
   equipe          Equipe?              @relation("EquipeAnimais", fields: [equipeId], references: [id], onDelete: SetNull)
   localizacao     LocalizacaoAnimal?   @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
   tratador        Tratador?            @relation(fields: [tratadorId],   references: [id], onDelete: SetNull)
@@ -178,7 +176,6 @@ model Animal {
   faturas         Fatura[]               @relation("AnimalFaturas")
   faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
   resumosIA       ResumoAtendimentoIA[]  @relation("AnimalResumosIA")
-  solicitacoes    VetAnimalSolicitacao[] @relation("AnimalSolicitacoes")
   reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
   designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
   agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
@@ -487,7 +484,7 @@ model EvolucaoClinica {
   // Tenancy: empresa/equipe do CONTEXTO em que a evolução foi criada (multi-vet:
   // o mesmo animal pode ter histórico dividido entre clínicas). Sem FK — o registro
   // clínico sobrevive à exclusão da empresa. null = legado/vet autônomo.
-  empresaId             Int?      @map("empresa_id")
+  empresaId             Int       @map("empresa_id")
   equipeId              Int?      @map("equipe_id")
   dataInicio            DateTime  @default(now())
   dataFim               DateTime?
@@ -589,7 +586,7 @@ model PrescricaoGrupo {
   numero          Int                              // sequencial por animal (1=001, 2=002…)
   animalId        Int
   veterinarioId   Int?
-  empresaId       Int?
+  empresaId       Int 
   evolucaoId      Int?      @map("evolucao_id")   // evolução que originou este grupo
   status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
   // "Aplicada pelo proprietário" mora no ITEM (Prescricao.aplicadaPeloProprietario) —
@@ -674,7 +671,7 @@ model Vacina {
 model LoteVacina {
   id              Int       @id @default(autoincrement())
   vacinaId        Int?      @map("vacina_id")
-  empresaId       Int?      @map("empresa_id")
+  empresaId       Int       @map("empresa_id")
   medicamentoCatId Int?     @map("medicamento_cat_id")
   lote            String    @db.VarChar(100)
   validade        DateTime
@@ -692,7 +689,7 @@ model LoteVacina {
 
   vacina         Vacina?      @relation(fields: [vacinaId],         references: [id], onDelete: Cascade)
   medicamentoCat Medicamento? @relation("MedicamentoLotes",         fields: [medicamentoCatId], references: [id], onDelete: SetNull)
-  empresa        Empresa?     @relation("LoteVacinaEmpresa",        fields: [empresaId],        references: [id], onDelete: SetNull)
+  empresa        Empresa      @relation("LoteVacinaEmpresa",        fields: [empresaId],        references: [id], onDelete: Restrict)
   aplicacoes     VacinaClinica[] @relation("LoteAplicacoes")
 
   @@index([vacinaId])
@@ -762,7 +759,7 @@ model AgendamentoClinico {
   criadoPorId   Int?     @map("criado_por_id")
   // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
   // por equipe. Sem FK (sobrevive à exclusão da empresa/equipe). Backfill = contexto do animal.
-  empresaId     Int?     @map("empresa_id")
+  empresaId     Int      @map("empresa_id")
   equipeId      Int?     @map("equipe_id")
   // Controle de idempotência dos lembretes por WhatsApp (D-1 e 2h antes)
   lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")   // legado — não usado mais
@@ -882,7 +879,7 @@ model Fatura {
   // aberta da clínica A e cada uma via os itens da outra. Sem FK (mesmo critério de
   // EvolucaoClinica/AgendamentoClinico: o registro sobrevive à exclusão da empresa).
   // null = legado anterior à migration 20260812000000, sem tenancy dedutível.
-  empresaId       Int?         @map("empresa_id")
+  empresaId       Int          @map("empresa_id")
   itens           FaturaItem[]
 
   animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])
@@ -1096,11 +1093,11 @@ model UsuarioEspecialidade {
   especialidadeId Int  @map("especialidade_id")
   // Especialidade é POR EMPRESA: o mesmo profissional pode ser ortopedista numa
   // clínica e clínico geral na outra. null = vínculo legado (anterior à 20260807000000).
-  empresaId       Int? @map("empresa_id")
+  empresaId       Int  @map("empresa_id")
 
   user          User          @relation(fields: [userId],          references: [id], onDelete: Cascade)
   especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
-  empresa       Empresa?      @relation("UsuarioEspecialidadeEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+  empresa       Empresa       @relation("UsuarioEspecialidadeEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@unique([userId, especialidadeId, empresaId], map: "tb_usuario_especialidades_user_esp_empresa_key")
   @@index([userId])
@@ -1124,30 +1121,20 @@ model FornecedorEspecialidade {
   @@schema("schs2vet")
 }
 
-model VetAnimalSolicitacao {
-  id              Int       @id @default(autoincrement())
-  animalId        Int
-  vetUserId       Int
-  status          String    @default("PENDENTE")
-  mensagem        String?   @db.Text
-  approvalToken   String?   @unique @db.VarChar(64)
-  expiresAt       DateTime?
-  solicitanteId   Int?
-  tipo            String    @default("VINCULO") // VINCULO | DESVINCULO | TROCA_VET
-  novoVetUserId   Int?      // TROCA_VET: ID do novo vet a ser vinculado após aceite do vet atual
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  animal          Animal @relation("AnimalSolicitacoes",    fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario     User   @relation("VetSolicitacoes",       fields: [vetUserId],     references: [id], onDelete: Cascade)
-  novoVeterinario User?  @relation("NovoVetSolicitacoes",   fields: [novoVetUserId], references: [id], onDelete: SetNull)
-
-  @@unique([animalId, vetUserId])
-  @@index([approvalToken])
-  @@index([novoVetUserId])
-  @@map("tb_vet_animal_solicitacoes")
-  @@schema("schs2vet")
-}
+// ⚠️ FASE 3 DO MULTI-TENANCY — `VetAnimalSolicitacao` (tb_vet_animal_solicitacoes) foi
+// REMOVIDA (migration 20260806000000_remove_vinculos_vet_animal).
+//
+// Ela guardava o vínculo/aprovação entre veterinário, proprietário e animal (tipo
+// VINCULO | DESVINCULO | TROCA_VET, com `approvalToken` e `expiresAt` para o link de
+// 24h do e-mail). Era a única estrutura que dava acesso a paciente FORA da empresa: o
+// vet com vínculo aceito enxergava o animal de qualquer clínica.
+//
+// O acesso passou a ser exclusivamente por `Animal.empresaId` (+ `equipeId`), e a
+// concessão pontual a prestador continua sendo `DesignacaoPrestador` — que NÃO é um
+// vínculo entre partes, e sim uma concessão do gestor DENTRO da empresa.
+//
+// NÃO recriar. Se um dia for preciso "o proprietário autoriza a clínica X", isso é um
+// convite no control plane (empresa ↔ cliente), não um vínculo por animal.
 
 // =============================================================================
 // EMPRESA E EQUIPES
@@ -1160,15 +1147,23 @@ model VetAnimalSolicitacao {
 model ResumoAtendimentoIA {
   id             Int       @id @default(autoincrement())
   animalId       Int       @map("animal_id")
-  empresaId      Int?      @map("empresa_id")
+  empresaId      Int       @map("empresa_id")
   resumo         String    @default("") @db.Text
+  /// ⚠️ `dados` e `versaoPrompt` EXISTIAM no banco (6/6 linhas preenchidas) e são
+  /// lidas/gravadas por `services/resumoAtendimentoService.js`, mas FALTAVAM aqui.
+  /// Com isso, `prisma migrate diff` mandava **DROPAR as duas** — um `migrate dev`
+  /// descuidado apagaria a Memória Clínica inteira (highlights + tópicos ancorados,
+  /// CLAUDE.md §7) e o `versao_prompt` que dispara a reconstrução ao subir a versão
+  /// do prompt. Declaradas em 2026-08-06 para fechar o drift SEM perder coluna.
+  dados          Json?     @db.JsonB
+  versaoPrompt   String?   @map("versao_prompt")
   ultimoEventoEm DateTime? @map("ultimo_evento_em")
   totalEventos   Int       @default(0) @map("total_eventos")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   animal  Animal   @relation("AnimalResumosIA",  fields: [animalId],  references: [id], onDelete: Cascade)
-  empresa Empresa? @relation("EmpresaResumosIA", fields: [empresaId], references: [id], onDelete: Cascade)
+  empresa Empresa  @relation("EmpresaResumosIA", fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@unique([animalId, empresaId])
   @@index([animalId])
@@ -1304,6 +1299,71 @@ model OrcamentoItem {
 // Plano de consumo de IA por cliente (empresa). Conta única no Google + medição
 // interna: o custo é centralizado e rateado/limitado por tenant aqui.
 // SEM LINHA = sem limite (apenas medição). Limite null = ilimitado na dimensão.
+/// PLANO COMERCIAL do SaaS — catálogo GLOBAL, não pertence a empresa nenhuma.
+/// Fica no control plane (sem RLS): é o cadastro do produto, e o ADMIN da plataforma o
+/// edita atravessando todos os tenants.
+model Plano {
+  id     Int    @id @default(autoincrement())
+  slug   String @unique @db.VarChar(40)
+  nome   String @db.VarChar(100)
+
+  /// Assentos incluídos. **NULL = ilimitado** — e não "zero". Zero é um plano sem
+  /// nenhum usuário, que existe (avaliação bloqueada); confundir os dois liberaria
+  /// geral no plano mais restrito.
+  limiteUsuarios Int?   @map("limite_usuarios")
+  limiteAnimais  Int?   @map("limite_animais")
+  precoMensal    Float? @map("preco_mensal")
+
+  /// Validade do plano em DIAS, preenchida pelo ADMIN. Ao associar o plano a uma
+  /// empresa, o vencimento da assinatura (`AssinaturaEmpresa.fimEm`) é calculado como
+  /// `inicioEm + validadeDias`. **NULL = sem validade** (não expira).
+  validadeDias Int? @map("validade_dias")
+
+  ativo Boolean @default(true)
+  ordem Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  assinaturas AssinaturaEmpresa[]
+
+  @@map("tb_planos")
+  @@schema("schs2vet")
+}
+
+/// ASSINATURA da empresa — uma por empresa. Control plane, mesma razão do `Plano`.
+model AssinaturaEmpresa {
+  id        Int @id @default(autoincrement())
+  empresaId Int @unique @map("empresa_id")
+  planoId   Int @map("plano_id")
+
+  /// Situação COMERCIAL. ⚠️ Não bloqueia acesso sozinha: quem barra o login é
+  /// `Empresa.status = SUSPENSA` (D3). Aqui fica o PORQUÊ, lá fica o EFEITO — assim a
+  /// suspensão por inadimplência é uma decisão explícita, e não um efeito colateral de
+  /// uma fatura em atraso.
+  status String @default("TRIAL") @db.VarChar(20) // TRIAL | ATIVA | INADIMPLENTE | CANCELADA
+
+  inicioEm DateTime  @default(now()) @map("inicio_em")
+  fimEm    DateTime? @map("fim_em")
+
+  /// Negociação pontual sem precisar criar um plano só para um cliente. Quando
+  /// preenchido, VENCE o `limiteUsuarios` do plano.
+  limiteUsuariosOverride Int? @map("limite_usuarios_override")
+
+  observacao String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  empresa Empresa @relation("EmpresaAssinatura", fields: [empresaId], references: [id], onDelete: Cascade)
+  plano   Plano   @relation(fields: [planoId], references: [id], onDelete: Restrict)
+
+  @@index([planoId])
+  @@index([status])
+  @@map("tb_assinaturas_empresa")
+  @@schema("schs2vet")
+}
+
 model IaPlanoEmpresa {
   id                Int      @id @default(autoincrement())
   empresaId         Int      @unique @map("empresa_id")
@@ -1370,7 +1430,43 @@ model Empresa {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // ── Cadastro do ASSINANTE (fase 2 do multi-tenancy) ────────────────────────
+  // `nome`, `cnpj`, `telefone` e `endereco` acima são os campos LEGADOS: continuam
+  // porque o unique(ownerId, nome, cnpj) e ~60 pontos de código dependem deles. A
+  // limpeza é tarefa própria, depois que os leitores migrarem.
+  razaoSocial       String?  @map("razao_social")       @db.VarChar(255)
+  nomeFantasia      String?  @map("nome_fantasia")      @db.VarChar(255)
+  // Documento em DÍGITOS (sem máscara) + o que ele é. A "empresa pessoal" (CPF) já existe
+  // no modelo — ver o comentário do unique abaixo.
+  // ÚNICO ENTRE EMPRESAS (migration `20260816100000`): o documento é o que identifica o
+  // assinante, e duas linhas com o mesmo CNPJ são duplicata, não filial. NULL fica de
+  // fora do índice (o Postgres trata NULLs como distintos), o que preserva a empresa
+  // legada que ainda não informou o seu — a aplicação é que passou a exigi-lo.
+  // Escrita SEMPRE junto do `cnpj` legado, com os mesmos dígitos — ver lib/documentoEmpresa.js.
+  documento         String?  @unique                     @db.VarChar(14)
+  tipoDocumento     String?  @map("tipo_documento")      @db.VarChar(4)   // CNPJ | CPF
+  inscricaoEstadual String?  @map("inscricao_estadual")  @db.VarChar(20)
+  emailContato      String?  @map("email_contato")       @db.VarChar(255)
+  // D4: o DONO do WhatsApp é este cadastro. `EmpresaConfiguracao.whatsapp` passa a ler
+  // daqui — dois donos para o mesmo dado sempre divergem.
+  whatsapp          String?                              @db.VarChar(15)
+  cep               String?                              @db.VarChar(10)
+  numero            String?                              @db.VarChar(20)
+  complemento       String?                              @db.VarChar(100)
+  bairro            String?                              @db.VarChar(100)
+  cidade            String?                              @db.VarChar(100)
+  estado            String?                              @db.VarChar(2)
+
+  // D3: empresa SUSPENSA **bloqueia o login de todos** dela. É por EMPRESA — quem também
+  // trabalha em outra clínica entra nela normalmente, e a suspensa some do seletor de
+  // contexto. Quem lê isto é `podeAcessarSistema`, o mesmo ponto do `acessoSistema`.
+  // ⚠️ Este campo governa o ACESSO. `AssinaturaEmpresa.status` descreve a situação
+  // COMERCIAL (o porquê) e não bloqueia nada sozinho — não confundir os dois.
+  status            String   @default("ATIVA")           @db.VarChar(20)  // ATIVA | SUSPENSA | CANCELADA
+  canceladoEm       DateTime? @map("cancelado_em")
+
   owner           User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  assinatura      AssinaturaEmpresa? @relation("EmpresaAssinatura")
   iaPlano         IaPlanoEmpresa?  @relation("EmpresaIaPlano")
   proprietarios   User[]           @relation("ProprietarioEmpresa")
   proprietarioPerfis ProprietarioPerfil[] @relation("ProprietarioPerfilEmpresa")
@@ -1713,7 +1809,7 @@ model CronAgenda {
 // para não acoplar a exclusão da empresa.
 model FaturaItemCatalogo {
   id          Int      @id @default(autoincrement())
-  empresaId   Int?     @map("empresa_id")
+  empresaId   Int      @map("empresa_id")
   tipo        String   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
   descricao   String
   valor       Float    @default(0)
@@ -2027,7 +2123,7 @@ model MedicamentoVia {
 model EstoqueClinica {
   id               Int       @id @default(autoincrement())
   medicamentoId    Int
-  empresaId        Int?
+  empresaId        Int 
   valor              Float     @default(0)        // preço de compra
   valorRepassado     Float     @default(0)        @map("valor_repassado")
   precoUnitarioBase  Float?                       @map("preco_unitario_base") // R$/g ou R$/mL — fixo na entrada
@@ -2046,7 +2142,7 @@ model EstoqueClinica {
   notaFiscal   String?   @db.VarChar(100) @map("nota_fiscal")
 
   medicamento Medicamento      @relation(fields: [medicamentoId], references: [id])
-  empresa     Empresa?         @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: SetNull)
+  empresa     Empresa          @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: Restrict)
   fornecedor  Fornecedor?      @relation("FornecedorEstoque", fields: [fornecedorId], references: [id], onDelete: SetNull)
   movimentos  MovimentoEstoque[]
   reservas    ReservaEstoque[] @relation("EstoqueReservas")
@@ -2089,7 +2185,7 @@ model Tratador {
   ativo         Boolean  @default(true)
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
-  empresaId     Int?     @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
+  empresaId     Int      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
   equipeId      Int?     @map("equipe_id")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

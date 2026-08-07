@@ -7,6 +7,7 @@ const { setAuthCookies } = require('../../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const mfa = require('../../services/mfaService');
 const { podeAcessarSistema } = require('../../lib/usuarioEmpresa');
+const { registrarAcesso } = require('../../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../../lib/sessionTokens');
 
@@ -27,7 +28,7 @@ async function acessoBloqueado(user) {
  * Ponto ÚNICO de nascimento de sessão por senha: usado pelo login sem 2FA e pela
  * verificação do segundo fator. Não duplicar esta lógica.
  */
-async function emitirSessao(res, user) {
+async function emitirSessao(req, res, user) {
   const token = assinarAccessToken(user);
 
   const refreshToken = generateRefreshToken(user.id);
@@ -36,6 +37,13 @@ async function emitirSessao(res, user) {
   // Tokens em cookies HttpOnly (não legíveis por JS). O corpo mantém os tokens
   // por compatibilidade com clientes não-navegador; o frontend não os usa mais.
   setAuthCookies(res, { accessToken: token, refreshToken });
+
+  // Trilha de acesso gravada AQUI, no servidor, com a identidade que o backend acabou de
+  // autenticar. Antes quem gravava era o frontend, por uma rota pública que aceitava
+  // usuário e empresa do corpo — ver `registrarAcesso` em lib/auditoria.js.
+  // `await` de propósito: o helper é fire-and-forget por dentro (nunca lança), então isso
+  // não adia a resposta de forma perceptível e evita promessa órfã.
+  await registrarAcesso(req, user, 'LOGIN');
 
   return {
     token,
@@ -144,7 +152,7 @@ class UserController {
       }
 
       console.log('✅ Login bem-sucedido!');
-      res.json(await emitirSessao(res, user));
+      res.json(await emitirSessao(req, res, user));
     } catch (err) {
       console.error('❌ Erro login:', err);
       res.status(500).json({ error: 'Erro interno no login' });
@@ -188,7 +196,7 @@ class UserController {
       if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });
 
       console.log('✅ 2FA verificado — login concluído:', user.email);
-      res.json(await emitirSessao(res, user));
+      res.json(await emitirSessao(req, res, user));
     } catch (err) {
       console.error('❌ Erro verificar2fa:', err);
       res.status(500).json({ error: 'Erro interno na verificação' });

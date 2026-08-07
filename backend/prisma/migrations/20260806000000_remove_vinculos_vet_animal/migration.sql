@@ -1,0 +1,32 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- FASE 3 DO MULTI-TENANCY — fim dos vínculos e aprovações entre partes
+-- (docs/MULTI-TENANCY-PLANO.md §6)
+--
+-- Remove `tb_vet_animal_solicitacoes`, que guardava o vínculo/aprovação entre
+-- veterinário, proprietário e animal:
+--
+--   tipo   = VINCULO | DESVINCULO | TROCA_VET
+--   status = PENDENTE | ACEITO | RECUSADO | CANCELADO
+--   approvalToken + expiresAt = link de 24h enviado por e-mail para aceitar/recusar
+--
+-- POR QUÊ SAI: era a ÚNICA estrutura que concedia acesso a paciente FORA da
+-- empresa. Um vet com vínculo ACEITO enxergava (e abria, pela URL) o animal de
+-- qualquer clínica — junto com histórico, evoluções, prescrições e agenda. O
+-- acesso passou a ser exclusivamente `Animal.empresaId` (+ `equipeId`).
+--
+-- A concessão pontual a prestador NÃO estava aqui e continua existindo:
+-- `tb_designacoes_prestador` é concessão do gestor DENTRO da empresa, não um
+-- vínculo negociado entre partes (decisão D1).
+--
+-- SEGURANÇA DA OPERAÇÃO (verificado antes de escrever esta migration):
+--   • nenhuma FK aponta para esta tabela — nada fica órfão;
+--   • as 3 FKs que SAEM dela (animal, veterinario, novoVeterinario) morrem com
+--     ela, então não é preciso soltá-las antes;
+--   • todo o código que a lia/escrevia já havia sido removido na mesma sessão
+--     (rotas, controllers, crons, hooks de polling e telas de aprovação).
+--
+-- DADOS: 32 linhas, todas de teste, removidas com autorização explícita.
+-- Cópia preservada fora do repositório antes do DROP.
+-- ════════════════════════════════════════════════════════════════════════════
+
+DROP TABLE IF EXISTS "schs2vet"."tb_vet_animal_solicitacoes";

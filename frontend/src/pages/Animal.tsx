@@ -1,12 +1,12 @@
 // src/pages/Animal.tsx
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Calendar, Camera, UserCheck, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2 } from 'lucide-react';
+import { Calendar, Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -39,7 +39,6 @@ interface FormData {
   sexo:               string;
   categoriaAnimal:    string;
   tipoExercicio:      string;
-  veterinarioUserId:  number | null;
   localizacaoId:      number | null;
   tratadorId:         number | null;
   baia:               string;
@@ -70,20 +69,7 @@ interface FormProprietario {
   telefone2:    string;
 }
 
-interface Vet {
-  vetUserId: number;
-  nome:      string;
-  crmv:      string | null;
-  email:     string;
-  especies:  { id: number; nome: string }[];
-}
 
-interface Solicitacao {
-  tipo:        string;
-  status:      string;
-  vetUserId:   number;
-  veterinario?: { id: number; fullName: string; email: string } | null;
-}
 
 interface AnimalEncontrado {
   id:               number;
@@ -110,13 +96,18 @@ interface AnimalEncontrado {
   registroPassaporte?: string | null;
   finalidade?:         string | null;
   seguradora?:         string | null;
-  temVet:           boolean;
-  vetDaMinhaEquipe?: boolean;
+  // Fase 3 do multi-tenancy: uma pergunta só — este animal já é DESTA empresa?
+  // Substituiu `temVet` + `vetDaMinhaEquipe`, que perguntavam pela PESSOA responsável.
+  jaCadastradoAqui: boolean;
   proprietario?:    { id: number; fullName: string; email: string; phone?: string | null } | null;
 }
 
-// ← 'minha_equipe' adicionado
-type StatusBusca = 'idle' | 'com_vet' | 'sem_vet' | 'nao_encontrado' | 'minha_equipe';
+// ⚠️ Eram cinco estados, hoje são quatro — e a diferença é o fim do vínculo.
+// `sem_vet` ("existe, mas ninguém responde por ele") e `com_vet` ("existe, e o
+// responsável é de outra equipe") perguntavam quem era o veterinário do animal.
+// Quem responde por um paciente é a CLÍNICA: ou ele já é desta empresa (e então não
+// se duplica), ou não é (e o cadastro segue normalmente).
+type StatusBusca = 'idle' | 'ja_cadastrado' | 'outra_empresa' | 'nao_encontrado';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const calcularIdadeEmMeses = (dn: string, ia: string): number | null => {
@@ -271,10 +262,10 @@ const Animal = () => {
   const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   // Erros por campo — preenchidos durante a digitação (onBlur) e no submit
   const [erros, setErros] = useState<Record<string, string>>({});
-  const [vets,           setVets]           = useState<Vet[]>([]);
-  const [vetsFiltrados,  setVetsFiltrados]  = useState<Vet[]>([]);
-  const [vetOriginalId,  setVetOriginalId]  = useState<number | null>(null);
-  const [vetStatusAtual, setVetStatusAtual] = useState<string | null>(null);
+  // ⚠️ FASE 3 DO MULTI-TENANCY — saíram daqui `vets`, `vetsFiltrados`, `vetOriginalId`
+  // e `vetStatusAtual`. Eram o estado do seletor "Veterinário Responsável", que o
+  // PROPRIETÁRIO usava para escolher um vet — e a escolha criava um vínculo e MOVIA o
+  // animal para a empresa dele. Quem responde pelo paciente é a clínica que o cadastrou.
 
   // ── Localização do animal ──────────────────────────────────────────────────
   const [localizacoes,   setLocalizacoes]   = useState<Localizacao[]>([]);
@@ -310,7 +301,6 @@ const Animal = () => {
     nome: nomeFromState, especieId: 0, racaId: null, peso: '',
     dataNascimento: '', idadeAnos: '', sexo: '',
     categoriaAnimal: '', tipoExercicio: '',
-    veterinarioUserId: null,
     localizacaoId: null, tratadorId: null, baia: '',
     pelagem: '', altura: '', registroPassaporte: '', finalidades: [],
     seguradora: '',
@@ -325,6 +315,34 @@ const Animal = () => {
   const [formProp, setFormProp] = useState<FormProprietario>({
     nomeCompleto: '', email: '', telefone: '', telefone2: '',
   });
+
+  // ── Rascunho do cadastro NÃO SALVO ───────────────────────────────────────────
+  // Guarda o que está na tela se o usuário sair sem salvar nem cancelar (só CRIAÇÃO —
+  // na edição o dado real já está no banco). Restaura ao voltar; limpa ao salvar ou
+  // cancelar. Mesmo padrão do autosave de evolução (CLAUDE.md).
+  const RASCUNHO_KEY = 's2vet_animal_draft';
+  const rascunhoPronto = useRef(false);
+  const limparRascunho = () => { try { localStorage.removeItem(RASCUNHO_KEY); } catch { /* ok */ } };
+
+  useEffect(() => {
+    if (isEditMode) { rascunhoPronto.current = true; return; }
+    try {
+      const raw = localStorage.getItem(RASCUNHO_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.formData) setFormData(d.formData);
+        if (d.formProp) setFormProp(d.formProp);
+      }
+    } catch { /* rascunho corrompido: ignora */ }
+    rascunhoPronto.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Só grava DEPOIS de tentar restaurar — senão o estado vazio inicial apagaria o rascunho.
+    if (isEditMode || !rascunhoPronto.current) return;
+    try { localStorage.setItem(RASCUNHO_KEY, JSON.stringify({ formData, formProp })); } catch { /* quota */ }
+  }, [formData, formProp, isEditMode]);
 
   // ── Computados ─────────────────────────────────────────────────────────────
   const especieAtual = especies.find(e => e.id === formData.especieId);
@@ -399,10 +417,6 @@ const Animal = () => {
     );
   }, [tratadores, tratBusca]);
 
-  const vetFoiAlterado = isEditMode
-    && formData.veterinarioUserId !== null
-    && formData.veterinarioUserId !== vetOriginalId;
-
   // ── Buscar localizações (autocomplete server-side) ────────────────────────
   // Catálogo grande: traz só os primeiros 10 e refaz a busca conforme digita
   // (debounce). Busca apenas com o dropdown aberto — evita refetch ao selecionar.
@@ -460,19 +474,6 @@ const Animal = () => {
     }
   }, [formData.especieId, todasRacas]);
 
-  useEffect(() => {
-    if (formData.especieId && vets.length > 0) {
-      const filtrados = vets.filter(v =>
-        v.especies.length === 0 || v.especies.some(e => e.id === formData.especieId)
-      );
-      setVetsFiltrados(filtrados);
-      if (formData.veterinarioUserId && !filtrados.some(v => v.vetUserId === formData.veterinarioUserId))
-        setFormData(p => ({ ...p, veterinarioUserId: null }));
-    } else {
-      setVetsFiltrados(vets);
-    }
-  }, [formData.especieId, vets]);
-
   // ── Carregamento inicial ───────────────────────────────────────────────────
   useEffect(() => {
     if (loadingPerms) return;
@@ -482,16 +483,10 @@ const Animal = () => {
           api.get('/especies'),
           api.get('/racas'),
         ]);
-        // escopo=equipe: quem tem contexto de equipe (gestor) vê apenas os
-        // veterinários da própria equipe; proprietário (sem equipe) mantém a lista padrão
-        const vetRes       = await api.get('/veterinarios?escopo=equipe').catch(() => ({ data: { dados: [] } }));
         const todasEspecies: { id: number; nome: string }[] = espRes.data?.dados ?? espRes.data ?? [];
         const racasData    = racRes.data?.dados ?? racRes.data ?? [];
-        const vetsData     = vetRes.data?.dados ?? [];
 
         setTodasRacas(racasData);
-        setVets(vetsData);
-        setVetsFiltrados(vetsData);
 
         // Filtrar espécies pelas atendidas na empresa/equipe
         // (vet: suas espécies; gestor: união das espécies dos vets da equipe)
@@ -518,25 +513,6 @@ const Animal = () => {
           const animalRes = await api.get(`/animais/${id}`);
           const a = animalRes.data?.dados ?? animalRes.data;
 
-          const solicitacoes: Solicitacao[] = a.solicitacoes ?? [];
-          // Apenas VINCULO ACEITO representa vet ativo; DESVINCULO ACEITO significa vet removido
-          const solAceita   = solicitacoes.find(s => s.status === 'ACEITO' && s.tipo === 'VINCULO');
-          const solPendente = solicitacoes.find(s => s.status === 'PENDENTE');
-          const solAtual    = solAceita ?? solPendente ?? null;
-          let vetCarregadoId: number | null = solAtual?.vetUserId ?? null;
-
-          // Fallback: sem solicitação mas veterinarioNome gravado → tenta encontrar pelo nome
-          if (!vetCarregadoId && a.veterinarioNome) {
-            const match = vetsData.find(
-              (v: { vetUserId: number; nome: string }) =>
-                v.nome.toLowerCase() === (a.veterinarioNome as string).toLowerCase()
-            );
-            if (match) vetCarregadoId = match.vetUserId;
-          }
-
-          setVetOriginalId(vetCarregadoId);
-          setVetStatusAtual(solAtual?.status ?? null);
-
           setFormData({
             nome:              a.nome            ?? '',
             especieId:         a.especieId       ?? 0,
@@ -549,7 +525,6 @@ const Animal = () => {
             sexo:              a.sexo             ?? '',
             categoriaAnimal:   a.categoriaAnimal  ?? '',
             tipoExercicio:     a.tipoExercicio    ?? '',
-            veterinarioUserId: vetCarregadoId,
             localizacaoId:     a.localizacaoId      ?? null,
             tratadorId:        a.tratadorId         ?? null,
             baia:              a.baia               ?? '',
@@ -604,25 +579,14 @@ const Animal = () => {
       if (animal) {
         setAnimalEncontrado(animal);
 
-        // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
-        // registro para este veterinário — tratado como cadastro em branco.
-        // NÃO pré-preenche NADA vindo do registro de origem: nem os dados do
-        // animal (peso, raça, local, tratador, foto — referenciam localização/
-        // tratador de outro escopo) nem os do PROPRIETÁRIO. O proprietário é
-        // isolado por empresa igual ao animal: cada empresa preenche e mantém
-        // os próprios dados de contato do cliente.
+        // Animal existente em OUTRA empresa vira um NOVO registro nesta clínica —
+        // tratado como cadastro em branco. NÃO pré-preenche NADA vindo do registro
+        // de origem: nem os dados do animal (peso, raça, local, tratador, foto —
+        // referenciam localização/tratador de outro escopo) nem os do PROPRIETÁRIO.
+        // O proprietário é isolado por empresa igual ao animal: cada empresa
+        // preenche e mantém os próprios dados de contato do cliente.
 
-        if (!animal.temVet) {
-          // Sem vet → pode vincular
-          setStatusBuscaAnimal('sem_vet');
-        } else if (animal.vetDaMinhaEquipe) {
-          // Tem vet mas é da mesma equipe → informa, bloqueia
-          setStatusBuscaAnimal('minha_equipe');
-        } else {
-          // Tem vet de outra equipe → cadastro segue normalmente como vínculo
-          // ADICIONAL (um animal pode ter mais de um veterinário)
-          setStatusBuscaAnimal('com_vet');
-        }
+        setStatusBuscaAnimal(animal.jaCadastradoAqui ? 'ja_cadastrado' : 'outra_empresa');
       } else {
         setStatusBuscaAnimal('nao_encontrado');
       }
@@ -812,15 +776,15 @@ const Animal = () => {
     if (isEditMode && !podeEditar) { semPermissao('alterar animal'); return; }
     if (!isEditMode && !podeCriar) { semPermissao('criar animal'); return; }
 
-    if (statusBuscaAnimal === 'minha_equipe') {
-      setErroInline(`${formData.nome} já está sob cuidados da sua equipe`);
+    if (statusBuscaAnimal === 'ja_cadastrado') {
+      setErroInline(`${formData.nome} já está cadastrado nesta clínica`);
       return;
     }
 
-    // Animal já existente (sem vet ou com vet de outra equipe) vira um NOVO
-    // registro (duplicado) para este veterinário — mesmo fluxo do não encontrado.
+    // Animal existente em OUTRA empresa vira um NOVO registro nesta clínica —
+    // mesmo fluxo do não encontrado.
     const criandoNovoRegistro = isVet && !isEditMode
-      && (statusBuscaAnimal === 'nao_encontrado' || statusBuscaAnimal === 'sem_vet' || statusBuscaAnimal === 'com_vet');
+      && (statusBuscaAnimal === 'nao_encontrado' || statusBuscaAnimal === 'outra_empresa');
 
     // Valida TODOS os campos de uma vez: cada um recebe a própria mensagem, em vez
     // de parar no primeiro erro com um aviso solto no topo da página.
@@ -865,10 +829,6 @@ const Animal = () => {
     setSubmitting(true);
 
     try {
-      const vetSelecionado = formData.veterinarioUserId
-        ? vets.find(v => v.vetUserId === formData.veterinarioUserId)
-        : null;
-
       const payload: Record<string, unknown> = {
         nome:               formData.nome.trim(),
         especieId:          formData.especieId,
@@ -879,9 +839,6 @@ const Animal = () => {
         sexo:               formData.sexo,
         categoriaAnimal:    isEquino ? formData.categoriaAnimal : null,
         tipoExercicio:      isEquino ? formData.tipoExercicio   : null,
-        veterinarioNome:    vetSelecionado?.nome ?? null,
-        veterinarioClinica: vetSelecionado ? `CRMV: ${vetSelecionado.crmv ?? '—'}` : null,
-        veterinarioUserId:  formData.veterinarioUserId ?? null,
         localizacaoId:      formData.localizacaoId ?? null,
         tratadorId:         formData.tratadorId    ?? null,
         local:              locBusca.trim() || null,
@@ -962,6 +919,7 @@ const Animal = () => {
         : 'Animal cadastrado com sucesso!';
 
       toast.success(msgSucesso);
+      if (!isEditMode) limparRascunho();  // salvou: o rascunho cumpriu o papel
       await refreshSelectedAnimal();
 
       const returnTo = (location.state as { nome?: string; returnTo?: string } | null)?.returnTo;
@@ -1125,26 +1083,25 @@ const Animal = () => {
                 </div>
               </div>
 
-              {/* Animal com vet da mesma equipe — informativo */}
-              {statusBuscaAnimal === 'minha_equipe' && (
+              {/* Já é desta clínica — bloqueia (o Salvar também recusa) */}
+              {statusBuscaAnimal === 'ja_cadastrado' && (
                 <div className="mt-2 flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
                   <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
-                    <strong>{formData.nome}</strong> já está sob responsabilidade de um veterinário
-                    da sua equipe. Nenhuma ação necessária.
+                    <strong>{formData.nome}</strong> já está cadastrado nesta clínica.
+                    Nenhuma ação necessária.
                   </span>
                 </div>
               )}
 
-              {/* Animal sem vet — novo registro duplicado para este vet */}
-              {statusBuscaAnimal === 'sem_vet' && animalEncontrado && (
+              {/* Existe em OUTRA clínica — cadastro próprio, independente */}
+              {statusBuscaAnimal === 'outra_empresa' && animalEncontrado && (
                 <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
                   <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
-                    <strong>{formData.nome}</strong> já está cadastrado sem veterinário responsável.
-                    Será criado um <strong>novo cadastro do animal</strong> tendo você como
-                    veterinário responsável — preencha os dados do animal e do proprietário.{' '}
-                    Após salvar, o proprietário receberá um e-mail informativo.
+                    Já existe um animal com o nome <strong>{formData.nome}</strong> em outra
+                    clínica. Será criado um <strong>cadastro próprio desta clínica</strong>,
+                    independente do outro — preencha os dados do animal e do proprietário.
                   </span>
                 </div>
               )}
@@ -1685,74 +1642,12 @@ const Animal = () => {
               </div>
             )}
 
-            {/* ── 9. Veterinário (apenas proprietários) ────────────────────── */}
-            {!isVet && (
-              <div className="pt-2 border-t border-gray-100">
-                <p className="text-sm font-semibold text-gray-700 mb-3">Veterinário Responsável</p>
-                <div className="mb-3">
-                  <label className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                    <UserCheck size={14} className="text-emerald-600" />
-                    Veterinário cadastrado no S2Vet
-                  </label>
-                  <select
-                    value={formData.veterinarioUserId ?? ''}
-                    onChange={e => setFormData(p => ({
-                      ...p, veterinarioUserId: e.target.value ? Number(e.target.value) : null,
-                    }))}
-                    className={inputClass}
-                  >
-                    <option value="">Não cadastrado</option>
-                    {vetsFiltrados.length === 0 && formData.especieId !== 0 && (
-                      <option disabled value="">Nenhum veterinário atende esta espécie</option>
-                    )}
-                    {vetsFiltrados.map(v => (
-                      <option key={v.vetUserId} value={v.vetUserId}>
-                        {v.nome}{v.crmv ? ` — CRMV: ${v.crmv}` : ''}
-                      </option>
-                    ))}
-                  </select>
-
-                  {formData.veterinarioUserId && !isEditMode && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>
-                        Após salvar, o veterinário selecionado será <strong>vinculado diretamente</strong> ao animal.
-                      </span>
-                    </div>
-                  )}
-
-                  {vetFoiAlterado && vetOriginalId && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>
-                        O veterinário selecionado será <strong>vinculado como responsável</strong>.
-                        Um animal pode ser tratado por mais de um veterinário — o vínculo do
-                        veterinário anterior é <strong>mantido</strong> (sem pedido de desvinculação).
-                      </span>
-                    </div>
-                  )}
-
-                  {vetFoiAlterado && !vetOriginalId && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                      <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>
-                        Após salvar, o veterinário selecionado será <strong>vinculado diretamente</strong> ao animal.
-                      </span>
-                    </div>
-                  )}
-
-                  {isEditMode && !vetFoiAlterado && vetStatusAtual === 'PENDENTE' && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>
-                        Este veterinário ainda não aceitou a solicitação de vínculo.
-                        Um e-mail de aprovação já foi enviado.
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+            {/* ⚠️ FASE 3 DO MULTI-TENANCY — a seção "Veterinário Responsável" (que só
+                aparecia para o PROPRIETÁRIO) foi REMOVIDA. Escolher um vet ali criava um
+                vínculo e movia o animal para a EMPRESA dele: uma parte colocando o
+                registro dentro do tenant da outra. Junto saíram os avisos de "será
+                vinculado", "o vínculo do veterinário anterior é mantido" e "este
+                veterinário ainda não aceitou a solicitação". */}
 
             {/* Legenda campos obrigatórios */}
             <p className="text-xs text-gray-400">
@@ -1778,7 +1673,7 @@ const Animal = () => {
             <div className="flex items-center justify-end gap-3 pb-2">
               <button
                 type="button"
-                onClick={() => navigate(paginaPacientes)}
+                onClick={() => { if (!isEditMode) limparRascunho(); navigate(paginaPacientes); }}
                 disabled={submitting}
                 className="px-4 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 rounded-xl text-sm font-semibold transition-colors"
               >
@@ -1786,13 +1681,15 @@ const Animal = () => {
               </button>
               <button
                 type="submit"
-                disabled={submitting || statusBuscaAnimal === 'minha_equipe'}
+                disabled={submitting || statusBuscaAnimal === 'ja_cadastrado'}
                 className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
               >
                 {submitting
                   ? 'Salvando...'
-                  : statusBuscaAnimal === 'minha_equipe'
-                    ? 'Animal já com sua equipe'
+                  : statusBuscaAnimal === 'ja_cadastrado'
+                    // Estado BLOQUEADO: o texto é a única explicação de por que o
+                    // botão está desabilitado (CLAUDE.md §12, rodapé do Animal).
+                    ? 'Animal já cadastrado aqui'
                     : 'Salvar'}
               </button>
             </div>

@@ -8,13 +8,6 @@ import FotoAnimal from './FotoAnimal';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-interface Solicitacao {
-  vetUserId:   number;
-  tipo:        string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
-  status:      string; // 'ACEITO' | 'PENDENTE' | 'RECUSADO' | 'CANCELADO'
-  veterinario?: { fullName: string; email: string } | null;
-}
-
 interface AnimalCardAnimal {
   id?:              number;
   nome:             string;
@@ -29,8 +22,6 @@ interface AnimalCardAnimal {
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
   veterinarioNome?: string | null;
-  // Relação via VetAnimalSolicitacao — agora inclui PENDENTE além de ACEITO
-  solicitacoes?:    Solicitacao[];
 }
 
 interface AnimalCardProps {
@@ -72,21 +63,14 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
     if (animal.id) navigate(`/animal/${animal.id}`);
   };
 
-  // Resolve vet responsável:
-  //   VINCULO ACEITO → vet ativo
-  //   DESVINCULO PENDENTE → vet ainda ativo (aguardando proprietário aceitar saída)
-  //   TROCA_VET PENDENTE  → vet ainda ativo (aguardando vet antigo aceitar troca)
-  // "Aguardando" badge: apenas VINCULO PENDENTE (vet ainda não aceitou entrar)
-  const solicitacaoAceita = animal.solicitacoes?.find(s =>
-    (s.tipo === 'VINCULO'    && s.status === 'ACEITO')  ||
-    (s.tipo === 'DESVINCULO' && s.status === 'PENDENTE') ||
-    (s.tipo === 'TROCA_VET'  && s.status === 'PENDENTE')
-  );
-  const solicitacaoPendente = animal.solicitacoes?.find(s =>
-    s.tipo === 'VINCULO' && s.status === 'PENDENTE'
-  );
-  const vetNome     = solicitacaoAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
-  const vetPendente = solicitacaoPendente?.veterinario?.fullName ?? null;
+  // Vet responsável: campo do próprio animal.
+  //
+  // ⚠️ FASE 3 DO MULTI-TENANCY — aqui havia a resolução por `VetAnimalSolicitacao`
+  // (VINCULO ACEITO → vet ativo; DESVINCULO/TROCA_VET PENDENTE → vet ainda ativo) e o
+  // selo âmbar pulsante "aguardando o vet aceitar entrar". Nada disso existe mais: não
+  // há pedido de acesso a paciente, então não há estado intermediário — o campo tem
+  // nome ou está vazio.
+  const vetNome = animal.veterinarioNome ?? null;
 
   // Proprietário: prioriza dados do animal (join), fallback para usuário logado
   const proprietarioNome = animal.user?.fullName ?? user?.fullName ?? '-';
@@ -187,11 +171,6 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
             <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Vet. Responsável</span>
             {vetNome ? (
               <span className="text-sm text-gray-900 truncate block">{vetNome}</span>
-            ) : vetPendente ? (
-              <span className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
-                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse flex-shrink-0" />
-                {vetPendente}
-              </span>
             ) : (
               <span className="text-sm text-gray-400 italic block">Não atribuído</span>
             )}

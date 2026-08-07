@@ -1,9 +1,14 @@
 // backend/src/lib/animalScope.js
-// Escopo de LISTAGEM de animais por usuário/contexto ativo (regra base × convidado).
-// Fonte ÚNICA usada por AnimalController.listar e pela execução de prescrição, para que
-// o veterinário vinculado (convidado) veja apenas os SEUS animais + os que outros vets
-// liberaram a ele (designação/vínculo) DENTRO da empresa ativa; e o dono/gestor (base)
-// veja todos os pacientes que trata. Ver CLAUDE.md §5 (LISTAGEM base × convidado).
+// Escopo de LISTAGEM de animais no contexto ativo. Fonte ÚNICA usada por
+// `AnimalController.listar`, pela execução de prescrição e pelo Painel Principal.
+//
+// REGRA (fase 3 do multi-tenancy): **o paciente é da EMPRESA**. Quem trabalha nela o
+// enxerga; quem não, não. Um profissional que atende em duas clínicas vê o conjunto de
+// cada uma ao trocar o contexto — nunca os dois somados.
+//
+// Exceção única: PRESTADOR (e vet atuando como prestador) enxerga só o que lhe foi
+// designado — `DesignacaoPrestador`, que é concessão do gestor dentro da empresa, e não
+// um vínculo entre partes (decisão D1).
 
 const prisma = require('./prisma').default;
 const { getEquipeScopeDoUsuario } = require('./vetUtils');
@@ -63,12 +68,6 @@ async function buildAnimalScopeWhere(req) {
 
   const isMembroEquipe = !!req.empresaId && !isAdmin;
 
-  const vetSolicitacoesWhere = { solicitacoes: { some: { vetUserId: Number(userId), OR: [
-    { tipo: 'VINCULO',    status: 'ACEITO'   },
-    { tipo: 'DESVINCULO', status: 'PENDENTE' },
-    { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-  ] } } };
-
   const equipeScope = isMembroEquipe
     ? await getEquipeScopeDoUsuario(userId, req.empresaId, req.equipeId)
     : null;
@@ -79,8 +78,20 @@ async function buildAnimalScopeWhere(req) {
       ]
     : [{ empresaId: req.empresaId }];
 
-  const vetVinculoNaEmpresa = { AND: [ vetSolicitacoesWhere, { empresaId: req.empresaId } ] };
-
+  // ⚠️ REGRA BASE × CONVIDADO REMOVIDA (fase 3 do multi-tenancy).
+  //
+  // Aqui existiam `vetSolicitacoesWhere` (vínculos do vet em QUALQUER empresa) e
+  // `vetVinculoNaEmpresa` (os mesmos, limitados à empresa ativa), e o `where` escolhia
+  // entre os dois conforme o profissional fosse "base própria" (gestor/dono) ou
+  // "convidado". Era a leitura cross-tenant INTENCIONAL documentada no CLAUDE.md §5 — e a
+  // única exceção que não caberia no isolamento por empresa.
+  //
+  // Com o fim dos vínculos e aprovações, ela deixou de existir: o paciente é da EMPRESA, e
+  // quem enxerga é quem trabalha nela. Um profissional que atende em duas clínicas vê os
+  // pacientes de cada uma ao trocar o contexto — nunca os dois conjuntos ao mesmo tempo.
+  //
+  // NÃO reintroduzir "meus pacientes independente de empresa": era o que fazia o vet
+  // enxergar, na base própria, animal pertencente a outra clínica.
   const where = isAdmin
     ? {}
     : userType === 'PROPRIETARIO'
@@ -92,11 +103,15 @@ async function buildAnimalScopeWhere(req) {
           ? { OR: scopeOR }
           : designacoesWhere
         : userType === 'VETERINARIO'
+          // Vet atuando como PRESTADOR no contexto: só o que lhe foi designado (D1 —
+          // `DesignacaoPrestador` permanece; é concessão do gestor, não vínculo entre partes).
           ? isVetPrestadorContexto
-            ? { OR: [designacoesWhere, vetVinculoNaEmpresa] }
+            ? designacoesWhere
             : isMembroEquipe
-              ? { OR: [...scopeOR, isDonoOuGestorContexto ? vetSolicitacoesWhere : vetVinculoNaEmpresa] }
-              : vetSolicitacoesWhere
+              ? { OR: scopeOR }
+              // Sem empresa resolvida (vet autônomo/legado): só os animais que ele mesmo
+              // cadastrou. Antes caía nos vínculos, que não existem mais.
+              : { userId: Number(userId) }
           : isMembroEquipe
             ? { OR: scopeOR }
             : {};

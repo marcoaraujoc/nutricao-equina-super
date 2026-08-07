@@ -507,7 +507,12 @@ const ProprietarioController = {
             empresaId: req.empresaId,
             ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
           },
-          data: { ativo: false, empresaId: null, equipeId: null },
+          // ⚠️ NÃO zerar `empresaId`/`equipeId` (era `{ ativo:false, empresaId:null,
+          // equipeId:null }`). Aquilo transformava cada animal do cliente removido numa
+          // linha SEM DONO — o gerador de órfão nº 1 desta base, e justamente o que trava
+          // o `NOT NULL` da fase 5. Inativar responde "aparece?"; a tenancy responde "de
+          // quem é?". Remover o cliente da clínica não muda de quem o histórico é.
+          data: { ativo: false },
         });
         // Inativa o cadastro DESTA empresa (o das outras e o login global ficam intactos)
         await tx.proprietarioPerfil.updateMany({

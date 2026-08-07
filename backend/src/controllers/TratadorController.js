@@ -18,7 +18,9 @@ async function verificarDuplicidade({ nome, localizacaoId, empresaId, excludeId 
     where: {
       ...(excludeId ? { id: { not: excludeId } } : {}),
       localizacaoId,
-      OR: [{ empresaId: null }, { empresaId: empresaId ?? -1 }],
+      // `tb_tratadores.empresa_id` virou NOT NULL na fase 5 — não existe mais tratador
+      // "global". O ramo `empresaId: null` quebrava a listagem inteira (HTTP 500).
+      empresaId: empresaId ?? -1,
     },
   });
 
@@ -66,7 +68,6 @@ const TratadorController = {
           ...(where.AND ?? []),
           {
             OR: [
-              { empresaId: null },
               { empresaId: req.empresaId ?? -1, equipeId: null },
               ...(equipeScope
                 ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]

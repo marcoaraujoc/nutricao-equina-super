@@ -1,0 +1,35 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- FASE 7c — CORREÇÃO: a policy da CANÁRIA sobreviveu, com o escape dentro
+--
+-- 🔴 O FAIL-CLOSED NÃO ESTAVA VALENDO EM `tb_movimentos_estoque`.
+--
+-- A tabela tinha DUAS policies:
+--   `tenant_movimentos_estoque`     ← fase 6, escrita à mão, COM o escape `IS NULL`
+--   `tenant_tb_movimentos_estoque`  ← fase 7c, gerada, sem escape
+--
+-- ⚠️ **O PostgreSQL combina policies PERMISSIVAS com `OR`.** Basta UMA permitir para a
+-- linha aparecer. Ou seja: a policy nova, correta e restritiva, era simplesmente
+-- ignorada — a antiga liberava tudo para quem não declarasse contexto.
+--
+-- Como apareceu: o teste 7 de `rlsCanario.test.js`, que a fase 7c reescreveu para exigir
+-- `0` linhas sem contexto, devolveu 32. Ele havia sido escrito na fase 6 prevendo a
+-- própria obsolescência ("quando o escape sair, ESTE TESTE PASSA A FALHAR") — e foi
+-- justamente ele que pegou o resíduo.
+--
+-- Causa: os nomes DIVERGEM. O gerador emite `tenant_<tabela>` (com o prefixo `tb_`), e o
+-- `DROP POLICY IF EXISTS` dele só alcança esse nome. A policy da fase 6 foi batizada
+-- `tenant_movimentos_estoque`, sem o `tb_`, então nada a removeu.
+--
+-- ⚠️ LIÇÃO: `DROP POLICY IF EXISTS` só protege contra o nome que ele conhece. Policy
+-- órfã não dá erro, não aparece em teste de rota e AFROUXA o isolamento em silêncio.
+-- Ao reescrever policies, conferir `pg_policies` por tabela — mais de uma linha por
+-- tabela é sinal de alerta, não de reforço.
+--
+-- ⚠️ NÃO confundir com o `IS NULL` LEGÍTIMO das 4 tabelas de CATÁLOGO MISTO
+-- (`tb_medicamentos`, `tb_procedimentos_vet`, `tb_localizacoes_animal`,
+-- `tb_midia_arquivos`): lá `empresa_id IS NULL` é a LINHA GLOBAL compartilhada, e o
+-- predicado correto é `app_plataforma() OR empresa_id = tenant OR empresa_id IS NULL`.
+-- O escape removido era outro: `app_empresa_id() IS NULL`, sobre a FUNÇÃO, não a coluna.
+-- ════════════════════════════════════════════════════════════════════════════
+
+DROP POLICY IF EXISTS "tenant_movimentos_estoque" ON "schs2vet"."tb_movimentos_estoque";

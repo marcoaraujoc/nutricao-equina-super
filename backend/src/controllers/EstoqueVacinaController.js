@@ -551,9 +551,13 @@ const listarLotesDisponiveisPorMed = async (req, res) => {
       ativo:            true,
       qtdDisponivel:    { gt: 0 },
       validade:         { gte: hoje },
-      // FAIL-CLOSED: sem empresa resolvida este spread virava `{}` e listava o lote de
-      // TODAS as clínicas. Sem empresa vê-se apenas o lote global (empresaId null).
-      ...escopoCatalogoEmpresa(empresaId),
+      // FAIL-CLOSED: sem empresa resolvida, `-1` não casa com clínica alguma.
+      //
+      // ⚠️ Não usa `escopoCatalogoEmpresa`: aquele helper é de CATÁLOGO (nulo = linha
+      // global compartilhada). LOTE DE VACINA é do estoque de UMA clínica — não existe
+      // lote global —, e `tb_lotes_vacina.empresa_id` virou NOT NULL na fase 5. Com o
+      // ramo `empresaId: null`, o Prisma recusa a consulta inteira.
+      empresaId: empresaId ? Number(empresaId) : -1,
     };
 
     const lotes = await prisma.loteVacina.findMany({

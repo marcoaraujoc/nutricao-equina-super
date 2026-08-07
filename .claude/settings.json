@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(node --check MidiaController.js)",
-      "Bash(node --check routes/midia.js)"
+      "Bash(node --check routes/midia.js)",
+      "Bash(node --check src/controllers/UserController.js)"
     ]
   }
 }

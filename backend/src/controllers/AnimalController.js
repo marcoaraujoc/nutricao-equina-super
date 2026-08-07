@@ -1,13 +1,13 @@
 // backend/src/controllers/AnimalController.js
 'use strict';
 
-const crypto           = require('crypto');
 const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const { storage }      = require('../storage');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
+const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -48,33 +48,12 @@ const ANIMAL_INCLUDE = {
   user:        { select: { id: true, fullName: true, email: true, phone: true, phone2: true, cpf: true } },
   localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } },
   tratador:    { select: { id: true, nome: true, telefone: true } },
-  solicitacoes: {
-    // DESVINCULO ACEITO é excluído: vet não tem mais acesso, não deve aparecer no form de edição
-    where: {
-      OR: [
-        { status: 'PENDENTE' },
-        { tipo: 'VINCULO', status: 'ACEITO' },
-      ],
-    },
-    select: {
-      id:              true,
-      tipo:            true,
-      status:          true,
-      vetUserId:       true,
-      novoVetUserId:   true,
-      solicitanteId:   true,
-      veterinario:     { select: { id: true, fullName: true, email: true } },
-      novoVeterinario: { select: { id: true, fullName: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-  },
-};
-
-const gerarToken     = () => crypto.randomBytes(32).toString('hex');
-const gerarExpiracao = (dias = 7) => {
-  const d = new Date();
-  d.setDate(d.getDate() + dias);
-  return d;
+  // ⚠️ FASE 3 DO MULTI-TENANCY — `solicitacoes` saiu do include.
+  // Ele vinha em TODA leitura de animal e era a fonte dos selos "Pendente"/"Remoção
+  // pendente"/"Troca pendente" e do seletor de veterinário responsável. Sem vínculo não
+  // há estado a exibir — o responsável é o campo `veterinarioNome` do próprio animal.
+  // Junto saíram `gerarToken`/`gerarExpiracao`, que só serviam ao token de aprovação
+  // de 24h dos e-mails de vínculo/desvínculo.
 };
 
 const obterUserType = async (userId) => {
@@ -85,200 +64,15 @@ const obterUserType = async (userId) => {
   return { userType: u?.userType ?? 'PROPRIETARIO', role: u?.role ?? 'USER' };
 };
 
-// Cria ou atualiza solicitação PENDENTE + dispara email ao destinatário correto.
-// Fluxos:
-//   - Sem vet ativo → VINCULO PENDENTE (email ao vet ou ao proprietário dependendo de quem solicitou)
-//   - Com vet ACEITO ou TROCA_VET PENDENTE → TROCA_VET PENDENTE (email ao vet atual pedindo aprovação)
-//   - solicitanteId === novoVetId → vet solicitou → email ao proprietário
-const criarSolicitacaoPendente = async ({
-  animalId, novoVetId, animalNome, solicitanteId,
-  proprietarioNome, proprietarioEmail, proprietarioPhone = null,
-  // permitirTroca=false: fluxo de CADASTRO — o animal pode ter mais de um vet;
-  // um vínculo ADICIONAL é criado sem disparar TROCA_VET nem tocar no vet atual.
-  // permitirTroca=true (padrão): fluxo de EDIÇÃO — trocar o vet responsável
-  // dispara a solicitação TROCA_VET ao vet atual.
-  permitirTroca = true,
-}) => {
-  const novoVetIdNum = novoVetId ? Number(novoVetId) : null;
-  if (!novoVetIdNum || isNaN(novoVetIdNum)) throw new Error(`novoVetId inválido: ${novoVetId}`);
-
-  const vet = await prisma.user.findUnique({
-    where:  { id: novoVetIdNum },
-    select: { id: true, fullName: true, email: true },
-  });
-  if (!vet) throw new Error(`Veterinário id=${novoVetIdNum} não encontrado`);
-
-  // Permite: dono de empresa, GESTOR/VETERINARIO em ALGUMA equipe, ou vet autônomo
-  // (sem equipe). Bloqueia: quem só tem cargos não-clínicos (ESTAGIARIO, FORNECEDOR etc.).
-  const empresaDoVet = await prisma.empresa.findFirst({ where: { ownerId: novoVetIdNum } });
-  if (!empresaDoVet) {
-    const membroDoVet = await prisma.membroEquipe.findFirst({ where: { userId: novoVetIdNum } });
-    const membroResponsavel = membroDoVet
-      ? await prisma.membroEquipe.findFirst({ where: { userId: novoVetIdNum, cargo: { in: ['GESTOR', 'VETERINARIO'] } } })
-      : null;
-    if (membroDoVet && !membroResponsavel) {
-      const err = new Error('VET_MEMBRO_SEM_RESPONSABILIDADE');
-      err.cargo = membroDoVet.cargo;
-      err.vetNome = vet.fullName;
-      throw err;
-    }
-  }
-
-  // Detecta vet com acesso ativo ao animal (ACEITO ou TROCA_VET que ainda está pendendo)
-  const solAtiva = await prisma.vetAnimalSolicitacao.findFirst({
-    where: {
-      animalId:  Number(animalId),
-      vetUserId: { not: novoVetIdNum },
-      OR: [
-        { status: 'ACEITO', tipo: 'VINCULO' },
-        { tipo: 'TROCA_VET', status: 'PENDENTE' },
-      ],
-    },
-    include: { veterinario: { select: { id: true, fullName: true, email: true } } },
-  });
-
-  if (solAtiva && permitirTroca) {
-    // ── TROCA_VET: vet atual precisa aprovar antes de trocar ──────────────────
-    const token     = gerarToken();
-    const expiresAt = gerarExpiracao(1); // 24 horas
-
-    await prisma.vetAnimalSolicitacao.update({
-      where: { id: solAtiva.id },
-      data: {
-        tipo:          'TROCA_VET',
-        status:        'PENDENTE',
-        novoVetUserId: novoVetIdNum,
-        approvalToken: token,
-        expiresAt,
-        solicitanteId: solicitanteId ? Number(solicitanteId) : null,
-        mensagem:      null,
-      },
-    });
-
-    emailService.enviarSolicitacaoTrocaVet({
-      vetEmail:          solAtiva.veterinario.email,
-      vetNome:           solAtiva.veterinario.fullName,
-      novoVetNome:       vet.fullName,
-      animalNome,
-      proprietarioNome:  proprietarioNome || 'Proprietário',
-      proprietarioEmail: proprietarioEmail || null,
-      proprietarioPhone: proprietarioPhone || null,
-      token,
-    }).catch(err => console.error('[emailService] Falha ao enviar TROCA_VET:', err));
-
-    return vet;
-  }
-
-  // ── VINCULO: sem vet ativo → solicitação direta ───────────────────────────
-  const token     = gerarToken();
-  const expiresAt = gerarExpiracao(7);
-
-  await prisma.vetAnimalSolicitacao.upsert({
-    where:  { animalId_vetUserId: { animalId: Number(animalId), vetUserId: novoVetIdNum } },
-    create: {
-      animalId:      Number(animalId),
-      vetUserId:     novoVetIdNum,
-      tipo:          'VINCULO',
-      status:        'PENDENTE',
-      approvalToken: token,
-      expiresAt,
-      solicitanteId: solicitanteId ? Number(solicitanteId) : null,
-    },
-    update: {
-      tipo:          'VINCULO',
-      status:        'PENDENTE',
-      approvalToken: token,
-      expiresAt,
-      solicitanteId: solicitanteId ? Number(solicitanteId) : null,
-      mensagem:      null,
-    },
-  });
-
-  const solicitanteEOVet = solicitanteId && Number(solicitanteId) === novoVetIdNum;
-
-  if (solicitanteEOVet) {
-    if (proprietarioEmail) {
-      emailService.enviarSolicitacaoVinculoProprietario({
-        proprietarioEmail,
-        proprietarioNome: proprietarioNome || 'Proprietário',
-        animalNome,
-        vetNome:          vet.fullName,
-        token,
-      })
-        .then(() => console.log(`[emailService] Email ao proprietário enviado → ${proprietarioEmail}`))
-        .catch(err => console.error('[emailService] FALHA ao enviar para proprietário:', err?.message ?? err));
-    } else {
-      console.warn('[emailService] Proprietário sem email — notificação não enviada');
-    }
-  } else {
-    emailService.enviarSolicitacaoVinculo({
-      vetEmail:         vet.email,
-      vetNome:          vet.fullName,
-      animalNome,
-      proprietarioNome: proprietarioNome || 'Proprietário',
-      token,
-    })
-      .then(() => console.log(`[emailService] Email ao vet enviado → ${vet.email}`))
-      .catch(err => console.error('[emailService] FALHA ao enviar para vet:', err?.message ?? err));
-  }
-
-  return vet;
-};
-
-// Vínculo DIRETO (ACEITO) de um vet ao animal — sem fluxo de aprovação por e-mail.
-// Usado quando NÃO há troca de vet: cadastro de animal novo com vet indicado e
-// edição atribuindo vet a animal que não tinha nenhum. A solicitação por e-mail
-// existe apenas na TROCA do vet responsável (criarSolicitacaoPendente/TROCA_VET).
-const vincularVetDireto = async ({ animalId, vetId }) => {
-  const vetIdNum = Number(vetId);
-  const vet = await prisma.user.findUnique({
-    where:  { id: vetIdNum },
-    select: { id: true, fullName: true },
-  });
-  if (!vet) throw new Error(`Veterinário id=${vetId} não encontrado`);
-
-  // Mesma regra do fluxo de solicitação: só GESTOR/VETERINARIO em alguma equipe
-  // (ou vet autônomo/dono de empresa) pode ser o vet responsável direto
-  const empresaDoVet = await prisma.empresa.findFirst({ where: { ownerId: vetIdNum } });
-  if (!empresaDoVet) {
-    const membroDoVet = await prisma.membroEquipe.findFirst({ where: { userId: vetIdNum } });
-    const membroResponsavel = membroDoVet
-      ? await prisma.membroEquipe.findFirst({ where: { userId: vetIdNum, cargo: { in: ['GESTOR', 'VETERINARIO'] } } })
-      : null;
-    if (membroDoVet && !membroResponsavel) {
-      const err = new Error('VET_MEMBRO_SEM_RESPONSABILIDADE');
-      err.cargo = membroDoVet.cargo;
-      err.vetNome = vet.fullName;
-      throw err;
-    }
-  }
-
-  await prisma.vetAnimalSolicitacao.upsert({
-    where:  { animalId_vetUserId: { animalId: Number(animalId), vetUserId: vetIdNum } },
-    create: { animalId: Number(animalId), vetUserId: vetIdNum, tipo: 'VINCULO', status: 'ACEITO' },
-    update: { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null },
-  });
-
-  // Espelha o aceite normal: animal herda empresa/equipe do contexto do vet
-  const ctx = await getContextoDoVet(vetIdNum, null, null);
-  let clinicaNome = null;
-  if (ctx.empresaId) {
-    const empresa = await prisma.empresa.findUnique({ where: { id: ctx.empresaId }, select: { nome: true } });
-    clinicaNome = empresa?.nome ?? null;
-  }
-  const animalDados = await prisma.animal.update({
-    where: { id: Number(animalId) },
-    data:  {
-      veterinarioNome:    vet.fullName,
-      veterinarioClinica: clinicaNome,
-      ...(ctx.empresaId ? { empresaId: ctx.empresaId, equipeId: ctx.equipeId } : {}),
-    },
-    select: { userId: true },
-  });
-  if (animalDados?.userId) await garantirFaturaAberta(animalDados.userId);
-
-  return vet;
-};
+// ⚠️ FASE 3 DO MULTI-TENANCY — os helpers `criarSolicitacaoPendente` e
+// `vincularVetDireto` foram REMOVIDOS daqui, junto de todos os seus chamadores.
+//
+// O primeiro criava a solicitação PENDENTE (VINCULO/TROCA_VET) com token de aprovação
+// e disparava o e-mail ao veterinário ou ao proprietário; o segundo criava o vínculo
+// já ACEITO e, de quebra, MOVIA o animal para a empresa do vet escolhido.
+//
+// Não existe mais acesso individual a paciente para conceder, pedir ou retirar: quem
+// dá acesso é a EMPRESA a que o animal pertence. Não reintroduzir.
 
 // ─── Regra de baia ───────────────────────────────────────────────────────────
 // Baia única por LOCAL, dentro do que o usuário PODE VER.
@@ -359,8 +153,6 @@ class AnimalController {
       }
 
       try {
-        const vetLogadoId = Number(req.user.id);
-
         const animais = await prisma.animal.findMany({
           where:   { nome: { contains: nome.trim(), mode: 'insensitive' }, ativo: true },
           include: {
@@ -369,16 +161,6 @@ class AnimalController {
             raca:        { select: { id: true, nome: true } },
             localizacao: { select: { id: true, nome: true } },
             tratador:    { select: { id: true, nome: true } },
-            solicitacoes: {
-              // Mesmo critério do ANIMAL_INCLUDE: exclui DESVINCULO ACEITO (vet já saiu)
-              where: {
-                OR: [
-                  { status: 'PENDENTE' },
-                  { tipo: 'VINCULO', status: 'ACEITO' },
-                ],
-              },
-              select: { status: true, vetUserId: true },
-            },
           },
           take: 10,
         });
@@ -400,53 +182,27 @@ class AnimalController {
           ?? animais.find(nomeExato)
           ?? animais[0];
 
-        const solAtiva = animal.solicitacoes.find(
-          s => s.status === 'ACEITO' || s.status === 'PENDENTE'
-        );
-        const temVet   = !!solAtiva;
-        const vetDoAnimalId = solAtiva?.vetUserId ?? null;
-
         // ── O animal já é da minha clínica? ────────────────────────────────
-        // A regra é de EMPRESA, não de pessoa: o cadastro do animal (e o do
+        // A pergunta é de EMPRESA, e SÓ de empresa. O cadastro do animal (e o do
         // proprietário) é isolado por empresa, então
-        //   • animal de OUTRA empresa  → independente, sempre. Não importa o cargo
-        //     que o vet do animal tenha aqui nem o que EU tenha lá (posso ser
-        //     prestador na clínica dele e gestor na minha, ou o contrário);
-        //   • animal DESTA empresa     → é da casa, não se duplica — qualquer que
-        //     seja o vet responsável (inclusive um prestador da própria equipe).
-        const mesmaEmpresa  = empresaAtivaId != null && animal.empresaId === empresaAtivaId;
-        const outraEmpresa  = empresaAtivaId != null && animal.empresaId != null
+        //   • animal DESTA empresa   → é da casa, não se duplica;
+        //   • animal de OUTRA        → independente, sempre. Não importa o cargo que o
+        //     vet do animal tenha aqui nem o que eu tenha lá (posso ser prestador na
+        //     clínica dele e gestor na minha, ou o contrário).
+        //
+        // ⚠️ FASE 3 DO MULTI-TENANCY — saíram daqui `temVet` e `vetDaMinhaEquipe`, que
+        // liam `VetAnimalSolicitacao` para responder "existe vet ativo?" e "esse vet é
+        // da minha equipe?". Eram a pergunta ERRADA: quem responde por um paciente é a
+        // clínica, não a pessoa. Um animal desta empresa sem vet designado voltava como
+        // "sem_vet" e era DUPLICADO por quem o cadastrasse de novo.
+        const mesmaEmpresa = empresaAtivaId != null && animal.empresaId === empresaAtivaId;
+        const outraEmpresa = empresaAtivaId != null && animal.empresaId != null
           && animal.empresaId !== empresaAtivaId;
 
-        let vetDaMinhaEquipe = mesmaEmpresa && temVet;
-
-        // Animal LEGADO (sem empresa definida) não pode ser resolvido pela empresa —
-        // cai no critério antigo: o vet responsável é da minha equipe no contexto ativo?
-        const semEmpresa = !mesmaEmpresa && !outraEmpresa;
-        if (semEmpresa && temVet && vetDoAnimalId) {
-          if (vetDoAnimalId === vetLogadoId) {
-            vetDaMinhaEquipe = true;
-          } else {
-            const minhasEquipes = await prisma.membroEquipe.findMany({
-              where: {
-                userId: vetLogadoId,
-                ...(req.equipeId
-                  ? { equipeId: Number(req.equipeId) }
-                  : req.empresaId
-                    ? { equipe: { empresaId: Number(req.empresaId) } }
-                    : {}),
-              },
-              select: { equipeId: true },
-            });
-            const minhasEquipeIds = minhasEquipes.map(e => e.equipeId);
-            if (minhasEquipeIds.length > 0) {
-              const vetDoAnimalNaEquipe = await prisma.membroEquipe.findFirst({
-                where: { userId: vetDoAnimalId, equipeId: { in: minhasEquipeIds } },
-              });
-              vetDaMinhaEquipe = !!vetDoAnimalNaEquipe;
-            }
-          }
-        }
+        // Animal LEGADO (sem `empresaId`) não pertence a clínica nenhuma que se possa
+        // provar — trata-se como NÃO sendo desta, para que o cadastro siga. O caminho
+        // inverso travaria o registro sem nenhuma saída na tela.
+        const jaCadastradoAqui = mesmaEmpresa;
 
         // IDENTIDADE do animal: atributos do próprio bicho, iguais em qualquer clínica.
         // Podem pré-preencher o cadastro mesmo vindo de outra empresa.
@@ -492,8 +248,7 @@ class AnimalController {
           dados: {
             ...identidade,
             ...operacional,
-            temVet,
-            vetDaMinhaEquipe,
+            jaCadastradoAqui,
             // NÃO devolvemos o proprietário do registro de origem: o cadastro em
             // outra empresa é isolado (animal e proprietário), e devolver aqui
             // vazaria o cliente de outra clínica para quem só pesquisou um nome.
@@ -505,167 +260,13 @@ class AnimalController {
       }
     }
 
-  // ── POST /api/animais/proprietario/aprovar ───────────────────────────────
-  // Rota pública — proprietário aprova ou recusa vínculo pelo link do email
-
-  async proprietarioAprovar(req, res) {
-    const { token, acao } = req.body;
-
-    if (!token || !acao) {
-      return res.status(400).json({ sucesso: false, mensagem: 'Token e ação são obrigatórios' });
-    }
-    if (!['aceitar', 'recusar'].includes(acao)) {
-      return res.status(400).json({ sucesso: false, mensagem: 'Ação inválida' });
-    }
-
-    try {
-      const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
-        where: { approvalToken: token, status: 'PENDENTE' },
-        include: {
-          animal:      { select: { nome: true, userId: true } },
-          veterinario: { select: { fullName: true, email: true } },
-        },
-      });
-
-      if (!solicitacao) {
-        return res.status(404).json({
-          sucesso:  false,
-          mensagem: 'Token inválido ou solicitação não encontrada',
-        });
-      }
-
-      if (solicitacao.expiresAt && new Date() > solicitacao.expiresAt) {
-        return res.status(410).json({
-          sucesso:  false,
-          mensagem: 'Este link expirou. Solicite um novo vínculo.',
-        });
-      }
-
-      if (solicitacao.tipo === 'DESVINCULO') {
-        // Vet-iniciado: proprietário decide se aceita a remoção do vet
-        if (acao === 'aceitar') {
-          // Proprietário aceita → vet perde acesso, animal desvinculado da empresa
-          await prisma.vetAnimalSolicitacao.update({
-            where: { id: solicitacao.id },
-            data:  { status: 'ACEITO', approvalToken: null },
-          });
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null, equipeId: null },
-          });
-        } else {
-          // Proprietário recusa → vet mantém acesso (restaura VINCULO ACEITO)
-          await prisma.vetAnimalSolicitacao.update({
-            where: { id: solicitacao.id },
-            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, mensagem: null },
-          });
-        }
-      } else {
-        // VINCULO: comportamento original
-        const novoStatus = acao === 'aceitar' ? 'ACEITO' : 'RECUSADO';
-
-        await prisma.vetAnimalSolicitacao.update({
-          where: { id: solicitacao.id },
-          data:  { status: novoStatus, approvalToken: null },
-        });
-
-        if (acao === 'aceitar') {
-          const ctx = await getContextoDoVet(solicitacao.vetUserId);
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  {
-              bloqueado:      false,
-              bloqueioTipo:   null,
-              bloqueioExpira: null,
-              ...(ctx.empresaId ? { empresaId: ctx.empresaId, equipeId: ctx.equipeId } : {}),
-            },
-          });
-          await garantirFaturaAberta(solicitacao.animal.userId);
-        } else {
-          // Recusa: limpa o vet responsável do animal
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null },
-          });
-        }
-      }
-
-      // Busca nome do proprietário para o email de confirmação ao vet
-      const proprietario = await prisma.user.findUnique({
-        where:  { id: solicitacao.animal.userId },
-        select: { fullName: true },
-      });
-
-      if (acao === 'aceitar' && solicitacao.tipo !== 'DESVINCULO') {
-        const empId = await getEmpresaIdDoVet(solicitacao.vetUserId);
-        if (empId) {
-          notificarGestoresDaEmpresa(empId, {
-            animalNome:       solicitacao.animal.nome,
-            proprietarioNome: proprietario?.fullName || 'Proprietário',
-            vetNome:          solicitacao.veterinario.fullName,
-          }).catch(() => {});
-        }
-      }
-
-      try {
-        await emailService.enviarConfirmacaoVinculo({
-          proprietarioEmail: solicitacao.veterinario.email,
-          proprietarioNome:  solicitacao.veterinario.fullName,
-          animalNome:        solicitacao.animal.nome,
-          vetNome:           proprietario?.fullName || 'Proprietário',
-          aceito:            acao === 'aceitar',
-        });
-      } catch (err) {
-        console.error('[emailService] Falha ao notificar vet sobre decisão:', err?.message);
-      }
-
-      res.json({
-        sucesso:  true,
-        aceito:   acao === 'aceitar',
-        mensagem: acao === 'aceitar'
-          ? `Vínculo com Dr(a). ${solicitacao.veterinario.fullName} autorizado com sucesso!`
-          : 'Vínculo recusado. O veterinário foi notificado.',
-      });
-    } catch (error) {
-      console.error('[AnimalController.proprietarioAprovar]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  }
-
-  // ── GET /api/animais/minhas-solicitacoes ─────────────────────────────────
-  // Retorna todas as solicitações de vínculo dos animais do proprietário autenticado.
-  // Usado pelo hook de polling para notificar quando vet aceita/recusa.
-
-  async minhasSolicitacoes(req, res) {
-    const userId = Number(req.user?.id);
-    if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
-
-    try {
-      const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
-        where:   { animal: { userId } },
-        select: {
-          id:              true,
-          tipo:            true,
-          status:          true,
-          updatedAt:       true,
-          vetUserId:       true,
-          novoVetUserId:   true,
-          solicitanteId:   true,
-          animal:          { select: { id: true, nome: true, bloqueioTipo: true } },
-          veterinario:     { select: { fullName: true } },
-          novoVeterinario: { select: { fullName: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-      });
-
-      res.json({ sucesso: true, dados: solicitacoes });
-    } catch (error) {
-      console.error('[AnimalController.minhasSolicitacoes]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar solicitações' });
-    }
-  }
-
-  // ── GET /api/animais ─────────────────────────────────────────────────────
+  // ⚠️ FASE 3 DO MULTI-TENANCY — MÉTODOS DE VÍNCULO REMOVIDOS:
+  //   proprietarioAprovar     (rota PÚBLICA por token do e-mail)
+  //   minhasSolicitacoes      (polling do proprietário)
+  //   vincularVet / desvincularVet
+  //   cancelarSolicitacao / responderSolicitacaoVet
+  // As rotas já haviam saído de routes/animais.js; estes eram os corpos órfãos.
+  // Não recriar: o acesso ao paciente vem de ele pertencer à EMPRESA.
 
   async listar(req, res) {
     try {
@@ -676,8 +277,12 @@ class AnimalController {
       // (convidado) só vê os seus animais + os liberados por outros vets na empresa ativa.
       const { where } = await buildAnimalScopeWhere(req);
 
+      // EXCLUSÃO LÓGICA (lib/visibilidade.js): o animal inativado some, e o do CLIENTE
+      // inativado some junto — nem como "inativo" ele aparece. `animalVisivelNaEmpresa`
+      // aplica também o `ativo` POR EMPRESA do cliente (§36): inativado numa clínica,
+      // ele continua visível nas outras.
       const animais = await prisma.animal.findMany({
-        where: { ...where, ativo: true },
+        where: { ...where, ...animalVisivelNaEmpresa(req.empresaId) },
         include:  ANIMAL_INCLUDE,
         orderBy:  { dataCadastro: 'desc' },
       });
@@ -782,128 +387,15 @@ class AnimalController {
       const vetEmpresaId = vetCtx.empresaId;
       const vetEquipeId  = vetCtx.equipeId;
 
-      // ── Vet vinculando animal já existente sem vet ──────────────────────
-      if (isVet && req.body.animalExistenteId) {
-        const existenteId = Number(req.body.animalExistenteId);
-        const animalExistente = await prisma.animal.findUnique({
-          where:  { id: existenteId },
-          select: {
-            id:     true,
-            nome:   true,
-            userId: true,
-            user: { select: { fullName: true, email: true } },
-            solicitacoes: {
-              where: {
-                OR: [
-                  { status: 'PENDENTE' },
-                  { tipo: 'VINCULO', status: 'ACEITO' },
-                ],
-              },
-              select: { status: true },
-            },
-          },
-        });
-
-        if (!animalExistente) {
-          return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
-        }
-
-        // Um animal pode ter MAIS DE UM veterinário (ex: vet responsável + fornecedor
-        // de outra equipe, como quiropraxista). Animal já atrelado a outro vet NÃO
-        // bloqueia o cadastro: o vet cadastrante é adicionado como vínculo ADICIONAL,
-        // sem disparar TROCA_VET e sem mexer no vet/equipe atuais. A solicitação de
-        // troca só acontece na EDIÇÃO, quando o vet responsável é efetivamente trocado.
-        const jaTemVet = animalExistente.solicitacoes.length > 0;
-
-        const pedirAutorizacao = req.body.pedirAutorizacao === true
-          || req.body.pedirAutorizacao === 'true';
-
-        if (pedirAutorizacao) {
-          // Solicita autorização ao proprietário — VINCULO PENDENTE para o novo vet
-          // (nunca TROCA_VET no cadastro; o vet atual, se houver, permanece intacto)
-          await criarSolicitacaoPendente({
-            animalId:          animalExistente.id,
-            novoVetId:         req.user.id,
-            animalNome:        animalExistente.nome,
-            solicitanteId:     req.user.id,
-            proprietarioNome:  animalExistente.user?.fullName,
-            proprietarioEmail: animalExistente.user?.email,
-            permitirTroca:     false,
-          });
-
-          if (!jaTemVet) {
-            // Só bloqueia o animal quando ele ainda não tem vet ativo — com outro vet
-            // atendendo, o bloqueio interromperia o atendimento da equipe atual
-            await prisma.animal.update({
-              where: { id: animalExistente.id },
-              data:  {
-                bloqueado:    true,
-                bloqueioTipo: 'AGUARDANDO_APROVACAO',
-                bloqueioExpira: null,
-                ...(vetEmpresaId ? { empresaId: vetEmpresaId, equipeId: vetEquipeId } : {}),
-              },
-            });
-          }
-
-          return res.status(201).json({
-            sucesso:  true,
-            dados:    { id: animalExistente.id },
-            mensagem: 'Solicitação enviada ao proprietário. O vínculo será efetivado após o aceite.',
-          });
-        }
-
-        // Vínculo direto (ACEITO) — sem bloqueio; e-mail informativo ao proprietário
-        const empId = vetEmpresaId;
-        let clinicaNome = null;
-        if (empId) {
-          const empresa = await prisma.empresa.findUnique({ where: { id: empId }, select: { nome: true } });
-          clinicaNome = empresa?.nome ?? null;
-        }
-
-        await prisma.vetAnimalSolicitacao.upsert({
-          where:  { animalId_vetUserId: { animalId: animalExistente.id, vetUserId: Number(req.user.id) } },
-          create: { animalId: animalExistente.id, vetUserId: Number(req.user.id), tipo: 'VINCULO', status: 'ACEITO', solicitanteId: Number(req.user.id) },
-          update: { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null, solicitanteId: Number(req.user.id) },
-        });
-
-        await prisma.animal.update({
-          where: { id: animalExistente.id },
-          data:  {
-            bloqueado:          false,
-            bloqueioTipo:       null,
-            bloqueioExpira:     null,
-            // Com outro vet já ativo: vínculo ADICIONAL — não sobrescreve o vet
-            // responsável exibido nem move o animal de empresa/equipe
-            ...(jaTemVet ? {} : {
-              veterinarioNome:    vetNomeCompleto,
-              veterinarioClinica: clinicaNome,
-              ...(empId ? { empresaId: empId, equipeId: vetEquipeId } : {}),
-            }),
-          },
-        });
-
-        if (animalExistente.userId) {
-          await garantirFaturaAberta(animalExistente.userId);
-        }
-
-        // E-mail meramente informativo ao proprietário (sem link de aprovação)
-        if (animalExistente.user?.email) {
-          emailService.enviarVinculoInformativo({
-            proprietarioEmail: animalExistente.user.email,
-            proprietarioNome:  animalExistente.user.fullName || 'Proprietário',
-            animalNome:        animalExistente.nome,
-            vetNome:           vetNomeCompleto,
-          })
-            .then(() => console.log(`[emailService] Email informativo enviado → ${animalExistente.user.email}`))
-            .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));
-        }
-
-        return res.status(201).json({
-          sucesso:  true,
-          dados:    { id: animalExistente.id },
-          mensagem: 'Vínculo estabelecido com sucesso!',
-        });
-      }
+      // ⚠️ FASE 3 DO MULTI-TENANCY — o ramo "vet vincula animal JÁ EXISTENTE" foi
+      // REMOVIDO daqui (req.body.animalExistenteId + pedirAutorizacao). Ele criava
+      // `VetAnimalSolicitacao` (PENDENTE ou ACEITO direto), marcava o animal como
+      // `bloqueado: AGUARDANDO_APROVACAO` e disparava e-mail de vínculo ao proprietário.
+      //
+      // Nada disso existe mais: animal de OUTRA empresa é INDEPENDENTE, e o cadastro
+      // aqui cria um registro próprio desta clínica (buscarPorNome devolve
+      // `jaCadastradoAqui`, e a tela só bloqueia quando ele já é desta empresa).
+      // O frontend já não enviava nenhum dos dois campos — não reintroduzir.
 
       // ── Criação de novo animal ──────────────────────────────────────────
 
@@ -972,6 +464,16 @@ class AnimalController {
                     ativo:    true,
                   });
 
+                  // 🔴 REATIVA o cliente NESTA empresa. `garantirPerfil` só aplica o
+                  // seed (com `ativo:true`) na CRIAÇÃO; se o cliente já tinha cadastro
+                  // aqui e foi INATIVADO antes (ex.: `removerDaEmpresa`), o perfil é
+                  // preservado como está — `ativo=false`. O animal nasceria ATIVO com
+                  // DONO INATIVO, quebrando o invariante "dono de animal ativo é cliente
+                  // ativo da empresa", e o filtro de visibilidade (§36) o esconderia da
+                  // lista — sintoma exato do Horse1 (paciente cadastrado que não aparece).
+                  // Só toca `ativo`; nome/telefone/documento seguem preservados.
+                  await salvarPerfilProprietario(prisma, prop.id, vetEmpresaId, { ativo: true });
+
                   // Cliente que JÁ tinha cadastro nesta empresa: `garantirPerfil`
                   // preserva o perfil, então o telefone digitado aqui seria descartado
                   // em silêncio. O contato é o único campo que esta tela atualiza —
@@ -1032,6 +534,18 @@ class AnimalController {
         }
       }
 
+      // 🔴 GUARDA ANTI-ÓRFÃO: todo animal PRECISA de empresa (`tb_animais.empresa_id` é
+      // NOT NULL desde a fase 5). Sem `vetEmpresaId` resolvido, `empresaId: undefined`
+      // omitia o campo e o INSERT dava HTTP 500 do Postgres — e, se a coluna aceitasse,
+      // nasceria um paciente SEM DONO, o registro órfão que a arquitetura proíbe. Falha
+      // aqui, com mensagem clara, em vez de deixar o banco recusar de forma opaca.
+      if (!vetEmpresaId) {
+        return res.status(400).json({
+          error: 'Não foi possível resolver a empresa do contexto para cadastrar o animal. Selecione a clínica ativa e tente novamente.',
+          code:  'EMPRESA_NAO_RESOLVIDA',
+        });
+      }
+
       const animal = await prisma.animal.create({
         data: {
           nome:            nome.trim(),
@@ -1062,19 +576,20 @@ class AnimalController {
       });
 
       if (isVet) {
+        // ⚠️ FASE 3 DO MULTI-TENANCY — o `VetAnimalSolicitacao` que nascia aqui (VINCULO
+        // ACEITO, nos dois ramos) foi REMOVIDO. Ele não autorizava nada: o animal já é
+        // criado com `empresaId`/`equipeId` do contexto do vet (ver o `create` acima), e
+        // é a EMPRESA que dá acesso ao paciente. O vínculo só duplicava essa informação
+        // numa segunda tabela — e era essa cópia que, lida como "meu paciente
+        // independente de empresa", abria o registro de uma clínica para outra.
         if (criadoParaSiMesmo) {
-          // Vet criando animal para si mesmo → ACEITO direto (empresaId já incluído no create)
-          await prisma.vetAnimalSolicitacao.create({
-            data: { animalId: animal.id, vetUserId: Number(req.user.id), tipo: 'VINCULO', status: 'ACEITO' },
-          });
           await garantirFaturaAberta(Number(targetUserId));
         } else {
-          // PREMISSA MULTI-EMPRESA: um animal pode ser atendido por mais de uma empresa e
-          // um proprietário pode estar em mais de uma. Cadastrar um animal que já existe
-          // gera um REGISTRO NOVO, que pertence a quem cadastrou — por isso o vínculo já
-          // nasce ACEITO e o animal NUNCA fica bloqueado aguardando aprovação: a empresa
-          // precisa atendê-lo de imediato. O proprietário é apenas informado por e-mail;
-          // é ele (e só ele) quem enxerga o histórico consolidado entre as empresas.
+          // PREMISSA MULTI-EMPRESA: um animal pode ser atendido por mais de uma empresa
+          // e um proprietário pode estar em mais de uma. Cadastrar um animal que já
+          // existe gera um REGISTRO NOVO, que pertence a quem cadastrou — por isso ele
+          // NUNCA nasce bloqueado aguardando aprovação: a empresa precisa atendê-lo de
+          // imediato. O proprietário é apenas informado por e-mail.
           const empIdNovo = vetEmpresaId;
           let clinicaNomeNovo = null;
           if (empIdNovo) {
@@ -1082,25 +597,13 @@ class AnimalController {
             clinicaNomeNovo = empresaNova?.nome ?? null;
           }
 
-          await prisma.vetAnimalSolicitacao.create({
-            data: {
-              animalId:      animal.id,
-              vetUserId:     Number(req.user.id),
-              tipo:          'VINCULO',
-              status:        'ACEITO',
-              solicitanteId: Number(req.user.id),
-            },
-          });
-
+          // `veterinarioNome`/`veterinarioClinica` são apenas os campos de EXIBIÇÃO do
+          // responsável — não concedem acesso a nada.
           await prisma.animal.update({
             where: { id: animal.id },
             data:  {
-              bloqueado:          false,
-              bloqueioTipo:       null,
-              bloqueioExpira:     null,
               veterinarioNome:    vetNomeCompleto,
               veterinarioClinica: clinicaNomeNovo,
-              ...(empIdNovo ? { empresaId: empIdNovo, equipeId: vetEquipeId } : {}),
             },
           });
 
@@ -1125,25 +628,17 @@ class AnimalController {
         }
       }
 
-      // Vet responsável indicado no cadastro → vínculo DIRETO (ACEITO).
-      // Animal novo não tem vet sendo trocado — o cadastro segue normalmente,
-      // sem solicitação por e-mail (solicitação existe apenas na TROCA, na edição).
-      // Normaliza o valor: FormData com campo duplicado chega como array ['5','5']
-      const vetIdRaw = Array.isArray(veterinarioUserId) ? veterinarioUserId[0] : veterinarioUserId;
-      const vetIdParaSolicitar = vetIdRaw ? Number(vetIdRaw) : null;
-      if (!isVet && vetIdParaSolicitar && !isNaN(vetIdParaSolicitar)) {
-        await vincularVetDireto({ animalId: animal.id, vetId: vetIdParaSolicitar });
-      }
+      // ⚠️ FASE 3 — `veterinarioUserId` não é mais lido no cadastro. Ele existia para o
+      // PROPRIETÁRIO escolher um veterinário, e `vincularVetDireto` então MOVIA o animal
+      // para a empresa daquele vet (`empresaId: ctx.empresaId`). Era uma parte colocando
+      // o registro dentro do tenant da outra, sem que a clínica decidisse nada — o oposto
+      // do isolamento por empresa. O campo saiu junto do seletor na tela.
 
       res.status(201).json({ sucesso: true, dados: animal });
     } catch (error) {
       console.error('[AnimalController.criar]', error);
-      if (error.message === 'VET_MEMBRO_SEM_RESPONSABILIDADE') {
-        return res.status(400).json({
-          sucesso: false,
-          mensagem: `O veterinário "${error.vetNome}" tem cargo ${error.cargo} na equipe e não pode ser vinculado diretamente como responsável. Selecione um veterinário GESTOR ou o proprietário da clínica.`,
-        });
-      }
+      // (o tratamento de VET_MEMBRO_SEM_RESPONSABILIDADE saiu com `vincularVetDireto`,
+      //  único ponto que lançava esse erro)
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao criar animal' });
     }
   }
@@ -1181,17 +676,12 @@ class AnimalController {
         });
       }
 
-      const solicitacaoAtual = await prisma.vetAnimalSolicitacao.findFirst({
-        where:   { animalId, status: 'ACEITO', tipo: 'VINCULO' },
-        select:  { vetUserId: true, veterinario: { select: { fullName: true, email: true } } },
-      });
-      const vetAtualId = solicitacaoAtual?.vetUserId ?? null;
-      // Normaliza: FormData com campo duplicado pode chegar como array
-      const vetIdRawUpd = Array.isArray(veterinarioUserId) ? veterinarioUserId[0] : veterinarioUserId;
-      const novoVetId   = vetIdRawUpd ? Number(vetIdRawUpd) : null;
-      const vetMudou    = novoVetId !== null && !isNaN(novoVetId) && novoVetId !== vetAtualId;
-      const vetRemovido = (novoVetId === null || isNaN(novoVetId)) && vetAtualId !== null;
-
+      // ⚠️ FASE 3 DO MULTI-TENANCY — saiu daqui a máquina de TROCA de veterinário:
+      // a leitura do vínculo ACEITO atual, `vetMudou` (que chamava `vincularVetDireto` e
+      // movia o animal para a empresa do vet escolhido) e `vetRemovido` (que criava um
+      // DESVINCULO PENDENTE com token de 24h e mandava e-mail ao veterinário pedindo que
+      // aceitasse perder o acesso). O acesso ao paciente é da EMPRESA: não há acesso
+      // individual para conceder nem para retirar, logo não há o que aprovar.
       const animalAtual = await prisma.animal.findUnique({
         where:  { id: animalId },
         select: { userId: true, empresaId: true, user: { select: { fullName: true, email: true, phone: true } } },
@@ -1272,39 +762,6 @@ class AnimalController {
         },
       });
 
-      if (vetMudou) {
-        // Um animal pode ser tratado por MAIS DE UM veterinário. Selecionar outro vet no
-        // formulário adiciona o novo como vínculo ADICIONAL (ACEITO) e o torna o responsável
-        // exibido, SEM desvincular o vet anterior e SEM pedir aprovação de troca (TROCA_VET).
-        // A remoção de um vet continua sendo uma ação explícita (DESVINCULO).
-        await vincularVetDireto({ animalId, vetId: novoVetId });
-      }
-
-      if (vetRemovido && vetAtualId) {
-        // Cria solicitação PENDENTE de DESVINCULO (mesma lógica do vínculo, mas ao contrário)
-        const token     = gerarToken();
-        const expiresAt = gerarExpiracao(1); // 24 horas
-        await prisma.vetAnimalSolicitacao.update({
-          where: { animalId_vetUserId: { animalId, vetUserId: vetAtualId } },
-          data:  {
-            tipo:          'DESVINCULO',
-            status:        'PENDENTE',
-            mensagem:      'Proprietário quer remover o seu acesso ao animal',
-            approvalToken: token,
-            expiresAt,
-          },
-        });
-        if (solicitacaoAtual?.veterinario?.email) {
-          emailService.enviarSolicitacaoDesvinculo({
-            vetEmail:         solicitacaoAtual.veterinario.email,
-            vetNome:          solicitacaoAtual.veterinario.fullName,
-            animalNome:       animal.nome,
-            proprietarioNome: animalAtual?.user?.fullName || 'Proprietário',
-            token,
-          }).catch(err => console.error('[emailService] Falha ao enviar desvinculo:', err));
-        }
-      }
-
       const animalAtualizado = await prisma.animal.findUnique({
         where:   { id: animalId },
         include: ANIMAL_INCLUDE,
@@ -1312,12 +769,6 @@ class AnimalController {
       res.json({ sucesso: true, dados: animalAtualizado });
     } catch (error) {
       console.error('[AnimalController.atualizar]', error);
-      if (error.message === 'VET_MEMBRO_SEM_RESPONSABILIDADE') {
-        return res.status(400).json({
-          sucesso: false,
-          mensagem: `O veterinário "${error.vetNome}" tem cargo ${error.cargo} na equipe e não pode ser vinculado diretamente como responsável. Selecione um veterinário GESTOR ou o proprietário da clínica.`,
-        });
-      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao atualizar animal' });
     }
   }
@@ -1363,299 +814,6 @@ class AnimalController {
   // ── POST /api/animais/vincular-vet ───────────────────────────────────────
   // Uso restrito: vínculo direto ACEITO (apenas quando vet cria animal para si mesmo)
 
-  async vincularVet(req, res) {
-    const { animalId, vetUserId } = req.body;
-    if (!animalId || !vetUserId) {
-      return res.status(400).json({ sucesso: false, mensagem: 'animalId e vetUserId são obrigatórios' });
-    }
-    try {
-      await prisma.vetAnimalSolicitacao.upsert({
-        where:  { animalId_vetUserId: { animalId: Number(animalId), vetUserId: Number(vetUserId) } },
-        create: { animalId: Number(animalId), vetUserId: Number(vetUserId), tipo: 'VINCULO', status: 'ACEITO' },
-        update: { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null },
-      });
-      const animalDados = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true } });
-      await garantirFaturaAberta(animalDados?.userId);
-      res.json({ sucesso: true, mensagem: 'Vínculo criado com sucesso' });
-    } catch (error) {
-      console.error('[AnimalController.vincularVet]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  }
-
-  // ── DELETE /api/animais/:id/cancelar-solicitacao ────────────────────────
-  // Proprietário cancela uma solicitação pendente e desfaz o estado.
-  // VINCULO    PENDENTE → CANCELADO
-  // DESVINCULO PENDENTE → restaura VINCULO ACEITO (vet mantém acesso)
-  // TROCA_VET  PENDENTE → restaura VINCULO ACEITO (sem novoVet)
-  // TROCA_VET  ACEITO   + VINCULO PENDENTE (step 2) → cancela step 2 e restaura vet anterior
-
-  async cancelarSolicitacao(req, res) {
-    const animalId = Number(req.params.id);
-    const userId   = Number(req.user?.id);
-
-    if (!userId) return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado' });
-
-    try {
-      const animal = await prisma.animal.findFirst({
-        where:  { id: animalId, userId },
-        select: { id: true, nome: true },
-      });
-      if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado ou sem permissão' });
-
-      // Solicitações PENDENTE para este animal
-      const pendentes = await prisma.vetAnimalSolicitacao.findMany({
-        where: { animalId, status: 'PENDENTE' },
-      });
-
-      if (pendentes.length === 0) {
-        // Verifica step 2 de TROCA_VET (old vet aceitou, new vet ainda pendente)
-        const trocaAceita = await prisma.vetAnimalSolicitacao.findFirst({
-          where: { animalId, tipo: 'TROCA_VET', status: 'ACEITO', novoVetUserId: { not: null } },
-        });
-        if (trocaAceita) {
-          await prisma.$transaction([
-            // Cancela VINCULO PENDENTE do novo vet
-            prisma.vetAnimalSolicitacao.updateMany({
-              where: { animalId, vetUserId: trocaAceita.novoVetUserId, status: 'PENDENTE' },
-              data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
-            }),
-            // Restaura acesso do vet original
-            prisma.vetAnimalSolicitacao.update({
-              where: { id: trocaAceita.id },
-              data:  { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null },
-            }),
-          ]);
-          return res.json({ sucesso: true, mensagem: 'Troca cancelada. Veterinário anterior restaurado.' });
-        }
-        return res.status(404).json({ sucesso: false, mensagem: 'Nenhuma solicitação pendente encontrada' });
-      }
-
-      // Processa cada PENDENTE por tipo
-      const ops = pendentes.map(sol => {
-        if (sol.tipo === 'VINCULO') {
-          return prisma.vetAnimalSolicitacao.update({
-            where: { id: sol.id },
-            data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
-          });
-        }
-        if (sol.tipo === 'DESVINCULO') {
-          // Restaura vínculo: vet mantém acesso
-          return prisma.vetAnimalSolicitacao.update({
-            where: { id: sol.id },
-            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null },
-          });
-        }
-        if (sol.tipo === 'TROCA_VET') {
-          // Restaura vínculo: vet atual mantém acesso, novo vet descartado
-          return prisma.vetAnimalSolicitacao.update({
-            where: { id: sol.id },
-            data:  { tipo: 'VINCULO', status: 'ACEITO', novoVetUserId: null, approvalToken: null, expiresAt: null, mensagem: null },
-          });
-        }
-        return null;
-      }).filter(Boolean);
-
-      await prisma.$transaction(ops);
-      res.json({ sucesso: true, mensagem: 'Solicitação cancelada com sucesso.' });
-    } catch (error) {
-      console.error('[AnimalController.cancelarSolicitacao]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  }
-
-  // ── PATCH /api/animais/solicitacoes/:id/responder ───────────────────────
-  // Proprietário responde (pela plataforma) a um convite iniciado pelo veterinário.
-
-  async responderSolicitacaoVet(req, res) {
-    const solId          = Number(req.params.id);
-    const proprietarioId = Number(req.user?.id);
-    const { status }     = req.body;
-
-    if (!['ACEITO', 'RECUSADO'].includes(status)) {
-      return res.status(400).json({ sucesso: false, mensagem: 'Status inválido. Use ACEITO ou RECUSADO' });
-    }
-
-    try {
-      const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
-        where: {
-          id:     solId,
-          status: 'PENDENTE',
-          animal: { userId: proprietarioId },
-        },
-        include: {
-          animal:      { select: { id: true, nome: true } },
-          veterinario: { select: { fullName: true, email: true } },
-        },
-      });
-
-      if (!solicitacao) {
-        return res.status(404).json({ sucesso: false, mensagem: 'Solicitação não encontrada ou sem permissão' });
-      }
-
-      if (solicitacao.tipo === 'DESVINCULO') {
-        // Vet-iniciado: proprietário decide se aceita a remoção do vet
-        if (status === 'ACEITO') {
-          // Proprietário aceita → vet perde acesso, animal desvinculado da empresa/equipe
-          await prisma.vetAnimalSolicitacao.update({
-            where: { id: solId },
-            data:  { status: 'ACEITO', approvalToken: null, expiresAt: null },
-          });
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null, equipeId: null },
-          });
-        } else {
-          // Proprietário recusa → restaura VINCULO ACEITO
-          await prisma.vetAnimalSolicitacao.update({
-            where: { id: solId },
-            data:  { tipo: 'VINCULO', status: 'ACEITO', approvalToken: null, expiresAt: null, mensagem: null },
-          });
-        }
-      } else {
-        // VINCULO: comportamento original
-        await prisma.vetAnimalSolicitacao.update({
-          where: { id: solId },
-          data:  { status, approvalToken: null, expiresAt: null },
-        });
-
-        if (status === 'ACEITO') {
-          const ctx = await getContextoDoVet(solicitacao.vetUserId);
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  {
-              bloqueado:      false,
-              bloqueioTipo:   null,
-              bloqueioExpira: null,
-              ...(ctx.empresaId ? { empresaId: ctx.empresaId, equipeId: ctx.equipeId } : {}),
-            },
-          });
-          await garantirFaturaAberta(proprietarioId);
-        } else {
-          await prisma.animal.update({
-            where: { id: solicitacao.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null },
-          });
-        }
-      }
-
-      const proprietario = await prisma.user.findUnique({
-        where:  { id: proprietarioId },
-        select: { fullName: true },
-      });
-
-      if (status === 'ACEITO' && solicitacao.tipo !== 'DESVINCULO') {
-        const empId = await getEmpresaIdDoVet(solicitacao.vetUserId);
-        if (empId) {
-          notificarGestoresDaEmpresa(empId, {
-            animalNome:       solicitacao.animal.nome,
-            proprietarioNome: proprietario?.fullName || 'Proprietário',
-            vetNome:          solicitacao.veterinario.fullName,
-          }).catch(() => {});
-        }
-      }
-
-      emailService.enviarConfirmacaoVinculo({
-        proprietarioEmail: solicitacao.veterinario.email,
-        proprietarioNome:  solicitacao.veterinario.fullName,
-        animalNome:        solicitacao.animal.nome,
-        vetNome:           proprietario?.fullName || 'Proprietário',
-        aceito:            status === 'ACEITO',
-      }).catch(err => console.error('[emailService] Falha ao notificar vet:', err?.message));
-
-      const isDesvinculo = solicitacao.tipo === 'DESVINCULO';
-      res.json({
-        sucesso:  true,
-        aceito:   status === 'ACEITO',
-        mensagem: isDesvinculo
-          ? (status === 'ACEITO'
-              ? `Remoção de Dr(a). ${solicitacao.veterinario.fullName} confirmada.`
-              : `Vínculo mantido. Dr(a). ${solicitacao.veterinario.fullName} continua responsável.`)
-          : (status === 'ACEITO'
-              ? `Vínculo com Dr(a). ${solicitacao.veterinario.fullName} autorizado!`
-              : 'Vínculo recusado. O veterinário foi notificado.'),
-      });
-    } catch (error) {
-      console.error('[AnimalController.responderSolicitacaoVet]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  }
-
-  // ── DELETE /api/animais/:id/desvincular-vet ─────────────────────────────
-  // Cria DESVINCULO PENDENTE aguardando aprovação do proprietário (24h → auto-aceite via cron)
-
-  async desvincularVet(req, res) {
-    const animalId  = Number(req.params.id);
-    const vetUserId = Number(req.user.id);
-
-    try {
-      const animal = await prisma.animal.findUnique({
-        where:  { id: animalId },
-        select: { nome: true, user: { select: { fullName: true, email: true } } },
-      });
-      if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
-
-      const solAtiva = await prisma.vetAnimalSolicitacao.findFirst({
-        where: {
-          animalId, vetUserId,
-          OR: [
-            { tipo: 'VINCULO',    status: 'ACEITO'   },
-            { tipo: 'DESVINCULO', status: 'PENDENTE' },
-          ],
-        },
-      });
-
-      if (!solAtiva) {
-        return res.status(404).json({ sucesso: false, mensagem: 'Vínculo ativo não encontrado' });
-      }
-
-      // Já existe solicitação pendente — evita duplicata
-      if (solAtiva.tipo === 'DESVINCULO' && solAtiva.status === 'PENDENTE') {
-        return res.status(409).json({
-          sucesso:  false,
-          mensagem: 'Já existe uma solicitação de desvinculação aguardando aprovação do proprietário',
-        });
-      }
-
-      const token     = gerarToken();
-      const expiresAt = gerarExpiracao(1); // 24 horas
-
-      await prisma.vetAnimalSolicitacao.update({
-        where: { id: solAtiva.id },
-        data: {
-          tipo:          'DESVINCULO',
-          status:        'PENDENTE',
-          solicitanteId: vetUserId,
-          approvalToken: token,
-          expiresAt,
-          mensagem:      'Veterinário solicitou a remoção do próprio acesso ao animal',
-        },
-      });
-
-      // Email ao proprietário com links de aprovar/recusar
-      if (animal.user?.email) {
-        const vet = await prisma.user.findUnique({
-          where:  { id: vetUserId },
-          select: { fullName: true },
-        });
-        emailService.enviarSolicitacaoDesvinculoProprietario({
-          proprietarioEmail: animal.user.email,
-          proprietarioNome:  animal.user.fullName,
-          animalNome:        animal.nome,
-          vetNome:           vet?.fullName || 'Veterinário',
-          token,
-        }).catch(err => console.error('[emailService] Falha ao enviar desvinculo ao proprietário:', err));
-      }
-
-      res.json({
-        sucesso:  true,
-        mensagem: 'Solicitação de desvinculação enviada ao proprietário. O acesso será removido após aprovação ou em 24 horas.',
-      });
-    } catch (error) {
-      console.error('[AnimalController.desvincularVet]', error);
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  }
 }
 
 module.exports = new AnimalController();

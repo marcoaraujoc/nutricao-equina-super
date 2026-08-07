@@ -6,7 +6,7 @@ const multer              = require('multer');
 const path                = require('path');
 const EquipeController    = require('../controllers/EquipeController');
 const PermissaoController = require('../controllers/PermissaoController');
-const { authenticate }    = require('../middlewares/auth');
+const { authenticate, authorize } = require('../middlewares/auth');
 const validate            = require('../middlewares/validate');
 const { criarEmpresaRules, convidarMembroRules } = require('../validators/equipe.validators');
 
@@ -27,8 +27,13 @@ const uploadLogo = multer({
 // =============================================================================
 
 // ─── Empresas ─────────────────────────────────────────────────────────────────
-router.post('/empresas', authenticate, criarEmpresaRules, validate, EquipeController.criarEmpresa);
-router.get ('/empresas', authenticate, EquipeController.listarEmpresas);
+// Criação restrita ao ADMIN da plataforma (novo modelo 2026-08-06): ADMIN cria a
+// empresa, escolhe o plano e associa gestor(es). O gestor não cria mais empresa.
+router.post ('/empresas',             authenticate, authorize('ADMIN'), criarEmpresaRules, validate, EquipeController.criarEmpresa);
+router.get  ('/empresas',             authenticate, EquipeController.listarEmpresas);
+// ADMIN inativa/reativa a empresa (governa o acesso via Empresa.status).
+router.put  ('/empresas/:id',         authenticate, authorize('ADMIN'), EquipeController.atualizarEmpresa);
+router.patch('/empresas/:id/status',  authenticate, authorize('ADMIN'), EquipeController.alterarStatusEmpresa);
 
 // ─── Contextos ativos do usuário (seletor de perfil/empresa do Sidebar) ───────
 router.get('/meus-contextos', authenticate, EquipeController.meusContextos);

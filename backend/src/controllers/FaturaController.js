@@ -248,19 +248,14 @@ const FaturaController = {
         ? await getEquipeScopeDoUsuario(vetId, empresaId, req.equipeId)
         : null;
 
-      // Proprietários via vínculos diretos do vet — animais de OUTRA equipe da
-      // mesma empresa ficam fora (mesma regra da listagem de pacientes)
-      const solicitacoes = await prisma.vetAnimalSolicitacao.findMany({
-        where:   { vetUserId: vetId, tipo: 'VINCULO', status: 'ACEITO' },
-        include: { animal: { select: { id: true, userId: true, empresaId: true, equipeId: true } } },
-      });
+      // ⚠️ REMOVIDO (fase 3 do multi-tenancy): aqui os proprietários também vinham dos
+      // VÍNCULOS diretos do vet (`VetAnimalSolicitacao`), que traziam cliente de animal de
+      // QUALQUER empresa para a lista de faturamento — dinheiro de outra clínica na tela
+      // desta. Com o fim dos vínculos, os clientes saem só dos animais da empresa ativa,
+      // logo abaixo.
+      let proprietarioIds = [];
 
-      const animaisVinculados = solicitacoes
-        .map(s => s.animal)
-        .filter(a => !empresaId || !equipeScope || a.empresaId !== empresaId || !a.equipeId || equipeScope.includes(a.equipeId));
-      let proprietarioIds = [...new Set(animaisVinculados.map(a => a.userId))];
-
-      // Também inclui proprietários via animais da(s) equipe(s) do vet na empresa
+      // Proprietários via animais da(s) equipe(s) do vet na empresa ativa
       if (empresaId) {
         const animaisEmpresa = await prisma.animal.findMany({
           where: {
@@ -281,8 +276,15 @@ const FaturaController = {
       // "Informação do Cavalo". Animal legado sem empresa continua aparecendo.
       const whereAnimaisDoEscopo = {
         ativo: true,
-        // FAIL-CLOSED: sem empresa o spread virava `{}` e trazia animal de outra clínica.
-        ...escopoCatalogoEmpresa(empresaId),
+        // FAIL-CLOSED: sem empresa, `-1` não casa com clínica alguma.
+        //
+        // ⚠️ Aqui NÃO cabe `escopoCatalogoEmpresa`. Aquele helper é de CATÁLOGO — devolve
+        // `OR: [{empresaId: id}, {empresaId: null}]`, onde o nulo é a LINHA GLOBAL
+        // compartilhada (medicamento, procedimento, localização). `Animal` não tem linha
+        // global: `tb_animais.empresaId` virou NOT NULL na fase 5, e o ramo `empresaId:
+        // null` passou a fazer o Prisma RECUSAR a consulta inteira — a tela de
+        // Faturamento devolvia HTTP 500 ("Argument `empresaId` is missing").
+        empresaId: empresaId ? Number(empresaId) : -1,
       };
 
       const proprietarios = await prisma.user.findMany({
@@ -691,7 +693,8 @@ const FaturaController = {
     try {
       const empresaId = req.empresaId ?? null;
       const itens = await prisma.faturaItemCatalogo.findMany({
-        where:   { ativo: true, OR: [{ empresaId }, { empresaId: null }] },
+        // `tb_fatura_item_catalogo.empresa_id` é NOT NULL desde a fase 5.
+        where:   { ativo: true, empresaId },
         orderBy: { descricao: 'asc' },
         select:  { id: true, tipo: true, descricao: true, valor: true },
       });

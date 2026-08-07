@@ -198,6 +198,8 @@ const crmvRoutes               = require('./routes/crmv');
 const veterinariosRoutes       = require('./routes/veterinarios');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const equipesRoutes            = require('./routes/equipes');
+// Cadastro do ASSINANTE + plano/assinatura (fase 2 do multi-tenancy)
+const empresasRoutes           = require('./routes/empresas');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const evolucaoRoutes           = require('./routes/evolucao');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -286,8 +288,10 @@ app.use('/api/clinica',               agendaRoutes); // /historico e /agendament
 app.use('/api/webhooks',              require('./routes/webhooks')); // Evolution API (token via query)
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);
+app.use('/api/planos',                require('./routes/planos'));
 app.use('/api/veterinarios',          veterinariosRoutes);
 app.use('/api/equipes',               equipesRoutes);
+app.use('/api/empresas',              empresasRoutes);
 app.use('/api/relatorio',             relatorioRoutes);
 app.use('/api/farmacia',              farmaciaRoutes);
 app.use('/api/medicamentos',          medicamentosRoutes);
@@ -463,171 +467,54 @@ registrarJob('crmv_sync', {
   }),
 });
 
-// ===================== CRON — AUTO-ACEITE DE SOLICITAÇÕES (24h) =====================
-// VINCULO e DESVINCULO: updateMany simples para ACEITO.
-// TROCA_VET: precisa criar VINCULO PENDENTE para o novo vet antes de marcar ACEITO.
-async function autoAceitarSolicitacoesPendentes() {
-  const corte = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  try {
-    const pendentes = await prisma.vetAnimalSolicitacao.findMany({
-      where:  { status: 'PENDENTE', updatedAt: { lt: corte } },
-      select: {
-        id: true, animalId: true, vetUserId: true, tipo: true, novoVetUserId: true, solicitanteId: true,
-        animal:          { select: { nome: true, userId: true } },
-        veterinario:     { select: { fullName: true, email: true } },
-        novoVeterinario: { select: { id: true, fullName: true, email: true } },
-      },
-    });
-
-    if (pendentes.length === 0) return { ok: true, notificar: false };
-
-    const trocas   = pendentes.filter(p => p.tipo === 'TROCA_VET');
-    const simples  = pendentes.filter(p => p.tipo !== 'TROCA_VET');
-
-    // VINCULO e DESVINCULO → ACEITO direto
-    if (simples.length > 0) {
-      await prisma.vetAnimalSolicitacao.updateMany({
-        where: { id: { in: simples.map(p => p.id) } },
-        data:  { status: 'ACEITO', approvalToken: null, expiresAt: null },
-      });
-
-      for (const s of simples) {
-        if (s.tipo === 'DESVINCULO') {
-          // Desvinculo: remove vet e limpa empresa/equipe do animal
-          await prisma.animal.update({
-            where: { id: s.animalId },
-            data:  { veterinarioNome: null, veterinarioClinica: null, empresaId: null, equipeId: null },
-          });
-        } else if (s.tipo === 'VINCULO') {
-          // Vinculo: associa animal à empresa/equipe do vet
-          const ctx = await getContextoDoVet(s.vetUserId);
-          if (ctx.empresaId) {
-            await prisma.animal.update({
-              where: { id: s.animalId },
-              data:  { empresaId: ctx.empresaId, equipeId: ctx.equipeId },
-            });
-          }
-          if (s.animal.userId) await garantirFaturaAberta(s.animal.userId);
-        }
-      }
-    }
-
-    // TROCA_VET → aceitar step 1 + criar VINCULO PENDENTE para novo vet
-    for (const troca of trocas) {
-      if (!troca.novoVetUserId) continue;
-      const token  = crypto.randomBytes(32).toString('hex');
-      const expiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      await prisma.$transaction([
-        prisma.vetAnimalSolicitacao.update({
-          where: { id: troca.id },
-          data:  { status: 'ACEITO', approvalToken: null, expiresAt: null, novoVetUserId: null },
-        }),
-        prisma.vetAnimalSolicitacao.upsert({
-          where:  { animalId_vetUserId: { animalId: troca.animalId, vetUserId: troca.novoVetUserId } },
-          create: {
-            animalId:      troca.animalId,
-            vetUserId:     troca.novoVetUserId,
-            tipo:          'VINCULO',
-            status:        'PENDENTE',
-            approvalToken: token,
-            expiresAt:     expiry,
-            solicitanteId: troca.solicitanteId,
-          },
-          update: {
-            tipo:          'VINCULO',
-            status:        'PENDENTE',
-            approvalToken: token,
-            expiresAt:     expiry,
-            solicitanteId: troca.solicitanteId,
-            mensagem:      null,
-          },
-        }),
-      ]);
-
-      logger.info(`[AutoAceite-Cron] TROCA_VET id=${troca.id} auto-aceita → VINCULO PENDENTE criado para vetUserId=${troca.novoVetUserId}`);
-    }
-
-    logger.info(`[AutoAceite-Cron] ${pendentes.length} solicitação(ões) processada(s) após 24h`, {
-      simples: simples.map(p => p.id),
-      trocas:  trocas.map(p => p.id),
-    });
-    return {
-      ok: true,
-      notificar: true,
-      resumo: `${pendentes.length} solicitação(ões) auto-aceita(s) após 24h — ${simples.length} vínculo/desvínculo e ${trocas.length} troca(s) de vet.`,
-    };
-  } catch (err: unknown) {
-    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
-  }
-}
-
-registrarJob('auto_aceite', {
-  nome: 'Auto-aceite de solicitações (24h)',
-  exprPadrao: '0 * * * *', // a cada hora
-  fn: () => comAlerta('Auto-aceite de solicitações (24h)', autoAceitarSolicitacoesPendentes),
-});
-
-// ===================== CRON — CANCELA VÍNCULOS PROVISÓRIOS EXPIRADOS =====================
-async function cancelarVinculosProvisionaisExpirados() {
-  const agora = new Date();
-  try {
-    const animaisExpirados = await prisma.animal.findMany({
-      where:  { bloqueado: true, bloqueioTipo: 'PROVISIONAL', bloqueioExpira: { lt: agora } },
-      select: { id: true, nome: true },
-    });
-
-    if (animaisExpirados.length === 0) return { ok: true, notificar: false };
-
-    for (const animal of animaisExpirados) {
-      await prisma.vetAnimalSolicitacao.updateMany({
-        where: { animalId: animal.id, tipo: 'VINCULO', status: 'PENDENTE' },
-        data:  { status: 'CANCELADO', approvalToken: null, expiresAt: null },
-      });
-      await prisma.animal.update({
-        where: { id: animal.id },
-        data:  { bloqueado: false, bloqueioTipo: null, bloqueioExpira: null },
-      });
-      logger.info(`[Provisional-Cron] Vínculo provisional cancelado — animalId=${animal.id} (${animal.nome})`);
-    }
-
-    logger.info(`[Provisional-Cron] ${animaisExpirados.length} vínculo(s) provisional(is) cancelado(s)`);
-    return {
-      ok: true,
-      notificar: true,
-      resumo: `${animaisExpirados.length} vínculo(s) provisional(is) expirado(s) cancelado(s).`,
-    };
-  } catch (err: unknown) {
-    return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
-  }
-}
-
-registrarJob('vinculos_provisorios', {
-  nome: 'Cancelamento de vínculos provisórios',
-  exprPadrao: '15 * * * *', // a cada hora (minuto 15)
-  fn: () => comAlerta('Cancelamento de vínculos provisórios', cancelarVinculosProvisionaisExpirados),
-});
+// ⚠️ REMOVIDOS na fase 3 do multi-tenancy (docs/MULTI-TENANCY-PLANO.md §6): os crons
+// `auto_aceite` (auto-aceite de solicitação de vínculo após 24h) e `vinculos_provisorios`
+// (cancelamento de vínculo provisório expirado). Não existem mais vínculos nem
+// aprovações entre veterinário, proprietário e empresa — o acesso ao paciente é dado
+// por ele pertencer à EMPRESA. Restaram 10 jobs.
 
 // ===================== CRON — LEMBRETE D-1 (agendamentos de amanhã) =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const emailServiceCron = require('./services/emailService');
 
+// Padrão POR EMPRESA — ver `lib/cronTenant.js`.
+// ── PADRÃO DE EXECUÇÃO DOS CRONS (fase 7 do multi-tenancy) ──────────────────
+// `paraCadaEmpresa`        → trabalho só de BANCO; abre UMA transação por empresa.
+// `paraCadaEmpresaComEnvio` → job que faz I/O EXTERNO (e-mail, WhatsApp): NÃO abre
+//   transação. Envolver rede numa transação segura conexão do pool, e o rollback não
+//   desfaz mensagem enviada — o cliente receberia o lembrete de novo. Ver lib/cronTenant.js.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { paraCadaEmpresa, paraCadaEmpresaComEnvio, resultadoCron } = require('./lib/cronTenant');
+
+/** Diário de execução do cron — ver `lib/cronTenant.js`. */
+type Diario = {
+  ok:   (empresa: { id: number }, desc: string) => void;
+  erro: (empresa: { id: number }, desc: string, err: unknown) => void;
+};
 async function enviarLembretesAgendamentos() {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // ⚠️ : este job manda E-MAIL. Ver o comentário em  —
+    // transação aberta durante I/O de rede segura conexão do pool, e o rollback não
+    // desfaz e-mail enviado.
+    const porEmp = paraCadaEmpresaComEnvio;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { comTenant } = require('./lib/tenantDb');
     const amanha  = new Date();
     amanha.setDate(amanha.getDate() + 1);
     const inicio  = new Date(amanha); inicio.setHours(0,  0,  0, 0);
     const fim     = new Date(amanha); fim.setHours(23, 59, 59, 999);
 
-    const agendamentos = await prisma.agendamentoClinico.findMany({
+    const r = await porEmp('Lembrete-Cron', async (empresa: { id: number }, diario: Diario) => {
+    // LEITURA em transação curta, com o tenant carimbado; o ENVIO acontece fora dela.
+    const agendamentos = await comTenant(empresa.id, (tx: typeof prisma) => tx.agendamentoClinico.findMany({
       where: { ativo: true, status: 'AGENDADO', dataHora: { gte: inicio, lte: fim } },
       include: {
         animal:      { include: { user: { select: { fullName: true, email: true } } } },
         veterinario: { select: { fullName: true, phone: true } },
       },
-    });
-
-    logger.info(`[Lembrete-Cron] ${agendamentos.length} agendamento(s) para amanhã`);
+    }));
+    if (!agendamentos.length) return 0;
 
     let enviados = 0;
     for (const ag of agendamentos) {
@@ -643,15 +530,15 @@ async function enviarLembretesAgendamentos() {
           dataHora:         ag.dataHora,
         });
         enviados++;
+        diario.ok(empresa, `${ag.animal?.nome ?? 'animal'} · ${ag.animal?.user?.fullName ?? proprietarioEmail} — lembrete D-1 enviado para ${proprietarioEmail}`);
       } catch (err: unknown) {
-        logger.warn(`[Lembrete-Cron] Falha ao enviar lembrete para ${proprietarioEmail}: ${(err as Error).message}`);
+        diario.erro(empresa, `${ag.animal?.nome ?? 'animal'} · lembrete D-1 para ${proprietarioEmail}`, err);
       }
     }
-    return {
-      ok: true,
-      notificar: agendamentos.length > 0,
-      resumo: `${enviados} lembrete(s) D-1 enviado(s) por e-mail, de ${agendamentos.length} agendamento(s) para amanhã.`,
-    };
+    return enviados;
+    });
+
+    return resultadoCron(r, 'lembrete');
   } catch (err: unknown) {
     return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
@@ -675,15 +562,25 @@ const { enviarLembretesWhatsapp } = require('./services/lembreteAgendamentoServi
 registrarJob('lembrete_whatsapp', {
   nome: 'Lembretes de agendamento por WhatsApp (1h/15min)',
   exprPadrao: '*/5 * * * *', // a cada 5 minutos — granularidade fina para o tier de 15min
+  // Padrão POR EMPRESA — ver `lib/cronTenant.js`. Roda a cada 5 min, uma vez por
+  // clínica ativa; os detalhes de todas são agregados num resumo só para a Monitoração.
   fn: () => comAlerta('Lembretes de agendamento por WhatsApp (1h/15min)', async () => {
-    const r = await enviarLembretesWhatsapp();
-    if (r.enviados > 0) logger.info(`[Lembrete-WA] ${r.enviados} lembrete(s) enviado(s) de ${r.verificados} agendamento(s) na janela`);
-    // Resumo detalhado (para quem + o que foi enviado) — visível ao clicar na
-    // execução na tela de Monitoração.
-    const cabecalho = `${r.enviados} lembrete(s) de WhatsApp enviado(s) de ${r.verificados} agendamento(s) na janela.`;
-    const resumo = r.detalhes?.length > 0 ? `${cabecalho}\n\n${r.detalhes.join('\n\n')}` : cabecalho;
+    const detalhes: string[] = [];
+    let verificados = 0;
+    // ⚠️ `…ComEnvio` e NÃO `paraCadaEmpresa`: este job manda WhatsApp. Numa transação
+    // por empresa, o rollback desfaria os flags mas não as mensagens já enviadas — o
+    // cliente receberia tudo de novo no ciclo seguinte. Ver `lib/cronTenant.js`.
+    const r = await paraCadaEmpresaComEnvio('Lembrete-WA', async (empresa: { id: number }) => {
+      const res = await enviarLembretesWhatsapp(empresa.id);
+      verificados += res.verificados;
+      if (res.detalhes?.length) detalhes.push(...res.detalhes);
+      return res.enviados;
+    });
+    if (r.total > 0) logger.info(`[Lembrete-WA] ${r.total} lembrete(s) enviado(s) de ${verificados} agendamento(s) na janela`);
+    const cabecalho = `${r.total} lembrete(s) de WhatsApp enviado(s) de ${verificados} agendamento(s) na janela, em ${r.empresas} empresa(s).`;
+    const resumo = detalhes.length > 0 ? `${cabecalho}\n\n${detalhes.join('\n\n')}` : cabecalho;
     // Só alerta o admin quando de fato enviou algo (roda a cada 5 min → evita spam)
-    return { ok: true, notificar: r.enviados > 0, resumo };
+    return { ok: true, notificar: r.total > 0 || r.falhas.length > 0, resumo };
   }),
 });
 
@@ -733,53 +630,71 @@ async function resolverConfigsFechamento(proprietarioId: number | null): Promise
   });
 }
 
+// ⚠️ PADRÃO POR EMPRESA (fase 7 do multi-tenancy — ver `lib/cronTenant.js`).
+//
+// Antes este job varria TODAS as faturas ABERTAS e resolvia `resolverConfigsFechamento`
+// DENTRO do laço, uma vez por fatura. Ou seja: o trabalho já era por empresa (a regra de
+// fechamento é de `EmpresaConfiguracao`), só o LAÇO é que era global.
+//
+// Invertido, três coisas mudam: o RLS continua valendo (sem isso, a remoção do escape na
+// fase 7c quebraria o fechamento na primeira noite), a falha de uma clínica não derruba
+// as outras, e a config passa a ser resolvida uma vez por EMPRESA em vez de por fatura.
 async function fecharFaturasDoMes() {
   try {
     const hoje = new Date();
-    // Sem `include` do proprietário de propósito: `users.valorAssistencia`/`mensalista`
-    // são campos LEGADOS (o cadastro é por empresa em ProprietarioPerfil desde a
-    // migration 20260724000000). Quem resolve o valor é `adicionarAssistenciaMensal`.
-    const faturas = await prisma.fatura.findMany({
-      where:  { status: 'ABERTA' },
-      select: { id: true, proprietarioId: true, empresaId: true },
+
+    const r = await paraCadaEmpresa('FaturaFechamento-Cron',
+      async (tx: typeof prisma, empresa: { id: number }, diario: Diario) => {
+      // Dentro de `comTenant`, o RLS já limitou a consulta a ESTA empresa — não é
+      // preciso (nem possível) alcançar fatura de outra.
+      // `user` entra no select só para IDENTIFICAR a fatura no diário de execução: quem
+      // abre a Monitoração precisa saber DE QUEM é a fatura que falhou, não só o id.
+      // Os campos comerciais seguem vindo de ProprietarioPerfil — `users.valorAssistencia`
+      // e `mensalista` são LEGADOS (migration 20260724000000), e quem resolve o valor é
+      // `adicionarAssistenciaMensal`.
+      const faturas = await tx.fatura.findMany({
+        where:  { status: 'ABERTA' },
+        select: {
+          id: true, proprietarioId: true, empresaId: true, mesReferencia: true,
+          proprietario: { select: { fullName: true } },
+        },
+      });
+      if (!faturas.length) return;
+
+      for (const fatura of faturas) {
+        const quem = `fatura #${fatura.id}`
+          + (fatura.mesReferencia ? ` (${fatura.mesReferencia})` : '')
+          + ` · ${fatura.proprietario?.fullName ?? `proprietário ${fatura.proprietarioId}`}`;
+        try {
+          const configs = await resolverConfigsFechamento(fatura.proprietarioId);
+          const deveFechar = configs.length > 0
+            ? configs.some((c: ConfigFechamento) => deveFecharHoje(c, hoje))
+            : deveFecharHoje(FALLBACK_ULTIMO_DIA_MES, hoje); // fallback: nenhuma equipe/empresa do proprietário configurou fechamento
+
+          if (!deveFechar) continue;
+
+          // A assistência é a da EMPRESA DA FATURA. Só fatura legada (empresaId null,
+          // anterior à migration 20260812000000) cai na dedução por ProprietarioPerfil.
+          await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, fatura.empresaId);
+
+          const total = await recalcularTotal(fatura.id);
+
+          await tx.fatura.update({
+            where: { id: fatura.id },
+            data:  { status: 'FECHADA', total },
+          });
+
+          diario.ok(empresa, `${quem} — fechada, total R$ ${Number(total).toFixed(2)}`);
+        } catch (err: unknown) {
+          // O erro vai INTEIRO para o diário (banco, validação, o que for) — é ele que
+          // aparece ao clicar na execução.
+          diario.erro(empresa, quem, err);
+        }
+      }
     });
 
-    logger.info(`[FaturaFechamento-Cron] ${faturas.length} fatura(s) ABERTA(s) — verificando dia de fechamento`);
-
-    let fechadas = 0;
-    for (const fatura of faturas) {
-      try {
-        const configs = await resolverConfigsFechamento(fatura.proprietarioId);
-        const deveFechar = configs.length > 0
-          ? configs.some((c: ConfigFechamento) => deveFecharHoje(c, hoje))
-          : deveFecharHoje(FALLBACK_ULTIMO_DIA_MES, hoje); // fallback: nenhuma equipe/empresa do proprietário configurou fechamento
-
-        if (!deveFechar) continue;
-
-        // A assistência é a da EMPRESA DA FATURA. Só fatura legada (empresaId null,
-        // anterior à migration 20260812000000) cai na dedução por ProprietarioPerfil.
-        await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, fatura.empresaId);
-
-        const total = await recalcularTotal(fatura.id);
-
-        await prisma.fatura.update({
-          where: { id: fatura.id },
-          data:  { status: 'FECHADA', total },
-        });
-
-        fechadas++;
-        logger.info(`[FaturaFechamento-Cron] Fatura id=${fatura.id} fechada (total=${total})`);
-      } catch (err: unknown) {
-        logger.error(`[FaturaFechamento-Cron] Erro na fatura id=${fatura.id}: ${(err as Error).message}`);
-      }
-    }
-
-    logger.info(`[FaturaFechamento-Cron] Concluído — ${fechadas}/${faturas.length} fatura(s) fechada(s)`);
-    return {
-      ok: true,
-      notificar: fechadas > 0,
-      resumo: `${fechadas} fatura(s) fechada(s) automaticamente hoje (de ${faturas.length} fatura(s) ABERTA(s) verificada(s)).`,
-    };
+    logger.info(`[FaturaFechamento-Cron] Concluído — ${r.total} fatura(s) fechada(s) em ${r.empresas} empresa(s)`);
+    return resultadoCron(r, 'fatura');
   } catch (err: unknown) {
     return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
@@ -796,49 +711,53 @@ registrarJob('fechamento_faturas', {
 
 // Marca como ATRASADA toda fatura FECHADA cujo vencimento já passou e não foi paga.
 // Vencimento = dia `diaVencimentoFatura` do proprietário no mês SEGUINTE ao mesReferencia.
+// Padrão POR EMPRESA — ver `lib/cronTenant.js`. O dia de vencimento já era resolvido
+// por empresa (`diaVencimentoDoProprietario(propId, empresaId)`), uma vez por fatura.
 async function marcarFaturasAtrasadas() {
   try {
     const hoje = new Date();
-    // Só FECHADA: PAGA (marcada manualmente em "Marcar como Pago") e CANCELADA nunca
-    // atrasam; ABERTA ainda não venceu — ela primeiro fecha, pela configuração de
-    // fechamento da EMPRESA (fecharFaturasDoMes/deveFecharHoje), e só depois vence.
-    const faturas = await prisma.fatura.findMany({
-      where:  { status: 'FECHADA', mesReferencia: { not: null } },
-      select: { id: true, mesReferencia: true, proprietarioId: true, empresaId: true },
-    });
-
     // O dia de vencimento é o do cadastro do cliente NAQUELA EMPRESA
     // (`ProprietarioPerfil.diaVencimentoFatura`, a tela de Proprietários). Ler de
     // `users` — como era feito aqui — pegava o valor legado/global: o mesmo cliente
     // pode vencer dia 5 numa clínica e dia 20 na outra.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { diaVencimentoDoProprietario } = require('./controllers/FaturaController');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
 
-    let atrasadas = 0;
-    for (const fatura of faturas) {
-      try {
-        const dia = await diaVencimentoDoProprietario(fatura.proprietarioId, fatura.empresaId);
-        if (!dia || !fatura.mesReferencia) continue;
-        const [y, m] = String(fatura.mesReferencia).split('-').map(Number);
-        if (!y || !m) continue;
-        // m (1-based) usado como monthIndex → mês SEGUINTE ao de referência; fim do dia.
-        const vencimento = new Date(y, m, Math.min(dia, 28), 23, 59, 59, 999);
-        if (hoje > vencimento) {
-          await prisma.fatura.update({ where: { id: fatura.id }, data: { status: 'ATRASADA' } });
-          atrasadas++;
-          logger.info(`[FaturaAtraso-Cron] Fatura id=${fatura.id} marcada como ATRASADA (venc=${vencimento.toISOString().slice(0,10)})`);
+    const r = await paraCadaEmpresa('FaturaAtraso-Cron',
+      async (tx: typeof prisma, empresa: { id: number }, diario: Diario) => {
+      // Só FECHADA: PAGA (marcada manualmente em "Marcar como Pago") e CANCELADA nunca
+      // atrasam; ABERTA ainda não venceu — ela primeiro fecha, pela configuração de
+      // fechamento da EMPRESA (fecharFaturasDoMes/deveFecharHoje), e só depois vence.
+      const faturas = await tx.fatura.findMany({
+        where:  { status: 'FECHADA', mesReferencia: { not: null } },
+        select: {
+          id: true, mesReferencia: true, proprietarioId: true, empresaId: true,
+          proprietario: { select: { fullName: true } },
+        },
+      });
+
+      for (const fatura of faturas) {
+        const quem = `fatura #${fatura.id} (${fatura.mesReferencia}) · ${fatura.proprietario?.fullName ?? 'proprietário ' + fatura.proprietarioId}`;
+        try {
+          const dia = await diaVencimentoDoProprietario(fatura.proprietarioId, fatura.empresaId);
+          if (!dia || !fatura.mesReferencia) continue;
+          const [y, m] = String(fatura.mesReferencia).split('-').map(Number);
+          if (!y || !m) continue;
+          // m (1-based) usado como monthIndex → mês SEGUINTE ao de referência; fim do dia.
+          const vencimento = new Date(y, m, Math.min(dia, 28), 23, 59, 59, 999);
+          if (hoje > vencimento) {
+            await tx.fatura.update({ where: { id: fatura.id }, data: { status: 'ATRASADA' } });
+            diario.ok(empresa, `${quem} — ATRASADA (venceu em ${vencimento.toISOString().slice(0,10)})`);
+          }
+        } catch (err: unknown) {
+          diario.erro(empresa, quem, err);
         }
-      } catch (err: unknown) {
-        logger.error(`[FaturaAtraso-Cron] Erro na fatura id=${fatura.id}: ${(err as Error).message}`);
       }
-    }
+    });
 
-    logger.info(`[FaturaAtraso-Cron] Concluído — ${atrasadas} fatura(s) marcada(s) como ATRASADA`);
-    return {
-      ok: true,
-      notificar: atrasadas > 0,
-      resumo: `${atrasadas} fatura(s) marcada(s) como ATRASADA (fechadas, vencidas e não pagas).`,
-    };
+    logger.info(`[FaturaAtraso-Cron] Concluído — ${r.total} fatura(s) ATRASADA(s) em ${r.empresas} empresa(s)`);
+    return resultadoCron(r, 'fatura');
   } catch (err: unknown) {
     return { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
@@ -857,10 +776,47 @@ registrarJob('marcar_faturas_atrasadas', {
 // horário já passou (não realizados/CONCLUIDO), preservando os EM_ANDAMENTO e futuros.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados } = require('./services/agendamentoCronService');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+
+/**
+ * Adapta um job "por empresa" ao contrato do `comAlerta`/`reportarCron`.
+ *
+ * ⚠️ O job de tenant NÃO roda mais uma vez para o banco inteiro: roda uma vez por
+ * EMPRESA ATIVA, com o tenant carimbado (`lib/cronTenant.js`). Sem isso, remover o
+ * escape do RLS na fase 7c faria todos eles enxergarem zero linha — o fechamento de
+ * fatura pararia silenciosamente na primeira noite.
+ */
+/**
+ * Adapta um service de cron (que devolve `{ resumo }`) ao diário de execução.
+ *
+ * O service recebe o cliente da transação e, quando aceita, o DIÁRIO — aí ele registra
+ * item a item (é o caso do de prescrições, onde importa saber QUAL documento falhou).
+ * Quando não aceita, o `resumo` que ele devolve é gravado como a linha daquela empresa.
+ *
+ * ⚠️ Granularidade honesta: `cancelarAgendamentosNaoRealizados` e
+ * `marcarAgendamentosAtrasados` usam `updateMany` — não há item a item para relatar,
+ * e a contagem por empresa é o máximo que se pode afirmar sem inventar precisão.
+ */
+const porEmpresa = (
+  rotulo: string,
+  unidade: string,
+  fn: (db: unknown, diario?: Diario, empresa?: { id: number }) => Promise<{ resumo?: string } | undefined>,
+) =>
+  async () => {
+    const r = await paraCadaEmpresa(rotulo,
+      async (tx: unknown, empresa: { id: number }, diario: Diario) => {
+      const res = await fn(tx, diario, empresa);
+      // Service que não usa o diário: o `resumo` dele vira a linha desta empresa.
+      if (res?.resumo) diario.ok(empresa, res.resumo);
+    });
+    return resultadoCron(r, unidade);
+  };
+
 registrarJob('cancelar_agendamentos_nao_realizados', {
   nome: 'Cancelamento de agendamentos não realizados',
   exprPadrao: '30 23 * * *', // diariamente às 23:30
-  fn: () => comAlerta('Cancelamento de agendamentos não realizados', cancelarAgendamentosNaoRealizados),
+  fn: () => comAlerta('Cancelamento de agendamentos não realizados',
+    porEmpresa('AgendamentoCancelamento-Cron', 'agendamento', cancelarAgendamentosNaoRealizados)),
 });
 
 // Marca como ATRASADA o agendamento AGENDADO cujo horário + 30min já passou (status
@@ -869,7 +825,8 @@ registrarJob('cancelar_agendamentos_nao_realizados', {
 registrarJob('marcar_agendamentos_atrasados', {
   nome: 'Marcação de agendamentos atrasados',
   exprPadrao: '*/10 * * * *',
-  fn: () => comAlerta('Marcação de agendamentos atrasados', marcarAgendamentosAtrasados),
+  fn: () => comAlerta('Marcação de agendamentos atrasados',
+    porEmpresa('AgendamentoAtraso-Cron', 'agendamento', marcarAgendamentosAtrasados)),
 });
 
 // ===================== CRON — CANCELAMENTO DE PRESCRIÇÕES NÃO EXECUTADAS =====================
@@ -881,7 +838,8 @@ const { cancelarPrescricoesNaoExecutadas } = require('./services/prescricaoCronS
 registrarJob('cancelar_prescricoes_nao_executadas', {
   nome: 'Cancelamento de prescrições não executadas',
   exprPadrao: '40 23 * * *', // diariamente às 23:40
-  fn: () => comAlerta('Cancelamento de prescrições não executadas', cancelarPrescricoesNaoExecutadas),
+  fn: () => comAlerta('Cancelamento de prescrições não executadas',
+    porEmpresa('PrescricaoCancelamento-Cron', 'prescrição', cancelarPrescricoesNaoExecutadas)),
 });
 
 // ===================== CRON — CANCELAMENTO DE ORÇAMENTOS VENCIDOS =====================

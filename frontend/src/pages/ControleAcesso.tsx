@@ -1139,8 +1139,11 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   const [especiesEquipe,       setEspeciesEquipe]       = useState<{ id: number; nome: string }[]>([]);
   const [loadingEspeciesEquipe,setLoadingEspeciesEquipe]= useState(false);
 
-  const [empresasDisponiveis, setEmpresasDisponiveis] = useState<AdminEmpresa[]>([]);
-  const [loadingEmpresas,     setLoadingEmpresas]     = useState(false);
+  // Sem SETTER de propósito: quem os preenchia era o "Incluir Gestor" do ADMIN, removido
+  // em 2026-08-16 (o gestor é associado na criação da empresa). Ficam nos valores iniciais
+  // — o modal do ADMIN, que os lê, não tem mais como ser aberto.
+  const [empresasDisponiveis] = useState<AdminEmpresa[]>([]);
+  const [loadingEmpresas]     = useState(false);
 
   // Empresas pessoais (sem CNPJ) — modo CPF. Label principal = nome da EMPRESA
   // (não da equipe); a equipe aparece como subtítulo. O id segue sendo o da equipe
@@ -1161,14 +1164,11 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   // Se não há seleção e há texto digitado → será criado novo
   const criandoNovo = !selecionadoId && !!comboInput.trim();
 
-  const carregarEmpresasDisponiveis = async () => {
-    setLoadingEmpresas(true);
-    try {
-      const res = await api.get('/equipes/admin/todas-empresas');
-      setEmpresasDisponiveis(res.data?.dados ?? []);
-    } catch { /* silencioso */ }
-    finally { setLoadingEmpresas(false); }
-  };
+  // ⚠️ `carregarEmpresasDisponiveis` foi REMOVIDA junto com o botão "Incluir Gestor"
+  // (2026-08-16): era o único chamador. O modal do ADMIN continua no arquivo, mas já
+  // não tem como ser aberto — por isso a lista de empresas ficar vazia não tem efeito
+  // observável. Para reativar o fluxo, o loader volta aqui e chama
+  // GET /equipes/admin/todas-empresas.
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1231,6 +1231,12 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   }, [equipeId, isAdmin, isGestor]);
 
   const carregarPerfis = useCallback(async () => {
+    // ADMIN na vista "todas as empresas" (nenhuma equipe selecionada) recebe
+    // `equipeId={equipeId ?? 0}` do chamador (armadilha 0 é falsy mas é um id "válido"
+    // pro template string). Sem este guard a chamada saía como GET /equipes/0/perfis:
+    // equipe 0 não existe, e o backend tentava CRIAR os perfis padrão pra ela — sem
+    // tenant válido pro RLS, o INSERT falhava e devolvia 500 com erro cru do Postgres.
+    if (!equipeId) return;
     try {
       const res = await api.get(`/equipes/${equipeId}/perfis`);
       const lista = (res.data.dados ?? []) as Array<{ cargo: string; label?: string }>;
@@ -1476,21 +1482,27 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
                 <Plus size={14} /> Incluir Cliente
               </button>
             )}
-            <button
-              onClick={() => {
-                setConviteCargo(isAdmin ? 'GESTOR' : 'VETERINARIO');
-                resetConviteForm();
-                setShowConvite(true);
-                if (isAdmin) {
-                  carregarEmpresasDisponiveis();
-                } else {
+            {/* ⚠️ "Incluir Gestor" (ADMIN) foi REMOVIDO em 2026-08-16. O gestor passou a
+                ser associado na CRIAÇÃO DA EMPRESA (/admin/empresas), que agora dispara
+                o e-mail de acesso com a senha inicial — era só isso que faltava e que
+                obrigava a incluí-lo de novo por aqui. Duas portas para o mesmo vínculo
+                significavam decidir em qual delas o e-mail sai.
+                O modal do ADMIN e `convidarGestorAdmin` continuam montados, mas SEM
+                ENTRADA NA UI; se a associação depois da criação voltar a ser necessária,
+                é por eles. */}
+            {!isAdmin && (
+              <button
+                onClick={() => {
+                  setConviteCargo('VETERINARIO');
+                  resetConviteForm();
+                  setShowConvite(true);
                   carregarPerfis();
-                }
-              }}
-              className={`flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-semibold transition-colors ${isAdmin ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-emerald-600 hover:bg-emerald-700'}`}
-            >
-              {isAdmin ? 'Incluir Gestor' : 'Incluir Membro'}
-            </button>
+                }}
+                className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700"
+              >
+                Incluir Membro
+              </button>
+            )}
           </div>
         )}
       </div>

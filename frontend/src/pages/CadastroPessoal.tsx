@@ -101,10 +101,10 @@ const LABEL_CARGO_EQUIPE: Record<string, string> = {
 
 // Cargos que podem informar especialidade e tempo de consulta (mesma regra do
 // backend: ver CLAUDE.md §15). Estagiário, enfermeiro, secretaria e financeiro
-// informam apenas local e horário de trabalho.
-// ⚠️ GESTOR entrou em 2026-08-04: ele PODE cadastrar especialidade, mas nunca é
-// obrigado — quem obriga (assumindo Clínica Médica quando nada é informado) é o
-// backend, e só para VETERINARIO. Gestor sem especialidade continua válido.
+// informam apenas local e horário de trabalho — SEM especialidade, mesmo que a
+// declarassem, aquele cargo não atende clinicamente.
+// ⚠️ GESTOR está na lista: ele PODE cadastrar especialidade, mas nunca é obrigado —
+// e, se escolher alguma, passa a precisar do CRMV (ver `precisaCrmv` abaixo).
 const CARGOS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR', 'GESTOR'];
 
 // ── Label com asterisco de obrigatório ────────────────────────────────────────
@@ -167,8 +167,12 @@ export default function CadastroPessoal() {
   // Membro de alguma equipe → habilita o expediente de atendimento
   const [temEquipe,       setTemEquipe]       = useState(false);
 
-  // Gestor: sem dados profissionais (CRMV/espécies/subespecialidade)
+  // GESTOR não tem "local de trabalho": essa seção é para quem BATE PONTO na clínica
+  // (dias, horário, turno). O gestor é dono/administrador, não escala — por isso a
+  // seção "Locais de trabalho" fica oculta para ele (ver o JSX mais abaixo), e a
+  // Especialidade dele volta a ser o seletor STANDALONE, mesmo tendo equipe.
   const isGestorEquipe = cargoEquipe === 'GESTOR';
+
   // Membro de equipe NESTE contexto → o tipo de usuário é o cargo que o gestor
   // atribuiu, exibido em somente leitura. Sem vínculo (cadastro direto) é que ele
   // escolhe entre Proprietário e Médico Veterinário.
@@ -264,9 +268,10 @@ export default function CadastroPessoal() {
     ? especiesEmpresa
     : form.especiesAtendidas;
 
-  // Só VETERINARIO e FORNECEDOR têm especialidade (e tempo de consulta). Estagiário,
-  // enfermeiro, secretaria, financeiro e gestor informam APENAS local e horário de
-  // trabalho. (Depois do useState do form — ver comentário acima sobre TDZ.)
+  // Só VETERINARIO, FORNECEDOR, PRESTADOR e GESTOR têm especialidade (e tempo de
+  // consulta). Estagiário, enfermeiro, secretaria e financeiro informam APENAS local e
+  // horário de trabalho — não atendem clinicamente, então o campo nem aparece para eles.
+  // (Depois do useState do form — ver comentário acima sobre TDZ.)
   //
   // Dentro de uma empresa quem decide é o CARGO, não o `userType` do login: a mesma
   // pessoa é ESTAGIÁRIA aqui (sem CRMV/especialidade) e VETERINÁRIA na outra clínica.
@@ -285,6 +290,23 @@ export default function CadastroPessoal() {
   const atuaComoVet = cargoEquipe
     ? cargoEquipe === 'VETERINARIO'
     : form.tipoUsuario === 'VETERINARIO';
+
+  // Especialidade vem dos LOCAIS de trabalho para quem tem essa seção (membro comum
+  // com equipe); o GESTOR não bate ponto em local nenhum, então a dele é sempre o
+  // seletor STANDALONE, mesmo tendo equipe (empresa própria).
+  const especialidadeViaLocal = temEquipe && !isGestorEquipe;
+
+  // Especialidade EFETIVA que será enviada. Ler só `form.especialidadeIds` para quem
+  // tem locais deixaria a pessoa escolher especialidade no local e nunca ver o CRMV.
+  const especialidadesEscolhidas = especialidadeViaLocal
+    ? uniaoEspecialidadesLocais(form.locaisTrabalho)
+    : form.especialidadeIds;
+
+  // DECLAROU ESPECIALIDADE ⇒ ATUA COMO VETERINÁRIO ⇒ PRECISA DE CRMV.
+  // A especialidade é a atuação clínica: quem a declara está dizendo que atende, e
+  // atendimento tem responsável técnico. Vale para qualquer cargo — inclusive o GESTOR,
+  // que não é obrigado a escolher especialidade, mas se escolher informa o CRMV.
+  const precisaCrmv = atuaComoVet || especialidadesEscolhidas.length > 0;
 
   // Rótulos do que a EMPRESA preenche quando o campo do local fica em branco
   const diasEmpresaLabel = expedienteEmpresa.dias && expedienteEmpresa.dias.length > 0
@@ -511,8 +533,12 @@ export default function CadastroPessoal() {
       case 'estado':
         return form.estado.trim() ? '' : 'Estado é obrigatório';
       case 'crmv':
-        if (atuaComoVet) {
-          if (!form.crmv.trim()) return 'CRMV é obrigatório para Médicos Veterinários';
+        if (precisaCrmv) {
+          if (!form.crmv.trim()) {
+            return atuaComoVet
+              ? 'CRMV é obrigatório para Médicos Veterinários'
+              : 'Informe o CRMV: declarar especialidade significa atuar clinicamente.';
+          }
           if (!CRMV_REGEX.test(form.crmv.trim())) return 'Formato de CRMV inválido. Use o formato: 12345/SP';
           if (crmvStatus === 'invalido') return 'CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.';
           if (crmvStatus === 'checking') return 'Aguarde a verificação do CRMV ser concluída';
@@ -529,7 +555,8 @@ export default function CadastroPessoal() {
         // Clínica Médica (aplicado no backend) e o fornecedor pode ficar sem.
         return '';
       case 'locaisTrabalho':
-        if (temEquipe) {
+        // GESTOR não tem a seção (não bate ponto em local nenhum) — nada a validar.
+        if (temEquipe && !isGestorEquipe) {
           if (form.locaisTrabalho.some(l => !l.localizacaoId)) {
             return 'Selecione o local de cada linha de trabalho (ou remova a linha vazia).';
           }
@@ -616,18 +643,23 @@ export default function CadastroPessoal() {
       cidade:      form.cidade.trim(),
       estado:      form.estado.trim().toUpperCase(),
       userType:    form.tipoUsuario,
+      // CRMV acompanha `precisaCrmv`, não `atuaComoVet`: o gestor que declarou
+      // especialidade preenche o campo, e sem isto o valor digitado seria descartado
+      // no payload — o usuário veria "salvo" com o CRMV nunca gravado.
+      ...(precisaCrmv && { crmv: form.crmv.trim() }),
+      // Espécies e subespecialidades continuam só para quem atua como VET: são o
+      // cadastro do veterinário, não a consequência de escolher uma especialidade.
       ...(atuaComoVet && {
-        crmv:              form.crmv.trim(),
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
       }),
-      // Especialidades do profissional (VET e FORNECEDOR): COM equipe = união das
-      // especialidades dos locais; SEM equipe = seletor standalone. Estagiário e demais
-      // perfis não enviam especialidade nenhuma — só local e horário.
+      // Especialidades do profissional: quem tem "Locais de trabalho" (VET/FORNECEDOR
+      // com equipe) manda a união das especialidades dos locais; GESTOR e quem não tem
+      // equipe mandam o seletor standalone — GESTOR não bate ponto em local nenhum.
       ...(perfilComEspecialidade && {
-        // Com equipe: união dos locais. Vazia (legado sem especialidade por local) →
+        // Com locais: união deles. Vazia (legado sem especialidade por local) →
         // undefined para não apagar as especialidades já cadastradas.
-        especialidadeIds: temEquipe
+        especialidadeIds: especialidadeViaLocal
           ? (uniaoEspecialidadesLocais(form.locaisTrabalho).length > 0
               ? uniaoEspecialidadesLocais(form.locaisTrabalho)
               : undefined)
@@ -935,13 +967,22 @@ export default function CadastroPessoal() {
             </div>
           )}
 
-          {/* ── Dados profissionais — só para veterinários (gestor não preenche) ── */}
-          {atuaComoVet && (
-            <div className="pt-2 border-t border-gray-100 space-y-5">
+          {/* ── Dados profissionais ──────────────────────────────────────────
+              Aparece para quem atua como VET **ou** para quem declarou especialidade
+              (qualquer cargo, inclusive o gestor). ⚠️ A visibilidade TEM de acompanhar
+              a validação: com o bloco preso a `atuaComoVet`, o gestor que escolhesse
+              especialidade seria barrado por um CRMV que a tela não mostra. */}
+          {precisaCrmv && (
+            <div className="pt-2 border-t border-gray-100 space-y-5" id="campo-crmv">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 
               <div>
                 <Label text="CRMV" required />
+                {!atuaComoVet && (
+                  <p className="text-xs text-gray-400 mb-1">
+                    Obrigatório porque você selecionou uma especialidade.
+                  </p>
+                )}
                 <input
                   type="text" name="crmv" value={form.crmv}
                   onChange={e => {
@@ -981,8 +1022,13 @@ export default function CadastroPessoal() {
                 )}
               </div>
 
-              {/* Espécies: convidado = automático; independente = seleção */}
-              {isConvidadoFlag ? (
+              {/* Espécies: convidado = automático; independente = seleção.
+                  ⚠️ Preso a `atuaComoVet`, e não a `precisaCrmv`: espécies atendidas são
+                  o cadastro do VETERINÁRIO e são OBRIGATÓRIAS na validação. Exibi-las
+                  para quem só declarou uma especialidade transformaria um campo opcional
+                  em dois obrigatórios. Dentro da empresa, a especialidade já é filtrada
+                  pelas espécies que a CLÍNICA atende. */}
+              {atuaComoVet && (isConvidadoFlag ? (
                 <div>
                   <Label text="Espécies atendidas" />
                   {form.especiesAtendidas.length > 0 && especiesLoaded && especies.length > 0 ? (
@@ -1039,22 +1085,26 @@ export default function CadastroPessoal() {
                   )}
                   <FieldError message={errors.especiesAtendidas} />
                 </div>
-              )}
+              ))}
 
             </div>
           )}
 
-          {/* ── Especialidade STANDALONE — só sem equipe (profissional solo).
-              Com equipe, a especialidade é definida POR LOCAL (abaixo). ── */}
-          {(form.tipoUsuario === 'VETERINARIO' || form.tipoUsuario === 'FORNECEDOR') && !isGestorEquipe && !temEquipe && (
+          {/* ── Especialidade STANDALONE — para quem NÃO tem "Locais de trabalho":
+              profissional solo (sem equipe) OU o GESTOR, que tem equipe mas não bate
+              ponto em local nenhum. Com locais (VET/FORNECEDOR membros de equipe), a
+              especialidade é definida POR LOCAL (seção abaixo). Sempre OPCIONAL —
+              escolher aqui passa a exigir o CRMV acima. ── */}
+          {perfilComEspecialidade && !especialidadeViaLocal && (
             <div className="pt-2 border-t border-gray-100" id="campo-especialidadeIds">
               <Label text="Especialidade" optional />
-              <p className="text-xs text-gray-400 mb-2">
-                {form.tipoUsuario === 'VETERINARIO'
-                  ? 'Sem nenhuma selecionada, você assume Clínica Médica.'
-                  : 'Opcional — o fornecedor pode ficar sem especialidade.'}
-              </p>
+              {atuaComoVet && (
+                <p className="text-xs text-gray-400 mb-2">
+                  Sem nenhuma selecionada, você assume Clínica Médica.
+                </p>
+              )}
               <EspecialidadeSelector
+                variant="dropdown"
                 value={form.especialidadeIds}
                 onChange={ids => { setForm(prev => ({ ...prev, especialidadeIds: ids })); limparErro('especialidadeIds'); }}
                 especieIds={especiesFiltroEspecialidade}
@@ -1068,8 +1118,11 @@ export default function CadastroPessoal() {
 
           {/* ── Locais de trabalho (local + dias + horário) ──────────────────
               Mesmo fluxo do "Incluir Membro": um rascunho é preenchido e só entra na
-              lista via "Adicionar", que bloqueia local repetido e conflito de horário. */}
-          {temEquipe && form.tipoUsuario !== 'PROPRIETARIO' && (
+              lista via "Adicionar", que bloqueia local repetido e conflito de horário.
+              ⚠️ GESTOR não vê esta seção: ela é "onde/quando eu atendo" (escala), e o
+              gestor não bate ponto em local nenhum — a especialidade dele é a
+              STANDALONE acima. */}
+          {temEquipe && !isGestorEquipe && form.tipoUsuario !== 'PROPRIETARIO' && (
             <div id="campo-locaisTrabalho">
               <Label text="Locais de trabalho" optional />
 
@@ -1159,7 +1212,7 @@ export default function CadastroPessoal() {
                     horarioEmpresaLabel={horarioEmpresaLabel}
                     textoEspecialidade={atuaComoVet
                       ? 'sem nenhuma, você assume Clínica Médica'
-                      : 'opcional'}
+                      : 'opcional — ao selecionar, o CRMV passa a ser obrigatório'}
                     emptyTextEspecialidade="Selecione as espécies atendidas para listar as especialidades."
                   />
 

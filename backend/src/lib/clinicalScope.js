@@ -50,8 +50,11 @@ function escopoEvolucaoWhere(req) {
   const userId = Number(req.user.id);
 
   if (ehGestor(req) && req.empresaId) {
-    // Todos os autores da empresa + registros sem tenancy (legado/race de contexto).
-    return { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] };
+    // ⚠️ O ramo `{ empresaId: null }` SAIU (fase 7). Ele cobria "registro sem tenancy
+    // por race de contexto" — estado que a fase 5 tornou IMPOSSÍVEL:
+    // `tb_evolucoes_clinicas.empresa_id` é NOT NULL. Com a coluna obrigatória, o Prisma
+    // recusa a consulta inteira ("Argument `empresaId` is missing") e a rota devolve 500.
+    return { empresaId: Number(req.empresaId) };
   }
 
   return req.empresaId
@@ -74,7 +77,6 @@ function escopoFilhoEvolucaoWhere(req) {
     return {
       OR: [
         { evolucao: { empresaId } },
-        { evolucao: { empresaId: null } },
         // Avulso: pertence a quem registrou — vale se o autor é da empresa.
         { evolucaoId: null, veterinario: { membrosEquipe: { some: { equipe: { empresaId } } } } },
       ],
@@ -100,7 +102,8 @@ function escopoPrescricaoGrupoWhere(req) {
   const userId = Number(req.user.id);
 
   if (ehGestor(req) && req.empresaId) {
-    return { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] };
+    // Idem: `tb_prescricao_grupos.empresaId` é NOT NULL desde a fase 5.
+    return { empresaId: Number(req.empresaId) };
   }
 
   return req.empresaId

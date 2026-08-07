@@ -5,34 +5,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
-import toast from 'react-hot-toast';
-import { Pencil, Unlink, Search, CheckCircle2, XCircle, Clock, UserPlus, X, ShieldOff, ClipboardList, Zap } from 'lucide-react';
+import { Pencil, Search, ShieldOff, ClipboardList, Zap } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
-import { VetNotificationModal, type SolicitacaoNotif } from '../components/VetNotificationModal';
 import InlineError from '../components/InlineError';
-import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import FotoAnimal from '../components/FotoAnimal';
 
-
-interface Solicitacao {
-  id:               number;
-  tipo:             string; // 'VINCULO' | 'DESVINCULO' | 'TROCA_VET'
-  status:           string;
-  solicitanteId?:   number | null;
-  mensagem?:        string | null;
-  novoVeterinario?: { fullName: string } | null;
-  animal: {
-    id:       number;
-    nome:     string;
-    photoUrl?: string | null;
-    especie?:  { nome: string } | null;
-    raca?:     { nome: string } | null;
-    dataNascimento?: string | null;
-    idadeAnos?:      number | null;
-    user?:     { fullName: string; email: string; phone?: string | null } | null;
-  };
-}
 
 interface Animal {
   id:               number;
@@ -51,14 +29,6 @@ interface Animal {
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
-}
-
-interface BuscaResultado {
-  id:             number;
-  nome:           string;
-  temVet:         boolean;
-  vetDaMinhaEquipe: boolean;
-  proprietario:   { id: number; fullName: string; email: string; phone?: string | null } | null;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
@@ -84,11 +54,10 @@ const idadeDisplay = (animal: Animal): string => {
 };
 
 // ─── Card mobile ──────────────────────────────────────────────────────────────
-function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEditar }: {
+function AnimalCardMobile({ animal, onDashboard, onEditar, podeEditar }: {
   animal:        Animal;
   onDashboard:   () => void;
   onEditar:      () => void;
-  onDesvincular: () => void;
   podeEditar:    boolean;
 }) {
   return (
@@ -136,136 +105,41 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular, podeEd
             <Pencil size={15} />
           </button>
         )}
-        {podeEditar && (
-          <button onClick={onDesvincular}
-            className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-            title="Desvincular">
-            <Unlink size={15} />
-          </button>
-        )}
       </div>
     </div>
   );
 }
 
-// ─── SolicitacaoCard ──────────────────────────────────────────────────────────
-function SolicitacaoCard({ sol, onResponder }: {
-  sol:         Solicitacao;
-  onResponder: (id: number, status: 'ACEITO' | 'RECUSADO') => void;
-}) {
-  const isDesvinculo = sol.tipo === 'DESVINCULO';
-  const isTroca      = sol.tipo === 'TROCA_VET';
-  const age = sol.animal.dataNascimento ? calcularIdade(sol.animal.dataNascimento)
-    : sol.animal.idadeAnos ? `${sol.animal.idadeAnos} ${sol.animal.idadeAnos === 1 ? 'ano' : 'anos'}`
-    : '—';
-  const borderClass = isDesvinculo ? 'border-red-200' : isTroca ? 'border-orange-200' : 'border-amber-200';
-  return (
-    <div className={`bg-white rounded-2xl border shadow-sm p-4 ${borderClass}`}>
-      <div className={`flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 py-1.5 mb-3 ${
-        isDesvinculo ? 'text-red-600 bg-red-50'
-        : isTroca    ? 'text-orange-600 bg-orange-50'
-        :              'text-amber-600 bg-amber-50'
-      }`}>
-        {isDesvinculo ? <><XCircle size={12} /> Solicitação de remoção de acesso</>
-         : isTroca    ? <><XCircle size={12} /> Solicitação de troca de veterinário</>
-         :              <><Clock size={12} /> Nova solicitação de vínculo</>}
-      </div>
-      <div className="flex items-start gap-3">
-        <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-          <FotoAnimal url={sol.animal.photoUrl} nome={sol.animal.nome} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
-          <p className="text-xs text-gray-500 truncate">
-            {sol.animal.especie?.nome} · {sol.animal.raca?.nome} · {age}
-          </p>
-          {isTroca && sol.novoVeterinario && (
-            <p className="text-xs text-orange-700 mt-0.5">→ Novo vet: Dr(a). {sol.novoVeterinario.fullName}</p>
-          )}
-          <p className="text-xs text-gray-500 mt-0.5 font-medium">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
-          <p className="text-xs text-gray-400">Tel: {sol.animal.user?.phone || 'Não informado'}</p>
-          <p className="text-xs text-gray-400">{sol.animal.user?.email || '—'}</p>
-          {sol.mensagem && !isDesvinculo && !isTroca && (
-            <p className="text-xs text-gray-600 mt-1 italic">"{sol.mensagem}"</p>
-          )}
-        </div>
-      </div>
-      <div className="flex gap-2 mt-3">
-        {isDesvinculo ? (
-          <>
-            <button onClick={() => onResponder(sol.id, 'ACEITO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl transition-colors">
-              <CheckCircle2 size={14} /> Aceitar remoção
-            </button>
-            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
-              <XCircle size={14} /> Manter acesso
-            </button>
-          </>
-        ) : isTroca ? (
-          <>
-            <button onClick={() => onResponder(sol.id, 'ACEITO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold rounded-xl transition-colors">
-              <CheckCircle2 size={14} /> Aceitar troca
-            </button>
-            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600 text-sm font-semibold rounded-xl transition-colors">
-              <XCircle size={14} /> Manter vínculo
-            </button>
-          </>
-        ) : (
-          <>
-            <button onClick={() => onResponder(sol.id, 'ACEITO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors">
-              <CheckCircle2 size={14} /> Aceitar
-            </button>
-            <button onClick={() => onResponder(sol.id, 'RECUSADO')}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600 text-sm font-semibold rounded-xl transition-colors">
-              <XCircle size={14} /> Recusar
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
+// ⚠️ SEÇÃO DE SOLICITAÇÕES REMOVIDA na fase 3 do multi-tenancy
+// (docs/MULTI-TENANCY-PLANO.md §6): acabaram os vínculos e aprovações entre
+// veterinário, proprietário e empresa. O paciente aparece aqui por pertencer à
+// EMPRESA do contexto ativo — não há mais convite a aceitar ou recusar.
+
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
   const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
-  const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal } = useSelectedAnimal();
   const { podeExecutar, temEquipe, loading: loadingPerms } = usePermissoes();
   const podeCriarAnimal                              = podeExecutar('animais.criar');
   const podeEditarAnimal                             = podeExecutar('animais.editar');
   const navigate                                     = useNavigate();
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
-  const [solicitacoes,   setSolicitacoes]   = useState<Solicitacao[]>([]);
   const [busca,          setBusca]          = useState('');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
-  const [animalToUnlink, setAnimalToUnlink] = useState<Animal | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
-  // Erro de AÇÃO (confirmar/excluir/desvincular): vai para o modal que disparou
-  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
-  const [unlinking,      setUnlinking]      = useState(false);
-  const [showBuscarModal,  setShowBuscarModal]  = useState(false);
-  const [buscaAnimal,      setBuscaAnimal]      = useState('');
-  const [resultadoBusca,   setResultadoBusca]   = useState<BuscaResultado | null>(null);
-  const [buscaFeita,       setBuscaFeita]       = useState(false);
-  const [buscando,         setBuscando]         = useState(false);
-  const [solicitando,      setSolicitando]      = useState(false);
+  // ⚠️ O botão "Desvincular" saiu na fase 3 do multi-tenancy: não há mais vínculo entre
+  // veterinário e animal para desfazer. O paciente pertence à EMPRESA, e quem deixa de
+  // atendê-lo é quem sai da equipe.
 
   const loadAnimais = async () => {
     try {
-      const [animaisRes, solRes] = await Promise.all([
-        api.get('/animais'),
-        isVet ? api.get('/veterinarios/solicitacoes?status=PENDENTE') : Promise.resolve({ data: [] }),
-      ]);
+      const animaisRes = await api.get('/animais');
       setAnimais(animaisRes.data?.dados ?? animaisRes.data ?? []);
-      setSolicitacoes(solRes.data?.dados ?? solRes.data ?? []);
     } catch {
       setErroInline('Erro ao carregar pacientes');
     } finally {
@@ -313,110 +187,6 @@ const AnimaisVet = () => {
     navigate(`/animais/${animal.id}`);
   };
 
-  const handleResponder = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
-    const sol = solicitacoes.find(s => s.id === id);
-    try {
-      await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
-      setSolicitacoes(prev => prev.filter(s => s.id !== id));
-      if (status === 'ACEITO') {
-        if (sol?.tipo === 'DESVINCULO') {
-          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
-        } else if (sol?.tipo === 'TROCA_VET') {
-          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
-        } else {
-          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
-        }
-      } else {
-        if (sol?.tipo === 'DESVINCULO') {
-          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
-        } else if (sol?.tipo === 'TROCA_VET') {
-          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
-        } else {
-          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
-        }
-      }
-      loadAnimais();
-    } catch {
-      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
-    }
-  };
-
-  const confirmDesvincular = async () => {
-    if (!animalToUnlink) return;
-    setUnlinking(true);
-    try {
-      await api.delete(`/animais/${animalToUnlink.id}/desvincular-vet`);
-      setAnimalToUnlink(null);
-      await refreshSelectedAnimal();
-      loadAnimais();
-      toast.success(`Solicitação de desvinculação enviada ao proprietário de ${animalToUnlink.nome}`);
-    } catch {
-      setErroAcao({ mensagem: 'Erro ao desvincular' });
-    } finally {
-      setUnlinking(false);
-    }
-  };
-
-  const handleResponderModal = async (id: number, status: 'ACEITO' | 'RECUSADO') => {
-    const sol = solicitacoes.find(s => s.id === id);
-    try {
-      await api.patch(`/veterinarios/solicitacoes/${id}`, { status });
-      if (status === 'ACEITO') {
-        if (sol?.tipo === 'DESVINCULO') {
-          toast.success(`Remoção de ${sol.animal.nome} confirmada.`);
-        } else if (sol?.tipo === 'TROCA_VET') {
-          toast.success(`Troca de veterinário para ${sol.animal.nome} aceita.`);
-        } else {
-          toast.success(`${sol?.animal.nome ?? 'Animal'} adicionado à sua lista.`);
-        }
-      } else {
-        if (sol?.tipo === 'DESVINCULO') {
-          toast(`Você manteve o acesso ao animal ${sol.animal.nome}.`, { icon: '🔒', duration: 8000 });
-        } else if (sol?.tipo === 'TROCA_VET') {
-          toast(`Você manteve o vínculo com ${sol.animal.nome}. A troca foi recusada.`, { icon: '🔄', duration: 8000 });
-        } else {
-          toast(`Solicitação de vínculo com ${sol?.animal.nome ?? 'o animal'} recusada.`, { icon: '❌', duration: 8000 });
-        }
-      }
-      loadAnimais();
-    } catch {
-      setErroAcao({ mensagem: 'Erro ao responder solicitação' });
-    }
-  };
-
-  const handleBuscarAnimal = async () => {
-    if (!buscaAnimal.trim()) return;
-    setBuscando(true);
-    setResultadoBusca(null);
-    setBuscaFeita(false);
-    try {
-      const res = await api.get(`/animais/buscar-por-nome?nome=${encodeURIComponent(buscaAnimal.trim())}`);
-      setResultadoBusca(res.data?.dados ?? null);
-    } catch {
-      setErroInline('Erro ao buscar animal');
-    } finally {
-      setBuscando(false);
-      setBuscaFeita(true);
-    }
-  };
-
-  const handleSolicitarVinculoVet = async () => {
-    if (!resultadoBusca) return;
-    setSolicitando(true);
-    try {
-      await api.post('/veterinarios/solicitar-vinculo', { animalId: resultadoBusca.id });
-      toast.success('Solicitação enviada! Aguarde a aprovação do proprietário.');
-      setShowBuscarModal(false);
-      setBuscaAnimal('');
-      setResultadoBusca(null);
-      loadAnimais();
-    } catch (err: any) {
-      setErroAcao({ mensagem: err?.response?.data?.mensagem ?? 'Erro ao solicitar vínculo' });
-    } finally {
-      setSolicitando(false);
-    }
-  };
-
   if (!loadingPerms && !podeExecutar('animais.ler')) {
     return (
       <PageContainer>
@@ -428,26 +198,8 @@ const AnimaisVet = () => {
     );
   }
 
-  // isConvidado mantido apenas para o VetNotificationModal (vets convidados não veem o modal)
-  const isConvidado = user?.isConvidado === true;
-
-  const solicitacoesRecebidas = solicitacoes.filter(
-    s => !s.solicitanteId || Number(s.solicitanteId) !== Number(user?.id)
-  );
-  const solicitacoesEnviadas = solicitacoes.filter(
-    s => s.solicitanteId && Number(s.solicitanteId) === Number(user?.id)
-  );
-
   return (
     <>
-      {user?.id && !isConvidado && (
-        <VetNotificationModal
-          solicitations={solicitacoesRecebidas as SolicitacaoNotif[]}
-          vetId={Number(user.id)}
-          onResponder={handleResponderModal}
-          onDismiss={() => {}}
-        />
-      )}
       <PageContainer maxWidth="7xl">
         <InlineError message={erroInline} className="mb-4" />
 
@@ -527,40 +279,7 @@ const AnimaisVet = () => {
           </div>
         </div>
 
-        {/* ── Solicitações recebidas (proprietário convida vet) ───────── */}
-        {!loading && solicitacoesRecebidas.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-              Solicitações pendentes ({solicitacoesRecebidas.length})
-            </h2>
-            {solicitacoesRecebidas.map(sol => (
-              <SolicitacaoCard key={sol.id} sol={sol} onResponder={handleResponder} />
-            ))}
-          </div>
-        )}
 
-        {/* ── Solicitações enviadas (vet aguarda aprovação do proprietário) ─ */}
-        {!loading && solicitacoesEnviadas.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-              Aguardando aprovação do proprietário ({solicitacoesEnviadas.length})
-            </h2>
-            {solicitacoesEnviadas.map(sol => (
-              <div key={sol.id} className="bg-white rounded-2xl border border-blue-200 shadow-sm p-4 flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                  <FotoAnimal url={sol.animal.photoUrl} nome={sol.animal.nome} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 truncate">{sol.animal.nome}</p>
-                  <p className="text-xs text-gray-500 truncate">Proprietário: {sol.animal.user?.fullName ?? '—'}</p>
-                </div>
-                <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-full font-medium flex-shrink-0">
-                  <Clock size={10} /> Aguardando aprovação
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
 
         {/* ── Conteúdo ───────────────────────────────────────────────────── */}
         {loading ? (
@@ -584,7 +303,6 @@ const AnimaisVet = () => {
                   animal={animal}
                   onDashboard={() => irParaAnimal(animal)}
                   onEditar={() => irParaEditar(animal)}
-                  onDesvincular={() => setAnimalToUnlink(animal)}
                   podeEditar={podeEditarAnimal}
                 />
               ))}
@@ -663,13 +381,6 @@ const AnimaisVet = () => {
                                 <Pencil size={15} />
                               </button>
                             )}
-                            {podeEditarAnimal && (
-                              <button onClick={() => setAnimalToUnlink(animal)}
-                                className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                                title="Desvincular">
-                                <Unlink size={15} />
-                              </button>
-                            )}
                           </div>
                         </td>
                       </tr>
@@ -692,138 +403,8 @@ const AnimaisVet = () => {
         )}
       </div>
 
-      {/* Modal — Desvincular */}
-      {animalToUnlink && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl text-center">
-            <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Unlink size={24} className="text-amber-600" />
-            </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Solicitar desvinculação?</h2>
-            <p className="text-gray-500 text-sm mb-6">
-              Uma solicitação será enviada ao proprietário de{' '}
-              <strong className="text-gray-700">{animalToUnlink.nome}</strong>.
-              O proprietário terá <strong className="text-gray-700">24 horas</strong> para
-              aprovar ou recusar. Sem resposta, o desvinculo será confirmado automaticamente.
-            </p>
-            <div className="flex gap-3">
-              <button onClick={() => setAnimalToUnlink(null)}
-                className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-gray-600 text-sm font-medium hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button onClick={confirmDesvincular} disabled={unlinking}
-                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-300 text-white rounded-2xl text-sm font-semibold">
-                {unlinking ? 'Removendo...' : 'Desvincular'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       </PageContainer>
-
-      {/* Modal — Buscar Paciente */}
-      {showBuscarModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-gray-900">Buscar Paciente</h2>
-              <button onClick={() => { setShowBuscarModal(false); setBuscaAnimal(''); setResultadoBusca(null); setBuscaFeita(false); }}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="flex gap-2 mb-4">
-              <input
-                type="text"
-                placeholder="Nome do animal..."
-                value={buscaAnimal}
-                onChange={e => { setBuscaAnimal(e.target.value); setResultadoBusca(null); setBuscaFeita(false); }}
-                onKeyDown={e => e.key === 'Enter' && handleBuscarAnimal()}
-                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-2xl text-sm
-                           text-gray-900 focus:outline-none focus:border-emerald-600
-                           focus:ring-2 focus:ring-emerald-100 transition-colors"
-                autoFocus
-              />
-              <button
-                onClick={handleBuscarAnimal}
-                disabled={buscando || !buscaAnimal.trim()}
-                className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
-                           text-white rounded-2xl text-sm font-semibold transition-colors flex-shrink-0"
-              >
-                {buscando ? '...' : <Search size={15} />}
-              </button>
-            </div>
-
-            {/* Animal não encontrado → oferecer cadastro */}
-            {buscaFeita && resultadoBusca === null && !buscando && (
-              <div className="border border-dashed border-gray-200 rounded-2xl p-4 text-center space-y-3">
-                <p className="text-sm text-gray-500">
-                  Nenhum animal chamado <strong className="text-gray-700">"{buscaAnimal}"</strong> encontrado no sistema.
-                </p>
-                <button
-                  onClick={() => {
-                    setShowBuscarModal(false);
-                    setBuscaAnimal('');
-                    setResultadoBusca(null);
-                    setBuscaFeita(false);
-                    navigate('/animais', { state: { nome: buscaAnimal } });
-                  }}
-                  className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xl text-sm font-semibold transition-colors"
-                >
-                  Cadastrar Animal
-                </button>
-              </div>
-            )}
-
-            {/* Animal encontrado */}
-            {resultadoBusca && (
-              <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50 space-y-3">
-                <div>
-                  <p className="font-semibold text-gray-900">{resultadoBusca.nome}</p>
-                  <p className="text-xs text-gray-500">
-                    Proprietário: {resultadoBusca.proprietario?.fullName ?? '—'}
-                  </p>
-                  {resultadoBusca.proprietario?.email && (
-                    <p className="text-xs text-gray-400">{resultadoBusca.proprietario.email}</p>
-                  )}
-                </div>
-
-                {/* Com vet de outra equipe — bloqueado */}
-                {resultadoBusca.temVet && !resultadoBusca.vetDaMinhaEquipe && (
-                  <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5">
-                    <XCircle size={13} className="flex-shrink-0 mt-0.5" />
-                    <span>
-                      Este animal já possui um veterinário responsável. Não é possível solicitar vínculo no momento.
-                    </span>
-                  </div>
-                )}
-
-                {/* Colega de equipe */}
-                {resultadoBusca.vetDaMinhaEquipe && (
-                  <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                    <CheckCircle2 size={12} />
-                    Animal atendido por colega de equipe.
-                  </div>
-                )}
-
-                {/* Sem vet → pode solicitar */}
-                {!resultadoBusca.temVet && !resultadoBusca.vetDaMinhaEquipe && (
-                  <button
-                    onClick={handleSolicitarVinculoVet}
-                    disabled={solicitando}
-                    className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300
-                               text-white rounded-2xl text-sm font-semibold transition-colors"
-                  >
-                    {solicitando ? 'Enviando...' : 'Solicitar Vínculo'}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 };

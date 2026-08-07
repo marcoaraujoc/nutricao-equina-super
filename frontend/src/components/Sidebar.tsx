@@ -14,12 +14,9 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
-  Sparkles, CalendarPlus, Package, Settings, ScrollText,
-  Bell, Gauge, ListChecks, Receipt,
+  Sparkles, CalendarPlus, Package, Settings, ScrollText, Building2,
+  Bell, Gauge, ListChecks, Receipt, Layers,
 } from 'lucide-react';
-import { useVetPendentes } from '../hooks/useVetPendentes';
-import { useVetSolicitacaoMonitor } from '../hooks/useVetSolicitacaoMonitor';
-import { useProprietarioNotificacoes } from '../hooks/useProprietarioNotificacoes';
 import { usePermissoes } from '../hooks/usePermissoes';
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
@@ -27,6 +24,26 @@ const CLS_MODULE_ACTIVE  = 'bg-emerald-50 text-emerald-600';
 const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
+
+// Rotas que pertencem à seção ADMINISTRAÇÃO. Fonte ÚNICA: a mesma lista decide a seção
+// ativa (`detectSection`) e se o accordion nasce aberto. Eram duas cópias idênticas —
+// item novo entrava numa e não na outra, e o accordion fechava sozinho na rota nova.
+// Configurações, Empresa e Auditoria ficam FORA de propósito: são de gestor, e o estado
+// ativo delas é resolvido direto por `p.startsWith`, sem depender da seção.
+const ROTAS_ADMIN = [
+  '/admin/empresas',
+  '/admin/vacinas',
+  '/ai-usage',
+  '/configuracao-alertas',
+  '/controle-acesso',
+  '/equipe-manager',
+  '/medicamentos',
+  '/monitoracao',
+  '/planos',
+  '/procedimentos',
+  '/usuarios',
+];
+const ehRotaAdmin = (pathname: string) => ROTAS_ADMIN.some(r => pathname.startsWith(r));
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
 type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'estoque' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
@@ -46,17 +63,7 @@ function detectSection(pathname: string): ActiveSection {
   if (pathname.startsWith('/alimentos'))             return 'nutricional';
   if (pathname.startsWith('/nutrientes'))            return 'nutricional';
   if (pathname.startsWith('/composicao-alimentar'))  return 'nutricional';
-  if (
-    pathname.startsWith('/usuarios') ||
-    pathname.startsWith('/equipe-manager') ||
-    pathname.startsWith('/controle-acesso') ||
-    pathname.startsWith('/ai-usage') ||
-    pathname.startsWith('/medicamentos') ||
-    pathname.startsWith('/procedimentos') ||
-    pathname.startsWith('/admin/vacinas') ||
-    pathname.startsWith('/configuracao-alertas') ||
-    pathname.startsWith('/monitoracao')
-  ) return 'admin';
+  if (ehRotaAdmin(pathname)) return 'admin';
   return 'geral';
 }
 
@@ -69,10 +76,12 @@ export default function Sidebar() {
   const { isNewUser, selectedAnimal, cadastroCompleto, isGestorEmpresa, empresaConfigurada } = useSelectedAnimal();
   const location                      = useLocation();
   const navigate                      = useNavigate();
-  const pendentesCount                = useVetPendentes();
   const { opcoes: opcoesContexto, contextoAtivo, trocarContexto, marca } = useEmpresa();
-  useVetSolicitacaoMonitor();
-  useProprietarioNotificacoes();
+  // ⚠️ Os TRÊS hooks de polling de VÍNCULO saíram na fase 3 do multi-tenancy:
+  // `useVetSolicitacaoMonitor`, `useProprietarioNotificacoes` e `useVetPendentes`
+  // observavam solicitações de vínculo/desvínculo, que não existem mais. O acesso ao
+  // paciente vem da EMPRESA — não há o que pedir nem o que aprovar, logo não há
+  // pendência a contar. Com isso o badge de "Pacientes" e o sino do header saíram junto.
 
   // Logomarca/nome da empresa ativa vêm do EmpresaContext (fonte única — header,
   // sidebar e rodapé mostram a mesma marca sem repetir o fetch).
@@ -190,17 +199,7 @@ export default function Sidebar() {
   // ── Estados dos menus ─────────────────────────────────────────────────────
   // Só ADMINISTRAÇÃO continua sendo seção-contêiner: os cabeçalhos "Geral" e
   // "Módulos" saíram (2026-07-30) e os itens ficaram no nível raiz do menu.
-  const [openAdministracao, setOpenAdministracao] = useState(() =>
-    p.startsWith('/usuarios') ||
-    p.startsWith('/equipe-manager') ||
-    p.startsWith('/controle-acesso') ||
-    p.startsWith('/ai-usage') ||
-    p.startsWith('/medicamentos') ||
-    p.startsWith('/procedimentos') ||
-    p.startsWith('/admin/vacinas') ||
-    p.startsWith('/configuracao-alertas') ||
-    p.startsWith('/monitoracao'),
-  );
+  const [openAdministracao, setOpenAdministracao] = useState(() => ehRotaAdmin(p));
 
   // Accordion de grupos: no máximo UM grupo expansível aberto por vez em todo o
   // sidebar. Abrir um fecha o anterior. Inicializa no grupo da rota ativa.
@@ -393,11 +392,6 @@ export default function Sidebar() {
                         }`}>
                         <Zap size={14} className="flex-shrink-0" />
                         <span className="flex-1">Pacientes</span>
-                        {isVet && pendentesCount > 0 && (
-                          <span className="bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none flex-shrink-0">
-                            {pendentesCount > 9 ? '9+' : pendentesCount}
-                          </span>
-                        )}
                       </Link>
                     ))
                     : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
@@ -634,20 +628,33 @@ export default function Sidebar() {
                 <div className="mt-1 space-y-0.5 pl-4">
                   {/* Configurações e Auditoria vieram da antiga seção "Geral": são
                       administração da clínica, não do dia a dia clínico. */}
-                  {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
+                  {/* Cadastro do ASSINANTE (razão social, documento, endereço fiscal e o
+                      plano contratado). É outra coisa que "Configurações", que guarda as
+                      preferências operacionais da clínica — por isso são dois itens. */}
+                  {/* ORDEM ALFABÉTICA CRESCENTE pelo RÓTULO, independente do perfil que
+                      enxerga cada item — a seção mistura itens de gestor e de ADMIN, e
+                      agrupá-los por perfil fazia a lista mudar de ordem conforme quem
+                      entrava. Item novo entra na posição alfabética, não no fim. */}
+                  {isAdmin && navLink('/configuracao-alertas', <Bell size={20} />, 'Alertas', isAdminActive('/configuracao-alertas'))}
                   {(isGestor || isAdmin) && navLink('/auditoria-geral', <ScrollText size={20} />, 'Auditoria', p.startsWith('/auditoria-geral'))}
-                  {isAdmin && navLink('/configuracao-alertas', <Bell  size={20} />, 'Alertas',     isAdminActive('/configuracao-alertas'))}
-                  {isAdmin && navLink('/monitoracao',          <Gauge size={20} />, 'Monitoração', isAdminActive('/monitoracao'))}
-                  {isAdmin && navLink('/medicamentos',    <Pill     size={20} />, 'Medicamentos',    isAdminActive('/medicamentos'))}
-                  {isAdmin && navLink('/procedimentos',  <Activity size={20} />, 'Procedimentos',  isAdminActive('/procedimentos'))}
-                  {isAdmin && navLink('/admin/vacinas',  <Syringe  size={20} />, 'Vacinas',        isAdminActive('/admin/vacinas'))}
-                  {isAdmin && (
-                    <>
-                      {navLink('/usuarios',   <Users size={20} />, 'Usuários',         isAdminActive('/usuarios'))}
-                      {navLink('/ai-usage',   <Users size={20} />, 'Monitoramento IA', isAdminActive('/ai-usage'))}
-                    </>
-                  )}
+                  {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
                   {navLink('/controle-acesso', <ShieldCheck size={20} />, 'Controle de Acesso', isAdminActive('/controle-acesso'))}
+                  {/* "Empresa" (gestor, cadastro fiscal da ATIVA — hoje SOMENTE LEITURA) ×
+                      "Empresas" (ADMIN, lista/cria a carteira inteira de clientes e edita
+                      o cadastro de cada uma). O ADMIN não tem item de menu para "Empresa"
+                      de propósito (2026-08-16): quem administra a identidade fiscal de UMA
+                      empresa por vez é "Empresas" — o backend continua aceitando o ADMIN
+                      em `/cadastro/empresa` (útil ao trocar o contexto ativo e navegar
+                      direto), mas sem entrada própria no menu, para não duplicar rota. */}
+                  {isGestor && navLink('/cadastro/empresa', <Building2 size={20} />, 'Empresa', p.startsWith('/cadastro/empresa'))}
+                  {isAdmin && navLink('/admin/empresas', <Building2 size={20} />, 'Empresas', isAdminActive('/admin/empresas'))}
+                  {isAdmin && navLink('/medicamentos', <Pill size={20} />, 'Medicamentos', isAdminActive('/medicamentos'))}
+                  {isAdmin && navLink('/monitoracao', <Gauge size={20} />, 'Monitoração', isAdminActive('/monitoracao'))}
+                  {isAdmin && navLink('/ai-usage', <Users size={20} />, 'Monitoramento IA', isAdminActive('/ai-usage'))}
+                  {isAdmin && navLink('/planos', <Layers size={20} />, 'Planos', isAdminActive('/planos'))}
+                  {isAdmin && navLink('/procedimentos', <Activity size={20} />, 'Procedimentos', isAdminActive('/procedimentos'))}
+                  {isAdmin && navLink('/usuarios', <Users size={20} />, 'Usuários', isAdminActive('/usuarios'))}
+                  {isAdmin && navLink('/admin/vacinas', <Syringe size={20} />, 'Vacinas', isAdminActive('/admin/vacinas'))}
                 </div>
               )}
             </div>

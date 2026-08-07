@@ -17,8 +17,12 @@ const { resolverTipoNoContexto } = require('./tipoContexto');
  *         - animal sem equipeId (legado) → empresa inteira
  *         - com x-equipe-id (equipeId): a equipe do animal deve bater
  *         - sem contexto explícito: membro da equipe do animal OU dono da empresa
- *      3. (só VETERINARIO) tem VetAnimalSolicitacao ACEITO/PENDENTE com o animal
- *         (vínculo direto sempre garante acesso ao próprio paciente)
+ *  - FORNECEDOR (prestador): só com DesignacaoPrestador ativa — nunca herda a equipe
+ *
+ * ⚠️ NÃO EXISTE MAIS acesso por VÍNCULO (`VetAnimalSolicitacao`). Fase 3 do
+ * multi-tenancy: o paciente é da EMPRESA, e é só isso que decide. Não reintroduzir um
+ * caminho "meu paciente independente de empresa" — era ele que deixava abrir pela URL o
+ * animal de outra clínica.
  *
  * Retorna:
  *   true  → acesso autorizado
@@ -132,6 +136,18 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
     }
   }
 
+  // ── O ANIMAL É DESTA EMPRESA? ──────────────────────────────────────────────
+  //
+  // Fase 3 do multi-tenancy: acabaram os vínculos e aprovações entre veterinário,
+  // proprietário e empresa. O acesso ao paciente deixou de ser "existe um
+  // `VetAnimalSolicitacao` aceito?" e passou a ser esta pergunta única.
+  //
+  // ⚠️ O que FOI REMOVIDO daqui, e por que não volta: havia um ramo final que liberava o
+  // animal para o VETERINARIO com vínculo direto, INDEPENDENTE de empresa. Ele era a
+  // origem do buraco documentado no CLAUDE.md — o animal de outra clínica não aparecia na
+  // listagem mas ABRIA pela URL, levando junto histórico, evoluções, prescrições e agenda.
+  // Com o vínculo extinto, existe uma regra só, e ela é a mesma da listagem
+  // (`lib/animalScope.js`).
   if (!vetPrestadorNoContexto && empresaId && animal.empresaId === Number(empresaId)) {
     // Animal legado sem equipe → escopo da empresa inteira
     if (!animal.equipeId) return true;
@@ -153,44 +169,6 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
       });
       if (dono) return true;
     }
-    // Mesma empresa, outra equipe → só com vínculo direto (check abaixo, vets)
-  }
-
-  if (userType === 'VETERINARIO') {
-    // VÍNCULO DIRETO × CONTEXTO ATIVO — espelha a LISTAGEM (lib/animalScope.js).
-    //
-    // Lá, só quem é dono/GESTOR da empresa ativa ("base própria") enxerga vínculos de
-    // QUALQUER empresa; em contexto CONVIDADO o isolamento é estrito (`vetVinculoNaEmpresa`).
-    // Aqui o vínculo valia sempre, então o animal de outra clínica NÃO aparecia na lista
-    // mas ABRIA pela URL — e com ele histórico, evoluções, prescrições e agenda.
-    // Duas regras para o mesmo fato é o que produz esse tipo de buraco: agora é uma só.
-    const daEmpresaAtiva = empresaId != null && animal.empresaId === Number(empresaId);
-
-    if (!daEmpresaAtiva && empresaId != null) {
-      const gestorAqui = await prisma.membroEquipe.findFirst({
-        where:  { userId: Number(userId), cargo: 'GESTOR', equipe: { empresaId: Number(empresaId) } },
-        select: { id: true },
-      });
-      const donoAqui = gestorAqui ? null : await prisma.empresa.findFirst({
-        where:  { id: Number(empresaId), ownerId: Number(userId) },
-        select: { id: true },
-      });
-      // Contexto convidado: o vínculo não atravessa a fronteira da empresa ativa.
-      if (!gestorAqui && !donoAqui) return false;
-    }
-
-    const solicitacao = await prisma.vetAnimalSolicitacao.findFirst({
-      where: {
-        animalId:  Number(animalId),
-        vetUserId: Number(userId),
-        OR: [
-          { tipo: 'VINCULO',    status: 'ACEITO'   },
-          { tipo: 'DESVINCULO', status: 'PENDENTE' },
-          { tipo: 'TROCA_VET',  status: 'PENDENTE' },
-        ],
-      },
-    });
-    return !!solicitacao;
   }
 
   return false;

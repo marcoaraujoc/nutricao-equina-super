@@ -190,19 +190,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const registrarAuditoria = async (action: 'LOGIN' | 'LOGOUT', u: User | null) => {
-    if (!u) return;
-    try {
-      await fetch('/api/audit/log', {
-        method:      'POST',
-        credentials: 'include',
-        headers:     { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: u.id, userName: u.fullName, email: u.email, action }),
-      });
-    } catch (err) {
-      console.warn(`⚠️ Falha ao registrar auditoria (${action}):`, err);
-    }
-  };
+  // 🔴 A trilha de LOGIN/LOGOUT NÃO é mais gravada aqui (2026-08-05).
+  // O front chamava `POST /api/audit/log`, uma rota pública que aceitava usuário, ação e
+  // empresa pelo corpo — qualquer um podia forjar auditoria. Agora quem grava é o
+  // SERVIDOR, com a identidade que ele mesmo autenticou: `registrarAcesso` em
+  // `backend/src/lib/auditoria.js`, chamado no login (senha, 2FA e Google) e no logout.
+  // NÃO reintroduzir chamada de auditoria a partir do cliente.
 
   // ── Recarrega perfil do usuário logado sem fazer logout ────────────────────
   const refreshUser = async (): Promise<void> => {
@@ -218,17 +211,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
     const me = await fetchMe();
-    if (me) {
-      setUser(me);
-      registrarAuditoria('LOGIN', me);
-    }
+    if (me) setUser(me);
     return me;
   };
 
   const logout = () => {
-    const atual = user;
-    registrarAuditoria('LOGOUT', atual);
-    // Encerra a sessão no backend (revoga refresh token + limpa cookies HttpOnly)
+    // Encerra a sessão no backend (revoga refresh token + limpa cookies HttpOnly).
+    // É esta chamada que também grava o LOGOUT na auditoria, do lado do servidor.
     fetch('/api/auth/logout', {
       method:      'POST',
       credentials: 'include',

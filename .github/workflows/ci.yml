@@ -6,6 +6,20 @@ on:
   pull_request:
     branches: [main, develop]
 
+env:
+  # 🔴 BANCO EFÊMERO DA CI — NUNCA o banco de ninguém.
+  # `secrets.DATABASE_URL` foi DELIBERADAMENTE removido daqui: a partir do momento em que
+  # a CI passou a rodar `prisma migrate deploy`, apontar para um banco real significaria
+  # APLICAR MIGRATION EM PRODUÇÃO a cada push. O container abaixo nasce e morre no job.
+  #
+  # Duas URLs, dois papéis — a separação é o ponto (ver migration 20260806160000):
+  #   ADMIN = superusuário, roda MIGRATION e FIXTURE (precisa criar role e ignorar RLS)
+  #   APP   = `zls2vetp1`, roda os TESTES — sem BYPASSRLS e sem ser dono de tabela
+  # Testar com a URL de admin daria verde falso: superusuário IGNORA todas as policies,
+  # então o gate de invasão passaria mesmo com o RLS desligado.
+  CI_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci_db?schema=schs2vet
+  CI_APP_DATABASE_URL: postgresql://zls2vetp1:ci_only_not_a_secret@localhost:5432/ci_db?schema=schs2vet
+
 jobs:
   backend:
     name: Backend — lint, build & test
@@ -14,6 +28,24 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # Postgres de verdade: o gate de tenancy (tenancyRls.test.js) e o futuro teste de
+    # invasão leem o catálogo do banco (pg_class/pg_policy) — não há como checar RLS sem
+    # um servidor. Ver docs/MULTI-TENANCY-PLANO.md §13.5.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -31,16 +63,64 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ci_db?schema=schs2vet' }}
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
       - name: TypeScript build
         run: npm run build
+
+      # ⚠️ ANTES do `migrate deploy`, e não depois: a migration 20260806160000 concede
+      # privilégios A `zls2vetp1` e usa `ALTER DEFAULT PRIVILEGES FOR ROLE "nutriadmin"`.
+      # Role inexistente faz o GRANT abortar, e com ele a migration inteira — a CI
+      # reprovaria por um motivo que nada tem a ver com o commit.
+      #
+      # Editar aquela migration para "criar a role se faltar" NÃO era alternativa: ela já
+      # foi aplicada no banco real, e o Prisma guarda o checksum de cada arquivo —
+      # mexer no conteúdo faz o próximo `migrate deploy` de produção falhar com
+      # "migration file has been modified". Migration aplicada é imutável; quem se adapta
+      # é o ambiente.
+      - name: Criar as roles que as migrations esperam
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+            -- `nutriadmin`: dona das tabelas no ambiente real e alvo do ALTER DEFAULT
+            -- PRIVILEGES. Aqui não precisa logar — só precisa EXISTIR.
+            CREATE ROLE "nutriadmin" NOLOGIN;
+
+            -- `zls2vetp1`: a role da APLICAÇÃO. Nasce com os mesmos atributos da real —
+            -- NOSUPERUSER, NOBYPASSRLS, NOCREATEROLE, NOCREATEDB. Um `BYPASSRLS` aqui
+            -- passaria despercebido e transformaria todo o gate em decoração.
+            CREATE ROLE "zls2vetp1" LOGIN PASSWORD 'ci_only_not_a_secret'
+              NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;
+          SQL
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+
+      # Cria o schema no banco efêmero. Também vale como teste das migrations em si:
+      # migration quebrada reprova aqui, antes de chegar perto de um banco real.
+      - name: Apply migrations (banco efêmero da CI)
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+
+      # Sem isto o gate de RLS compara zero com zero e passa sem provar nada — a razão
+      # está no cabeçalho do próprio arquivo. Roda como SUPERUSUÁRIO porque precisa
+      # semear DUAS empresas, o que a role da aplicação (sujeita às policies) não faria.
+      - name: Semear o fixture de tenancy (2 empresas)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/ci-fixture.sql
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
       - name: Run tests
         run: npm test -- --ci --forceExit
         env:
           NODE_ENV: test
           JWT_SECRET: ci-test-secret-do-not-use-in-prod
+          # 🔴 URL DA APLICAÇÃO, não a de admin — é o que dá sentido aos testes de
+          # invasão. Com a de admin (superusuário) as policies seriam ignoradas e
+          # "empresa A não enxerga B" passaria mesmo com o RLS desligado.
+          DATABASE_URL: ${{ env.CI_APP_DATABASE_URL }}
+          # Faz o gate de tenancy EXIGIR banco: sem isso ele se pularia sozinho na CI,
+          # e um gate que se pula não é gate (ver o beforeAll de tenancyRls.test.js).
+          CI: 'true'
 
   frontend:
     name: Frontend — lint & build

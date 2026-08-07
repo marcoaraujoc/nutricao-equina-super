@@ -15,6 +15,7 @@
 const prisma = require('../lib/prisma').default;
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { escopoEvolucaoWhere, semEscopoDeEmpresa } = require('../lib/clinicalScope');
+const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { formatAtendimentoNum } = require('../lib/faturaUtils');
 
@@ -66,7 +67,11 @@ const BuscaGlobalController = {
       const animalNoEscopo = {
         AND: [
           escopoAnimal,
-          { ativo: true },
+          // EXCLUSÃO LÓGICA (lib/visibilidade.js): `{ ativo: true, user: { ativo: true } }`.
+          // O `ativo` do animal já estava aqui; faltava o do CLIENTE. Como os TRÊS grupos
+          // da busca (pacientes, atendimentos, agenda) partem deste mesmo objeto, o
+          // paciente inativado — ou o do cliente inativado — some dos três de uma vez.
+          ANIMAL_VISIVEL,
           ...(ehAdminPlataforma && !req.empresaId
             ? []
             : [{ empresaId: req.empresaId ? Number(req.empresaId) : -1 }]),
@@ -81,7 +86,8 @@ const BuscaGlobalController = {
         ? {}
         : req.empresaId
           ? (req.membroCargo === 'GESTOR'
-              ? { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] }
+              // `tb_agendamentos_clinicos.empresa_id` é NOT NULL desde a fase 5.
+              ? { empresaId: Number(req.empresaId) }
               : { OR: [{ empresaId: Number(req.empresaId) }, { veterinarioId: userId }] })
           : { veterinarioId: userId };
 

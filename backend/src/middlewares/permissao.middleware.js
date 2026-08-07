@@ -86,7 +86,16 @@ async function getEquipeIdsDoProprietario(userId, empresaId = null) {
   const animais = await prisma.animal.findMany({
     // Com empresa ATIVA (seletor do portal do proprietário) o escopo é só ela:
     // o que a empresa A liberou não vale quando ele está olhando a empresa B.
-    where:  { userId, empresaId: empresaId ? Number(empresaId) : { not: null } },
+    //
+    // ⚠️ SEM empresa no contexto, o filtro de empresa é OMITIDO — nunca `{ not: null }`.
+    // `tb_animais.empresa_id` virou NOT NULL na fase 5 e o Prisma Client regenerou a
+    // coluna como não-nulável, então `{ not: null }` passou a ser INVÁLIDO
+    // ("Argument `not` must not be null") e derrubava com HTTP 500 a home do
+    // proprietário sem empresa selecionada, o `logoEmpresaUtils` e o cron de
+    // fechamento de fatura (server.ts). O ramo existia para excluir animal órfão —
+    // estado que a fase 4 eliminou e a fase 5 tornou impossível: todo animal tem
+    // empresa. Omitir o filtro é equivalente e correto.
+    where:  empresaId ? { userId, empresaId: Number(empresaId) } : { userId },
     select: { empresaId: true, equipeId: true },
   });
 

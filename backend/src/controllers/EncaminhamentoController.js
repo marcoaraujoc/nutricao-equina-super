@@ -174,7 +174,8 @@ const EncaminhamentoController = {
           where: {
             userId: { in: userIds },
             ...(req.empresaId
-              ? { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] }
+              // `tb_usuario_especialidades.empresa_id` é NOT NULL desde a fase 5.
+              ? { empresaId: Number(req.empresaId) }
               : {}),
           },
           select: { userId: true, especialidade: { select: { nome: true } } },

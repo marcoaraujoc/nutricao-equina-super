@@ -11,6 +11,8 @@
 'use strict';
 
 const prisma = require('./prisma').default;
+// Escopo de plataforma para a escrita da trilha de acesso (fase 7c)
+const { comEscopoPlataforma } = require('./prismaTenant');
 
 // TRANSFERENCIA → troca de responsável (assumir / transferir / reatribuir agenda).
 //                 O `detalhes` DEVE dizer quem era o dono anterior e quem passou a ser.
@@ -59,6 +61,68 @@ async function registrarAuditoria(client, req, { categoria, entidade, entidadeId
     detalhes || null,
     ipDoRequest(req),
   );
+}
+
+/**
+ * Registra ACESSO (LOGIN / LOGOUT) — a trilha de quem entrou e saiu.
+ *
+ * 🔴 POR QUE ELE EXISTE (2026-08-05): isto era gravado pelo FRONTEND, chamando
+ * `POST /api/audit/log`, uma rota **pública** que aceitava `userId`, `userName`, `email`,
+ * `action` e `empresaId` **do corpo da requisição**. Ou seja: qualquer um na internet
+ * podia injetar registro de auditoria atribuindo qualquer ação a qualquer pessoa, em
+ * qualquer empresa — e auditoria é justamente o que precisa ser inquestionável.
+ * (O controller antigo até protegia o IP contra spoofing, com comentário explicando, e
+ * aceitava todo o resto do cliente.)
+ *
+ * Agora quem grava é o SERVIDOR, nos três pontos que criam ou encerram sessão:
+ * `emitirSessao` (login por senha e 2º fator), `GoogleController` (OAuth) e o `logout`.
+ * A identidade vem do usuário que o próprio backend acabou de autenticar — nunca do corpo.
+ *
+ * ⚠️ `empresaId` fica NULL de propósito: LOGIN/LOGOUT são eventos de PLATAFORMA, e a
+ * resolução da empresa ativa mora inline no `middlewares/auth.js` (≈90 linhas de
+ * prioridade: header → dono/gestor → vínculo mais recente). Duplicá-la aqui seria pior do
+ * que não carimbar. Quando a migração de multi-tenancy extrair esse resolvedor para uma
+ * função reusável, é só plugá-lo aqui — ver docs/MULTI-TENANCY-PLANO.md §10.6/§10.7.
+ *
+ * Fire-and-forget: falha de auditoria NUNCA derruba o login nem o logout.
+ */
+async function registrarAcesso(req, user, action) {
+  if (!user?.id || !['LOGIN', 'LOGOUT'].includes(action)) return;
+  try {
+    // ⚠️ FASE 7c — A EMPRESA PASSOU A SER CARIMBADA, e não é cosmética.
+    //
+    // Gravar `empresaId: null` era aceitável enquanto o RLS tinha escape. Sem o escape,
+    // a policy de `tb_audit_logs` é `empresa_id = app_empresa_id()`: linha com empresa
+    // nula não casa com NINGUÉM e fica invisível para todos, inclusive para o gestor da
+    // clínica onde o login aconteceu. A trilha de acesso viraria lixo inalcançável — foi
+    // exatamente assim que as 911 linhas apagadas na fase 4 se acumularam.
+    //
+    // É também o que o §10.6 do plano prometeu ao rejeitar a opção (c): "quando o audit
+    // de login for escrito no servidor, ele nasce com a empresa correta e cai sozinho
+    // dentro da policy (b)".
+    //
+    // ⚠️ `req.empresaId` NULO ainda é possível e legítimo: ADMIN de plataforma e usuário
+    // sem vínculo. Continua indo nulo — é EVENTO DE PLATAFORMA, visível só em escopo de
+    // plataforma. O que mudou é que o login DE UMA CLÍNICA agora fica com ela.
+    const empresaId = req?.empresaId ?? null;
+
+    // O INSERT roda em escopo de PLATAFORMA de propósito: no LOGOUT o contexto da
+    // requisição já pode ter sido derrubado, e no LOGIN a empresa acaba de ser
+    // resolvida. Sem isso o `WITH CHECK` da policy recusaria a própria escrita da
+    // auditoria — e a auditoria falharia calada (é fire-and-forget).
+    await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_audit_logs ("userId", "userName", "email", "action", "empresaId", "ip")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      user.id,
+      user.fullName ?? '',
+      user.email ?? '',
+      action,
+      empresaId,
+      ipDoRequest(req),
+    ));
+  } catch (err) {
+    console.warn(`[auditoria] falha ao registrar ${action} do usuário ${user.id}:`, err.message);
+  }
 }
 
 /**
@@ -157,6 +221,7 @@ async function registrarAlteracao(client, req, { entidade, entidadeId, animalId 
 
 module.exports = {
   registrarAuditoria,
+  registrarAcesso,
   registrarTransferencia,
   registrarAlteracao,
   nomeDoUsuario,

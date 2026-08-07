@@ -32,12 +32,17 @@ function ultimoDiaDoItem(item) {
  *
  * @returns ResultadoCron para o comAlerta/reportarCron (Monitoração + e-mail ADMIN).
  */
-async function cancelarPrescricoesNaoExecutadas() {
+async function cancelarPrescricoesNaoExecutadas(db = prisma, diario = null, empresa = null) {
   const hojeStr = new Date().toISOString().split('T')[0];
 
-  const grupos = await prisma.prescricaoGrupo.findMany({
+  const grupos = await db.prescricaoGrupo.findMany({
     where:   { status: 'FINALIZADO' },
-    include: { itens: { where: { ativo: true }, select: { id: true, dataInicio: true, duracaoDias: true, executadoEm: true } } },
+    include: {
+      // `numero` e o animal entram para IDENTIFICAR o documento no diário de execução:
+      // quem abre a Monitoração precisa saber QUAL prescrição foi cancelada, não só quantas.
+      animal: { select: { nome: true } },
+      itens: { where: { ativo: true }, select: { id: true, dataInicio: true, duracaoDias: true, executadoEm: true } },
+    },
   });
 
   let canceladas = 0;
@@ -51,24 +56,38 @@ async function cancelarPrescricoesNaoExecutadas() {
 
     const houveExecucao = grupo.itens.some(item => item.executadoEm);
 
-    await prisma.$transaction(async (tx) => {
-      // Libera reservas de estoque remanescentes (sem dar baixa)
-      await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupo.id } });
-      // Cancela apenas os itens nunca executados (preserva executados/faturados)
-      await tx.prescricao.updateMany({
-        where: { grupoId: grupo.id, ativo: true, executadoEm: null },
-        data:  { status: 'CANCELADA', ativo: false },
-      });
-      await tx.prescricaoGrupo.update({
-        where: { id: grupo.id },
-        data:  {
-          status:             houveExecucao ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO',
-          motivoCancelamento: houveExecucao ? MOTIVO_PARCIAL : MOTIVO_NAO_EXECUTADA,
-        },
-      });
+    // ⚠️ SEM `$transaction` aqui. O cron já roda DENTRO de uma (uma por empresa, aberta
+    // por `paraCadaEmpresa`), e o Prisma NÃO suporta transação aninhada (§13.1 do plano):
+    // a interna abriria OUTRA conexão, sem o `set_config` do tenant, e o RLS devolveria
+    // zero linha — ou travaria em deadlock esperando lock que a externa segura.
+    //
+    // Efeito colateral aceito: a atomicidade deixou de ser POR GRUPO e passou a ser POR
+    // EMPRESA. Se um grupo falhar, o lote inteiro daquela clínica volta atrás e o cron
+    // registra a falha (as demais empresas seguem). Para uma limpeza noturna isso é
+    // preferível ao estado anterior, em que metade dos grupos ficava aplicada.
+    await db.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupo.id } });
+    await db.prescricao.updateMany({
+      where: { grupoId: grupo.id, ativo: true, executadoEm: null },
+      data:  { status: 'CANCELADA', ativo: false },
+    });
+    await db.prescricaoGrupo.update({
+      where: { id: grupo.id },
+      data:  {
+        status:             houveExecucao ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO',
+        motivoCancelamento: houveExecucao ? MOTIVO_PARCIAL : MOTIVO_NAO_EXECUTADA,
+      },
     });
 
     if (houveExecucao) parciais++; else canceladas++;
+
+    if (diario) {
+      const naoExecutados = grupo.itens.filter(i => !i.executadoEm).length;
+      diario.ok(empresa,
+        `prescrição #${String(grupo.numero ?? grupo.id).padStart(3, '0')} · ${grupo.animal?.nome ?? 'animal ?'} — `
+        + (houveExecucao
+            ? `CANCELADA PARCIALMENTE (${naoExecutados} de ${grupo.itens.length} item(ns) não executado(s))`
+            : `CANCELADA (${grupo.itens.length} item(ns), nenhum executado)`));
+    }
   }
 
   if (canceladas === 0 && parciais === 0) return { ok: true, notificar: false };

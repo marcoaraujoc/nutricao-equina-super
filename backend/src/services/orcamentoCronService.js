@@ -37,36 +37,47 @@ async function cancelarOrcamentosVencidos() {
   let total = 0;
   const porEmpresa = [];
 
+  // ⚠️ Este job JÁ percorria empresa a empresa — a validade é de `EmpresaConfiguracao`.
+  // O que faltava era CARIMBAR o tenant: sem o `comTenant`, as consultas rodavam sem
+  // `app.empresa_id` e, depois da fase 7c, o RLS as devolveria vazias. O filtro
+  // `empresaId: escopo.empresaId` continua no `where` de propósito — o RLS é a garantia
+  // no banco, não substituto do filtro explícito da aplicação.
+  const { comTenant } = require('../lib/tenantDb');
+
   for (const escopo of escopos) {
     const limite = new Date(agora - escopo.dias * 24 * 60 * 60 * 1000);
 
-    const vencidos = await prisma.orcamento.findMany({
-      where: {
-        empresaId: escopo.empresaId,
-        ...(escopo.equipeId != null && { equipeId: escopo.equipeId }),
-        ativo:     true,
-        status:    { notIn: STATUS_PRESERVADOS },
-        createdAt: { lt: limite },
-      },
-      select: { id: true, numero: true, observacao: true },
-    });
-    if (vencidos.length === 0) continue;
-
-    const motivo = motivoCancelamento(escopo.dias);
-    // Um update por linha: a observação do orçamento é do usuário — o motivo é
-    // ACRESCENTADO, nunca sobrescreve o que ele escreveu.
-    for (const orc of vencidos) {
-      await prisma.orcamento.update({
-        where: { id: orc.id },
-        data:  {
-          status:     'CANCELADO',
-          observacao: [orc.observacao?.trim(), motivo].filter(Boolean).join('\n'),
+    const n = await comTenant(escopo.empresaId, async (tx) => {
+      const vencidos = await tx.orcamento.findMany({
+        where: {
+          empresaId: escopo.empresaId,
+          ...(escopo.equipeId != null && { equipeId: escopo.equipeId }),
+          ativo:     true,
+          status:    { notIn: STATUS_PRESERVADOS },
+          createdAt: { lt: limite },
         },
+        select: { id: true, numero: true, observacao: true },
       });
-    }
+      if (vencidos.length === 0) return 0;
 
-    total += vencidos.length;
-    porEmpresa.push(`empresa ${escopo.empresaId}: ${vencidos.length}`);
+      const motivo = motivoCancelamento(escopo.dias);
+      // Um update por linha: a observação do orçamento é do usuário — o motivo é
+      // ACRESCENTADO, nunca sobrescreve o que ele escreveu.
+      for (const orc of vencidos) {
+        await tx.orcamento.update({
+          where: { id: orc.id },
+          data:  {
+            status:     'CANCELADO',
+            observacao: [orc.observacao?.trim(), motivo].filter(Boolean).join('\n'),
+          },
+        });
+      }
+      return vencidos.length;
+    });
+
+    if (n === 0) continue;
+    total += n;
+    porEmpresa.push(`empresa ${escopo.empresaId}: ${n}`);
   }
 
   if (total === 0) return { ok: true, notificar: false };

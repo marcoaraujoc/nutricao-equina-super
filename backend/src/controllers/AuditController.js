@@ -1,29 +1,11 @@
 const prisma = require('../lib/prisma').default;
-const { ipDoRequest } = require('../lib/auditoria');
 
 class AuditController {
-  async registrar(req, res) {
-    const { userId, userName, email, action, empresaId } = req.body;
-
-    try {
-      // IP derivado do request (respeita trust proxy) — nunca do corpo, evitando
-      // spoofing. INSERT via SQL para funcionar mesmo antes do prisma generate.
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO schs2vet.tb_audit_logs ("userId", "userName", "email", "action", "empresaId", "ip")
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        userId ?? null,
-        userName ?? '',
-        email ?? '',
-        action ?? '',
-        empresaId ? Number(empresaId) : null,
-        ipDoRequest(req),
-      );
-      res.status(201).json({ sucesso: true });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Erro ao registrar auditoria' });
-    }
-  }
+  // ⚠️ `registrar` REMOVIDO em 2026-08-05 junto com a rota pública `POST /api/audit/log`.
+  // Ele aceitava usuário, ação e empresa do CORPO da requisição, sem autenticação — ou
+  // seja, permitia forjar auditoria. Quem grava LOGIN/LOGOUT agora é o servidor, via
+  // `registrarAcesso` (lib/auditoria.js). Não recriar: escrita de auditoria não vem do
+  // cliente. Ver docs/MULTI-TENANCY-PLANO.md §10.7.
 
   // GET /api/audit/logs — tela de Auditoria (módulo Geral)
   // ADMIN: todos os logs (filtro ?empresaId= opcional).

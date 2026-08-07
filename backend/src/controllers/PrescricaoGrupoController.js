@@ -4,6 +4,7 @@
 const prisma = require('../lib/prisma').default;
 const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
+const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
@@ -1826,7 +1827,11 @@ const listarParaExecucao = async (req, res) => {
     // vinculado (convidado) só vê os grupos dos SEUS animais + os liberados por outros
     // vets (designação) na empresa ativa; dono/gestor vê os pacientes que trata.
     const { where: animalScopeWhere } = await buildAnimalScopeWhere(req);
-    whereGrupo.animal = { ...animalScopeWhere, ativo: true };
+    // `ANIMAL_VISIVEL` = `{ ativo: true, user: { ativo: true } }` — EXCLUSÃO LÓGICA
+    // (lib/visibilidade.js). O `ativo: true` do animal já estava aqui; o que faltava
+    // era o do CLIENTE: inativar o proprietário não tirava do plantão as prescrições
+    // dos animais dele.
+    whereGrupo.animal = { ...animalScopeWhere, ...ANIMAL_VISIVEL };
 
     const gruposCrus = await prisma.prescricaoGrupo.findMany({
       where:   whereGrupo,

@@ -1,6 +1,7 @@
 // VacinaClinicaController.js — registro clínico de vacinas por animal
 const prisma = require('../lib/prisma').default;
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
+const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
@@ -403,7 +404,10 @@ async function listarParaExecucao(req, res) {
 
     const where = {
       ativo:  true,
-      animal: { ativo: true },
+      // EXCLUSÃO LÓGICA (lib/visibilidade.js) — o `animal: { ativo: true }` já estava
+      // aqui; `ANIMAL_VISIVEL` acrescenta o cliente, para que inativar o proprietário
+      // também tire as vacinas dos animais dele da fila de aplicação.
+      animal: ANIMAL_VISIVEL,
       AND:    [escopoFilhoEvolucaoWhere(req)],
     };
 

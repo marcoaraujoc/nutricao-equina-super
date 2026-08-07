@@ -1,16 +1,20 @@
 // src/components/AppHeader.tsx
-// Header global do shell — marca do produto, busca global, notificações e o menu do
-// usuário (que substituiu o bloco de usuário/Sair que ficava no rodapé da Sidebar).
+// Header global do shell — marca do produto, busca global e o menu do usuário (que
+// substituiu o bloco de usuário/Sair que ficava no rodapé da Sidebar).
 // No mobile também abriga o gatilho do menu lateral (era a MobileTopBar do App.tsx).
+//
+// ⚠️ O SINO SAIU (fase 3 do multi-tenancy). A única coisa que ele notificava eram as
+// solicitações de vínculo vet↔animal, que deixaram de existir: o profissional passou a
+// enxergar o paciente por pertencer à EMPRESA, sem pedir nem aprovar nada. Sem fonte,
+// o botão só teria um estado — "Nenhuma notificação nova." — e botão que nunca faz
+// nada é cromo morto. Quando houver notificação de verdade para dar, ele volta com ela.
 
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Menu, Bell, ChevronDown, LogOut, User as UserIcon, Settings } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Menu, ChevronDown, LogOut, User as UserIcon, Settings } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useMobileMenu } from '../contexts/MobileMenuContext';
 import { usePermissoes } from '../hooks/usePermissoes';
-import { useVetPendentes } from '../hooks/useVetPendentes';
 import BrandS2Vet from './BrandS2Vet';
 import BuscaGlobal from './BuscaGlobal';
 
@@ -29,8 +33,6 @@ export default function AppHeader() {
   const { user, logout } = useAuth();
   const { setOpen }      = useMobileMenu();
   const { isGestor }     = usePermissoes();
-  const pendentes        = useVetPendentes();
-  const navigate         = useNavigate();
 
   const [menuAberto, setMenuAberto] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -56,11 +58,6 @@ export default function AppHeader() {
     if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
     return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
   })();
-
-  const aoClicarSino = () => {
-    if (pendentes > 0) { navigate('/animais-vet'); return; }
-    toast('Nenhuma notificação nova.', { icon: '🔔' });
-  };
 
   // h-20 no desktop para acomodar a marca ampliada sem espremê-la
   return (
@@ -98,21 +95,6 @@ export default function AppHeader() {
       <div className="flex-1 min-w-0 max-w-xl mx-auto px-2 md:px-4">
         <BuscaGlobal />
       </div>
-
-      {/* Notificações */}
-      <button
-        type="button"
-        onClick={aoClicarSino}
-        aria-label={pendentes > 0 ? `${pendentes} notificações` : 'Notificações'}
-        className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl flex-shrink-0"
-      >
-        <Bell size={20} />
-        {pendentes > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none">
-            {pendentes > 9 ? '9+' : pendentes}
-          </span>
-        )}
-      </button>
 
       {/* Menu do usuário */}
       {user && (

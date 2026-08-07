@@ -8,7 +8,24 @@ const prisma = require('../lib/prisma').default;
 // Perfis/permissões são POR EQUIPE — um gestor de outra equipe/empresa não pode
 // ler nem alterar a matriz desta. Retorna null se autorizado, ou { status, mensagem }.
 async function autorizarGestorDaEquipe(req, equipeId) {
-  if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') return null;
+  // ⚠️ `equipeId` inválido (0, NaN, negativo) tem de cair AQUI, antes do bypass do
+  // ADMIN. Sem isto, uma tela que ainda não resolveu a equipe ativa (ex.: ADMIN na
+  // vista "todas as empresas", sem nenhuma equipe selecionada) manda `equipeId: 0`
+  // e o ADMIN, que não passa pela checagem de existência abaixo, seguia direto para
+  // `PermissaoService` — que tentava CRIAR PerfilEquipe para uma equipe que não
+  // existe. Sem tenant válido para o RLS, o INSERT falhava com um erro cru do
+  // Postgres ("new row violates row-level security policy") vazando pro cliente
+  // como 500, no lugar de um 404 comum.
+  if (!Number.isInteger(equipeId) || equipeId <= 0) {
+    return { status: 404, mensagem: 'Equipe não encontrada.' };
+  }
+
+  if (req.user.role === 'ADMIN' || req.user.userType === 'ADMIN') {
+    // ADMIN ainda precisa de uma equipe que EXISTA — bypassa a checagem de cargo
+    // logo abaixo, mas não a de existência.
+    const existe = await prisma.equipe.findUnique({ where: { id: equipeId }, select: { id: true } });
+    return existe ? null : { status: 404, mensagem: 'Equipe não encontrada.' };
+  }
 
   const equipe = await prisma.equipe.findUnique({
     where:  { id: equipeId },

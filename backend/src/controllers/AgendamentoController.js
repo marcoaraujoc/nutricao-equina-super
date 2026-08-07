@@ -6,6 +6,7 @@ const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
 // Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
+const { filhoDeAnimalVisivel }                    = require('../lib/visibilidade');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarTransferencia, registrarAlteracao } = require('../lib/auditoria');
 // Assumir/transferir a agenda arrasta a evolução aberta e tudo que está sob ela
@@ -257,7 +258,10 @@ const AgendamentoController = {
       const { userType, role, id: userId } = req.user;
       const isAdmin = role === 'ADMIN' && userType !== 'PROPRIETARIO';
 
-      const where = { ativo: true };
+      // EXCLUSÃO LÓGICA (lib/visibilidade.js): animal ou cliente inativado some da
+      // agenda junto com os agendamentos dele. Sem isto, inativar o paciente o tirava
+      // da lista de Pacientes mas ele continuava ocupando horário na agenda do dia.
+      const where = { ativo: true, ...filhoDeAnimalVisivel() };
 
       let inicio = null, fim = null;
       if (data) {

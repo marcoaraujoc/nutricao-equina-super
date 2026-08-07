@@ -53,12 +53,27 @@ async function enviarPara(provider, telefone, texto, contexto) {
  * isolável em teste (recebe `agora` opcional).
  * @param {Date} [agora]
  */
-async function enviarLembretesWhatsapp(agora = new Date()) {
+// ⚠️ Recebe a EMPRESA, não o cliente da transação — e a diferença é o ponto principal.
+//
+// O cron chama esta função uma vez por empresa ativa (`paraCadaEmpresaComEnvio`), SEM
+// transação aberta. Aqui dentro há três momentos, nesta ordem, e eles NÃO podem virar
+// um só:
+//   1. LER a janela  → transação curta, com o tenant carimbado;
+//   2. ENVIAR        → FORA de qualquer transação (é rede);
+//   3. MARCAR o flag → transação curta e INDEPENDENTE, por agendamento.
+//
+// Envolver os três numa transação só (como cheguei a fazer) tem duas consequências: o
+// rollback desfaz os flags mas NÃO desfaz as mensagens já enviadas — o cliente recebe
+// tudo de novo cinco minutos depois —, e a transação fica aberta durante todas as
+// chamadas ao provedor, segurando conexão do pool.
+async function enviarLembretesWhatsapp(empresaId, agora = new Date()) {
+  const { comTenant } = require('../lib/tenantDb');
   const provider = getWhatsAppProvider();
   // Janela de varredura: até 60min à frente (o tier mais distante) + folga.
   const limite = new Date(agora.getTime() + (TIER_1H_MIN + 5) * MINUTO_MS);
 
-  const agendamentos = await prisma.agendamentoClinico.findMany({
+  // 1. LEITURA — transação curta, só para trazer a janela desta empresa.
+  const agendamentos = await comTenant(empresaId, (tx) => tx.agendamentoClinico.findMany({
     where: {
       ativo: true, status: { in: ['AGENDADO', 'ATRASADA'] },
       dataHora: { gte: agora, lte: limite },
@@ -67,7 +82,7 @@ async function enviarLembretesWhatsapp(agora = new Date()) {
       animal:      { include: { user: { select: { fullName: true, phone: true } } } },
       veterinario: { select: { fullName: true, phone: true } },
     },
-  });
+  }));
 
   let enviados = 0;
   // Detalhe por envio (quem recebeu, o quê) — exibido na tela de Monitoração ao
@@ -105,11 +120,13 @@ async function enviarLembretesWhatsapp(agora = new Date()) {
       detalhes.push(`[${animalNome} · ${tierLabel}] Para: ${destinatarios.join('; ')}\nMensagem: "${texto}"`);
     }
 
-    // Marca o flag mesmo sem telefone (evita reprocessar o mesmo tier a cada ciclo).
-    await prisma.agendamentoClinico.update({
+    // 3. MARCA o flag — transação PRÓPRIA, já com a mensagem fora do caminho. Marca
+    // mesmo sem telefone (evita reprocessar o mesmo tier a cada ciclo). Commit por
+    // agendamento: uma falha adiante não desfaz o que já foi avisado.
+    await comTenant(empresaId, (tx) => tx.agendamentoClinico.update({
       where: { id: ag.id },
       data:  tier === '1H' ? { lembreteWa1hEnviadoEm: agora } : { lembreteWa15minEnviadoEm: agora },
-    });
+    }));
   }
 
   return { verificados: agendamentos.length, enviados, detalhes };

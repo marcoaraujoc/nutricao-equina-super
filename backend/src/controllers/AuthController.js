@@ -7,6 +7,7 @@ const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require(
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
+const { registrarAcesso } = require('../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const {
   SECRET, REFRESH_SECRET,
@@ -230,10 +231,21 @@ const AuthController = {
   logout: async (req, res) => {
     const refreshToken = getRefreshTokenFromCookie(req) || req.body?.refreshToken;
     if (refreshToken) {
+      // Descobre QUEM está saindo antes de invalidar o token — depois do update não há
+      // mais como identificar a sessão. É o servidor dizendo quem saiu; antes disso, a
+      // trilha de LOGOUT vinha do frontend por uma rota pública que aceitava qualquer
+      // usuário no corpo (ver `registrarAcesso` em lib/auditoria.js).
+      const dono = await prisma.user.findFirst({
+        where:  { refreshToken },
+        select: { id: true, fullName: true, email: true },
+      }).catch(() => null);
+
       await prisma.user.updateMany({
         where: { refreshToken },
         data:  { refreshToken: null },
       }).catch(() => { /* silencioso — logout é best-effort */ });
+
+      if (dono) await registrarAcesso(req, dono, 'LOGOUT');
     }
     clearAuthCookies(res);
     res.json({ success: true, message: 'Sessão encerrada' });

@@ -12,7 +12,7 @@ const { whereProprietarioNoEscopo } = require('./ProprietarioController');
 // MESMA função que resolve o escopo em GET /equipes/configuracoes — reusada aqui para
 // o `/me` já dizer se a pessoa é dona/gestora, sem o front precisar sondar aquele
 // endpoint só para ler o 404. Ver `isGestorEmpresa` no getMe.
-const { resolverEscopoConfiguracao, buscarConfiguracao } = require('./EquipeController');
+const { resolverEscopoConfiguracao, buscarConfiguracao, configuracaoCompleta } = require('./EquipeController');
 const { parseLocaisTrabalho, gravarLocaisTrabalho, csvParaIds, validarLocaisContraExpedienteEmpresa,
         especialidadesPadraoVeterinario } = require('./EquipeController');
 const {
@@ -139,7 +139,9 @@ const UserController = {
           // Especialidade é por empresa; sem contexto (vet autônomo) lê todas as dele.
           // Legado (empresaId null) continua visível para o próprio dono do cadastro.
           especialidades: {
-            where:  req.empresaId ? { OR: [{ empresaId: Number(req.empresaId) }, { empresaId: null }] } : {},
+            // O ramo do legado (`empresaId: null`) saiu: a coluna é NOT NULL desde a
+            // fase 5, e mantê-lo fazia o Prisma recusar a consulta.
+            where:  req.empresaId ? { empresaId: Number(req.empresaId) } : {},
             select: { especialidadeId: true },
           },
         },
@@ -267,15 +269,22 @@ const UserController = {
       // interpretando o 404 como "não é gestor" — funcionava, mas gerava um 404 no
       // DevTools a cada login, e o navegador loga a requisição na camada de rede,
       // antes de qualquer tratamento em JS. Agora vem junto do /me, sem round-trip.
-      // `empresaConfigurada` acompanha porque saía do MESMO endpoint (`configurado`
-      // = já existe registro salvo) e alimenta o gate de primeiro acesso do gestor.
-      // Para quem não é gestor vale `true`: esse gate nunca se aplica a ele.
+      // `empresaConfigurada` acompanha porque saía do MESMO endpoint e alimenta o gate
+      // de primeiro acesso do gestor. Para quem não é gestor vale `true`: esse gate
+      // nunca se aplica a ele.
+      //
+      // ⚠️ "Configurada" é `configuracaoCompleta()` — dias + horário + espécies
+      // preenchidos —, NUNCA "a linha existe". A empresa nasce (2026-08-16) já com uma
+      // linha de `EmpresaConfiguracao` (o ADMIN escolhe as espécies na criação), então
+      // "a linha existe" ficaria sempre `true` e o gestor nunca mais seria cobrado a
+      // completar o expediente — o sidebar liberaria antes de qualquer sessão real de
+      // configuração. Mesma exigência que `salvarConfiguracao` já faz no PUT.
       let isGestorEmpresa   = false;
       let empresaConfigurada = true;
       try {
         const escopoCfg = await resolverEscopoConfiguracao(req);
         isGestorEmpresa = !!escopoCfg;
-        if (escopoCfg) empresaConfigurada = !!(await buscarConfiguracao(escopoCfg));
+        if (escopoCfg) empresaConfigurada = configuracaoCompleta(await buscarConfiguracao(escopoCfg));
       } catch { isGestorEmpresa = false; empresaConfigurada = true; }
 
       // Remuneração e acesso ao sistema desta empresa. Vão para o Cadastro Pessoal
@@ -359,6 +368,40 @@ const UserController = {
 
       // (o antigo flag `isConvidado` deixou de decidir a troca de tipo — quem decide
       // é o vínculo no contexto ativo, logo abaixo)
+
+      // ── DECLAROU ESPECIALIDADE ⇒ PRECISA DE CRMV (2026-08-16) ──────────────────
+      // A especialidade é a atuação clínica: quem a declara está dizendo que atende, e
+      // atendimento tem responsável técnico. Vale para QUALQUER cargo — inclusive o
+      // gestor, que não é obrigado a escolher especialidade, mas se escolher informa o
+      // CRMV. A tela espelha esta regra (`precisaCrmv` em CadastroPessoal.tsx); aqui é
+      // onde ela vale de fato, porque validação só no front não é validação.
+      //
+      // ⚠️ Roda ANTES de qualquer escrita. Depois do update do User, um 400 deixaria o
+      // cadastro meio gravado — nome e telefone salvos, especialidade não.
+      // ⚠️ A especialidade pode vir por DOIS caminhos: o campo avulso (profissional sem
+      // equipe) e os LOCAIS de trabalho (com equipe, que é o que o submit envia). Olhar
+      // só o primeiro deixaria o gestor de equipe passar sem CRMV.
+      const especDoBody = [
+        ...(Array.isArray(especialidadeIds) ? especialidadeIds : []),
+        ...(Array.isArray(locaisTrabalho)
+          ? locaisTrabalho.flatMap(l => (Array.isArray(l?.especialidadeIds) ? l.especialidadeIds : []))
+          : []),
+      ].map(Number).filter(n => Number.isInteger(n) && n > 0);
+
+      if (especDoBody.length > 0 && !String(crmv ?? '').trim()) {
+        // Só exige quando ele TAMBÉM não tem CRMV já cadastrado nesta empresa: quem já
+        // informou antes pode salvar outras partes da tela sem reenviar o campo.
+        const crmvSalvo = req.empresaId
+          ? (await perfilDaEmpresa(Number(req.user.id), Number(req.empresaId)))?.crmv
+          : null;
+        if (!String(crmvSalvo ?? '').trim()) {
+          return res.status(400).json({
+            success: false,
+            code:    'CRMV_OBRIGATORIO',
+            error:   'Informe o CRMV: declarar especialidade significa atuar clinicamente.',
+          });
+        }
+      }
 
       // O tipo de usuário DENTRO de uma empresa é o CARGO que o gestor atribuiu
       // (MembroEquipe.cargo, que é por equipe/empresa). Logo, quem tem vínculo no
@@ -522,14 +565,16 @@ const UserController = {
       // ficam no vínculo do CONTEXTO ATIVO — a localização pertence à empresa. Usa o
       // mesmo parser da tela de Equipe, então a regra de horários que não podem
       // coincidir vale igual aqui.
-      // Especialidade existe para VETERINARIO, FORNECEDOR e GESTOR. Demais perfis
-      // (estagiário, enfermeiro, secretaria, financeiro) não têm especialidade nem
-      // tempo de consulta — o que vier no body é ignorado.
+      // Especialidade existe para VETERINARIO, FORNECEDOR, PRESTADOR (mapeia para
+      // userType FORNECEDOR) e GESTOR. Demais perfis (estagiário, enfermeiro,
+      // secretaria, financeiro) não têm especialidade nem tempo de consulta — o que
+      // vier no body é ignorado, porque aquele cargo não atende clinicamente.
       //
-      // ⚠️ GESTOR entrou em 2026-08-04 e é caso PRÓPRIO: pode informar especialidade,
-      // mas NUNCA é obrigado a isso. Por isso ele fica fora de `ehVet` — quem manda o
-      // padrão "sem nenhuma, assume Clínica Médica" é `especPadrao`, e para o gestor
-      // ele é lista vazia. Gestor que não escolher nada continua sem especialidade.
+      // ⚠️ GESTOR pode informar especialidade, mas NUNCA é obrigado a isso. Por isso
+      // ele fica fora de `ehVet` — quem manda o padrão "sem nenhuma, assume Clínica
+      // Médica" é `especPadrao`, e para o gestor ele é lista vazia. Gestor que não
+      // escolher nada continua sem especialidade; se escolher, precisa do CRMV (ver
+      // a validação `CRMV_OBRIGATORIO` acima, que cobre exatamente esse caso).
       const membroCtx  = await resolverMembroDoContexto(updatedUser.id, req);
       const ehGestor   = membroCtx?.cargo === 'GESTOR';
       const ehVet      = updatedUser.userType === 'VETERINARIO' && !ehGestor;
@@ -555,11 +600,14 @@ const UserController = {
 
       // Especialidades (catálogo por espécie) — fonte única para VET e FORNECEDOR e
       // escopadas por EMPRESA: o que ele exerce na outra clínica não é tocado aqui.
-      // Sem contexto de empresa (autônomo), mexe só nos vínculos sem empresa.
-      const escopoEspec = req.empresaId
-        ? { empresaId: Number(req.empresaId) }
-        : { empresaId: null };
-      if (Array.isArray(especialidadeIds)) {
+      //
+      // ⚠️ SEM empresa no contexto, NÃO se mexe em especialidade. `UsuarioEspecialidade.
+      // empresa_id` é NOT NULL, então o `createMany` com `empresaId: null` violava a
+      // constraint e devolvia HTTP 500 ao profissional autônomo que salvasse o Cadastro
+      // Pessoal com especialidades. A especialidade é POR EMPRESA (CLAUDE.md §36-c): sem
+      // empresa resolvida não há a que empresa ela pertenceria, então a escrita é pulada.
+      const escopoEspec = req.empresaId ? { empresaId: Number(req.empresaId) } : null;
+      if (escopoEspec && Array.isArray(especialidadeIds)) {
         let ids = perfilComEspecialidade
           ? [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger)
           : [];
@@ -576,7 +624,7 @@ const UserController = {
       // Garantia: veterinário nunca fica sem especialidade NESTA empresa — Clínica Médica.
       // (Cobre o caso em que especialidadeIds nem foi enviado, ex.: o cadastro define
       // a especialidade por local e o profissional não marcou nenhuma.)
-      if (ehVet && especPadrao.length > 0) {
+      if (escopoEspec && ehVet && especPadrao.length > 0) {
         const jaTem = await prisma.usuarioEspecialidade.count({
           where: { userId: updatedUser.id, ...escopoEspec },
         });

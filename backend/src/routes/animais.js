@@ -25,7 +25,7 @@ const upload = multer({
 
 // ─── Rotas literais ANTES das rotas com parâmetros (:id) ─────────────────────
 // CRÍTICO: Express processa rotas na ordem de registro.
-// "buscar-por-nome" e "proprietario/aprovar" devem vir ANTES de "/:id",
+// "buscar-por-nome" deve vir ANTES de "/:id",
 // caso contrário o Express interpreta "buscar-por-nome" como o valor de :id.
 
 // GET  /api/animais/buscar-por-nome?nome=X       → busca animal por nome (vet)
@@ -34,23 +34,10 @@ router.get('/buscar-por-nome', authenticate, animalController.buscarPorNome);
 // GET  /api/animais/verificar-baia?baia=&local=&localizacaoId=&animalId=  → checagem em
 // tempo de preenchimento do formulário (somente leitura; a validação definitiva segue no
 // POST/PUT). O checkPermission NÃO é opcional aqui: além de autorizar a leitura, é ele
-// que popula `req.membroCargo`, do qual buildAnimalScopeWhere depende para distinguir
-// base própria (gestor vê todos os seus vínculos) de convidada (isolamento estrito).
-// Sem ele o gestor não enxerga os próprios pacientes de outra empresa e a baia ocupada
-// aparece como livre.
+// que popula `req.membroCargo`, do qual buildAnimalScopeWhere depende.
 router.get('/verificar-baia', authenticate, checkPermission('animais.ler', 'LEITURA'), animalController.verificarBaia);
 
-// GET  /api/animais/minhas-solicitacoes           → solicitações dos animais do proprietário (polling)
-router.get('/minhas-solicitacoes', authenticate, animalController.minhasSolicitacoes);
 
-// PATCH /api/animais/solicitacoes/:id/responder  → proprietário responde a convite iniciado pelo vet
-router.patch('/solicitacoes/:id/responder', authenticate, animalController.responderSolicitacaoVet);
-
-// POST /api/animais/proprietario/aprovar    → proprietário aprova/recusa vínculo (pública)
-router.post('/proprietario/aprovar', animalController.proprietarioAprovar);
-
-// POST /api/animais/vincular-vet           → cria vínculo ACEITO direto (vet p/ si mesmo)
-router.post('/vincular-vet', authenticate, animalController.vincularVet);
 
 // ─── Rotas CRUD ───────────────────────────────────────────────────────────────
 
@@ -72,10 +59,11 @@ router.put('/:id',  authenticate, checkPermission('animais.editar', 'EQUIPE'), u
 // DELETE /api/animais/:id   → excluir animal
 router.delete('/:id', authenticate, checkPermission('animais.deletar', 'EQUIPE'), animalIdParam, validate, animalController.excluir);
 
-// DELETE /api/animais/:id/desvincular-vet → vet se remove do animal
-router.delete('/:id/desvincular-vet', authenticate, animalController.desvincularVet);
 
-// DELETE /api/animais/:id/cancelar-solicitacao → proprietário cancela solicitação pendente
-router.delete('/:id/cancelar-solicitacao', authenticate, animalController.cancelarSolicitacao);
+
+// ⚠️ ROTAS DE VÍNCULO REMOVIDAS na fase 3 do multi-tenancy
+// (docs/MULTI-TENANCY-PLANO.md §6). Não existem mais vínculos nem aprovações entre
+// veterinário, proprietário e empresa: o acesso ao paciente vem de ele pertencer à
+// EMPRESA. Não reabrir estas rotas.
 
 module.exports = router;

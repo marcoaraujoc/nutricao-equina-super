@@ -13,6 +13,16 @@
 'use strict';
 
 const prisma = require('./prisma').default;
+// `tb_usuario_empresa` passou a ter RLS por empresa (defesa em profundidade —
+// dado pessoal + remuneração). As DUAS leituras "por user_id" desta lib
+// (`podeAcessarSistema`, `empresasSemAcesso`) respondem perguntas que atravessam
+// tenants por natureza ("este usuário tem acesso / está bloqueado em ALGUMA
+// empresa?") e rodam FORA de um contexto de empresa (o login, antes do
+// `authenticate`). Sob a policy por empresa elas voltariam vazio e trancariam o
+// usuário para fora. `comEscopoPlataforma` levanta o filtro de tenant; o
+// `WHERE user_id = $1` de cada query é o que mantém a leitura restrita a ESTE
+// usuário — nunca a de terceiros.
+const { comEscopoPlataforma } = require('./prismaTenant');
 
 // Campos cadastrais que a empresa mantém sobre a pessoa. `null` aqui significa
 // "vazio NESTA empresa" — nunca cai de volta no `users`.
@@ -333,22 +343,39 @@ async function anexarFotoEmRelacao(itens, chave, empresaId, client = prisma) {
 }
 
 /**
+ * Empresa que NÃO deixa ninguém entrar: `status <> 'ATIVA'`.
+ *
+ * D3 do multi-tenancy (docs/MULTI-TENANCY-PLANO.md): empresa SUSPENSA (inadimplência) ou
+ * CANCELADA **bloqueia o login de todos dela**. É por EMPRESA, não por pessoa: quem
+ * também trabalha em outra clínica entra nela normalmente e só perde a suspensa no
+ * seletor de contexto.
+ *
+ * ⚠️ Quem governa o ACESSO é `tb_empresas.status`. `tb_assinaturas_empresa.status`
+ * descreve a situação COMERCIAL e não bloqueia nada sozinho — suspender é decisão
+ * explícita, não efeito colateral de uma fatura em atraso.
+ */
+const EMPRESA_ATIVA_SQL = `COALESCE(e.status, 'ATIVA') = 'ATIVA'`;
+
+/**
  * O usuário pode entrar na aplicação?
  *
- * Regra: quem TEM vínculo de empresa precisa de ao menos UM com acesso liberado.
- * Quem não tem vínculo nenhum (vet autônomo, proprietário legado, ADMIN da
- * plataforma) não é barrado — não há quem tenha concedido ou negado nada a ele.
+ * Regra: quem TEM vínculo de empresa precisa de ao menos UM que seja, ao mesmo tempo,
+ * **com acesso liberado** E **numa empresa ATIVA**. Quem não tem vínculo nenhum (vet
+ * autônomo, proprietário legado, ADMIN da plataforma) não é barrado — não há quem tenha
+ * concedido ou negado nada a ele.
  */
 async function podeAcessarSistema(userId, client = prisma) {
   if (!userId) return true;
   if (!(await temColunasPagamento())) return true;
   try {
-    const rows = await client.$queryRawUnsafe(
+    const rows = await comEscopoPlataforma(() => client.$queryRawUnsafe(
       `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE acesso_sistema)::int AS liberados
-         FROM schs2vet.tb_usuario_empresa WHERE user_id = $1`,
+              COUNT(*) FILTER (WHERE ue.acesso_sistema AND ${EMPRESA_ATIVA_SQL})::int AS liberados
+         FROM schs2vet.tb_usuario_empresa ue
+         JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
+        WHERE ue.user_id = $1`,
       Number(userId),
-    );
+    ));
     const r = rows?.[0];
     if (!r || r.total === 0) return true;
     return r.liberados > 0;
@@ -357,16 +384,23 @@ async function podeAcessarSistema(userId, client = prisma) {
   }
 }
 
-/** Ids das empresas em que este usuário está SEM acesso (some do seletor de contexto). */
+/**
+ * Ids das empresas que somem do seletor de contexto deste usuário: as em que ele está
+ * sem acesso **e** as que estão suspensas/canceladas (D3).
+ */
 async function empresasSemAcesso(userId, client = prisma) {
   const bloqueadas = new Set();
   if (!userId) return bloqueadas;
   if (!(await temColunasPagamento())) return bloqueadas;
   try {
-    const rows = await client.$queryRawUnsafe(
-      'SELECT empresa_id FROM schs2vet.tb_usuario_empresa WHERE user_id = $1 AND acesso_sistema = false',
+    const rows = await comEscopoPlataforma(() => client.$queryRawUnsafe(
+      `SELECT ue.empresa_id
+         FROM schs2vet.tb_usuario_empresa ue
+         JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
+        WHERE ue.user_id = $1
+          AND (ue.acesso_sistema = false OR NOT (${EMPRESA_ATIVA_SQL}))`,
       Number(userId),
-    );
+    ));
     for (const r of rows) bloqueadas.add(r.empresa_id);
   } catch { /* coluna ainda não migrada */ }
   return bloqueadas;

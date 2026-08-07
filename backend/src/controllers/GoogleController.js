@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
+const { registrarAcesso } = require('../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../lib/sessionTokens');
 
@@ -96,6 +97,10 @@ const GoogleController = {
 
       // Cookies HttpOnly (consistente com o login por e-mail/senha)
       setAuthCookies(res, { accessToken: token, refreshToken });
+
+      // ⚠️ O login Google NÃO passa por `emitirSessao` — cria a sessão aqui mesmo. Sem
+      // esta linha, quem entra pelo Google sumiria da trilha de acesso.
+      await registrarAcesso(req, user, 'LOGIN');
 
       return res.json({
         success: true,

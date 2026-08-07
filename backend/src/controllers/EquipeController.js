@@ -12,6 +12,7 @@ const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/vali
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 const prisma = require('../lib/prisma').default;
+const { comEscopoPlataforma } = require('../lib/prismaTenant');
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 // Cadastro do profissional é POR EMPRESA — nunca gravar nome/contato/endereço/CRMV
 // direto no User (vaza entre clínicas). Ver lib/profissionalPerfil.js.
@@ -21,7 +22,12 @@ const {
 } = require('../lib/profissionalPerfil');
 // Tabela de ligação usuário × empresa — PERFIL + cadastro por empresa (fonte nova)
 const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAcesso,
+        lerPagamentoEAcesso,
         anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso } = require('../lib/usuarioEmpresa');
+// Limite de usuários do plano — fonte única da conta de assentos (fase 2 do multi-tenancy)
+const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa');
+// Documento da empresa (CPF/CNPJ): obrigatório e único entre empresas
+const { resolverDocumento } = require('../lib/documentoEmpresa');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -167,6 +173,27 @@ async function buscarConfiguracao(escopo) {
   return prisma.empresaConfiguracao.findFirst({
     where: { empresaId: escopo.empresaId, equipeId: escopo.equipeId },
   });
+}
+
+// "Configuração completa" NÃO é "a linha existe" — é dias + horário + espécies
+// preenchidos, exatamente o que `salvarConfiguracao` exige do gestor na tela.
+//
+// ⚠️ Existe porque `criarEmpresa` (2026-08-16) passou a pré-criar a linha de
+// `EmpresaConfiguracao` já na criação da empresa, com SÓ `especiesAtendidas` (o
+// ADMIN escolhe as espécies no formulário de criação — expediente não). Se o gate de
+// primeiro acesso do gestor (`empresaConfigurada` em UserController.getMe) checasse
+// só "existe linha?", ele passaria a responder `true` no instante em que a empresa
+// nasce — antes de o gestor abrir Configurações e definir o expediente — e o sidebar
+// nunca mais pediria isso dele. Este helper é o que faz o gate continuar exigindo o
+// preenchimento de verdade, e não apenas a existência da linha.
+function configuracaoCompleta(config) {
+  return !!(
+    config
+    && config.diasAtendimento
+    && config.horaInicioAtendimento
+    && config.horaFimAtendimento
+    && config.especiesAtendidas
+  );
 }
 
 // Espécies atendidas no escopo (Configurações da empresa; sem elas, as espécies do
@@ -684,79 +711,406 @@ const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
 
+  // 🔴 NOVO MODELO (2026-08-06): só o ADMIN da plataforma cria empresa. Ela nasce
+  // associada a um PLANO e a UM OU MAIS GESTORES. O gestor NÃO cria mais a própria
+  // empresa — ele só administra a equipe da(s) que recebeu. A rota é gateada por
+  // `authorize('ADMIN')`; aqui a checagem é redundante mas explícita.
   criarEmpresa: async (req, res) => {
     try {
-      const { nome, cnpj, telefone, endereco, equipeNome } = req.body;
+      if (req.user?.role !== 'ADMIN' && req.user?.userTypeGlobal !== 'ADMIN' && req.user?.userType !== 'ADMIN') {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o administrador da plataforma cria empresas.' });
+      }
+      const { nome, cnpj, telefone, endereco, equipeNome, planoId, gestores, especiesAtendidas } = req.body;
       if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
-      // Equipe nasce junto com a empresa (invariante do gestor) e o nome dela é
-      // OBRIGATÓRIO — nunca em branco, nunca um genérico escolhido pelo sistema.
-      if (!equipeNome?.trim()) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Nome da equipe é obrigatório', code: 'EQUIPE_NOME_OBRIGATORIO' });
+
+      // DOCUMENTO obrigatório e ÚNICO entre empresas: é o que identifica o assinante.
+      // Resolvido ANTES de criar/resolver os usuários gestores — senão um documento
+      // repetido já teria deixado para trás um usuário criado por engano.
+      const doc = await resolverDocumento(cnpj);
+      if (doc.erro) return res.status(doc.status).json({ sucesso: false, mensagem: doc.erro, code: doc.code });
+
+      // TELEFONE obrigatório: é o contato da clínica na plataforma.
+      const telefoneTrim = String(telefone ?? '').trim();
+      if (!telefoneTrim) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório', code: 'TELEFONE_OBRIGATORIO' });
+      }
+
+      // PLANO obrigatório e ativo — a empresa nasce com uma assinatura.
+      const planoIdNum = Number(planoId);
+      if (!Number.isInteger(planoIdNum)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione um plano para a empresa.', code: 'PLANO_OBRIGATORIO' });
+      }
+      const plano = await prisma.plano.findUnique({ where: { id: planoIdNum }, select: { id: true, ativo: true, validadeDias: true } });
+      if (!plano || !plano.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Plano inválido ou inativo.' });
+
+      // GESTORES: ao menos um. Cada item = { email, fullName?, phone? }.
+      const lista = Array.isArray(gestores) ? gestores.filter((g) => g && String(g.email || '').trim()) : [];
+      if (lista.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Associe ao menos um gestor à empresa.', code: 'GESTOR_OBRIGATORIO' });
+      }
+
+      // ESPÉCIES ATENDIDAS: obrigatórias já na criação. Sem elas a clínica nasce sem
+      // catálogo de especialidades (é `especiesAtendidas` que filtra o catálogo por
+      // espécie — ver §15), e o gestor só descobriria isso ao abrir a agenda vazia.
+      // Ficam na `EmpresaConfiguracao`, o MESMO lugar que a tela de Configurações
+      // edita — nada de campo novo, senão haveria dois donos do dado.
+      const especiesIds = [...new Set(
+        (Array.isArray(especiesAtendidas) ? especiesAtendidas : String(especiesAtendidas ?? '').split(','))
+          .map((v) => Number(String(v).trim()))
+          // `n > 0`: `''.split(',')` devolve `['']` e `Number('')` é 0, que passa por
+          // `Number.isInteger`. Sem o corte, body sem espécie viraria `[0]` e o erro
+          // seria "Espécie inválida" no lugar de "informe ao menos uma espécie".
+          .filter((n) => Number.isInteger(n) && n > 0),
+      )];
+      if (especiesIds.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos uma espécie atendida.', code: 'ESPECIE_OBRIGATORIA' });
+      }
+      const especiesExistentes = await prisma.especie.findMany({
+        where: { id: { in: especiesIds } }, select: { id: true },
+      });
+      if (especiesExistentes.length !== especiesIds.length) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Espécie inválida.', code: 'ESPECIE_INVALIDA' });
       }
 
       const nomeTrim = nome.trim();
-      const cnpjNorm = cnpj?.trim() ? cnpj.replace(/\D/g, '') : null;
+      // Equipe sem nome informado HERDA o nome da empresa (regra 36-d: onde não há
+      // ninguém para nomear, usa-se o nome da própria empresa — nunca o genérico
+      // "Equipe Principal", que em empresa pessoal apareceria no seletor de contexto
+      // no lugar da clínica).
+      const equipeNomeFinal = equipeNome?.trim() || nomeTrim;
+      const cnpjNorm = doc.digitos;
 
-      // Duplicidade: mesmo gestor (e-mail) + mesmo nome + mesmo CPF/CNPJ → bloqueia.
-      // cnpj null = empresa pessoal (CPF do owner, fixo por usuário) — coberto pelo mesmo check.
-      const duplicada = await prisma.empresa.findFirst({
-        where: { ownerId: req.user.id, nome: { equals: nomeTrim, mode: 'insensitive' }, cnpj: cnpjNorm },
-      });
-      if (duplicada) {
-        return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma empresa com este nome e CPF/CNPJ para o seu usuário.' });
+      // Resolve/cria os usuários gestores (find-or-create por e-mail, como o membro
+      // direto). Usuário novo nasce VETERINARIO com senha padrão + troca obrigatória.
+      const SENHA_INICIAL = 'Inicial_001';
+      const gestoresResolvidos = [];
+      // Quem foi CRIADO agora — só a esses o e-mail leva a senha inicial. Quem já tinha
+      // login entra com a senha dele; mandar "Inicial_001" para essa pessoa seria uma
+      // credencial errada, e ela perderia o acesso tentando usá-la.
+      const idsNovos = new Set();
+      for (const g of lista) {
+        const emailNorm = normalizeEmail(g.email);
+        let usuario = await findUserByEmail(prisma, emailNorm);
+        if (!usuario) {
+          usuario = await prisma.user.create({
+            data: {
+              fullName: String(g.fullName || '').trim() || emailNorm,
+              email:    emailNorm,
+              phone:    g.phone || null,
+              passwordHash: await bcrypt.hash(SENHA_INICIAL, 10),
+              role:     'USER',
+              userType: 'VETERINARIO',
+              mustChangePassword: true,
+            },
+          });
+          idsNovos.add(usuario.id);
+        }
+        if (!gestoresResolvidos.some((x) => x.id === usuario.id)) gestoresResolvidos.push(usuario);
       }
+      const donoId = gestoresResolvidos[0].id; // o 1º gestor é o dono (ownerId)
 
-      // INVARIANTE: empresa nunca existe sem gestor. Nasce com o dono E com o vínculo
-      // GESTOR numa equipe, na MESMA transaction — antes, quem criasse a empresa por
-      // aqui era gestor só por `ownerId` e a equipe/vínculo vinham depois (ou não),
-      // deixando a empresa sem nenhum membro GESTOR.
-      //
-      // O NOME da equipe é SEMPRE o que o gestor informou (validado acima) — nunca em
-      // branco e nunca um genérico "Equipe Principal". Em empresa pessoal (CPF) é o
-      // nome da equipe que aparece no seletor de contexto, então o genérico fazia o
-      // gestor ver "Equipe Principal" no lugar da clínica dele.
-      const nomeEquipeInicial = equipeNome.trim();
-      const empresa = await prisma.$transaction(async (tx) => {
+      // A checagem antiga (mesmo dono + mesmo nome + mesmo CPF/CNPJ) saiu daqui: com o
+      // documento ÚNICO ENTRE EMPRESAS, ela virou inalcançável — qualquer repetição já
+      // foi barrada acima, com mensagem que diz de QUAL empresa o documento é. O
+      // unique(ownerId, nome, cnpj) do banco continua como rede de segurança.
+
+      const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
+
+      // ⚠️ Sob ESCOPO DE PLATAFORMA: criar uma empresa NOVA insere linhas em tabelas com
+      // RLS (equipe, membro, usuario_empresa) cujo `empresaId` é o da empresa recém-criada
+      // — que NÃO é o tenant do contexto do ADMIN. O `WITH CHECK` das policies recusaria
+      // (`empresa_id = app_empresa_id()` falha). Criar tenant é operação de plataforma.
+      const empresa = await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
         const emp = await tx.empresa.create({
-          data: { nome: nomeTrim, cnpj: cnpjNorm, telefone: telefone || null, endereco: endereco || null, ownerId: req.user.id },
-        });
-        await tx.equipe.create({
           data: {
-            nome:      nomeEquipeInicial,
-            empresaId: emp.id,
-            membros:   { create: { userId: req.user.id, cargo: 'GESTOR' } },
+            nome: nomeTrim,
+            // `documento` é a AUTORIDADE; `cnpj` é o legado que ~60 pontos leem e só
+            // recebe o valor quando ele É um CNPJ.
+            // ⚠️ NÃO gravar CPF em `cnpj`: aquela coluna não guarda só o documento, ela
+            // SINALIZA "empresa pessoal" — `resolverEscopoConfiguracao` decide por ela
+            // se a EmpresaConfiguracao é da empresa (cnpj presente) ou da equipe (null).
+            // Preenchê-la com um CPF mudaria o escopo e a clínica perderia de vista o
+            // logo e o expediente já configurados. A unicidade não depende disso: ela
+            // varre as duas colunas.
+            cnpj:          doc.tipo === 'CNPJ' ? cnpjNorm : null,
+            documento:     cnpjNorm,
+            tipoDocumento: doc.tipo,
+            telefone:      telefoneTrim,
+            endereco:      endereco || null,
+            ownerId:       donoId,
           },
         });
-        // Vínculo usuário × empresa — é ele que define o PERFIL do dono nesta empresa
-        await salvarVinculo(tx, req.user.id, emp.id, { perfil: 'GESTOR' });
+        const equipe = await tx.equipe.create({ data: { nome: equipeNomeFinal, empresaId: emp.id } });
+        for (const u of gestoresResolvidos) {
+          await tx.membroEquipe.create({ data: { equipeId: equipe.id, userId: u.id, cargo: 'GESTOR' } });
+          await salvarVinculo(tx, u.id, emp.id, { perfil: 'GESTOR' });
+        }
+        // Assinatura: liga a empresa ao plano, com o vencimento derivado da validade.
+        await tx.assinaturaEmpresa.create({
+          data: { empresaId: emp.id, planoId: plano.id, status: 'ATIVA', fimEm },
+        });
+        // Espécies atendidas na `EmpresaConfiguracao`, no MESMO escopo que
+        // `resolverEscopoConfiguracao` vai procurar depois: empresa com CNPJ guarda a
+        // config no nível da EMPRESA (equipeId null); empresa pessoal (CPF), no nível
+        // da EQUIPE. Escopo errado aqui = tela de Configurações abrindo em branco.
+        await tx.empresaConfiguracao.create({
+          data: {
+            empresaId:         emp.id,
+            equipeId:          emp.cnpj ? null : equipe.id,
+            especiesAtendidas: especiesIds.join(','),
+          },
+        });
         return emp;
-      });
-      // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort,
-      // nunca bloqueia o cadastro; o Conectar da tela de Configurações cobre falhas.
+      }));
+      // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort.
       require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
+
+      // O gestor precisa SABER que tem acesso — e, se a conta nasceu agora, com qual
+      // senha. Sem isto a empresa era criada e ninguém era avisado: era preciso incluí-lo
+      // de novo pela tela de Controle de Acesso só para disparar o e-mail.
+      // Fire-and-forget: falha de e-mail não desfaz a empresa já criada.
+      for (const u of gestoresResolvidos) {
+        const novo = idsNovos.has(u.id);
+        emailService.enviarAcessoGestor({
+          email:        u.email,
+          nomeGestor:   u.fullName || u.email,
+          empresaNome:  empresa.nome,
+          equipeName:   equipeNomeFinal,
+          usuarioCriado: novo,
+          senhaInicial:  novo ? SENHA_INICIAL : null,
+        }).catch(err => console.error('[emailService] Falha ao enviar acesso de gestor:', err?.message));
+      }
+
       res.status(201).json({ sucesso: true, dados: empresa });
     } catch (err) {
       console.error('Erro ao criar empresa:', err);
-      if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'Já existe uma empresa com este nome e CPF/CNPJ para o seu usuário.' });
+      // Rede de segurança do banco (unique de `documento` e unique(ownerId, nome, cnpj)):
+      // a checagem em `resolverDocumento` já responde antes, com o nome da empresa que
+      // tem o documento — isto aqui só cobre a corrida entre dois cadastros simultâneos.
+      if (err.code === 'P2002') {
+        return res.status(409).json({
+          sucesso:  false,
+          mensagem: 'Este CPF/CNPJ já está cadastrado para outra empresa.',
+          code:     'DOCUMENTO_DUPLICADO',
+        });
+      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // PUT /equipes/empresas/:id — ADMIN edita os dados da empresa.
+  //
+  // Edita o que é da EMPRESA: nome, documento, telefone, endereço e espécies atendidas.
+  // ⚠️ NÃO mexe em PLANO nem em GESTORES: são associações com ciclo próprio (assinatura
+  // e vínculo de equipe), e trocá-las num formulário de cadastro faria uma edição de
+  // nome cancelar assinatura ou remover o acesso de alguém sem que ninguém pedisse.
+  atualizarEmpresa: async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ sucesso: false, mensagem: 'ID inválido' });
+
+      const empresa = await prisma.empresa.findUnique({
+        where:  { id },
+        select: { id: true, cnpj: true, nome: true },
+      });
+      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      const { nome, cnpj, telefone, endereco, especiesAtendidas, planoId } = req.body;
+      if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+
+      // PLANO — mesmo formulário da criação, editável: o ADMIN pode trocar o plano da
+      // empresa aqui, sem precisar de uma tela à parte. Obrigatório como na criação.
+      const planoIdNum = Number(planoId);
+      if (!Number.isInteger(planoIdNum)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione um plano para a empresa.', code: 'PLANO_OBRIGATORIO' });
+      }
+      const plano = await prisma.plano.findUnique({ where: { id: planoIdNum }, select: { id: true, ativo: true, validadeDias: true } });
+      if (!plano || !plano.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Plano inválido ou inativo.' });
+
+      // Mesmas regras da criação — inclusive a unicidade, ignorando a PRÓPRIA empresa
+      // (sem isso, salvar sem trocar o documento acusaria conflito com ela mesma).
+      const doc = await resolverDocumento(cnpj, { ignorarEmpresaId: id });
+      if (doc.erro) return res.status(doc.status).json({ sucesso: false, mensagem: doc.erro, code: doc.code });
+
+      const telefoneTrim = String(telefone ?? '').trim();
+      if (!telefoneTrim) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório', code: 'TELEFONE_OBRIGATORIO' });
+      }
+
+      const especiesIds = [...new Set(
+        (Array.isArray(especiesAtendidas) ? especiesAtendidas : String(especiesAtendidas ?? '').split(','))
+          .map((v) => Number(String(v).trim()))
+          // `n > 0`: `''.split(',')` devolve `['']` e `Number('')` é 0, que passa por
+          // `Number.isInteger`. Sem o corte, body sem espécie viraria `[0]` e o erro
+          // seria "Espécie inválida" no lugar de "informe ao menos uma espécie".
+          .filter((n) => Number.isInteger(n) && n > 0),
+      )];
+      if (especiesIds.length === 0) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos uma espécie atendida.', code: 'ESPECIE_OBRIGATORIA' });
+      }
+      const especiesExistentes = await prisma.especie.findMany({
+        where: { id: { in: especiesIds } }, select: { id: true },
+      });
+      if (especiesExistentes.length !== especiesIds.length) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Espécie inválida.', code: 'ESPECIE_INVALIDA' });
+      }
+
+      const cnpjNovo = doc.tipo === 'CNPJ' ? doc.digitos : null;
+
+      // ⚠️ Trocar CNPJ ↔ CPF MOVE o escopo da EmpresaConfiguracao (empresa × equipe —
+      // ver resolverEscopoConfiguracao). Sem mover a linha junto, o gestor abriria as
+      // Configurações em branco: logo, expediente e fechamento de fatura continuariam
+      // no banco, no escopo antigo, invisíveis. Aqui a linha é MOVIDA, não recriada.
+      const primeiraEquipe = await prisma.equipe.findFirst({
+        where: { empresaId: id }, orderBy: { id: 'asc' }, select: { id: true },
+      });
+      const escopoAntigo = { empresaId: id, equipeId: empresa.cnpj ? null : (primeiraEquipe?.id ?? null) };
+      const escopoNovo   = { empresaId: id, equipeId: cnpjNovo    ? null : (primeiraEquipe?.id ?? null) };
+
+      const atualizada = await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
+        const emp = await tx.empresa.update({
+          where: { id },
+          data: {
+            nome:          nome.trim(),
+            cnpj:          cnpjNovo,          // só CNPJ mora aqui — ver criarEmpresa
+            documento:     doc.digitos,
+            tipoDocumento: doc.tipo,
+            telefone:      telefoneTrim,
+            ...(endereco !== undefined ? { endereco: endereco || null } : {}),
+          },
+        });
+
+        const config = await tx.empresaConfiguracao.findFirst({ where: escopoAntigo });
+        if (config) {
+          await tx.empresaConfiguracao.update({
+            where: { id: config.id },
+            data:  { equipeId: escopoNovo.equipeId, especiesAtendidas: especiesIds.join(',') },
+          });
+        } else {
+          const noNovo = await tx.empresaConfiguracao.findFirst({ where: escopoNovo });
+          if (noNovo) {
+            await tx.empresaConfiguracao.update({
+              where: { id: noNovo.id }, data: { especiesAtendidas: especiesIds.join(',') },
+            });
+          } else {
+            await tx.empresaConfiguracao.create({
+              data: { ...escopoNovo, especiesAtendidas: especiesIds.join(',') },
+            });
+          }
+        }
+
+        // Assinatura: só recalcula o vencimento (`fimEm`) quando o PLANO muda de
+        // verdade. Se recalculássemos toda vez (o formulário sempre manda um
+        // `planoId`), salvar uma correção de telefone estenderia a assinatura sem
+        // ninguém ter pedido isso — o vencimento é uma decisão comercial, não um
+        // efeito colateral de editar o cadastro.
+        const assinaturaAtual = await tx.assinaturaEmpresa.findUnique({ where: { empresaId: id } });
+        if (!assinaturaAtual) {
+          const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
+          await tx.assinaturaEmpresa.create({
+            data: { empresaId: id, planoId: plano.id, status: 'ATIVA', fimEm },
+          });
+        } else if (assinaturaAtual.planoId !== plano.id) {
+          const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
+          await tx.assinaturaEmpresa.update({
+            where: { empresaId: id },
+            data:  { planoId: plano.id, fimEm },
+          });
+        }
+
+        return emp;
+      }));
+
+      res.json({ sucesso: true, dados: atualizada, mensagem: 'Empresa atualizada.' });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        return res.status(409).json({
+          sucesso:  false,
+          mensagem: 'Este CPF/CNPJ já está cadastrado para outra empresa.',
+          code:     'DOCUMENTO_DUPLICADO',
+        });
+      }
+      console.error('Erro ao atualizar empresa:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // PATCH /equipes/empresas/:id/status — ADMIN inativa/reativa a empresa.
+  // `Empresa.status` governa o ACESSO (SUSPENSA/CANCELADA barram o login — D3); a
+  // assinatura só descreve a situação comercial. Empresa inativada some do seletor de
+  // contexto de todos (menos o dono, que nunca se tranca para fora — ver meusContextos).
+  alterarStatusEmpresa: async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const STATUS_VALIDOS = ['ATIVA', 'SUSPENSA', 'CANCELADA'];
+      const status = String(req.body?.status || '').toUpperCase();
+      if (!STATUS_VALIDOS.includes(status)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Status inválido (ATIVA | SUSPENSA | CANCELADA).' });
+      }
+      const empresa = await prisma.empresa.findUnique({ where: { id }, select: { id: true } });
+      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      const atualizada = await prisma.empresa.update({
+        where: { id },
+        data:  { status, canceladoEm: status === 'ATIVA' ? null : new Date() },
+        select: { id: true, nome: true, status: true, canceladoEm: true },
+      });
+      res.json({ sucesso: true, dados: atualizada });
+    } catch (err) {
+      console.error('[EquipeController.alterarStatusEmpresa]', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao alterar o status da empresa' });
     }
   },
 
   listarEmpresas: async (req, res) => {
     try {
       const userId = req.user.id;
-      // Inclui empresas onde é owner OU onde é gestor convidado (cargo: 'GESTOR')
-      const membroGestor = await prisma.membroEquipe.findMany({
-        where:   { userId, cargo: 'GESTOR' },
-        select:  { equipe: { select: { empresaId: true } } },
-      });
-      const empresaIdsGestor = membroGestor.map(m => m.equipe.empresaId).filter(Boolean);
 
-      const empresas = await prisma.empresa.findMany({
-        where:   { OR: [{ ownerId: userId }, { id: { in: empresaIdsGestor } }] },
-        include: { equipes: { include: { _count: { select: { membros: true } } } } },
+      // ⚠️ O ADMIN da PLATAFORMA vê TODAS as empresas. Ele é quem as cria (POST
+      // /equipes/empresas é authorize('ADMIN')), mas não é dono nem gestor de nenhuma —
+      // com o filtro de posse a tela de criação abria com a lista VAZIA, sem nenhum
+      // cliente à vista. Quem administra o SaaS precisa enxergar a carteira inteira.
+      // `role`/`userTypeGlobal`, NUNCA `userType`: este é o tipo na EMPRESA ATIVA e vira
+      // GESTOR/VETERINARIO conforme o vínculo (armadilha 36-e).
+      // Sem escopoPlataformaSeAdmin de propósito: `tb_empresas` é CONTROL PLANE e não
+      // tem RLS (ver o cabeçalho de escopoPlataforma.js).
+      const ehAdminPlataforma = req.user.role === 'ADMIN' || req.user.userTypeGlobal === 'ADMIN';
+
+      let where;
+      if (ehAdminPlataforma) {
+        where = {};
+      } else {
+        // Empresas onde é owner OU onde é gestor convidado (cargo: 'GESTOR')
+        const membroGestor = await prisma.membroEquipe.findMany({
+          where:   { userId, cargo: 'GESTOR' },
+          select:  { equipe: { select: { empresaId: true } } },
+        });
+        const empresaIdsGestor = membroGestor.map(m => m.equipe.empresaId).filter(Boolean);
+        where = { OR: [{ ownerId: userId }, { id: { in: empresaIdsGestor } }] };
+      }
+
+      const buscarEmpresas = () => prisma.empresa.findMany({
+        where,
+        include: {
+          // ⚠️ `equipes`, `configuracoes` e `assinatura` são tabelas com RLS FORÇADO
+          // (tb_equipes, tb_empresa_configuracoes, tb_assinaturas_empresa). O ADMIN da
+          // plataforma navega SEM `req.empresaId` (não está "dentro" de nenhuma
+          // empresa), então `tenantRls` não carimba tenant nenhum e a policy filtra
+          // essas relações para VAZIO — a empresa em si aparece (tb_empresas não tem
+          // RLS), mas equipe, espécie e plano vinham sempre nulos. Por isso a consulta
+          // roda dentro de `comEscopoPlataforma` quando é o ADMIN pedindo.
+          equipes: { include: { _count: { select: { membros: true } } } },
+          // Espécies atendidas para a tela de edição preencher os campos. Vem a
+          // configuração de QUALQUER escopo (empresa ou equipe) — a tela lê a primeira
+          // que tenha espécies, e é o backend que decide onde gravar de volta.
+          configuracoes: { select: { equipeId: true, especiesAtendidas: true } },
+          // Plano atual, para a tela de edição pré-selecionar o mesmo formulário da
+          // criação. Legado sem assinatura → null, a tela mostra "Selecione".
+          assinatura: { select: { planoId: true } },
+        },
         orderBy: { createdAt: 'desc' },
       });
+      const empresas = ehAdminPlataforma ? await comEscopoPlataforma(buscarEmpresas) : await buscarEmpresas();
       res.json({ sucesso: true, dados: empresas });
     } catch (err) {
       console.error('Erro ao listar empresas:', err);
@@ -781,7 +1135,15 @@ const EquipeController = {
       };
       const labelCargo = c => CARGO_LABEL[c] ?? (c ? c.charAt(0) + c.slice(1).toLowerCase() : '');
 
-      const [empresasOwned, membros] = await Promise.all([
+      // 🔴 LEITURA CROSS-EMPRESA, escopada ao PRÓPRIO usuário. "Quais empresas eu
+      // pertenço" atravessa tenants por natureza: `membroEquipe`/`animal`/
+      // `proprietarioPerfil` têm RLS por empresa, então sob o carimbo da empresa ATIVA
+      // (que o `authenticate` já aplicou) esta lista via só ela — e o profissional
+      // multi-clínica (ex.: membro de 5 empresas) via 1 opção no seletor e não
+      // conseguia TROCAR para as outras 4 pela UI. `comEscopoPlataforma` levanta o
+      // filtro de tenant; o `where: { userId }` de CADA query é o que mantém a leitura
+      // restrita aos vínculos DESTA pessoa — nunca os de terceiros.
+      const [empresasOwned, membros] = await comEscopoPlataforma(() => Promise.all([
         prisma.empresa.findMany({
           where:   { ownerId: userId },
           select:  { id: true, nome: true, cnpj: true, equipes: { select: { id: true, nome: true }, orderBy: { id: 'asc' } } },
@@ -792,11 +1154,13 @@ const EquipeController = {
           select:  { cargo: true, equipe: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true, cnpj: true, ownerId: true } } } } },
           orderBy: { createdAt: 'asc' },
         }),
-      ]);
+      ]));
 
       // Empresa que revogou o acesso desta pessoa não aparece no seletor — ela não
       // deve poder trabalhar por lá nem saber que o vínculo segue cadastrado.
       // O dono nunca é barrado da própria empresa (senão ele se trancaria para fora).
+      // Também cross-empresa (lê tb_usuario_empresa por user_id) — já se auto-escopa
+      // com `comEscopoPlataforma` dentro da própria função (lib/usuarioEmpresa).
       const semAcesso = await empresasSemAcesso(userId);
       const idsProprios = new Set(empresasOwned.map(e => e.id));
 
@@ -837,16 +1201,21 @@ const EquipeController = {
       // acesso (as permissões são resolvidas pela empresa ativa) e o cadastro que
       // aquela clínica mantém dele (lib/proprietarioPerfil).
       if (req.user.userType === 'PROPRIETARIO') {
-        const [animais, perfis] = await Promise.all([
+        // Mesmo caso: o cliente atendido por várias clínicas precisa ver todas no
+        // seletor. `animal`/`proprietarioPerfil` têm RLS por empresa → escopo de
+        // plataforma + `where: { userId }` (só os vínculos deste cliente).
+        const [animais, perfis] = await comEscopoPlataforma(() => Promise.all([
           prisma.animal.findMany({
-            where:  { userId, ativo: true, empresaId: { not: null } },
+            // `empresaId: { not: null }` REMOVIDO — coluna NOT NULL desde a fase 5
+            // torna o filtro inválido no Prisma (ver auth.js/permissao.middleware).
+            where:  { userId, ativo: true },
             select: { empresa: { select: { id: true, nome: true } } },
           }),
           prisma.proprietarioPerfil.findMany({
             where:  { userId, ativo: true },
             select: { empresa: { select: { id: true, nome: true } } },
           }),
-        ]);
+        ]));
         const empresasDoCliente = new Map();
         for (const r of [...animais, ...perfis]) {
           if (r.empresa) empresasDoCliente.set(r.empresa.id, r.empresa.nome);
@@ -876,6 +1245,15 @@ const EquipeController = {
 
       const config = await buscarConfiguracao(escopo);
 
+      // Plano da empresa (SOMENTE LEITURA para o gestor — quem edita é o ADMIN).
+      // Só nome + valor aparecem na tela; validade/vencimento vão junto para exibição.
+      const assinatura = escopo.empresaId
+        ? await prisma.assinaturaEmpresa.findUnique({
+            where:  { empresaId: escopo.empresaId },
+            select: { status: true, fimEm: true, plano: { select: { nome: true, precoMensal: true, limiteUsuarios: true, validadeDias: true } } },
+          })
+        : null;
+
       // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
       // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
       const tipoFechamentoEfetivo = config?.tipoFechamento
@@ -901,6 +1279,17 @@ const EquipeController = {
           // null = sem validade (o orçamento não expira)
           validadeOrcamentoDias: config
             ? await lerValidade(prisma, escopo.empresaId, escopo.equipeId)
+            : null,
+          // PLANO da empresa (read-only p/ gestor) — null se a empresa não tem assinatura.
+          plano: assinatura?.plano
+            ? {
+                nome:           assinatura.plano.nome,
+                valor:          assinatura.plano.precoMensal,
+                limiteUsuarios: assinatura.plano.limiteUsuarios,
+                validadeDias:   assinatura.plano.validadeDias,
+                status:         assinatura.status,
+                fimEm:          assinatura.fimEm,
+              }
             : null,
         },
       });
@@ -1497,33 +1886,46 @@ const EquipeController = {
       const equipeIdN = Number(equipeId);
       const isAdminReq = req.user.role === 'ADMIN' || req.user.userType === 'ADMIN';
 
-      const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
+      // ⚠️ `tb_equipes`, `tb_membros_equipe` e `tb_profissional_perfis` (usada dentro de
+      // `aplicarPerfilProfEmRelacao`) têm RLS forçado. O ADMIN navega SEM `req.empresaId`
+      // — `tenantRls` não carimba tenant nenhum, e a policy filtra tudo isto para VAZIO.
+      // Por isso a leitura inteira roda dentro de `comEscopoPlataforma` quando é o ADMIN
+      // pedindo; sem isso o painel de equipe em `/admin/empresas` mostrava "sem membros"
+      // mesmo com gente cadastrada pelo gestor.
+      const buscar = async () => {
+        const equipe = await prisma.equipe.findUnique({ where: { id: equipeIdN }, select: { empresaId: true } });
 
-      // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
-      if (!isAdminReq) {
-        const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
-        if (empresa) {
-          if (!equipe || equipe.empresaId !== empresa.id) {
-            return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a esta equipe.' });
+        // Garante que o solicitante pertence à mesma empresa da equipe (isolamento multi-empresa)
+        if (!isAdminReq) {
+          const empresa = await getEmpresaDoGestor(req.user.id, req.empresaId);
+          if (empresa) {
+            if (!equipe || equipe.empresaId !== empresa.id) {
+              const negado = new Error('Acesso não autorizado a esta equipe.');
+              negado.status = 403;
+              throw negado;
+            }
           }
         }
-      }
 
-      const membros = await prisma.membroEquipe.findMany({
-        where:   { equipeId: equipeIdN, NOT: { user: { role: 'ADMIN' } } },
-        include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
-        orderBy: { createdAt: 'desc' },
-      });
-      // Perfis restritos à empresa desta equipe (ADMIN da plataforma vê tudo)
-      const dados = await aplicarPerfilProfEmRelacao(
-        await anexarPerfisGlobais(
-          membros,
-          isAdminReq ? { todos: true } : { empresaId: equipe?.empresaId ?? null },
-        ),
-        'user', equipe?.empresaId ?? null,
-      );
+        const membros = await prisma.membroEquipe.findMany({
+          where:   { equipeId: equipeIdN, NOT: { user: { role: 'ADMIN' } } },
+          include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
+          orderBy: { createdAt: 'desc' },
+        });
+        // Perfis restritos à empresa desta equipe (ADMIN da plataforma vê tudo)
+        return aplicarPerfilProfEmRelacao(
+          await anexarPerfisGlobais(
+            membros,
+            isAdminReq ? { todos: true } : { empresaId: equipe?.empresaId ?? null },
+          ),
+          'user', equipe?.empresaId ?? null,
+        );
+      };
+
+      const dados = isAdminReq ? await comEscopoPlataforma(buscar) : await buscar();
       res.json({ sucesso: true, dados });
     } catch (err) {
+      if (err.status) return res.status(err.status).json({ sucesso: false, mensagem: err.message });
       console.error('Erro ao listar membros por equipe:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
@@ -1961,9 +2363,29 @@ const EquipeController = {
           ...(estado      !== undefined && { estado:      estado?.trim()      || null }),
           ...(ativo       !== undefined && { ativo:       Boolean(ativo) }),
         };
+        // LIMITE DO PLANO ao RELIGAR o acesso de quem já é membro. ⚠️ Este é o ponto
+        // fácil de esquecer: o assento não nasce só na inclusão — revogar o acesso de
+        // alguém e devolvê-lo depois também ocupa vaga. Sem isto, bastaria desligar e
+        // religar para furar o plano.
+        // `jaOcupava` evita contar a própria pessoa duas vezes quando ela JÁ tinha acesso
+        // (salvar o cadastro de quem já ocupa assento não pode reprovar com o plano cheio).
+        // `lerPagamentoEAcesso` recebe uma LISTA de userIds e devolve um Map — uma
+        // consulta só serve para as duas perguntas (o que ele tem hoje e o que terá).
+        const acessoAtual  = (await lerPagamentoEAcesso(prisma, [membro.userId], empresaDoMembro))
+                               .get(membro.userId);
+        const vaiTerAcesso = acessoSistema !== undefined
+          ? acessoSistema
+          : acessoAtual?.acessoSistema !== false;
+        const ficaAtivo   = ativo === undefined || Boolean(ativo);
+        const perfilFinal = cargo?.trim() || membro.cargo;
+        if (consomeAssento({ perfil: perfilFinal, acessoSistema: vaiTerAcesso, ativo: ficaAtivo })) {
+          const jaOcupava = acessoAtual && acessoAtual.acessoSistema !== false ? 1 : 0;
+          await garantirVagaDeUsuario(empresaDoMembro, { jaOcupava });
+        }
+
         // Fonte nova: tabela de ligação. O PERFIL na empresa é o cargo do membro.
         await salvarVinculo(prisma, membro.userId, empresaDoMembro, {
-          perfil: cargo?.trim() || membro.cargo,
+          perfil: perfilFinal,
           ...cadastroEmpresa,
         });
         await salvarPagamentoEAcesso(prisma, membro.userId, empresaDoMembro, {
@@ -2067,6 +2489,11 @@ const EquipeController = {
       res.json({ sucesso: true, mensagem: 'Membro atualizado' });
     } catch (err) {
       console.error('Erro ao atualizar membro:', err);
+      // Religar o acesso de um membro com o plano cheio é regra de negócio → 409 com a
+      // mensagem útil, nunca "Erro interno".
+      if (err.code === 'LIMITE_USUARIOS_PLANO') {
+        return res.status(409).json({ sucesso: false, mensagem: err.message, code: err.code, ...err.dados });
+      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -2453,6 +2880,13 @@ const EquipeController = {
         });
       }
 
+      // LIMITE DO PLANO — verificado ANTES de criar qualquer coisa: membro criado e só
+      // depois recusado deixaria vínculo pela metade. Só consome assento quem terá acesso
+      // ao sistema e não for PROPRIETARIO (D2) — ver lib/planoEmpresa.js.
+      await garantirVagaDeUsuario(equipe.empresaId, {
+        ocupaAssento: consomeAssento({ perfil: cargo, acessoSistema }),
+      });
+
       // Adicionar à equipe diretamente
       const novoMembro = await prisma.membroEquipe.create({
         data: { equipeId: equipe.id, userId: usuario.id, cargo },
@@ -2603,6 +3037,12 @@ const EquipeController = {
           await prisma.user.delete({ where: { id: usuarioCriadoId } }).catch(() => {});
         }
       } catch { /* melhor esforço — não mascarar o erro original */ }
+      // Limite do plano é regra de NEGÓCIO, não falha do servidor: precisa chegar à tela
+      // com 409 e a mensagem dizendo o limite, o uso atual e a saída. Como 500 genérico,
+      // o gestor veria "Erro interno" e não teria como saber que basta trocar de plano.
+      if (err.code === 'LIMITE_USUARIOS_PLANO') {
+        return res.status(409).json({ sucesso: false, mensagem: err.message, code: err.code, ...err.dados });
+      }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -2790,9 +3230,25 @@ const EquipeController = {
 
       const equipe = await prisma.equipe.findUnique({
         where: { id: equipeId },
-        select: { id: true, nome: true },
+        select: { id: true, nome: true, empresaId: true },
       });
       if (!equipe) return res.status(404).json({ sucesso: false, mensagem: 'Equipe não encontrada' });
+
+      // LIMITE DO PLANO já no ENVIO do convite — falha CEDO. A trava obrigatória é no
+      // aceite (a vaga pode acabar entre convidar e aceitar), mas convidar alguém para
+      // depois a pessoa levar 409 ao aceitar é péssimo dos dois lados.
+      if (equipe.empresaId) {
+        try {
+          await garantirVagaDeUsuario(equipe.empresaId, {
+            ocupaAssento: consomeAssento({ perfil: cargo, acessoSistema: acessoSistema !== false }),
+          });
+        } catch (e) {
+          if (e.code === 'LIMITE_USUARIOS_PLANO') {
+            return res.status(409).json({ sucesso: false, mensagem: e.message, code: e.code, ...e.dados });
+          }
+          throw e;
+        }
+      }
 
       // Bloqueia re-convite: membro já existente
       const usuarioCheck = await findUserByEmail(prisma, email);
@@ -2930,6 +3386,34 @@ const EquipeController = {
         where: { equipeId_userId: { equipeId: convite.equipeId, userId } },
       });
       if (jaEMembro) return res.status(409).json({ sucesso: false, mensagem: 'Você já é membro desta equipe' });
+
+      // LIMITE DO PLANO no ACEITE — e não só no envio do convite. ⚠️ Entre convidar e
+      // aceitar pode ter entrado outra pessoa e fechado a última vaga: verificar apenas
+      // no envio deixaria o plano ser estourado por um convite antigo.
+      // O acesso ao sistema vem do que foi definido NO CONVITE (coluna `acesso_sistema`).
+      const equipeAlvo = await prisma.equipe.findUnique({
+        where: { id: convite.equipeId }, select: { empresaId: true },
+      });
+      if (equipeAlvo?.empresaId) {
+        let acessoDoConvite = true;
+        try {
+          const rows = await prisma.$queryRawUnsafe(
+            'SELECT acesso_sistema FROM schs2vet.tb_convites_equipe WHERE id = $1', convite.id,
+          );
+          acessoDoConvite = rows?.[0]?.acesso_sistema !== false;
+        } catch { /* convite legado, sem a coluna — assume com acesso */ }
+
+        try {
+          await garantirVagaDeUsuario(equipeAlvo.empresaId, {
+            ocupaAssento: consomeAssento({ perfil: convite.cargo, acessoSistema: acessoDoConvite }),
+          });
+        } catch (e) {
+          if (e.code === 'LIMITE_USUARIOS_PLANO') {
+            return res.status(409).json({ sucesso: false, mensagem: e.message, code: e.code, ...e.dados });
+          }
+          throw e;
+        }
+      }
 
       await prisma.$transaction([
         prisma.membroEquipe.create({ data: { equipeId: convite.equipeId, userId, cargo: convite.cargo } }),
@@ -3729,6 +4213,7 @@ module.exports.resolverEscopoConfiguracao = resolverEscopoConfiguracao;
 // Usada pelo GET /users/me para responder `isGestorEmpresa` e `empresaConfigurada`
 // sem o front ter de sondar GET /equipes/configuracoes (e gerar 404 no DevTools).
 module.exports.buscarConfiguracao         = buscarConfiguracao;
+module.exports.configuracaoCompleta       = configuracaoCompleta;
 // Locais de trabalho do membro — reusados pelo Cadastro Pessoal (UserController.updateMe),
 // para que a validação (inclusive a de horários coincidentes) seja a MESMA das duas telas.
 module.exports.parseLocaisTrabalho  = parseLocaisTrabalho;

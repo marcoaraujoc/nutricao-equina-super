@@ -348,8 +348,29 @@ VetEspecie        → especialização do vet por espécie
 VetSubespecialidade → subespecialidades do vet
 VetAnimalSolicitacao → vínculo/desvinculo vet-animal (tipo: 'VINCULO'|'DESVINCULO', approvalToken, expiresAt)
 Empresa           → clínicas/empresas cadastradas
-                    Gestor pode ter VÁRIAS empresas. unique(ownerId, nome, cnpj) — cnpj NÃO é mais
-                    único global. Duplicata = mesmo owner (e-mail) + mesmo nome + mesmo CPF/CNPJ.
+                    Gestor pode ter VÁRIAS empresas. unique(ownerId, nome, cnpj).
+                    🔴 **DOCUMENTO (CPF/CNPJ) É OBRIGATÓRIO E ÚNICO ENTRE EMPRESAS** (2026-08-16,
+                    migration `20260816100000`): `@@unique([documento])`. A empresa é o TENANT que
+                    assina o SaaS e o documento é o que a identifica — duas linhas com o mesmo CNPJ
+                    são duplicata, não filial. Isto REVERTE, para o documento, a decisão de
+                    2026-06-11 que derrubou o unique global de `cnpj` (aquela existia porque o
+                    GESTOR criava as próprias empresas; desde 2026-08-06 só o ADMIN cria, com plano
+                    e gestores). unique(ownerId, nome, cnpj) continua, só é mais fraco.
+                    ⚠️ O MESMO dado mora em DUAS colunas: `cnpj` (LEGADO, lido por ~60 pontos) e
+                    `documento`/`tipoDocumento` (cadastro fiscal). Quem grava preenche AS DUAS com
+                    os mesmos dígitos, e a checagem de unicidade olha as duas — preencher só uma
+                    deixa a outra livre para receber o mesmo documento de novo.
+                    LEITURA/ESCRITA: SEMPRE por `lib/documentoEmpresa.js` (`normalizarDocumento` /
+                    `empresaComDocumento` / `resolverDocumento`). Valida o TAMANHO (11=CPF,
+                    14=CNPJ), NÃO o dígito verificador — endurecer rejeitaria a base de teste.
+                    Aplicado em `EquipeController.criarEmpresa` (+ telefone obrigatório) e em
+                    `EmpresaCadastroController.salvar` — fechar só a criação seria garantia falsa:
+                    daria para criar com um documento e trocar pelo de outra empresa no cadastro
+                    fiscal. NULL fica fora do índice (Postgres), o que preserva a empresa legada.
+                    ⚠️ PENDENTE: `setup`, `convidarGestorAdmin`, `EquipeService.criarEmpresaEEquipe`
+                    e o bootstrap de `garantirEquipePadrao` ainda criam empresa SEM documento —
+                    são caminhos do modelo ANTIGO (gestor criava a própria empresa) e não têm campo
+                    onde coletá-lo. Decidir se são aposentados antes de exigir o documento neles.
                     Empresa pessoal (cnpj null): unique do PG não cobre (NULLs distintos) — app
                     bloqueia em criarEmpresa/setup/convidarGestorAdmin/criarEmpresaEEquipe (insensitive)
 Equipe            → equipes dentro de uma empresa — unique(empresaId, nome)
@@ -632,9 +653,39 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 - Para re-sincronizar módulos no banco após alterações no seed: `node backend/seed.js`
 - ControleAcesso: botão **Incluir Membro** (profissionais) e **Incluir Cliente** (cargo PROPRIETARIO) para convites
 
+### 🔴 EXCLUSÃO LÓGICA — quem SOME e quem fica INATIVO (2026-08-06)
+
+Fonte única: **`backend/src/lib/visibilidade.js`**. Nada é apagado do banco; o que muda é
+o que a aplicação MOSTRA, e isso depende de quem foi inativado:
+
+```
+ANIMAL · PROPRIETÁRIO · EMPRESA    → SOMEM. Não aparecem nem como "inativo", e tudo que
+    pende deles some junto (evolução, prescrição, vacina, exame, agendamento, fatura,
+    histórico). São o SUJEITO do atendimento.
+
+PROFISSIONAL · FORNECEDOR · PRESTADOR → CONTINUAM aparecendo, marcados como INATIVOS.
+    São o AUTOR do registro: esconder o autor apagaria a autoria de prontuário que segue
+    válido — "quem prescreveu isto?" precisa ter resposta.
+```
+
+⚠️ **NUNCA zerar `empresaId` ao inativar.** `ProprietarioController.removerDaEmpresa`
+fazia `{ ativo: false, empresaId: null, equipeId: null }` e transformava cada animal do
+cliente removido numa linha SEM DONO — o principal gerador de registro órfão da base.
+**Inativar responde "aparece?"; a tenancy responde "de quem é?".** São perguntas
+diferentes, e a segunda não muda quando a primeira muda.
+
+⚠️ **Listagem GLOBAL (a que não recebe `animalId`) precisa do filtro explícito.** Use
+`ANIMAL_VISIVEL` / `filhoDeAnimalVisivel()` / `animalVisivelNaEmpresa(empresaId)` — não
+basta `animal: { ativo: true }`, que deixa passar os animais do CLIENTE inativado. Já
+aplicado em `AnimalController.listar`, `AgendamentoController.listarGlobal`, as duas
+`listarParaExecucao` (prescrição e vacina) e `BuscaGlobalController`.
+
+⚠️ `MembroEquipe`/`UsuarioEmpresa` **não entram** nesses filtros. `__tests__/visibilidade.test.js`
+falha se algum deles for mencionado ali, e falha se aparecer `empresaId: null`.
+
 ### Regras de modelagem
 - `@@schema("schs2vet")` em todos os modelos
-- Soft delete via campo `ativo: Boolean`
+- Soft delete via campo `ativo: Boolean` — ver a regra de EXCLUSÃO LÓGICA acima
 - Audit fields: `createdAt`, `updatedAt` onde aplicável
 - Indexes explícitos em FKs e campos de busca frequente
 - `@@unique` composto onde necessário (ex: [animalId, vetUserId])

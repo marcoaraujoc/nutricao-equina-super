@@ -8,8 +8,6 @@ import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
 import Usuarios from './pages/Usuarios';
 import AnimaisVet from './pages/AnimaisVet';
-import AprovarVinculo from './pages/AprovarVinculo';
-import AprovarVinculoProprietario from './pages/AprovarVinculoProprietario';
 import AlterarSenhaObrigatoria from './pages/AlterarSenhaObrigatoria';
 import AceitarConviteEquipe   from './pages/AceitarConviteEquipe';
 
@@ -55,6 +53,8 @@ import CriaExameNutricional from './pages/CriaExameNutricional';
 import Equipe         from './pages/Equipe';
 import ControleAcesso from './pages/ControleAcesso';
 import Configuracoes  from './pages/Configuracoes';
+import CadastroEmpresa from './pages/CadastroEmpresa';
+import EquipeManager  from './pages/EquipeManager';
 import AuditoriaGeral from './pages/AuditoriaGeral';
 
 // Pages — Relatório
@@ -88,6 +88,7 @@ import QueryAdHoc from './pages/query-adhoc';
 
 // Pages — Monitoração Custo IA
 import AiUsageDashboard from './pages/AiUsageDashboard';
+import PlanosAdmin from './pages/PlanosAdmin';
 
 // Pages — Farmácia / Medicamentos / Procedimentos
 import Farmacia            from './pages/Farmacia';
@@ -131,7 +132,6 @@ function App() {
             <Route path="/login"          element={<Login />} />
             <Route path="/register"       element={<Register />} />
             <Route path="/reset-password" element={<ResetPassword />} />
-            <Route path="/proprietario/aprovar-vinculo" element={<AprovarVinculoProprietario />} />
 
             {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
             <Route
@@ -202,6 +202,9 @@ function App() {
 
                           {/* Monitoração IA */}
                           <Route path="/ai-usage" element={<AiUsageDashboard />} />
+
+                          {/* Planos do SaaS (ADMIN) */}
+                          <Route path="/planos" element={<PlanosAdmin />} />
 
                           {/* Nutrientes */}
                           <Route path="/nutrientes"       element={<Nutrientes />} />
@@ -277,6 +280,15 @@ function App() {
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
                           <Route path="/configuracoes"    element={<Configuracoes />} />
+                          {/* Cadastro do ASSINANTE (razão social, documento, plano) — não confundir
+                              com /configuracoes, que são as preferências operacionais da clínica */}
+                          <Route path="/cadastro/empresa"  element={<CadastroEmpresa />} />
+                          {/* CRIAÇÃO de empresas pelo ADMIN da plataforma (empresa + equipe +
+                              plano + gestor(es)). Não confundir com /cadastro/empresa, que é o
+                              gestor editando o cadastro da PRÓPRIA empresa.
+                              ⚠️ A tela existia desde sempre mas nunca foi montada — as instruções
+                              de montagem ficaram num comentário morto em AceitarConvite.tsx. */}
+                          <Route path="/admin/empresas"    element={<EquipeManager />} />
                           <Route path="/configuracao-alertas" element={<ConfiguracaoAlerta />} />
                           <Route path="/monitoracao"          element={<Monitoracao />} />
                           <Route path="/auditoria-geral"  element={<AuditoriaGeral />} />
@@ -298,7 +310,6 @@ function App() {
                           <Route path="/query-adhoc" element={<QueryAdHoc />} />
                           <Route path="/analise"     element={<Analise />} />
 
-                          <Route path="/veterinarios/solicitacoes/aprovar" element={<AprovarVinculo />} />
                         </Routes>
                       </main>
 
